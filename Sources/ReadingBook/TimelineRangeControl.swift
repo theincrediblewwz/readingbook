@@ -37,7 +37,12 @@ struct TimelineRangeControl: View {
                     .gesture(DragGesture(minimumDistance: 0).onChanged { value in
                         if dragging == nil {
                             let left = abs(value.startLocation.x - startX), right = abs(value.startLocation.x - endX)
-                            dragging = abs(startX - endX) < 18 ? (value.startLocation.y <= axisY ? .lower : .upper) : (left < right ? .lower : .upper)
+                            if abs(startX - endX) < 18 {
+                                let middle = (startX + endX) / 2
+                                if value.startLocation.x < middle - 13 { dragging = .lower }
+                                else if value.startLocation.x > middle + 13 { dragging = .upper }
+                                else { dragging = value.startLocation.y <= axisY ? .lower : .upper }
+                            } else { dragging = left < right ? .lower : .upper }
                         }
                         if let dragging, abs(value.translation.width) > 3 {
                             set(dragging, to: self.value(at: value.location.x, width: width))

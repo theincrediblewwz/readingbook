@@ -83,7 +83,12 @@ struct SpatialTimelineView: View {
             timeRange
         }.onAppear { normalizeRange() }
             .onChange(of: store.bookID) { _, _ in normalizeRange(); showingEvents = false; editingRange = false; eventQuery = "" }
-            .onChange(of: bounds) { _, _ in normalizeRange() }
+            .onChange(of: bounds) { previous, _ in
+                // An explicit "all" window follows newly discovered dates;
+                // a manually narrowed window keeps the reader's selection.
+                if store.timeFrom == previous.lowerBound, store.timeTo == previous.upperBound { fitTime() }
+                else { normalizeRange() }
+            }
     }
     private func mapMarker(_ point: ReadingMapPoint) -> some View {
         let selected = store.selectedObjectID == point.targetID
