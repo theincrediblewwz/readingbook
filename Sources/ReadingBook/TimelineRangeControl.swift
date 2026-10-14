@@ -240,8 +240,8 @@ private struct TimelinePointerInput: NSViewRepresentable {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow(); stopTracking(); removeObservers()
             guard let window else { return }
-            windowObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in self?.cancelTracking() }
-            appObserver = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.cancelTracking() }
+            windowObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.cancelTracking() } }
+            appObserver = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.cancelTracking() } }
         }
         private func removeObservers() {
             if let windowObserver { NotificationCenter.default.removeObserver(windowObserver); self.windowObserver = nil }
