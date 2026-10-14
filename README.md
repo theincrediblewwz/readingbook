@@ -2,7 +2,7 @@
 
 让自己的 AI 读书、创建知识要素、调用插件，并把阅读连接到自己写下的理解。
 
-原生 macOS 应用，SwiftUI，macOS 15+；macOS 26 使用系统 Liquid Glass。当前为**首批源码预览：尚未完成 macOS 编译、真实模型调用和真机视觉验收**，还没有可宣称可用的安装包。
+原生 macOS 应用，SwiftUI，macOS 15+；macOS 26 使用系统 Liquid Glass。当前为**首批预览**：编译与安装包状态见 [Actions](https://github.com/theincrediblewwz/readingbook/actions/workflows/macos.yml)，真实模型调用与真机视觉仍待验收。
 
 ## 阅读怎样连接起来
 
@@ -31,7 +31,7 @@
 
 ## 在 GitHub Actions 构建
 
-仓库提供手动工作流 **Build macOS App**，不在每次小修改后自动打包。公开仓库、许可证与首次远端操作仍待项目所有者确认。
+仓库提供手动工作流 **Build macOS App**，不在每次小修改后自动打包。
 
 1. 在 GitHub 的 Actions 中选择工作流，点击 **Run workflow**。
 2. 工作流在 `macos-26` / Xcode 26.6 运行核心检查、编译 arm64 和 x86_64，合并为 Universal App。
@@ -71,4 +71,4 @@ bash scripts/build-macos.sh
 
 产品参考：[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的插件组合，[Lumen](https://github.com/theincrediblewwz/lumen) 的文档节点，以及作者本地 HistoryandKnowledge 的时空联动。本项目独立实现，未复制这些项目的源码或真实数据。
 
-许可证待所有者确定，当前不作已获得 MIT 授权的声明。
+源码采用 [MIT License](LICENSE)。
