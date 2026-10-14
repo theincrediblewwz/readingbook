@@ -1,0 +1,17 @@
+.build/
+.swiftpm/
+dist/
+logs/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+.env
+.env.*
+*.key
+*.p12
+*.mobileprovision
+*.readingbook/
+private-books/
+node_modules/
+/PLAN.md
+/AGENTS.md

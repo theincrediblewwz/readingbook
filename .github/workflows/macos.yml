@@ -1,0 +1,39 @@
+name: Build macOS App
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Core data and plugin checks
+        run: swift test --scratch-path .build/tests
+      - name: Build universal app and package
+        run: bash scripts/build-macos.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ReadingBook-macos-universal
+          path: |
+            dist/ReadingBook-macos-universal.zip
+            dist/ReadingBook-macos-universal.zip.sha256
+            dist/build-info.txt
+          if-no-files-found: error
+          retention-days: 14
