@@ -178,6 +178,16 @@ import ReadingCore
         documentGeneration += 1
         selectedDocumentID = nil; editorTitle = "新的理解"; editorMarkdown = "# 新的理解\n\n"; draftEvidence = []; editorDirty = true; route = "editor"
     }
+    func discardDraft() {
+        guard !isSavingDocument, let bookID else { return }
+        documentGeneration += 1
+        let document = book?.activeDocuments.first { $0.id == selectedDocumentID }
+        editorDirty = false
+        UserDefaults.standard.removeObject(forKey: "draft-\(bookID)")
+        selectedDocumentID = nil; editorTitle = ""; editorMarkdown = ""; draftEvidence = []
+        if let document { Task { await openDocument(document) } }
+        activity = "未保存修改已放弃；已保存的文档保留。"
+    }
     func openDocument(_ document: DocumentRecord) async {
         guard let current = book else { return }
         guard document.trashedAt == nil else { errorMessage = "文档已在回收站，请先恢复。"; showingTrash = true; return }

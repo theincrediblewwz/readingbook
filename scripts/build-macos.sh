@@ -40,6 +40,7 @@ swift scripts/make-icon.swift "$PACKAGE_ROOT/icon.iconset"
 iconutil -c icns "$PACKAGE_ROOT/icon.iconset" -o "$APP_PATH/Contents/Resources/AppIcon.icns"
 codesign --force --sign - --timestamp=none "$APP_PATH"
 codesign --verify --strict --verbose=2 "$APP_PATH"
+"$APP_PATH/Contents/MacOS/ReadingBook" --verify-resources
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" dist/ReadingBook-macos-universal.zip
 shasum -a 256 dist/ReadingBook-macos-universal.zip > dist/ReadingBook-macos-universal.zip.sha256
 {

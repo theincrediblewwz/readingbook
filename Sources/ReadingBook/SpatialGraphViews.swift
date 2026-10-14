@@ -107,10 +107,13 @@ struct EntityCardsView: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                Text("书中的要素").font(.system(size: 28, design: .serif)); Spacer()
-                Picker("类型", selection: $filter) { Text("全部类型").tag(""); ForEach(store.book?.types ?? []) { type in Text(type.name).tag(type.id) } }.frame(width: 150)
-                TextField("查找名称与内容", text: $query).textFieldStyle(.roundedBorder).frame(width: 190)
+            VStack(alignment: .leading, spacing: 14) {
+                Text("书中的要素").font(.system(size: 28, design: .serif))
+                HStack {
+                    Picker("类型", selection: $filter) { Text("全部类型").tag(""); ForEach(store.book?.types ?? []) { type in Text(type.name).tag(type.id) } }.frame(maxWidth: 175)
+                    TextField("查找名称与内容", text: $query).textFieldStyle(.roundedBorder).frame(maxWidth: 300)
+                    Spacer(minLength: 0)
+                }
             }.padding(.horizontal, 26).padding(.top, 24)
             if entities.isEmpty { EmptyState(title: "卡片会随着阅读长出来", detail: "AI 会依据内容创建人物、概念、定理或自定义类型，并保留每张卡片的原文依据。", icon: "rectangle.stack") }
             else {

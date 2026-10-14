@@ -202,6 +202,7 @@ struct MarkdownText: View {
 struct DocumentEditorView: View {
     @EnvironmentObject var store: AppStore
     @State private var preview = false
+    @State private var discardingDraft = false
     var body: some View {
         HSplitView {
             VStack(alignment: .leading, spacing: 12) {
@@ -217,14 +218,20 @@ struct DocumentEditorView: View {
             }.frame(minWidth: 170, idealWidth: 200, maxWidth: 250)
             if store.selectedDocumentID != nil || store.editorDirty {
                 VStack(spacing: 0) {
-                    HStack {
+                    VStack(spacing: 12) {
+                        HStack {
                         TextField("文档标题", text: Binding(get: { store.editorTitle }, set: { store.editorTitle = $0; store.editorDirty = true })).font(.headline).textFieldStyle(.plain)
-                        Toggle("预览", isOn: $preview).toggleStyle(.button)
                         if let document = store.book?.activeDocuments.first(where: { $0.id == store.selectedDocumentID }) {
                             Button { store.requestDeletion(.document, id: document.id, title: document.title) } label: { Image(systemName: "trash") }.help("文档移入回收站").disabled(store.isBusy)
                         }
+                        }
+                        HStack {
+                        Toggle("预览", isOn: $preview).toggleStyle(.button)
+                        Spacer(minLength: 0)
+                        if store.editorDirty { Button("放弃修改") { discardingDraft = true }.disabled(store.isSavingDocument) }
                         Button("导出 .md") { store.exportMarkdown() }.disabled(store.selectedDocumentID == nil || store.editorDirty)
                         Button(store.editorDirty ? "保存" : "已保存") { Task { await store.saveCurrentDocument() } }.buttonStyle(.borderedProminent).disabled(!store.editorDirty || store.isBusy)
+                        }
                     }.padding(20)
                     Divider().opacity(0.4)
                     if preview { ScrollView { MarkdownText(markdown: store.editorMarkdown).padding(36).frame(maxWidth: 850).frame(maxWidth: .infinity) }.background(Palette.paper) }
@@ -232,6 +239,9 @@ struct DocumentEditorView: View {
                 }.frame(minWidth: 360, maxWidth: .infinity).disabled(store.isRecognizingPDF)
             } else { EmptyState(title: "给理解留一个位置", detail: "你写下的想法与主动保存的 AI 回答，都是真实的 Markdown 文件。它们也会出现在文档导图中。", icon: "square.and.pencil", actionTitle: "写下理解", action: { store.newDocument() }) }
         }
+        .confirmationDialog("放弃尚未保存的修改？", isPresented: $discardingDraft) {
+            Button("放弃修改", role: .destructive) { store.discardDraft() }
+        } message: { Text("清除当前草稿，恢复最近保存的内容；已保存的 Markdown 不会删除。") }
     }
 }
 

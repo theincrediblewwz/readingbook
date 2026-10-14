@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 
-@main
 struct ReadingBookApp: App {
     @StateObject private var store = AppStore()
     var body: some Scene {
@@ -24,7 +23,7 @@ struct ReadingBookApp: App {
                 Button("暂停任务") { store.pause() }.keyboardShortcut(".").disabled(!store.isBusy)
             }
         }
-        Settings { ProviderSettingsView().environmentObject(store).frame(width: 660, height: 760) }
+        Settings { ProviderSettingsView().environmentObject(store).frame(width: 640, height: 660) }
     }
 }
 

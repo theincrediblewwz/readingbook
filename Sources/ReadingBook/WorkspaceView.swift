@@ -29,7 +29,7 @@ struct WorkspaceView: View {
         .navigationSplitViewStyle(.balanced)
         .tint(Palette.accent)
         .onOpenURL { url in Task { await store.openInternalURL(url) } }
-        .sheet(isPresented: $store.showingSettings) { ProviderSettingsView().environmentObject(store).frame(width: 660, height: 760) }
+        .sheet(isPresented: $store.showingSettings) { ProviderSettingsView().environmentObject(store).frame(width: 640, height: 660) }
         .sheet(isPresented: $store.showingOCR) { PDFOCRPanel().environmentObject(store).frame(width: 590, height: 510) }
         .sheet(isPresented: $store.showingTrash) { LibraryTrashView().environmentObject(store).frame(width: 620, height: 550) }
         .confirmationDialog("删除保存的内容？", isPresented: Binding(get: { store.deletionRequest != nil }, set: { if !$0 { store.deletionRequest = nil } }), presenting: store.deletionRequest) { request in
