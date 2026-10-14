@@ -7,20 +7,23 @@ import PDFKit
 struct PDFReaderView: NSViewRepresentable {
     var url: URL
     var page: Int?
+    /// Increment for an explicit source navigation, even when selecting the same
+    /// page again. PDF scroll callbacks should not increment this token.
+    var navigationToken: Int
     var onPageChange: ((Int) -> Void)?
 
-    init(url: URL, page: Int? = nil, onPageChange: ((Int) -> Void)? = nil) {
-        self.url = url; self.page = page; self.onPageChange = onPageChange
+    init(url: URL, page: Int? = nil, navigationToken: Int = 0, onPageChange: ((Int) -> Void)? = nil) {
+        self.url = url; self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
     }
 
     func makeNSView(context: Context) -> PDFReaderContainerView {
         let view = PDFReaderContainerView()
-        view.update(url: url, requestedPage: page, onPageChange: onPageChange)
+        view.update(url: url, requestedPage: page, navigationToken: navigationToken, onPageChange: onPageChange)
         return view
     }
 
     func updateNSView(_ nsView: PDFReaderContainerView, context: Context) {
-        nsView.update(url: url, requestedPage: page, onPageChange: onPageChange)
+        nsView.update(url: url, requestedPage: page, navigationToken: navigationToken, onPageChange: onPageChange)
     }
 
     static func dismantleNSView(_ nsView: PDFReaderContainerView, coordinator: ()) { nsView.shutdown() }
@@ -42,7 +45,10 @@ struct PDFReaderView: NSViewRepresentable {
     private let resultLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private let fitPicker = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let modePicker = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let zoomControls = NSStackView()
+    private var searchRow = NSStackView()
+    private var searchButton = NSButton()
+    private var moreButton = NSButton()
     private var previousButton = NSButton()
     private var nextButton = NSButton()
     private var previousMatchButton = NSButton()
@@ -59,9 +65,15 @@ struct PDFReaderView: NSViewRepresentable {
     private var securityScoped = false
     private var sourcePage: Int?
     private var lastParentPage: Int?
+    private var lastParentNavigationToken: Int?
     private var lastEmittedPage: Int?
+    private var lastCallback: (page: Int, token: Int)?
     private var callback: ((Int) -> Void)?
     private var documentGeneration = 0
+    private var navigationRequestID = 0
+    private var pageObservationID = 0
+    private var installingDocument = false
+    private var pendingNavigation: (id: Int, page: Int, notifyParent: Bool)?
     private var fitMode = FitMode.width
     private var lastViewportSize = NSSize.zero
     private var searchGeneration = 0
@@ -71,6 +83,7 @@ struct PDFReaderView: NSViewRepresentable {
     private var searching = false
     private var searchLimited = false
     private var highlightUpdateScheduled = false
+    private var allowsSearchAutoNavigation = false
     private let matchLimit = 5000
 
     override init(frame frameRect: NSRect) {
@@ -128,11 +141,9 @@ struct PDFReaderView: NSViewRepresentable {
         pageField.alignment = .right
         pageField.target = self; pageField.action = #selector(jumpToPage)
         pageField.setAccessibilityLabel("PDF 页码，按回车跳转")
-        pageField.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        pageField.widthAnchor.constraint(equalToConstant: 38).isActive = true
         countLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         countLabel.textColor = .secondaryLabelColor
-        let navigation = row([previousButton, nextButton, pageField, countLabel, flexibleSpace(), thumbnailButton])
-
         let zoomOut = symbolButton("minus.magnifyingglass", "缩小", #selector(zoomOut))
         let zoomIn = symbolButton("plus.magnifyingglass", "放大", #selector(zoomIn))
         zoomLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
@@ -142,10 +153,15 @@ struct PDFReaderView: NSViewRepresentable {
         fitPicker.selectItem(at: FitMode.width.rawValue)
         fitPicker.target = self; fitPicker.action = #selector(changeFit)
         fitPicker.controlSize = .small
-        modePicker.addItems(withTitles: ["连续", "单页"])
-        modePicker.target = self; modePicker.action = #selector(changePDFDisplayMode)
-        modePicker.controlSize = .small
-        let sizing = row([zoomOut, zoomIn, zoomLabel, flexibleSpace(), fitPicker, modePicker])
+        fitPicker.setAccessibilityLabel("PDF 缩放适合方式")
+        zoomControls.orientation = .horizontal; zoomControls.alignment = .centerY; zoomControls.spacing = 4
+        zoomControls.addArrangedSubview(zoomOut); zoomControls.addArrangedSubview(zoomLabel); zoomControls.addArrangedSubview(zoomIn)
+        searchButton = symbolButton("magnifyingglass", "查找文字（⌘F）", #selector(toggleSearch))
+        searchButton.setButtonType(.toggle)
+        searchButton.keyEquivalent = "f"; searchButton.keyEquivalentModifierMask = [.command]
+        moreButton = symbolButton("ellipsis", "更多 PDF 选项", #selector(showMoreMenu))
+        let navigation = row([thumbnailButton, previousButton, pageField, countLabel, nextButton, flexibleSpace(), zoomControls, fitPicker, searchButton, moreButton])
+        navigation.detachesHiddenViews = true
 
         searchField.placeholderString = "搜索 PDF 文字 · 回车查找"
         searchField.controlSize = .small
@@ -160,27 +176,28 @@ struct PDFReaderView: NSViewRepresentable {
         let clear = symbolButton("xmark", "停止搜索并清除高亮", #selector(clearSearch))
         resultLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         resultLabel.textColor = .secondaryLabelColor
-        let finding = row([searchField, resultLabel, previousMatchButton, nextMatchButton, clear])
+        searchRow = row([searchField, resultLabel, previousMatchButton, nextMatchButton, clear])
+        searchRow.isHidden = true
         statusLabel.font = .systemFont(ofSize: 10)
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.isHidden = true
-        let toolbar = NSStackView(views: [navigation, sizing, finding, statusLabel])
+        let toolbar = NSStackView(views: [navigation, searchRow, statusLabel])
         toolbar.orientation = .vertical
         toolbar.alignment = .leading
-        toolbar.spacing = 7
+        toolbar.spacing = 6
         toolbar.detachesHiddenViews = true
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         header.material = .headerView
         header.blendingMode = .withinWindow
         header.state = .active
         header.addSubview(toolbar)
-        for line in [navigation, sizing, finding] { line.widthAnchor.constraint(equalTo: toolbar.widthAnchor).isActive = true }
+        for line in [navigation, searchRow] { line.widthAnchor.constraint(equalTo: toolbar.widthAnchor).isActive = true }
         NSLayoutConstraint.activate([
             toolbar.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 10),
             toolbar.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -10),
-            toolbar.topAnchor.constraint(equalTo: header.topAnchor, constant: 9),
-            toolbar.bottomAnchor.constraint(equalTo: header.bottomAnchor, constant: -9)
+            toolbar.topAnchor.constraint(equalTo: header.topAnchor, constant: 6),
+            toolbar.bottomAnchor.constraint(equalTo: header.bottomAnchor, constant: -6)
         ])
         let stack = NSStackView(views: [header, contentStack])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 0
@@ -194,7 +211,7 @@ struct PDFReaderView: NSViewRepresentable {
         header.setContentHuggingPriority(.required, for: .vertical)
         contentStack.setContentHuggingPriority(.defaultLow, for: .vertical)
         configureOverlay()
-        contentButtons = [previousButton, nextButton, pageField, zoomOut, zoomIn, fitPicker, modePicker, searchField, thumbnailButton]
+        contentButtons = [previousButton, nextButton, pageField, zoomOut, zoomIn, fitPicker, searchField, thumbnailButton, searchButton, moreButton]
         refreshControls()
     }
 
@@ -229,19 +246,31 @@ struct PDFReaderView: NSViewRepresentable {
         overlay.isHidden = true
     }
 
-    func update(url: URL, requestedPage: Int?, onPageChange: ((Int) -> Void)?) {
+    func update(url: URL, requestedPage: Int?, navigationToken: Int, onPageChange: ((Int) -> Void)?) {
         callback = onPageChange
         let canonical = url.standardizedFileURL
         if canonical != loadedURL {
-            sourcePage = requestedPage; lastParentPage = requestedPage
+            sourcePage = requestedPage; lastParentPage = requestedPage; lastParentNavigationToken = navigationToken
             load(canonical)
-        } else if requestedPage != lastParentPage {
-            lastParentPage = requestedPage; sourcePage = requestedPage
-            if let requestedPage { navigate(to: requestedPage, fromParent: true) }
+        } else if requestedPage != lastParentPage || navigationToken != lastParentNavigationToken {
+            // A page echoed by our own scroll callback acknowledges a native
+            // scroll. Do not snap it back to the page top on the SwiftUI update.
+            // The PDF may already have scrolled farther before that echo arrives.
+            let isAcknowledgement = navigationToken == lastParentNavigationToken
+                && lastCallback?.token == navigationToken && lastCallback?.page == requestedPage
+            lastParentPage = requestedPage; lastParentNavigationToken = navigationToken; sourcePage = requestedPage
+            lastCallback = nil
+            guard !isAcknowledgement else { return }
+            allowsSearchAutoNavigation = false
+            invalidateNavigation()
+            if let requestedPage { navigate(to: requestedPage, notifyParent: false) }
         }
     }
 
     private func load(_ url: URL) {
+        invalidateNavigation(); installingDocument = true
+        defer { installingDocument = false }
+        allowsSearchAutoNavigation = false; lastCallback = nil; setStatus("")
         clearSearchState()
         document?.delegate = nil
         pdfView.document = nil; document = nil
@@ -266,17 +295,14 @@ struct PDFReaderView: NSViewRepresentable {
             return
         }
         overlay.isHidden = true; passwordField.stringValue = ""
+        installingDocument = true
         pdfView.document = document
         thumbnails.pdfView = pdfView
         layoutThumbnails()
         let desired = sourcePage ?? 1
-        navigate(to: (1...document.pageCount).contains(desired) ? desired : 1, fromParent: true)
+        navigate(to: (1...document.pageCount).contains(desired) ? desired : 1, notifyParent: false)
+        installingDocument = false
         refreshControls()
-        let generation = documentGeneration
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.documentGeneration == generation else { return }
-            self.applyFit(); self.refreshControls()
-        }
     }
 
     private func showLocked() {
@@ -307,14 +333,54 @@ struct PDFReaderView: NSViewRepresentable {
         return index == NSNotFound ? nil : index + 1
     }
 
-    private func navigate(to number: Int, fromParent: Bool = false) {
+    /// Explicit navigation always addresses a destination, including a repeated
+    /// request for the current page. Notifications resume after its layout turn.
+    private func navigate(to number: Int, notifyParent: Bool = true) {
         guard let document, !document.isLocked, document.pageCount > 0, (1...document.pageCount).contains(number), let target = document.page(at: number - 1) else {
             if document?.isLocked != true { setStatus("页码超出 PDF 的有效范围。") }
             return
         }
-        if fromParent { lastEmittedPage = number }
-        if pdfView.currentPage !== target { pdfView.go(to: target) }
-        applyFit(); refreshControls()
+        invalidateNavigation()
+        setStatus("")
+        let request = navigationRequestID, generation = documentGeneration
+        pendingNavigation = (request, number, notifyParent)
+        position(at: target)
+        DispatchQueue.main.async { [weak self] in self?.settleNavigation(request, generation: generation, attempt: 0) }
+    }
+
+    private func invalidateNavigation() {
+        navigationRequestID &+= 1; pageObservationID &+= 1; pendingNavigation = nil
+    }
+
+    private func position(at page: PDFPage) {
+        pdfView.go(to: page)
+        applyFit()
+        let box = page.bounds(for: pdfView.displayBox)
+        pdfView.go(to: PDFDestination(page: page, at: CGPoint(x: box.minX, y: box.maxY)))
+        refreshControls()
+    }
+
+    private func settleNavigation(_ request: Int, generation: Int, attempt: Int) {
+        guard generation == documentGeneration, let pending = pendingNavigation,
+              request == navigationRequestID, pending.id == request else { return }
+        // makeNSView can load a document before SwiftUI gives the PDF a viewport.
+        // Keep the request pending; layout() will resume it once it has a size.
+        guard pdfView.bounds.width > 40, pdfView.bounds.height > 40 else { return }
+        // PDFKit may finish document/scale layout on the next run-loop turn.
+        // An older attempt cannot move or notify after a newer request arrives.
+        if attempt == 0 || currentPageNumber != pending.page {
+            guard attempt < 3, let target = document?.page(at: pending.page - 1) else {
+                pendingNavigation = nil
+                setStatus("PDF 定位未完成，请重新选择页码。")
+                return
+            }
+            position(at: target)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in self?.settleNavigation(request, generation: generation, attempt: attempt + 1) }
+            return
+        }
+        pendingNavigation = nil; refreshControls()
+        if pending.notifyParent { schedulePageCallback(pending.page) }
+        else { lastEmittedPage = pending.page }
     }
 
     @objc private func jumpToPage() {
@@ -342,18 +408,53 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     @objc private func changeFit() { fitMode = FitMode(rawValue: fitPicker.indexOfSelectedItem) ?? .width; applyFit() }
-    @objc private func changePDFDisplayMode() {
+    @objc private func showContinuousPages() { changePDFDisplayMode(.singlePageContinuous) }
+    @objc private func showSinglePage() { changePDFDisplayMode(.singlePage) }
+    private func changePDFDisplayMode(_ mode: PDFDisplayMode) {
         let page = currentPageNumber
-        pdfView.displayMode = modePicker.indexOfSelectedItem == 0 ? .singlePageContinuous : .singlePage
-        if let page { navigate(to: page, fromParent: true) }
+        pdfView.displayMode = mode
+        if let page { navigate(to: page, notifyParent: false) }
         applyFit()
+    }
+
+    @objc private func toggleSearch() {
+        searchRow.isHidden.toggle()
+        searchButton.state = searchRow.isHidden ? .off : .on
+        if searchRow.isHidden { clearSearchState(); setStatus("") }
+        else { window?.makeFirstResponder(searchField) }
+        needsLayout = true
+    }
+
+    @objc private func showMoreMenu() {
+        let menu = NSMenu(title: "更多 PDF 选项")
+        menu.autoenablesItems = false
+        func item(_ title: String, action: Selector, checked: Bool = false) {
+            let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            entry.target = self; entry.state = checked ? .on : .off
+            entry.isEnabled = document != nil && document?.isLocked == false
+            menu.addItem(entry)
+        }
+        item("放大", action: #selector(zoomIn)); item("缩小", action: #selector(zoomOut))
+        menu.addItem(.separator())
+        item("连续", action: #selector(showContinuousPages), checked: pdfView.displayMode == .singlePageContinuous)
+        item("单页", action: #selector(showSinglePage), checked: pdfView.displayMode == .singlePage)
+        menu.popUp(positioning: nil, at: NSPoint(x: moreButton.bounds.minX, y: moreButton.bounds.maxY + 2), in: moreButton)
     }
 
     override func layout() {
         super.layout()
+        // Narrow reader columns keep page navigation, fit and find on one line.
+        // Zoom controls remain available in More when their inline group hides.
+        let hideZoom = bounds.width < 600, hideCount = bounds.width < 430
+        if zoomControls.isHidden != hideZoom { zoomControls.isHidden = hideZoom }
+        if countLabel.isHidden != hideCount { countLabel.isHidden = hideCount }
         let size = pdfView.bounds.size
         if abs(size.width - lastViewportSize.width) > 0.5 || abs(size.height - lastViewportSize.height) > 0.5 {
             lastViewportSize = size; layoutThumbnails(); applyFit()
+            if let pending = pendingNavigation, size.width > 40, size.height > 40 {
+                let request = pending.id, generation = documentGeneration
+                DispatchQueue.main.async { [weak self] in self?.settleNavigation(request, generation: generation, attempt: 0) }
+            }
         }
     }
 
@@ -378,14 +479,24 @@ struct PDFReaderView: NSViewRepresentable {
 
     @objc private func pageChanged(_ notification: Notification) {
         refreshControls()
+        guard !installingDocument, pendingNavigation == nil else { return }
         if fitMode == .page { applyFit() }
-        guard let page = currentPageNumber, page != lastEmittedPage else { return }
-        lastEmittedPage = page
-        let generation = documentGeneration
-        // Updating the enclosing SwiftUI source selection from updateNSView
-        // would cause a render loop. Deliver only the latest page asynchronously.
+        if let page = currentPageNumber { schedulePageCallback(page) }
+    }
+
+    private func schedulePageCallback(_ page: Int) {
+        pageObservationID &+= 1
+        guard page != lastEmittedPage, !installingDocument, pendingNavigation == nil else { return }
+        let generation = documentGeneration, navigation = navigationRequestID
+        let observation = pageObservationID, token = lastParentNavigationToken ?? 0
+        // A document switch, source navigation or later native page observation
+        // invalidates this queued callback before it can update SwiftUI selection.
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.documentGeneration == generation, self.currentPageNumber == page else { return }
+            guard let self, self.documentGeneration == generation,
+                  self.navigationRequestID == navigation, self.pageObservationID == observation,
+                  self.lastParentNavigationToken == token, self.pendingNavigation == nil,
+                  !self.installingDocument, self.currentPageNumber == page else { return }
+            self.lastEmittedPage = page; self.lastCallback = (page, token)
             self.callback?(page)
         }
     }
@@ -410,6 +521,7 @@ struct PDFReaderView: NSViewRepresentable {
         guard !query.isEmpty else { clearSearchState(); return }
         guard query.count <= 500 else { setStatus("搜索词最多为 500 字。"); return }
         clearSearchState()
+        allowsSearchAutoNavigation = true
         searching = true; resultLabel.stringValue = "查找中…"; setStatus("")
         startSearch(query, generation: searchGeneration, attempts: 0)
     }
@@ -431,7 +543,7 @@ struct PDFReaderView: NSViewRepresentable {
         searchGeneration += 1
         document?.delegate = nil; document?.cancelFindString(); searchDelegate = nil
         matches = []; matchIndex = -1; searching = false; searchLimited = false
-        highlightUpdateScheduled = false
+        highlightUpdateScheduled = false; allowsSearchAutoNavigation = false
         pdfView.highlightedSelections = nil; pdfView.clearSelection()
         resultLabel.stringValue = ""; refreshControls()
     }
@@ -446,7 +558,7 @@ struct PDFReaderView: NSViewRepresentable {
         }
         selection.color = NSColor.systemYellow.withAlphaComponent(0.45)
         matches.append(selection)
-        if matchIndex < 0 { matchIndex = 0; showMatch() }
+        if matchIndex < 0 { matchIndex = 0; if allowsSearchAutoNavigation { showMatch() } }
         guard !highlightUpdateScheduled else { return }
         highlightUpdateScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
@@ -470,10 +582,12 @@ struct PDFReaderView: NSViewRepresentable {
     @objc private func nextMatch() { moveMatch(1) }
     private func moveMatch(_ direction: Int) {
         guard !matches.isEmpty else { return }
+        allowsSearchAutoNavigation = true
         matchIndex = (matchIndex + direction + matches.count) % matches.count; showMatch()
     }
     private func showMatch() {
         guard matches.indices.contains(matchIndex) else { return }
+        invalidateNavigation()
         let selection = matches[matchIndex]
         pdfView.go(to: selection); pdfView.setCurrentSelection(selection, animate: true)
         pdfView.scrollSelectionToVisible(nil); updateSearchDisplay()
@@ -498,6 +612,7 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     func shutdown() {
+        invalidateNavigation(); installingDocument = true
         searchGeneration += 1; document?.delegate = nil; document?.cancelFindString(); searchDelegate = nil
         NotificationCenter.default.removeObserver(self)
         thumbnails.pdfView = nil; pdfView.document = nil; document = nil; callback = nil

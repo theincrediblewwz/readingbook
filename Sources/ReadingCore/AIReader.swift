@@ -80,14 +80,58 @@ public actor AIReader {
         let ordered = orderedUnits(project)
         guard let index = ordered.firstIndex(where: {
             let state = project.coverage[$0.id]?.status ?? .pending
-            return state != .completed && state != .needsReview
+            if ReadingLedger.isDeferred(unitID: $0.id, in: project) { return false }
+            return state != .completed && !(state == .needsReview && ReadingLedger.hasReadingAnalysis(unitID: $0.id, in: project))
         }) else { throw ReadingError.invalid("所有登记单元已处理；待复核单元仍需人工核对。") }
         let unit = ordered[index]
-        let previous = ordered.prefix(index).last { project.coverage[$0.id]?.status == .completed }
+        guard !unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ReadingError.invalid("当前单元尚无可靠文字，不能生成逐段回执；请先OCR，或对照原书明确确认为空白。")
+        }
+        let previous = ordered.prefix(index).last {
+            let state = project.coverage[$0.id]?.status
+            return (state == .completed || state == .needsReview) && ReadingLedger.hasReadingAnalysis(unitID: $0.id, in: project)
+        }
         let previousContext = previous.map { previous in
             let insight = project.insights.last { $0.unitIDs.contains(previous.id) }
-            return "上一已完成单元 \(previous.id)（仅为衔接，不属于当前覆盖）：\n" + String((insight?.markdown ?? previous.text).prefix(1800))
-        } ?? "这是首个可处理单元；没有上一已完成单元。"
+            let previousIndex = ordered.firstIndex(where: { $0.id == previous.id }) ?? index
+            let gap = index - previousIndex > 1 ? "中间还有未读、延期或空白单元，不能将两端当作连续完整证明或叙事。" : "这两个登记单元相邻，但单元边界不保证语义完整。"
+            let analysis = insight?.markdown ?? "无细读分析"
+            return "上一已处理单元 \(previous.id)（以下仅为衔接，不增加当前覆盖；源质量警告：\(previous.warning ?? "无")）。\(gap)\n前序分析开头节选：\n" + String(analysis.prefix(900)) + "\n前序分析末尾节选：\n" + String(analysis.suffix(1200)) + "\n前序原文尾部（有界片段）：\n" + String(previous.text.suffix(1200))
+        } ?? "没有可用于衔接的前序细读分析。"
+        let paragraphs = try ReadingLedger.paragraphs(for: unit, in: staged)
+        let savedReceipts = try ReadingLedger.receipts(for: unit, in: staged)
+        let savedIDs = Set(savedReceipts.map(\.paragraphID))
+        let missing = paragraphs.filter { !savedIDs.contains($0.id) }
+        if !missing.isEmpty {
+            // The host chooses a bounded fragment batch from output budget, never a fixed page count.
+            guard settings.maxOutputTokens >= 512 else { throw ReadingError.invalid("逐段回执至少需要512输出token预算；未发送请求。") }
+            // IDs, hashes, exact anchors and JSON syntax also consume output;
+            // reserve enough room instead of budgeting only the short summary.
+            let count = min(12, max(1, (min(settings.maxOutputTokens, 8000) - 512) / 600))
+            let selected = Array(missing.prefix(count))
+            let batch = try ReadingLedger.makeBatch(unit: unit, paragraphs: selected)
+            staged.receiptBatch = batch
+            let entries: [[String: Any]] = selected.map { p in
+                ["paragraphID": p.id, "textHash": p.textHash, "lineStart": p.lineStart, "lineEnd": p.lineEnd,
+                 "utf8Start": p.utf8Start, "utf8End": p.utf8End, "kind": p.kind, "text": p.text,
+                 "startQuote": p.startQuote, "endQuote": p.endQuote]
+            }
+            let prompt = """
+            先逐段主动复述，再进行知识抽取。下面清单由宿主从当前源单元精确生成，不得自编、删减、合并或跳过。
+            按清单顺序逐行阅读每个片段，包含题号、脚注、题注、公式、证明条件与阅读顺序。每段用自己的话写极简复述，通常20–80字；纯公式须说明其符号条件和该式表达，不能只写“公式”。保留看不清、不连贯或跨单元未完成处于issues；不得猜测填补。
+            startQuote/endQuote和textHash精确复制宿主提供值；锚点用于原文核对，并不能替代复述。不要把图表解释当成转录。已有清单可能是段落片段，不能假称语义段落完整。
+            只调用read_receipt，batchID为\(batch.id)，receipts精确包含下面全部\(selected.count)项。不能调用知识工具或reading_finish。批次通过后宿主保存检查点，再提供尚未通过的清单。
+            原书：\(String(staged.title.prefix(200)))；当前单元：\(unit.locator)；源质量警告：\(unit.warning ?? "无")。
+            本单元已通过\(savedReceipts.count)/\(paragraphs.count)片段；本次不是全单元完成。
+            \(previousContext)
+            清单数据：\(try jsonString(entries))
+            """
+            return try await toolConversation(project: staged, messages: baseMessages(prompt), allowedNames: ["read_receipt"],
+                                               allowedUnitIDs: [unit.id], requiredTool: "read_receipt", currentUnitID: unit.id,
+                                               settings: settings, apiKey: apiKey)
+        }
+        staged.receiptBatch = nil
+        try ReadingLedger.requireComplete(unitIDs: [unit.id], in: staged)
         let methods = staged.methods.filter { readingPlan.methodIDs.contains($0.id) }
         guard methods.count == Set(readingPlan.methodIDs).count else {
             throw ReadingError.invalid("读书方案引用的方法缺失，请重新预读。")
@@ -102,9 +146,13 @@ public actor AIReader {
         人物只是可选类型；数学书可创建定义、定理、证明与依赖。不要捏造地理坐标、日期或书外事实。
         新事实只允许引用当前 unitID；evidence.quote 必须是当前原文连续精确子串，不改写引文。多个对象可以引用同一段依据。
         工具依赖按顺序执行：先类型、再实体/地点、事件、关系/视图。工具返回错误时修正参数并重试，未修复的错误不能结束。
-        最后调用 reading_finish，unitIDs 仅为 [\(unit.id)]，markdown 写本单元逐步阅读结果，evidence 覆盖当前单元；该完整工具批次通过后宿主保存结果。
+        读中发现原方法不足时可methods_define创建新方法，再reading_plan把新方法加入原methodIDs；正文阶段不能移除原方法。reading_plan会返回更新后的宿主stepID，finish须交齐新增全部步骤。
+        当前全部片段回执已经由宿主校验齐全，回执是可检查覆盖记录，不代表绝对理解无遗漏。
+        最后调用 reading_finish，unitIDs 仅为 [\(unit.id)]，markdown 写本单元逐步阅读结果，evidence 覆盖当前单元；stepResults精确覆盖下面每个stepID，result写实际执行所得，paragraphIDs引用相关已通过片段。不适用的步骤也明确说明理由。该完整工具批次通过后宿主保存结果。
         提取 warning 或复杂图表/公式未能核查时明确待复核；处理完成不等于理解绝无遗漏。不能编辑用户文档，也没有网络/文件/Shell 工具。
         已选方法与步骤：\(try encodedString(methods))
+        宿主步骤清单：\(try encodedString(ReadingLedger.stepRequirements(for: unit, in: staged)))
+        已校验逐段复述：\(try encodedString(savedReceipts))
         方案关注点：\(try encodedString(readingPlan))
         已启用类型：\(try encodedString(staged.types.filter { !disabled.types.contains($0.id) }))
         已启用视图：\(try encodedString(staged.views.filter { !disabled.views.contains($0.id) && $0.typeIDs.allSatisfy { !disabled.types.contains($0) } }))
@@ -297,12 +345,7 @@ public actor AIReader {
                 guard calls.isEmpty, requiredSucceeded, unresolvedErrors.isEmpty else {
                     throw ReadingError.invalid("模型结束前没有完成必要工具或仍有工具错误；当前分析未提交。")
                 }
-                if let currentUnitID {
-                    guard let status = staged.coverage[currentUnitID]?.status,
-                          status == .completed || status == .needsReview else {
-                        throw ReadingError.invalid("reading_finish 没有完成当前原文单元。")
-                    }
-                } else if staged.plan == nil { throw ReadingError.invalid("预读没有生成有效方案。") }
+                try validateTerminal(staged, requiredTool: requiredTool, currentUnitID: currentUnitID)
                 try Task.checkCancellation()
                 return staged
             }
@@ -339,15 +382,34 @@ public actor AIReader {
             // Do not spend another request merely asking the model to acknowledge
             // tool success; the whole returned call batch must have passed first.
             if requiredSucceeded && unresolvedErrors.isEmpty {
-                if let currentUnitID {
-                    guard let status = staged.coverage[currentUnitID]?.status,
-                          status == .completed || status == .needsReview else { throw ReadingError.invalid("当前单元没有完整完成，结果未提交。") }
-                } else if staged.plan == nil { throw ReadingError.invalid("预读没有生成有效方案。") }
+                try validateTerminal(staged, requiredTool: requiredTool, currentUnitID: currentUnitID)
                 try Task.checkCancellation()
                 return staged
             }
         }
         throw ReadingError.invalid("本次分析达到 12 轮工具调用上限；当前单元未提交，可调整模型或缩小内容后重试。")
+    }
+
+    private func validateTerminal(_ project: BookProject, requiredTool: String, currentUnitID: String?) throws {
+        guard let currentUnitID else {
+            guard project.plan != nil else { throw ReadingError.invalid("预读没有生成有效方案。") }
+            return
+        }
+        if requiredTool == "read_receipt" {
+            guard let unit = project.units.first(where: { $0.id == currentUnitID }), let batch = project.receiptBatch,
+                  batch.unitID == currentUnitID else { throw ReadingError.invalid("逐段批次缺失，结果未提交。") }
+            let saved = Set(try ReadingLedger.receipts(for: unit, in: project).map(\.paragraphID))
+            guard Set(batch.paragraphIDs).isSubset(of: saved) else { throw ReadingError.invalid("逐段批次回执未齐，结果未提交。") }
+        } else {
+            guard let status = project.coverage[currentUnitID]?.status, status == .completed || status == .needsReview else {
+                throw ReadingError.invalid("reading_finish 没有完成当前原文单元。")
+            }
+            guard let unit = project.units.first(where: { $0.id == currentUnitID }) else { throw ReadingError.invalid("完成单元不存在。") }
+            try ReadingLedger.requireComplete(unitIDs: [currentUnitID], in: project)
+            let requirements = try ReadingLedger.stepRequirements(for: unit, in: project)
+            let saved = Set((project.readingStepResults ?? []).filter { $0.unitID == currentUnitID }.map(\.stepID))
+            guard Set(requirements.map(\.stepID)).isSubset(of: saved) else { throw ReadingError.invalid("完成后方案又增加了步骤，必须交齐新增步骤结果再结束。") }
+        }
     }
 
     private func request(messages: [[String: Any]], tools: [[String: Any]], settings: ProviderSettings,
@@ -430,7 +492,7 @@ public actor AIReader {
         guard !units.isEmpty else { throw ReadingError.invalid("没有可综合的原文单元。") }
         guard units.allSatisfy({ unit in
             let state = project.coverage[unit.id]?.status
-            return state == .completed || state == .needsReview
+            return (state == .completed || state == .needsReview) && !ReadingLedger.isDeferred(unitID: unit.id, in: project)
         }) else { throw ReadingError.invalid("仍有待处理或失败单元，请完成顺序精读后再做读后综合。") }
         let unitOrder = Dictionary(units.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
         guard unitOrder.count == units.count else { throw ReadingError.invalid("源单元 ID 重复，不能建立综合来源映射。") }

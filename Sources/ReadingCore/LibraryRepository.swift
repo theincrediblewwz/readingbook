@@ -354,6 +354,9 @@ public actor LibraryRepository {
             guard unit.order == index, unit.text.count <= 5_000, unit.lineStart > 0, unit.lineEnd >= unit.lineStart,
                   unit.page.map({ $0 > 0 && $0 <= 20_000 }) ?? true else { throw ReadingError.invalid("原文单元顺序、页行定位或长度无效：\(unit.id)") }
         }
+        // Older projects may have no ledger. When present, its source hashes,
+        // anchors, historical method versions and batch must survive every load/save/import.
+        try ReadingLedger.validateStoredRecords(in: project)
         let recognizedPages = project.ocrPages ?? []
         guard recognizedPages.count <= 20_000, Set(recognizedPages.map(\.page)).count == recognizedPages.count else { throw ReadingError.invalid("OCR 页记录重复或超过上限。") }
         for page in recognizedPages {

@@ -268,7 +268,7 @@ struct KnowledgeLibraryView: View {
                 if store.book?.activeDocuments.isEmpty != false { Text("还没有保存文档。你可以主动保存 AI 回答，或写下自己的理解。").font(.subheadline).foregroundStyle(.secondary) }
                 Text("阅读分析").font(.headline).padding(.top, 10)
                 ForEach((store.book?.insights ?? []).filter { query.isEmpty || $0.markdown.localizedCaseInsensitiveContains(query) }) { insight in
-                    VStack(alignment: .leading, spacing: 14) { MarkdownText(markdown: insight.markdown); HStack { ForEach(insight.unitIDs, id: \.self) { id in Button(id) { store.selectedUnitID = id; store.route = "reader" }.font(.caption) }; Spacer(); Button("保存为文档") { Task { await store.saveInsight(insight) } }.font(.caption).disabled(store.isBusy) } }.softPanel()
+                    VStack(alignment: .leading, spacing: 14) { MarkdownText(markdown: insight.markdown); HStack { ForEach(insight.unitIDs, id: \.self) { id in Button(id) { store.navigateToUnit(id); store.route = "reader" }.font(.caption) }; Spacer(); Button("保存为文档") { Task { await store.saveInsight(insight) } }.font(.caption).disabled(store.isBusy) } }.softPanel()
                 }
                 if !query.isEmpty {
                     Text("相关要素").font(.headline)

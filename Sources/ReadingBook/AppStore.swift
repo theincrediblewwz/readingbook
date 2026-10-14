@@ -9,7 +9,11 @@ import ReadingCore
     @Published var bookID: String?
     @Published var route = "reader"
     @Published var selectedObjectID: String?
-    @Published var selectedUnitID: String?
+    @Published var selectedUnitID: String? {
+        didSet { if let bookID, let selectedUnitID { UserDefaults.standard.set(selectedUnitID, forKey: "position-\(bookID)") } }
+    }
+    @Published var pdfNavigationToken = 0
+    @Published var activeReadingUnitID: String?
     @Published var search = ""
     @Published var selectedDocumentID: String?
     @Published var editorTitle = "" { didSet { if editorDirty { persistDraft() } } }
@@ -19,6 +23,7 @@ import ReadingCore
     @Published var sourceFileURL: URL?
     @Published var isBusy = false
     @Published var isSavingDocument = false
+    @Published var isExportingProject = false
     @Published var activity = "把一本书带进来，让理解慢慢长出来。"
     @Published var errorMessage: String?
     @Published var showingSettings = false
@@ -69,8 +74,9 @@ import ReadingCore
         guard !isBusy else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档，再切换书籍。"; return }
         navigationGeneration += 1; documentGeneration += 1
+        pdfNavigationToken += 1
         let generation = navigationGeneration
-        bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []
+        bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
         if book?.units.contains(where: { $0.id == selectedUnitID }) != true { selectedUnitID = book?.units.first?.id }
         if let project = book {
@@ -123,7 +129,7 @@ import ReadingCore
     func startReading() {
         guard book != nil, !isBusy, providerReady else { return }
         guard !requiresPDFRecognition else { showingOCR = true; activity = "扫描页尚未识别；请先 OCR，避免把空提取结果当成已读。"; return }
-        isBusy = true; route = "workflow"; activity = "准备顺序精读…"
+        isBusy = true; activity = "准备顺序精读…"
         task = Task {
             await reader.resetBudget()
             do {
@@ -135,10 +141,11 @@ import ReadingCore
                     try Task.checkCancellation()
                     let pending = current.units.first { unit in
                         let status = current.coverage[unit.id]?.status ?? .pending
-                        return status == .pending || status == .failed
+                        return !ReadingLedger.isDeferred(unitID: unit.id, in: current) && status != .completed && !(status == .needsReview && ReadingLedger.hasReadingAnalysis(unitID: unit.id, in: current))
                     }
                     guard let unit = pending else { break }
-                    activity = "正在精读：\(unit.locator)"; selectedUnitID = unit.id
+                    activity = "正在精读：\(unit.locator)"
+                    activeReadingUnitID = unit.id
                     let result = try await reader.readNext(project: current, settings: settings, apiKey: apiKey)
                     try Task.checkCancellation(); try await repository.save(result); publish(result)
                     requestsUsed = await reader.requestCount
@@ -153,7 +160,7 @@ import ReadingCore
             requestsUsed = await reader.requestCount; isBusy = false
         }
     }
-    func pause() { guard !isSavingDocument else { return }; task?.cancel(); activity = "正在暂停，已保存结果可以继续阅读。" }
+    func pause() { guard !isSavingDocument, !isExportingProject else { return }; task?.cancel(); activity = "正在暂停，已保存结果可以继续阅读。" }
     private var requiresPDFRecognition: Bool {
         guard let book, book.originalName.lowercased().hasSuffix(".pdf") else { return false }
         return book.units.contains { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (book.coverage[$0.id]?.status ?? .pending) == .pending }
@@ -277,10 +284,15 @@ import ReadingCore
     }
     func openObject(_ id: String) {
         if let document = book?.activeDocuments.first(where: { $0.id == id }) { Task { await openDocument(document) } }
-        else if let unit = book?.units.first(where: { $0.id == id }) { selectedUnitID = unit.id; route = "reader" }
+        else if let unit = book?.units.first(where: { $0.id == id }) { navigateToUnit(unit.id); route = "reader" }
         else { focus(id) }
     }
-    func follow(_ evidence: Evidence) { selectedUnitID = evidence.unitID; route = "reader" }
+    func navigateToUnit(_ id: String) {
+        guard book?.units.contains(where: { $0.id == id }) == true else { return }
+        pdfNavigationToken += 1
+        selectedUnitID = id
+    }
+    func follow(_ evidence: Evidence) { navigateToUnit(evidence.unitID); route = "reader" }
     func openInternalURL(_ url: URL) async {
         guard url.scheme == "readingbook" else { return }
         let parts = url.pathComponents.filter { $0 != "/" }
@@ -292,7 +304,7 @@ import ReadingCore
             guard bookID == targetBook else { return }
             kind = parts[1]; id = parts[2]
         } else { kind = url.host ?? ""; id = parts.last ?? "" }
-        if kind == "unit", book?.units.contains(where: { $0.id == id }) == true { selectedUnitID = id; route = "reader" }
+        if kind == "unit", book?.units.contains(where: { $0.id == id }) == true { navigateToUnit(id); route = "reader" }
         else if kind == "document", let document = book?.documents.first(where: { $0.id == id }) { await openDocument(document) }
         else { errorMessage = "引用的原文或文档不存在于当前书籍。" }
     }
@@ -303,8 +315,13 @@ import ReadingCore
         if current.units[index].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             var entry = current.coverage[unitID] ?? CoverageEntry(); entry.status = .completed; entry.message = "用户确认此单元为原书空白。"; entry.updatedAt = Date(); current.coverage[unitID] = entry
             let insightID = "blank-\(unitID)"
+            current.insights.removeAll { $0.id == "deferred-\(unitID)" && $0.unitIDs == [unitID] }
             if !current.insights.contains(where: { $0.id == insightID }) { current.insights.append(ReadingInsight(id: insightID, unitIDs: [unitID], markdown: "用户对照原书确认此单元为空白，无需 AI 提取文字。")) }
-        } else if current.coverage[unitID]?.status == .needsReview { current.coverage[unitID]?.status = .completed }
+        } else if current.coverage[unitID]?.status == .needsReview {
+            let hasAnalysis = ReadingLedger.hasReadingAnalysis(unitID: unitID, in: current)
+            current.coverage[unitID]?.status = hasAnalysis ? .completed : .pending
+            if !hasAnalysis { current.insights.removeAll { $0.id == "deferred-\(unitID)" && $0.unitIDs == [unitID] } }
+        }
         current.audit.append(ToolAudit(name: "user_review", summary: "用户核对单元 \(unitID)"))
         do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
     }
@@ -336,13 +353,16 @@ import ReadingCore
     }
     func exportProject() {
         guard let current = book, !isBusy else { return }
+        guard !editorDirty else { errorMessage = "请先保存或放弃当前 Markdown 草稿，再导出完整书项目。"; return }
         let panel = NSSavePanel(); panel.nameFieldStringValue = "\(current.title).readingbook"; panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
-            Task { do { try await repository.exportProject(current, to: url); activity = "书项目及 Markdown 已导出。" } catch { errorMessage = error.localizedDescription } }
+            isBusy = true; isExportingProject = true
+            Task { defer { isBusy = false; isExportingProject = false }; do { try await repository.exportProject(current, to: url); activity = "书项目及 Markdown 已导出。" } catch { errorMessage = error.localizedDescription } }
         }
     }
     func importProject() {
-        guard !isBusy, !editorDirty else { return }
+        guard !isBusy else { return }
+        guard !editorDirty else { errorMessage = "请先保存或放弃当前 Markdown 草稿，再导入书项目。"; return }
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.treatsFilePackagesAsDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
             Task { do { let current = try await repository.importProject(from: url); publish(current); await selectBook(current.id) } catch { errorMessage = error.localizedDescription } }

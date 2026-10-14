@@ -16,7 +16,8 @@ public enum OCRIntegration {
         guard !units.isEmpty else { return "页码不存在。" }
         let ids = Set(units.map(\.id))
         if units.contains(where: { project.coverage[$0.id]?.status == .completed }) { return "此页已有完成记录，重新导入原书为新项目后可以重新识别。" }
-        if project.insights.contains(where: { !ids.isDisjoint(with: $0.unitIDs) }) || project.syntheses.contains(where: { !ids.isDisjoint(with: $0.unitIDs) }) { return "此页已有阅读分析，不能替换其引用正文。" }
+        if ReadingLedger.hasStoredWork(unitIDs: ids, in: project) { return "此页已有段落回执或读书步骤记录，不能改写账本引用的原文。请导入为新项目后识别。" }
+        if project.insights.contains(where: { !ids.isDisjoint(with: $0.unitIDs) && !isEmptyDeferredPlaceholder($0, in: project) }) || project.syntheses.contains(where: { !ids.isDisjoint(with: $0.unitIDs) }) { return "此页已有阅读分析，不能替换其引用正文。" }
         var evidence: [Evidence] = project.entities.flatMap(\.evidence)
         evidence.append(contentsOf: project.events.flatMap(\.evidence))
         evidence.append(contentsOf: project.relations.flatMap(\.evidence))
@@ -38,6 +39,9 @@ public enum OCRIntegration {
         var replacements = try BookImporter.splitText(result.markdown, chapter: old.first?.chapter ?? project.title, page: result.page, warning: notice)
         for index in replacements.indices { replacements[index].id = "ocr-p\(result.page)-\(fingerprint)-\(index)" }
         var updated = project
+        // A deferred marker records that no reading took place. Once its empty
+        // source is replaced, remove only that exact app-generated placeholder.
+        updated.insights.removeAll { !oldIDs.isDisjoint(with: $0.unitIDs) && isEmptyDeferredPlaceholder($0, in: project) }
         updated.units.removeAll { oldIDs.contains($0.id) }
         updated.units.insert(contentsOf: replacements, at: min(firstOrder, updated.units.count))
         guard updated.units.count <= BookImporter.maximumUnits else { throw ReadingError.invalid("OCR 结果超过内容单元上限。") }
@@ -53,6 +57,16 @@ public enum OCRIntegration {
         updated.plan = nil // Previews based on the old extraction must be redone.
         updated.audit.append(ToolAudit(name: "pdf_ocr", summary: "第 \(result.page) 页使用 \(result.model) 逐页转录，保留原 PDF；待人工核对，阅读覆盖尚未增加。"))
         return updated
+    }
+
+    private static func isEmptyDeferredPlaceholder(_ insight: ReadingInsight, in project: BookProject) -> Bool {
+        guard insight.unitIDs.count == 1, let id = insight.unitIDs.first,
+              insight.id == "deferred-\(id)",
+              let unit = project.units.first(where: { $0.id == id }),
+              unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              project.coverage[id]?.status == .needsReview,
+              project.coverage[id]?.message == "用户保留本单元为待识别，未读取其中内容。" else { return false }
+        return insight.markdown == "【未读取，待识别】\(unit.locator)。该单元尚无可靠文本，不得推断其中的事实。"
     }
 }
 

@@ -5,28 +5,29 @@ import ReadingCore
 struct WorkspaceView: View {
     @EnvironmentObject var store: AppStore
     @State private var compactInspector = false
+    @State private var servicePopover = false
+    @State private var columns: NavigationSplitViewVisibility = .detailOnly
     var body: some View {
-        NavigationSplitView {
-            sidebar.navigationSplitViewColumnWidth(min: 210, ideal: 238, max: 290)
+        NavigationSplitView(columnVisibility: $columns) {
+            sidebar.navigationSplitViewColumnWidth(min: 200, ideal: 226, max: 260)
         } detail: {
             GeometryReader { geometry in
             VStack(spacing: 0) {
-                header
-                Divider().opacity(0.45)
                 if store.book != nil {
                     HSplitView {
                         content.frame(maxWidth: .infinity, maxHeight: .infinity)
-                        if geometry.size.width >= 1060, let id = store.selectedObjectID, store.book?.activeDocuments.contains(where: { $0.id == id }) != true {
+                        if store.route != "reader", geometry.size.width >= 1060, let id = store.selectedObjectID, store.book?.activeDocuments.contains(where: { $0.id == id }) != true {
                             ObjectInspector(id: id).frame(minWidth: 270, idealWidth: 310, maxWidth: 380)
                         }
                     }
                 } else { WelcomeView() }
-                footer
+                if store.route != "reader" || store.isBusy || store.requestsUsed > 0 { footer }
             }
             .background(Color(nsColor: .windowBackgroundColor))
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .toolbar { workspaceToolbar }
         .tint(Palette.accent)
         .onOpenURL { url in Task { await store.openInternalURL(url) } }
         .sheet(isPresented: $store.showingSettings) { ProviderSettingsView().environmentObject(store).frame(width: 640, height: 660) }
@@ -52,7 +53,7 @@ struct WorkspaceView: View {
             HStack(spacing: 10) {
                 Image(systemName: "book.closed.fill").font(.title2).foregroundStyle(Palette.accent)
                 VStack(alignment: .leading, spacing: 2) { Text("ReadingBook").font(.headline); Text("让阅读长成理解").font(.caption2).foregroundStyle(.secondary) }
-            }.padding(.horizontal, 20).padding(.top, 26).padding(.bottom, 24)
+            }.padding(.horizontal, 18).padding(.top, 12).padding(.bottom, 16)
             ScrollView {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("书 库").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary).padding(.horizontal, 12).padding(.bottom, 5)
@@ -104,24 +105,67 @@ struct WorkspaceView: View {
                 .background(store.route == route ? Palette.accent.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 9))
         }.buttonStyle(.plain).foregroundStyle(store.route == route ? Palette.accent : .primary)
     }
-    private var header: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(store.book?.title ?? "你的下一次发现").font(.system(size: 18, weight: .semibold, design: .serif)).lineLimit(1).truncationMode(.middle)
-                Text(routeTitle).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
+    @ToolbarContentBuilder private var workspaceToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Menu {
+                Button("原文阅读") { store.route = "reader" }
+                Button("阅读流程") { store.route = "workflow" }
+                Button("与书对话") { store.route = "query" }
+                Button("我的理解") { store.route = "editor" }
+                ForEach(store.enabledViews.filter { ![ComponentKind.workflow, .query, .editor].contains($0.kind) }) { view in
+                    Button(view.title) { store.route = view.id }
+                }
+                Divider()
+                Menu("添加组件") { ForEach(ComponentKind.allCases, id: \.self) { kind in Button(kind.title) { store.activate(kind) } } }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: store.route == "reader" ? "book.pages" : "square.grid.2x2")
+                    Text(store.book?.title ?? "ReadingBook").font(.subheadline.weight(.medium)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 220)
+                    Image(systemName: "chevron.down").font(.caption2)
+                }
+            }.help("当前书籍：\(routeTitle) · 切换阅读、流程和组件")
+        }
+        ToolbarItemGroup(placement: .primaryAction) {
             if store.selectedObjectID != nil {
-                Button { compactInspector.toggle() } label: { Image(systemName: "info.circle") }.help("查看所选对象").popover(isPresented: $compactInspector) {
-                    if let id = store.selectedObjectID { ObjectInspector(id: id).environmentObject(store).frame(width: 340, height: 540) }
+                Button { compactInspector.toggle() } label: { Image(systemName: "info.circle") }.help("查看所选对象")
+                    .popover(isPresented: $compactInspector) {
+                        if let id = store.selectedObjectID { ObjectInspector(id: id).environmentObject(store).frame(width: 340, height: 540) }
+                    }
+            }
+            Button { servicePopover.toggle() } label: { Image(systemName: "sparkles") }.help("AI 服务：\(store.serviceName)")
+                .popover(isPresented: $servicePopover) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("自己的 AI").font(.headline)
+                        Picker("已保存的服务", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0) })) {
+                            if store.selectedServiceID == nil { Text("未保存配置").tag("") }
+                            ForEach(store.savedServices) { service in Text(service.name).tag(service.id) }
+                        }.disabled(store.isBusy)
+                        Text(store.settings.model.isEmpty ? "尚未配置模型" : store.settings.model).font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Button("管理 / 新建") { servicePopover = false; store.showingSettings = true }
+                            Spacer()
+                            Button("测试") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty)
+                        }
+                        if !store.connectionStatus.isEmpty { Text(store.connectionStatus).font(.caption).foregroundStyle(.secondary) }
+                    }.padding(20).frame(width: 310)
+                }
+            if let book = store.book {
+                if store.isBusy {
+                    Button { store.pause() } label: { Label(store.isExportingProject ? "导出中" : store.isSavingDocument ? "保存中" : "暂停", systemImage: store.isExportingProject || store.isSavingDocument ? "doc" : "pause.fill") }.disabled(store.isSavingDocument || store.isExportingProject)
+                } else {
+                    Button { store.startReading() } label: { Label(book.completedCount > 0 ? "继续精读" : "开始精读", systemImage: "play.fill") }
                 }
             }
-            if let book = store.book {
-                Text("\(book.completedCount) / \(book.units.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                if store.isBusy { Button { store.pause() } label: { Label(store.isSavingDocument ? "保存中" : "暂停", systemImage: store.isSavingDocument ? "doc" : "pause.fill") }.disabled(store.isSavingDocument) }
-                else { Button { store.startReading() } label: { Label(book.completedCount > 0 ? "继续精读" : "开始精读", systemImage: "sparkles") }.buttonStyle(.borderedProminent) }
-            }
-        }.padding(.horizontal, 28).padding(.vertical, 18)
+            Menu {
+                Button("导入书籍…") { store.chooseBook() }
+                Button("导入书项目…") { store.importProject() }
+                Button("导出完整书项目…") { store.exportProject() }.disabled(store.book == nil)
+                Divider()
+                Button("插件与读书法") { store.showingPlugins = true }
+                Button("AI 服务配置") { store.showingSettings = true }
+                Button("回收站") { store.showingTrash = true }
+            } label: { Image(systemName: "ellipsis.circle") }.help("导入、导出与设置")
+        }
     }
     private var routeTitle: String { store.book?.views.first { $0.id == store.route }?.title ?? (store.route == "reader" ? "原文与证据" : ComponentKind(rawValue: store.route)?.title ?? "阅读工作台") }
     @ViewBuilder private var content: some View {
@@ -147,7 +191,7 @@ struct WorkspaceView: View {
             Spacer()
             if store.requestsUsed > 0 { Text("本轮 \(store.requestsUsed) 次请求").font(.caption2.monospacedDigit()).foregroundStyle(.tertiary) }
             Text("本地书库").font(.caption2).foregroundStyle(.tertiary)
-        }.padding(.horizontal, 22).padding(.vertical, 10).background(.bar)
+        }.padding(.horizontal, 22).padding(.vertical, 4).background(.bar)
     }
 }
 

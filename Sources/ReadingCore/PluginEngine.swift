@@ -23,7 +23,8 @@ public enum PluginEngine {
             ReadingMethod(id: "narrative", name: "叙事追踪", goal: "沿原文追踪角色、事件、时空和因果，保留不确定之处。", steps: ["按原文顺序逐单元阅读，包含脚注与题注", "依据证据创建合适的实体与事件", "连接人物、地点、时间及因果", "章节结束回顾变化和未解问题"]),
             ReadingMethod(id: "analytical", name: "论证精读", goal: "辨明问题、概念、论据、推理和反例。", steps: ["逐单元识别作者的问题与主张", "提取定义、前提、结论及证据", "区分作者陈述与读者推断", "回查矛盾、反例和概念变化"]),
             ReadingMethod(id: "textbook", name: "教材学习", goal: "连接定义、定理、证明、例题和先修依赖。", steps: ["逐单元阅读正文、公式、图表与注释", "提取概念、条件、定理和方法", "连接先修依赖并记录证明步骤", "列出理解问题和可练习内容"]),
-            ReadingMethod(id: "research", name: "研究笔记", goal: "整理研究问题、方法、材料、发现与局限。", steps: ["逐单元读取材料和方法细节", "记录可核对的发现与证据", "区分来源事实、作者解释和推断", "整理局限、争议及后续问题"])
+            ReadingMethod(id: "research", name: "研究笔记", goal: "整理研究问题、方法、材料、发现与局限。", steps: ["逐单元读取材料和方法细节", "记录可核对的发现与证据", "区分来源事实、作者解释和推断", "整理局限、争议及后续问题"]),
+            ReadingMethod(id: "active-retelling", name: "主动复述", goal: "逐段用自己的话简短复述，再核对术语、条件与遗漏，提出理解问题。", steps: ["逐段简短复述正文、公式含义及注释，不补充书外信息", "核对术语、限制条件、推理连接及不确定处", "记录自己尚未理解的问题和需要回查的原文"])
         ]
         for method in methods where !project.methods.contains(where: { $0.id == method.id }) { project.methods.append(method) }
         for unit in project.units where project.coverage[unit.id] == nil { project.coverage[unit.id] = CoverageEntry() }
@@ -56,6 +57,8 @@ public enum PluginEngine {
         ], required: ["id", "name", "evidence"])
         let relation = object(["id": id, "fromID": id, "toID": id, "label": text, "evidence": evidenceList], required: ["id", "fromID", "toID", "label", "evidence"])
         let attach = object(["eventID": id, "viewID": id, "title": text, "evidence": evidenceList], required: ["eventID", "evidence"])
+        let receipt = object(["paragraphID": id, "textHash": id, "summary": ["type": "string", "minLength": 1, "maxLength": 1200], "startQuote": ["type": "string", "maxLength": 96], "endQuote": ["type": "string", "maxLength": 96], "issues": array(text, maximum: 12)], required: ["paragraphID", "textHash", "summary", "startQuote", "endQuote", "issues"])
+        let stepResult = object(["stepID": id, "result": ["type": "string", "minLength": 1, "maxLength": 2000], "paragraphIDs": array(id, minimum: 1, maximum: 512)], required: ["stepID", "result", "paragraphIDs"])
         return [
             function("knowledge_search", "只读查询本书已经保存的实体、事件与文档标题，按名称、别名和概述匹配。创建对象前用它查找索引样本之外的既有对象，避免重复。不会读取未提供的 Markdown 正文，不增加阅读覆盖。", object(["query": ["type": "string", "minLength": 1, "maxLength": 400], "limit": ["type": "integer", "minimum": 1, "maximum": 12]], required: ["query"])),
             function("types_define", "定义通用卡片类型。人物只是默认类型之一；可自定义概念、定理等类型。相同 ID 的既有类型不能被不同定义覆盖。", object(["types": array(type, minimum: 1, maximum: 64)], required: ["types"])),
@@ -64,8 +67,9 @@ public enum PluginEngine {
             function("relations_link", "以证据连接已经存在的实体、事件或文档，不创建悬空引用，不编辑文档正文。", object(["relations": array(relation, minimum: 1, maximum: 128)], required: ["relations"])),
             function("views_configure", "添加或配置当前书适用的默认组件视图。kind 只能选系统支持的组件；typeIDs 只引用已定义类型。不会生成视图独有的知识副本。", object(["views": array(view, minimum: 1, maximum: 32)], required: ["views"])),
             function("methods_define", "声明自定义读书法：目标及自然语言步骤。它是受限配置，不是可执行脚本，也不能跳过完整阅读覆盖。", object(["methods": array(method, minimum: 1, maximum: 32)], required: ["methods"])),
-            function("reading_plan", "预读后选择已存在的读书法并解释理由、关注点；可先定义新方法。该操作不增加正文处理覆盖率。", object(["methodIDs": array(id, minimum: 1, maximum: 16), "rationale": ["type": "string", "minLength": 1, "maxLength": 8_000], "focus": array(text, maximum: 32)], required: ["methodIDs", "rationale", "focus"])),
-            function("reading_finish", "提交本次全部获准源单元的细读笔记。unitIDs 必须与本次允许单元完全一致，evidence 至少逐一覆盖每个单元且 quote 必须是该单元原文。保留公式、注释、细节及疑问，不以摘要冒充全书理解。源单元有提取警告时只标为待复核。", object(["unitIDs": array(id, minimum: 1, maximum: 128), "markdown": ["type": "string", "minLength": 1, "maxLength": 160_000], "evidence": evidenceList], required: ["unitIDs", "markdown", "evidence"])),
+            function("reading_plan", "预读后选择已有读书法，可先自定义；正文阶段只允许增加方法，不能减少现有步骤。正文阶段成功后返回当前全部宿主stepID，finish须完整交齐。该操作不增加正文覆盖。", object(["methodIDs": array(id, minimum: 1, maximum: 16), "rationale": ["type": "string", "minLength": 1, "maxLength": 8_000], "focus": array(text, maximum: 32)], required: ["methodIDs", "rationale", "focus"])),
+            function("read_receipt", "仅提交宿主当前batchID清单内的全部片段回执；不得自编清单、遗漏、重复或加入片段。summary用自己的话极简复述本段，保留关键条件、公式和注释；空白段写空白分隔。textHash原样复制，startQuote/endQuote精确复制宿主给出的首尾锚点，issues明确疑点。回执验证齐全后才开放知识抽取。", object(["batchID": id, "receipts": array(receipt, minimum: 1, maximum: 24)], required: ["batchID", "receipts"])),
+            function("reading_finish", "全部片段回执齐全后，提交本次全部获准源单元的细读笔记及每个宿主stepID对应的执行结果。stepResults须精确覆盖选定读书法全部步骤，引用本单元paragraphIDs；不适用也写出原因。unitIDs必须与获准单元完全一致；evidence逐一覆盖且quote为连续原文。源提取警告和回执疑点保留待复核。", object(["unitIDs": array(id, minimum: 1, maximum: 128), "markdown": ["type": "string", "minLength": 1, "maxLength": 160_000], "evidence": evidenceList, "stepResults": array(stepResult, minimum: 1, maximum: 384)], required: ["unitIDs", "markdown", "evidence", "stepResults"])),
             function("map_attach", "把已有事件接入地图视图。必须先创建事件及其引用的地点；只使用同一 eventID，不复制事件。没有坐标的地点仍保持待定位，禁止猜造坐标。", attach),
             function("timeline_attach", "把已有事件接入时间轴视图。使用与地图、卡片相同的 eventID；未知时间保留待考文本，不虚构年份。", attach)
         ]
@@ -157,7 +161,12 @@ public enum PluginEngine {
     }
 
     private static func execute(name: String, input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        if ["cards_upsert", "events_upsert", "relations_link", "map_attach", "timeline_attach", "reading_finish"].contains(name) {
+            try ReadingLedger.requireComplete(unitIDs: allowed, in: project)
+        }
         switch name {
+        case "read_receipt":
+            return try recordReceipts(input, project: &project, allowed: allowed)
         case "types_define":
             try keys(input, allowed: ["types"])
             let values = try objects(input, key: "types", maximum: 64).map(parseType)
@@ -197,9 +206,18 @@ public enum PluginEngine {
             try uniqueIDs(ids)
             guard ids.allSatisfy({ id in project.methods.contains(where: { $0.id == id }) }) else { throw invalid("阅读计划引用了不存在的读书法。") }
             guard !ids.contains(where: { isDisabledMethod($0, in: project) }) else { throw invalid("阅读计划不能选择已停用声明包提供的读书法。") }
+            if !allowed.isEmpty {
+                guard let old = project.plan, Set(old.methodIDs).isSubset(of: Set(ids)) else { throw invalid("正文阶段只能增加读书法，不能删减原方案以跳过步骤；重新改选请另行预读。") }
+            }
             let rationale = try string(input, key: "rationale", maximum: 8_000)
             let focus = try strings(input, key: "focus", required: true, maximum: 32)
             project.plan = ReadingPlan(methodIDs: ids, rationale: rationale, focus: focus)
+            if !allowed.isEmpty {
+                let requirements = try project.units.filter { allowed.contains($0.id) }.flatMap { try ReadingLedger.stepRequirements(for: $0, in: project) }
+                let data = try JSONEncoder().encode(requirements)
+                guard let text = String(data: data, encoding: .utf8), text.count <= 14_000 else { throw invalid("新增读书法步骤超出当前可返回清单预算；请使用更精简的步骤。") }
+                return "已扩展方案；reading_finish须交齐以下全部步骤：\n" + text
+            }
             return "已选择 \(ids.count) 种读书法；正文覆盖未改变。"
         case "cards_upsert":
             try keys(input, allowed: ["entities"])
@@ -331,7 +349,7 @@ public enum PluginEngine {
     }
 
     private static func finish(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
-        try keys(input, allowed: ["unitIDs", "markdown", "evidence"])
+        try keys(input, allowed: ["unitIDs", "markdown", "evidence", "stepResults"])
         let ids = try strings(input, key: "unitIDs", required: true, maximum: 128)
         try uniqueIDs(ids)
         guard !allowed.isEmpty, Set(ids) == allowed else { throw invalid("reading_finish 必须完整覆盖本次获准的全部单元，不能遗漏或加入其他单元。") }
@@ -340,6 +358,27 @@ public enum PluginEngine {
         guard Set(evidence.map(\.unitID)) == allowed else { throw invalid("细读笔记须为每个获准单元提供原文证据。") }
         let markdown = try string(input, key: "markdown", maximum: 160_000)
         let units = project.units.filter { allowed.contains($0.id) }.sorted { $0.order < $1.order }
+        let requirements = try units.flatMap { try ReadingLedger.stepRequirements(for: $0, in: project) }
+        let outputs = try objects(input, key: "stepResults", maximum: 384)
+        let outputIDs = try outputs.map { try identifier($0, key: "stepID") }
+        try uniqueIDs(outputIDs)
+        guard Set(outputIDs) == Set(requirements.map(\.stepID)) else { throw invalid("读书法步骤结果必须完整覆盖宿主给出的全部 stepID，不得缺项或自编。") }
+        for output in outputs {
+            try keys(output, allowed: ["stepID", "result", "paragraphIDs"])
+            let stepID = try identifier(output, key: "stepID")
+            guard let requirement = requirements.first(where: { $0.stepID == stepID }), let unit = units.first(where: { $0.id == requirement.unitID }) else { throw invalid("步骤来源不存在。") }
+            let paragraphIDs = try strings(output, key: "paragraphIDs", required: true, maximum: 512)
+            try uniqueIDs(paragraphIDs)
+            let available = Set(try ReadingLedger.receipts(for: unit, in: project).map(\.paragraphID))
+            guard !paragraphIDs.isEmpty, Set(paragraphIDs).isSubset(of: available) else { throw invalid("步骤结果须引用当前单元已校验的片段。") }
+            let result = try string(output, key: "result", maximum: 2000)
+            let saved = ReadingStepResult(stepID: stepID, unitID: unit.id, methodID: requirement.methodID, methodHash: requirement.methodHash, stepIndex: requirement.stepIndex, result: result, paragraphIDs: paragraphIDs, createdAt: Date())
+            var records = project.readingStepResults ?? []
+            if let index = records.firstIndex(where: { $0.stepID == stepID }) {
+                guard records[index].result == result, records[index].paragraphIDs == paragraphIDs else { throw invalid("已保存步骤结果不能通过重试静默覆盖。") }
+            } else { records.append(saved) }
+            project.readingStepResults = records
+        }
         let sourceNotes = evidence.map { item -> String in
             let locator = units.first(where: { $0.id == item.unitID })?.locator ?? item.unitID
             let quoted = item.quote.split(separator: "\n", omittingEmptySubsequences: false).map { "> \($0)" }.joined(separator: "\n")
@@ -355,8 +394,11 @@ public enum PluginEngine {
         for unit in units {
             var entry = project.coverage[unit.id] ?? CoverageEntry()
             if !repeated { entry.attempts += 1 }
+            let issues = try ReadingLedger.receipts(for: unit, in: project).flatMap(\.issues)
             if let warning = unit.warning {
                 entry.status = .needsReview; entry.message = "AI 已处理；源内容待复核：\(warning.isEmpty ? "源提取存在警告" : warning)"
+            } else if !issues.isEmpty {
+                entry.status = .needsReview; entry.message = "AI 已处理；逐段回执存在待核对问题：" + issues.prefix(3).joined(separator: "；")
             } else if entry.status == .needsReview {
                 entry.message = entry.message.isEmpty ? "AI 已处理；保留已有待复核标记。" : entry.message
             } else { entry.status = .completed; entry.message = "逐单元处理已提交，原文依据可核对。" }
@@ -364,7 +406,38 @@ public enum PluginEngine {
             project.coverage[unit.id] = entry
         }
         project.lastUnitID = units.last?.id
+        project.receiptBatch = nil
         return "已提交 \(units.count) 个单元的细读笔记；\(units.filter { project.coverage[$0.id]?.status == .needsReview }.count) 个单元仍待复核。"
+    }
+
+    private static func recordReceipts(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        try keys(input, allowed: ["batchID", "receipts"])
+        let batchID = try identifier(input, key: "batchID")
+        guard let batch = project.receiptBatch, batch.id == batchID, allowed == [batch.unitID],
+              let unit = project.units.first(where: { $0.id == batch.unitID }) else { throw invalid("回执不属于宿主当前获准批次。") }
+        let manifest = try ReadingLedger.paragraphs(for: unit, in: project)
+        let selected = manifest.filter { batch.paragraphIDs.contains($0.id) }
+        let expected = try ReadingLedger.makeBatch(unit: unit, paragraphs: selected)
+        guard expected == batch else { throw invalid("宿主批次原文哈希或片段清单已变化。") }
+        let values = try objects(input, key: "receipts", maximum: 24)
+        let ids = try values.map { try identifier($0, key: "paragraphID") }
+        try uniqueIDs(ids)
+        guard Set(ids) == Set(batch.paragraphIDs) else { throw invalid("逐段回执必须精确覆盖当前清单，不能遗漏、重复或添加片段。") }
+        var records = project.paragraphReceipts ?? []
+        _ = try ReadingLedger.receipts(for: unit, in: project)
+        for value in values {
+            try keys(value, allowed: ["paragraphID", "textHash", "summary", "startQuote", "endQuote", "issues"])
+            let id = try identifier(value, key: "paragraphID")
+            guard let paragraph = selected.first(where: { $0.id == id }),
+                  let start = value["startQuote"] as? String, let end = value["endQuote"] as? String else { throw invalid("回执缺少精确首尾锚点。") }
+            let receipt = ParagraphReceipt(paragraphID: id, unitID: unit.id, unitHash: paragraph.unitHash, textHash: try identifier(value, key: "textHash"), utf8Start: paragraph.utf8Start, utf8End: paragraph.utf8End, summary: try string(value, key: "summary", maximum: 1200), startQuote: start, endQuote: end, issues: try strings(value, key: "issues", required: true, maximum: 12), createdAt: Date())
+            guard ReadingLedger.matches(receipt, paragraph: paragraph) else { throw invalid("片段回执哈希、范围或首尾原文锚点不匹配：\(id)") }
+            if let old = records.first(where: { $0.paragraphID == id }) {
+                guard old.summary == receipt.summary, old.startQuote == receipt.startQuote, old.endQuote == receipt.endQuote, old.issues == receipt.issues else { throw invalid("已通过回执不能用重试改写；请保留原核对记录。") }
+            } else { records.append(receipt) }
+        }
+        project.paragraphReceipts = records
+        return "已校验并保存 \(values.count) 个片段回执；此检查点尚未完成本单元知识抽取。"
     }
 
     private static func parseType(_ input: [String: Any]) throws -> EntityType {

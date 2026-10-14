@@ -223,6 +223,10 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var bookmarks: [String] = []
     /// Optional for compatibility with projects created before page OCR existed.
     public var ocrPages: [OCRPageProvenance]? = nil
+    /// Absent in older projects: historical completion is never backfilled with invented receipts.
+    public var paragraphReceipts: [ParagraphReceipt]? = nil
+    public var readingStepResults: [ReadingStepResult]? = nil
+    public var receiptBatch: ReadingReceiptBatch? = nil
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units
     }

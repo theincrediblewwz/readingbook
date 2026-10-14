@@ -5,93 +5,134 @@ import ReadingCore
 struct ReaderWorkspaceView: View {
     @EnvironmentObject var store: AppStore
     @State private var showPDF = true
-    @AppStorage("source-outline-visible") private var showOutline = true
+    @AppStorage("reader-outline-v3") private var showOutline = false
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     var body: some View {
         GeometryReader { geometry in
-        HSplitView {
-            if showOutline && geometry.size.width >= 720 {
-            VStack(spacing: 12) {
-                TextField("搜索原文或章节", text: $store.search).textFieldStyle(.roundedBorder).padding(.horizontal, 14).padding(.top, 16)
-                ScrollViewReader { proxy in
-                    List {
+            let inlineOutline = geometry.size.width >= 760
+            HStack(spacing: 0) {
+                if showOutline && inlineOutline {
+                    outline.frame(width: 224)
+                    Divider()
+                }
+                VStack(spacing: 0) {
+                    readerBar(inlineOutline: inlineOutline)
+                    Divider().opacity(0.45)
+                    if let unit = store.selectedUnit {
+                        if isPDF, showPDF, let url = store.sourceFileURL {
+                            let requestToken = store.pdfNavigationToken
+                            PDFReaderView(url: url, page: unit.page, navigationToken: requestToken) { page in
+                                guard store.pdfNavigationToken == requestToken else { return }
+                                if store.selectedUnit?.page != page {
+                                    store.selectedUnitID = store.book?.units.first { $0.page == page }?.id
+                                }
+                            }
+                        } else { sourceText(unit) }
+                    } else {
+                        EmptyState(title: "选择一个章节", detail: "从左上角目录选择原文内容。", icon: "book.pages")
+                    }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity).layoutPriority(1)
+            }
+        }
+    }
+    private func readerBar(inlineOutline: Bool) -> some View {
+        HStack(spacing: 12) {
+            Button { showOutline.toggle() } label: { Image(systemName: "list.bullet") }
+                .help(showOutline ? "收起原文目录与搜索" : "展开原文目录与搜索")
+                .accessibilityLabel("原文目录与搜索")
+                .popover(isPresented: Binding(get: { showOutline && !inlineOutline }, set: { if !$0 { showOutline = false } })) {
+                    outline.frame(width: 300, height: 480)
+                }
+            if !isPDF || !showPDF {
+                Button { move(-1) } label: { Image(systemName: "chevron.left") }.help("上一内容单元").disabled(store.selectedUnit?.order == 0)
+                Button { move(1) } label: { Image(systemName: "chevron.right") }.help("下一内容单元").disabled(store.selectedUnit?.order == (store.book?.units.count ?? 0) - 1)
+            }
+            Text(store.selectedUnit?.locator ?? "原文").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 0)
+            if isPDF {
+                Menu {
+                    Button("原始 PDF") { showPDF = true }
+                    Button("文本 / OCR 识别稿") { showPDF = false }
+                    Divider()
+                    Button("用视觉模型识别页面…") { store.showingOCR = true }.disabled(store.isBusy)
+                    if store.selectedUnit?.warning != nil { Text("此单元仍需对照原页核对") }
+                } label: {
+                    HStack(spacing: 5) {
+                        if store.selectedUnit?.warning != nil { Image(systemName: "exclamationmark.circle").foregroundStyle(Palette.copper) }
+                        Text(showPDF ? "原始 PDF" : "识别稿").font(.caption)
+                    }
+                }.fixedSize().help("切换原始页面、识别稿或执行 OCR")
+            }
+            if let unit = store.selectedUnit {
+                Button { Task { await store.toggleBookmark(unit.id) } } label: { Image(systemName: store.book?.bookmarks.contains(unit.id) == true ? "bookmark.fill" : "bookmark") }.help("切换书签").disabled(store.isBusy)
+                Button { store.newNote(for: unit) } label: { Image(systemName: "square.and.pencil") }.help("对这一段记一笔").disabled(store.isRecognizingPDF)
+            }
+        }.buttonStyle(.borderless).controlSize(.small).padding(.horizontal, 14).frame(height: 36).background(.bar)
+    }
+    private var outline: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("目录与原文").font(.subheadline.weight(.medium))
+                Spacer()
+                Button { showOutline = false } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("收起目录")
+            }.padding(14)
+            TextField("搜索原文或章节", text: $store.search).textFieldStyle(.roundedBorder).padding(.horizontal, 12).padding(.bottom, 10)
+            Divider().opacity(0.4)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 4) {
                         ForEach(filteredUnits) { unit in
-                            Button { store.selectedUnitID = unit.id } label: {
-                                HStack(alignment: .top, spacing: 8) {
+                            Button { store.navigateToUnit(unit.id) } label: {
+                                HStack(alignment: .top, spacing: 9) {
                                     statusIcon(unit)
                                     VStack(alignment: .leading, spacing: 5) {
-                                        Text(unit.chapter).font(.caption.weight(.medium)).lineLimit(1)
-                                        Text(unit.locator).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-                                        Text(unit.text.prefix(48)).font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                                        Text(isPDF ? "第 \(unit.page ?? 1) 页" : unit.chapter).font(.subheadline.weight(.medium)).lineLimit(1)
+                                        Text("行 \(unit.lineStart)–\(unit.lineEnd)").font(.caption2).foregroundStyle(.secondary)
+                                        Text(unit.text.isEmpty ? "尚未识别文本" : String(unit.text.prefix(64)).replacingOccurrences(of: "\n", with: " ")).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                                     }
                                     Spacer(minLength: 0)
                                     if store.book?.bookmarks.contains(unit.id) == true { Image(systemName: "bookmark.fill").font(.caption2).foregroundStyle(Palette.copper) }
-                                }.padding(.vertical, 5).frame(maxWidth: .infinity, alignment: .leading)
-                            }.buttonStyle(.plain).listRowBackground(store.selectedUnitID == unit.id ? Palette.accent.opacity(0.10) : .clear).id(unit.id)
+                                }.padding(12).frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+                                    .background(store.selectedUnitID == unit.id ? Palette.accent.opacity(0.11) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
+                                    .contentShape(Rectangle())
+                            }.buttonStyle(.plain).id(unit.id)
+                                .accessibilityLabel("\(unit.locator)，点击定位原文")
                         }
-                    }.listStyle(.sidebar)
-                    .onChange(of: store.selectedUnitID) { _, id in if let id { withAnimation { proxy.scrollTo(id, anchor: .center) }; if let bookID = store.bookID { UserDefaults.standard.set(id, forKey: "position-\(bookID)") } } }
-                }
-            }.frame(minWidth: 195, idealWidth: 225, maxWidth: 280)
+                        if filteredUnits.isEmpty { Text("没有匹配的原文").font(.caption).foregroundStyle(.secondary).padding(20) }
+                    }.padding(8)
+                }.onChange(of: store.selectedUnitID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
+                    .onAppear { if let id = store.selectedUnitID { proxy.scrollTo(id, anchor: .center) } }
             }
-            if let unit = store.selectedUnit {
-                VStack(spacing: 0) {
-                    HStack {
-                        Button { showOutline.toggle() } label: { Image(systemName: "sidebar.left") }.help("显示或收起原文搜索与章节栏；窄窗口自动收起").disabled(geometry.size.width < 720)
-                        Button { move(-1) } label: { Image(systemName: "chevron.left") }.disabled(unit.order == 0)
-                        Button { move(1) } label: { Image(systemName: "chevron.right") }.disabled(unit.order >= (store.book?.units.count ?? 0) - 1)
-                        Text(unit.locator).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        Spacer()
-                        if isPDF {
-                            Button { store.showingOCR = true } label: { Label("OCR", systemImage: "viewfinder") }.disabled(store.isBusy)
-                            Toggle("原始 PDF", isOn: $showPDF).toggleStyle(.switch).controlSize(.small)
-                        }
-                        Button { Task { await store.toggleBookmark(unit.id) } } label: { Image(systemName: store.book?.bookmarks.contains(unit.id) == true ? "bookmark.fill" : "bookmark") }.help("书签").disabled(store.isBusy)
-                        Button { store.newNote(for: unit) } label: { Image(systemName: "square.and.pencil") }.help("记一笔").disabled(store.isRecognizingPDF)
-                    }.buttonStyle(.borderless).padding(.horizontal, 25).padding(.vertical, 14)
-                    Divider().opacity(0.4)
-                    if isPDF, showPDF, let url = store.sourceFileURL {
-                        if unit.warning != nil {
-                            HStack { Label(store.book?.ocrPages?.contains(where: { $0.page == unit.page }) == true ? "此页已有 OCR，待核对" : "此页提取内容待核对", systemImage: "doc.text.magnifyingglass").font(.caption).foregroundStyle(.secondary); Spacer(); Button("查看文本 / 识别稿") { showPDF = false }.font(.caption) }.padding(.horizontal, 24).padding(.vertical, 8)
-                        }
-                        PDFReaderView(url: url, page: unit.page) { page in
-                            if store.selectedUnit?.page != page { store.selectedUnitID = store.book?.units.first { $0.page == page }?.id }
-                        }
-                    }
-                    else {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 22) {
-                                Text(unit.chapter).font(.system(size: 30, weight: .regular, design: .serif)).padding(.bottom, 8)
-                                if let warning = unit.warning {
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        Label("内容待核对", systemImage: "doc.text.magnifyingglass").font(.subheadline.weight(.medium))
-                                        Text(warning).font(.caption).foregroundStyle(.secondary)
-                                        Button(unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "我已对照原页，确认这确实是空白内容" : "我已对照原文，确认此单元内容完整") { Task { await store.markReviewed(unit.id) } }.font(.caption).disabled(store.isBusy)
-                                        if unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Button("保留为待识别，先继续其他内容") { Task { await store.deferUnit(unit.id) } }.font(.caption).disabled(store.isBusy) }
-                                    }.padding(14).background(Palette.copper.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                                }
-                                if ["md", "markdown"].contains(store.sourceFileURL?.pathExtension.lowercased() ?? "") || store.book?.ocrPages?.contains(where: { $0.page == unit.page }) == true {
-                                    MarkdownText(markdown: sourceMarkdown(unit))
-                                } else {
-                                    Text(unit.text.isEmpty ? "此单元尚未获得可读文本，请对照原始文件核查。" : unit.text)
-                                        .font(.system(size: 17, weight: .regular, design: .serif)).lineSpacing(10).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                Divider().padding(.vertical, 20)
-                                let insights = store.book?.insights.filter { $0.unitIDs.contains(unit.id) } ?? []
-                                ForEach(insights) { insight in
-                                    VStack(alignment: .leading, spacing: 12) {
-                                        Label("阅读留下的线索", systemImage: "sparkles").font(.caption).foregroundStyle(Palette.accent)
-                                        MarkdownText(markdown: insight.markdown)
-                                        Button("保存为我的文档") { Task { await store.saveInsight(insight) } }.font(.caption).disabled(store.isBusy)
-                                    }.softPanel()
-                                }
-                            }.frame(maxWidth: 740).padding(.horizontal, 40).padding(.vertical, 40).frame(maxWidth: .infinity)
-                        }.background(Palette.paper)
-                    }
-                }.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
-            } else { EmptyState(title: "选择一个章节", detail: "原文与 AI 结论的依据都会在这里展开。", icon: "book.pages") }
-        }
-        }
+        }.background(Color(nsColor: .textBackgroundColor))
+    }
+    private func sourceText(_ unit: SourceUnit) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                if !isPDF { Text(unit.chapter).font(.system(size: 28, weight: .regular, design: .serif)) }
+                if let warning = unit.warning {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("内容待核对", systemImage: "doc.text.magnifyingglass").font(.subheadline.weight(.medium))
+                        Text(warning).font(.caption).foregroundStyle(.secondary)
+                        Button(unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "我已对照原页，确认这确实是空白内容" : "我已对照原文，确认此单元内容完整") { Task { await store.markReviewed(unit.id) } }.font(.caption).disabled(store.isBusy)
+                        if unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Button("保留为待识别，先继续其他内容") { Task { await store.deferUnit(unit.id) } }.font(.caption).disabled(store.isBusy) }
+                    }.padding(14).background(Palette.copper.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                }
+                if ["md", "markdown"].contains(store.sourceFileURL?.pathExtension.lowercased() ?? "") || store.book?.ocrPages?.contains(where: { $0.page == unit.page }) == true {
+                    MarkdownText(markdown: sourceMarkdown(unit))
+                } else {
+                    Text(unit.text.isEmpty ? "此单元尚未获得可读文本，请对照原始文件核查。" : unit.text)
+                        .font(.system(size: 17, weight: .regular, design: .serif)).lineSpacing(10).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                let insights = store.book?.insights.filter { $0.unitIDs.contains(unit.id) } ?? []
+                ForEach(insights) { insight in
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label("阅读留下的线索", systemImage: "sparkles").font(.caption).foregroundStyle(Palette.accent)
+                        MarkdownText(markdown: insight.markdown)
+                        Button("保存为我的文档") { Task { await store.saveInsight(insight) } }.font(.caption).disabled(store.isBusy)
+                    }.softPanel()
+                }
+            }.frame(maxWidth: 740).padding(.horizontal, 28).padding(.vertical, 26).frame(maxWidth: .infinity)
+        }.background(Palette.paper)
     }
     private func sourceMarkdown(_ unit: SourceUnit) -> String {
         if let page = unit.page, store.book?.ocrPages?.contains(where: { $0.page == page }) == true {
@@ -101,16 +142,16 @@ struct ReaderWorkspaceView: View {
     }
     private var filteredUnits: [SourceUnit] {
         let units = store.book?.units ?? []
-        return store.search.isEmpty ? units : units.filter { $0.chapter.localizedCaseInsensitiveContains(store.search) || $0.text.localizedCaseInsensitiveContains(store.search) }
+        return store.search.isEmpty ? units : units.filter { $0.chapter.localizedCaseInsensitiveContains(store.search) || $0.text.localizedCaseInsensitiveContains(store.search) || $0.locator.localizedCaseInsensitiveContains(store.search) }
     }
     private func statusIcon(_ unit: SourceUnit) -> some View {
         let status = store.book?.coverage[unit.id]?.status ?? .pending
         return Image(systemName: status == .completed ? "checkmark.circle.fill" : status == .needsReview || unit.warning != nil ? "exclamationmark.circle" : "circle")
-            .font(.caption2).foregroundStyle(status == .completed ? Palette.accent : .secondary).padding(.top, 2)
+            .font(.caption).foregroundStyle(status == .completed ? Palette.accent : .secondary).padding(.top, 2)
     }
     private func move(_ offset: Int) {
         guard let units = store.book?.units, let current = store.selectedUnitID, let index = units.firstIndex(where: { $0.id == current }), units.indices.contains(index + offset) else { return }
-        store.selectedUnitID = units[index + offset].id
+        store.navigateToUnit(units[index + offset].id)
     }
 }
 
@@ -125,10 +166,11 @@ struct ReadingWorkflowView: View {
                         Spacer(); Button("重新预读") { store.makePlan() }.disabled(store.isBusy)
                     }
                     HStack(spacing: 16) {
+                        let analyzedIDs = Set(book.insights.filter { !$0.id.hasPrefix("deferred-") && !$0.id.hasPrefix("blank-") }.flatMap(\.unitIDs))
                         metric("内容单元", value: "\(book.units.count)", detail: "按源顺序登记")
-                        metric("已处理", value: "\(Int(book.progress * 100))%", detail: "\(book.completedCount) 个单元已核对")
+                        metric("AI 分析", value: "\(book.units.filter { analyzedIDs.contains($0.id) }.count)", detail: "源质量核对另计")
                         metric("待核对", value: "\(book.reviewCount)", detail: "提取或图文异常")
-                        metric("知识线索", value: "\(book.entities.count + book.events.count)", detail: "要素与事件")
+                        metric("逐段回执", value: "\(book.paragraphReceipts?.count ?? 0)", detail: "本版开始留存")
                     }
                     HStack(spacing: 0) {
                         flowStep("1", "预读选法", done: book.plan != nil)
@@ -139,6 +181,7 @@ struct ReadingWorkflowView: View {
                         Image(systemName: "arrow.right").foregroundStyle(.tertiary)
                         flowStep("4", "核对与沉淀", done: book.isFullyProcessed)
                     }.softPanel()
+                    ReadingLedgerView()
                     if let plan = book.plan {
                         VStack(alignment: .leading, spacing: 16) {
                             Text("AI 选择的读法").font(.headline); MarkdownText(markdown: plan.rationale)
