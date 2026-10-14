@@ -112,7 +112,12 @@ public struct ReadingMethod: Codable, Identifiable, Hashable, Sendable {
     public var name: String
     public var goal: String
     public var steps: [String]
-    public init(id: String, name: String, goal: String, steps: [String]) { self.id = id; self.name = name; self.goal = goal; self.steps = steps }
+    /// Absent in older projects. Legacy text steps keep their original hash and
+    /// are executed by the controlled analysis action when next read.
+    public var executions: [ReadingStepExecution]? = nil
+    public init(id: String, name: String, goal: String, steps: [String], executions: [ReadingStepExecution]? = nil) {
+        self.id = id; self.name = name; self.goal = goal; self.steps = steps; self.executions = executions
+    }
 }
 public struct ReadingPlan: Codable, Sendable {
     public var methodIDs: [String]
@@ -226,6 +231,8 @@ public struct BookProject: Codable, Identifiable, Sendable {
     /// Absent in older projects: historical completion is never backfilled with invented receipts.
     public var paragraphReceipts: [ParagraphReceipt]? = nil
     public var readingStepResults: [ReadingStepResult]? = nil
+    /// Real action checkpoints are never synthesized for historical completion.
+    public var workflowRuns: [ReadingWorkflowStepRun]? = nil
     public var receiptBatch: ReadingReceiptBatch? = nil
     public var readerAnnotations: [ReaderAnnotation]? = nil
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {

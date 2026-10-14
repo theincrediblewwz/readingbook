@@ -19,15 +19,18 @@ struct RichMarkdownView: View {
     let markdown: String
     var baseDirectory: URL?
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
+    var onSelectionSave: ((RenderedMarkdownSelection) -> Void)?
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     @State private var contentHeight: CGFloat = 40
 
     init(markdown: String, baseDirectory: URL? = nil,
-         onSelectionChange: ((RenderedMarkdownSelection?) -> Void)? = nil) {
+         onSelectionChange: ((RenderedMarkdownSelection?) -> Void)? = nil,
+         onSelectionSave: ((RenderedMarkdownSelection) -> Void)? = nil) {
         self.markdown = markdown
         self.baseDirectory = baseDirectory
         self.onSelectionChange = onSelectionChange
+        self.onSelectionSave = onSelectionSave
     }
 
     var body: some View {
@@ -36,7 +39,7 @@ struct RichMarkdownView: View {
                 MarkdownWebView(markdown: markdown, baseDirectory: baseDirectory,
                                 resources: resources, theme: colorScheme == .dark ? "dark" : "light",
                                 height: $contentHeight, onOpenURL: { openURL($0) },
-                                onSelectionChange: onSelectionChange)
+                                onSelectionChange: onSelectionChange, onSelectionSave: onSelectionSave)
                     .frame(height: max(32, contentHeight))
             } else {
                 Text("离线 Markdown / 公式资源缺失，请重新安装完整的 ReadingBook.app。")
@@ -69,6 +72,7 @@ private struct MarkdownWebView: NSViewRepresentable {
     @Binding var height: CGFloat
     var onOpenURL: (URL) -> Void
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
+    var onSelectionSave: ((RenderedMarkdownSelection) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(height: $height, onOpenURL: onOpenURL, onSelectionChange: onSelectionChange) }
 
@@ -85,6 +89,10 @@ private struct MarkdownWebView: NSViewRepresentable {
         webView.underPageBackgroundColor = .clear
         webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = false
+        webView.selectionForAction = { [weak coordinator = context.coordinator] in coordinator?.selectionForAction() }
+        if onSelectionSave != nil {
+            webView.saveSelection = { [weak coordinator = context.coordinator] selection in coordinator?.saveSelection(selection) }
+        }
         context.coordinator.webView = webView
         context.coordinator.schemeHandler = handler
         webView.load(URLRequest(url: URL(string: "readingbook-renderer://bundle/index.html")!))
@@ -95,6 +103,12 @@ private struct MarkdownWebView: NSViewRepresentable {
         context.coordinator.height = $height
         context.coordinator.onOpenURL = onOpenURL
         context.coordinator.onSelectionChange = onSelectionChange
+        context.coordinator.onSelectionSave = onSelectionSave
+        if let contentView = webView as? MarkdownContentWebView {
+            if onSelectionSave != nil {
+                contentView.saveSelection = { [weak coordinator = context.coordinator] selection in coordinator?.saveSelection(selection) }
+            } else { contentView.saveSelection = nil }
+        }
         context.coordinator.update(markdown: markdown, baseDirectory: baseDirectory, theme: theme)
     }
 
@@ -105,6 +119,7 @@ private struct MarkdownWebView: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "readingbookLink")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "readingbookSelection")
         coordinator.invalidate()
+        if let contentView = webView as? MarkdownContentWebView { contentView.selectionForAction = nil; contentView.saveSelection = nil }
         coordinator.webView = nil
     }
 
@@ -113,12 +128,14 @@ private struct MarkdownWebView: NSViewRepresentable {
         var height: Binding<CGFloat>
         var onOpenURL: (URL) -> Void
         var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
+        var onSelectionSave: ((RenderedMarkdownSelection) -> Void)?
         weak var webView: WKWebView?
         var schemeHandler: MarkdownSchemeHandler?
         private var pending: State?
         private var displayed: State?
         private var ready = false
         private var revision = 0
+        private var lastSelection: RenderedMarkdownSelection?
 
         init(height: Binding<CGFloat>, onOpenURL: @escaping (URL) -> Void,
              onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?) {
@@ -130,11 +147,25 @@ private struct MarkdownWebView: NSViewRepresentable {
             renderPending()
         }
 
-        func invalidate() { ready = false; revision += 1; pending = nil; displayed = nil; onSelectionChange = nil }
+        func invalidate() { ready = false; revision += 1; pending = nil; displayed = nil; lastSelection = nil; onSelectionChange = nil; onSelectionSave = nil }
+
+        // Native menu/keyboard actions only reuse a selection admitted by the
+        // existing main-frame bridge, and revalidate it when the action fires.
+        func selectionForAction() -> RenderedMarkdownSelection? {
+            guard ready, onSelectionSave != nil, let state = displayed, state == pending, state.selectionEnabled,
+                  let selection = lastSelection, selection.revision == revision,
+                  selection.sourceMarkdown == state.markdown else { return nil }
+            return selection
+        }
+        func saveSelection(_ selection: RenderedMarkdownSelection) {
+            guard selectionForAction() == selection else { return }
+            onSelectionSave?(selection)
+        }
 
         private func renderPending() {
             guard ready, let webView, let state = pending, state != displayed else { return }
             displayed = state; revision += 1
+            lastSelection = nil
             let renderedRevision = revision
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.revision == renderedRevision else { return }
@@ -195,9 +226,12 @@ private struct MarkdownWebView: NSViewRepresentable {
                     version.intValue == revision, let state = displayed, state == pending, state.selectionEnabled,
                     let selected = body["text"] as? String, selected.utf8.count <= 131_072,
                     let containsMath = body["containsMath"] as? Bool {
-                if selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { onSelectionChange?(nil) }
-                else { onSelectionChange?(RenderedMarkdownSelection(text: selected, sourceMarkdown: state.markdown,
-                                                                    revision: revision, containsMath: containsMath)) }
+                if selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { lastSelection = nil; onSelectionChange?(nil) }
+                else {
+                    let selection = RenderedMarkdownSelection(text: selected, sourceMarkdown: state.markdown,
+                                                              revision: revision, containsMath: containsMath)
+                    lastSelection = selection; onSelectionChange?(selection)
+                }
             }
         }
     }
@@ -206,11 +240,48 @@ private struct MarkdownWebView: NSViewRepresentable {
 /// The web document fits its content; vertical gestures belong to the SwiftUI parent.
 /// Horizontal gestures remain in WebKit for wide equations, tables and code blocks.
 private final class MarkdownContentWebView: WKWebView {
+    var selectionForAction: (() -> RenderedMarkdownSelection?)?
+    var saveSelection: ((RenderedMarkdownSelection) -> Void)?
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        guard saveSelection != nil else { return }
+        let item = NSMenuItem(title: "保存选区为语义摘记…", action: nil, keyEquivalent: "")
+        item.toolTip = "先预览再保存；精确公式请选择 Markdown 源文片段。"
+        if let selection = selectionForAction?() {
+            let action = MarkdownSelectionMenuAction(owner: self, selection: selection)
+            item.action = #selector(MarkdownSelectionMenuAction.invoke(_:)); item.target = action
+            item.representedObject = action
+        } else { item.isEnabled = false }
+        menu.addItem(.separator()); menu.addItem(item)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .shift, .control, .option])
+        if modifiers == [.command, .shift], event.charactersIgnoringModifiers?.lowercased() == "s",
+           let responder = window?.firstResponder as? NSView, responder === self || responder.isDescendant(of: self),
+           let selection = selectionForAction?() {
+            saveSelection?(selection); return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func scrollWheel(with event: NSEvent) {
         if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) || event.modifierFlags.contains(.shift) {
             super.scrollWheel(with: event)
         } else { nextResponder?.scrollWheel(with: event) }
     }
+}
+
+private final class MarkdownSelectionMenuAction: NSObject, NSMenuItemValidation {
+    weak var owner: MarkdownContentWebView?
+    let selection: RenderedMarkdownSelection
+    init(owner: MarkdownContentWebView, selection: RenderedMarkdownSelection) { self.owner = owner; self.selection = selection }
+    @objc func invoke(_ sender: NSMenuItem) {
+        guard owner?.selectionForAction?() == selection else { return }
+        owner?.saveSelection?(selection)
+    }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { owner?.selectionForAction?() == selection }
 }
 
 /// No file:// read grant is ever given to WebKit. Both bundled assets and explicitly

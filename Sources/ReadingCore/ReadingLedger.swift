@@ -82,7 +82,8 @@ public enum ReadingLedger {
 
     public static func hasStoredWork(unitIDs: Set<String>, in project: BookProject) -> Bool {
         (project.paragraphReceipts ?? []).contains { unitIDs.contains($0.unitID) } ||
-        (project.readingStepResults ?? []).contains { unitIDs.contains($0.unitID) }
+        (project.readingStepResults ?? []).contains { unitIDs.contains($0.unitID) } ||
+        (project.workflowRuns ?? []).contains { unitIDs.contains($0.unitID) }
     }
 
     /// Blank separators stay attached to a fragment. Concatenating the manifest texts exactly reproduces unit.text.
@@ -170,12 +171,14 @@ public enum ReadingLedger {
         }
     }
 
-    public static func stepRequirements(for unit: SourceUnit, in project: BookProject) throws -> [ReadingStepRequirement] {
+    public static func stepRequirements(for unit: SourceUnit, in project: BookProject,
+                                         registry: ReadingWorkflowActionRegistry? = nil) throws -> [ReadingStepRequirement] {
         guard let plan = project.plan, !plan.methodIDs.isEmpty, Set(plan.methodIDs).count == plan.methodIDs.count else { throw ReadingError.invalid("读书方案缺失或重复。") }
         let unitHash = try digest(unit.text)
         var requirements: [ReadingStepRequirement] = []
         for methodID in plan.methodIDs {
             guard let method = project.methods.first(where: { $0.id == methodID }), !method.steps.isEmpty else { throw ReadingError.invalid("读书法缺失或没有步骤。") }
+            try ReadingWorkflowRuntime.validate(method: method, registry: registry)
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             let methodHash = try BookImporter.sha256(encoder.encode(method))
             for (index, text) in method.steps.enumerated() {
@@ -226,6 +229,7 @@ public enum ReadingLedger {
             let manifest = try paragraphs(for: unit, in: project).filter { batch.paragraphIDs.contains($0.id) }
             guard try makeBatch(unit: unit, paragraphs: manifest) == batch else { throw ReadingError.invalid("保存的阅读批次与原文不匹配。") }
         }
+        try ReadingWorkflowRuntime.validateStoredRecords(in: project)
     }
 
     static func matches(_ receipt: ParagraphReceipt, paragraph: ReadingParagraph) -> Bool {

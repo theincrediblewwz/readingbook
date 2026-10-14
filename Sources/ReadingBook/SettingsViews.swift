@@ -17,6 +17,7 @@ struct ProviderSettingsView: View {
             profilePicker
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    ServiceProfileLocalError(draft: store.serviceProfileDraft)
                     connectionFields
                     budgetFields
                     ocrFields
@@ -29,17 +30,18 @@ struct ProviderSettingsView: View {
             Divider()
             HStack {
                 Button("关闭") { dismiss() }
+                if store.serviceProfileDraft.isDirty(in: store) { Text("有未保存更改").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
                 Button("测试连接") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty)
-                Button("保存配置") {
-                    do { try store.persistServiceProfile(); store.connectionStatus = "配置已保存。" }
-                    catch { store.errorMessage = error.localizedDescription }
-                }.buttonStyle(.borderedProminent).disabled(store.isBusy)
+                Button("保存配置") { store.saveServiceProfileForUI() }.buttonStyle(.borderedProminent).disabled(store.isBusy)
             }
         }.padding(18).controlSize(.small)
         .confirmationDialog("删除已保存的服务配置与其密钥？", isPresented: $deletingService) {
             Button("删除配置", role: .destructive) { if let id = store.selectedServiceID { store.removeService(id) } }
         } message: { Text("书籍、文档与已生成内容会保留。") }
+        .serviceProfileChangeConfirmation(store: store, isSettingsContext: true)
+        .onAppear { store.serviceProfileDraft.settingsPresentationCount += 1 }
+        .onDisappear { store.serviceProfileDraft.settingsPresentationCount = max(0, store.serviceProfileDraft.settingsPresentationCount - 1) }
     }
 
     private var profilePicker: some View {
@@ -145,8 +147,13 @@ struct PluginLibraryView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var showCapabilities = false
+    @State private var showNativePlugins = false
     @State private var showTypes = false
     @State private var showMethods = false
+    @State private var importError = ""
+    @State private var componentError = ""
+    @State private var componentNotice = ""
+    @State private var pendingAddition: ComponentKind?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -156,10 +163,16 @@ struct PluginLibraryView: View {
                     Text("按书组合类型、方法与视图").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
-                Button("导入插件…") { store.importPlugin() }.disabled(store.book == nil || store.isBusy)
+                Button("导入插件…") {
+                    importError = ""
+                    store.importPlugin(onError: { importError = $0 })
+                }.disabled(store.book == nil || store.isBusy)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    if !importError.isEmpty {
+                        Label(importError, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                    }
                     CompactSettingsSection("本书安装的声明包") {
                         if store.book?.plugins.isEmpty != false {
                             Text("尚未安装。仓库 Examples 附有数学精读示例。").font(.caption).foregroundStyle(.secondary)
@@ -169,11 +182,33 @@ struct PluginLibraryView: View {
                         }
                     }
                     CompactSettingsSection("组件能力") {
-                        DisclosureGroup("内置组件 · \(ComponentKind.allCases.count)", isExpanded: $showCapabilities) {
+                        DisclosureGroup("内置执行插件 · \(PluginEngine.registry.plugins.count)", isExpanded: $showNativePlugins) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(PluginEngine.registry.plugins, id: \.id) { plugin in
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(plugin.name).font(.caption.weight(.medium))
+                                        Text(PluginEngine.registry.schemas().compactMap { schema -> String? in
+                                            guard let function = schema["function"] as? [String: Any], let name = function["name"] as? String,
+                                                  PluginEngine.registry.definition(named: name)?.pluginID == plugin.id else { return nil }
+                                            return name
+                                        }.joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                                    }
+                                }
+                            }.padding(.top, 6)
+                        }.font(.system(size: 12))
+                        DisclosureGroup("内置组件 · \(WorkspaceComponentRegistry.shared.components.count)", isExpanded: $showCapabilities) {
                             VStack(spacing: 0) {
-                                ForEach(ComponentKind.allCases, id: \.self) { kind in capabilityRow(kind) }
+                                ForEach(WorkspaceComponentRegistry.shared.components, id: \.kind) { component in
+                                    capabilityRow(component.kind, title: component.title)
+                                }
                             }.padding(.top, 5)
                         }.font(.system(size: 12))
+                        if !componentNotice.isEmpty {
+                            Text(componentNotice).font(.caption).foregroundStyle(.secondary).accessibilityLabel(componentNotice)
+                        }
+                        if !componentError.isEmpty {
+                            Label(componentError, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                        }
                     }
                     if let book = store.book {
                         CompactSettingsSection("本书类型与方法") {
@@ -200,15 +235,35 @@ struct PluginLibraryView: View {
                 Button("完成") { dismiss() }.keyboardShortcut(.defaultAction)
             }
         }.padding(18).controlSize(.small)
+        .onChange(of: store.isBusy) { _, busy in
+            guard !busy, let kind = pendingAddition else { return }
+            if store.installedComponent(for: kind) != nil {
+                let title = WorkspaceComponentRegistry.shared.component(for: kind)?.title ?? kind.title
+                componentNotice = "已添加\(title)，可在此点击“打开”或从侧栏进入。"
+            }
+            pendingAddition = nil
+        }
     }
 
-    private func capabilityRow(_ kind: ComponentKind) -> some View {
-        HStack(spacing: 10) {
+    private func capabilityRow(_ kind: ComponentKind, title: String) -> some View {
+        let installed = store.installedComponent(for: kind) != nil
+        return HStack(spacing: 10) {
             BrandGlyph(name: BrandNavigation.glyph(route: kind.rawValue)).frame(width: 17, height: 17).foregroundStyle(Palette.accent)
-            Text(kind.title).font(.system(size: 12, weight: .medium)).frame(width: 82, alignment: .leading)
-            Text(capabilityDescription(kind)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                Text(capabilityDescription(kind)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
             Spacer(minLength: 0)
-            Button("添加") { store.activate(kind); dismiss() }.disabled(store.book == nil || store.isBusy)
+            Button(installed ? "打开" : "添加") {
+                componentError = ""; componentNotice = ""
+                if installed {
+                    store.activate(kind, open: true, onError: { componentError = $0 })
+                    dismiss()
+                } else {
+                    pendingAddition = kind; componentNotice = "正在添加\(title)…"
+                    store.activate(kind, open: false, onError: { message in componentError = message; componentNotice = ""; pendingAddition = nil })
+                }
+            }.disabled(store.book == nil || store.isBusy).fixedSize()
         }.padding(.vertical, 6)
     }
 
@@ -216,7 +271,7 @@ struct PluginLibraryView: View {
         switch kind {
         case .cards: return "按书定义类型，查看带来源的要素"
         case .timeline: return "按事件时间筛选"
-        case .map: return "地点与时间窗联动"
+        case .map: return "地图、时间轴与事件共用同一时间窗"
         case .mindmap: return "组织文档节点与连线"
         case .relations: return "查看要素之间的关系"
         case .knowledge: return "查阅已保存文档与知识"
@@ -230,9 +285,11 @@ struct PluginLibraryView: View {
 private struct CompactPluginRow: View {
     @EnvironmentObject var store: AppStore
     let plugin: PluginManifest
+    @State private var operationError = ""
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        VStack(alignment: .leading, spacing: 5) {
+          HStack(alignment: .top, spacing: 12) {
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(plugin.description).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
@@ -249,8 +306,13 @@ private struct CompactPluginRow: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            Toggle("启用", isOn: Binding(get: { store.book?.disabledPluginIDs.contains(plugin.id) != true }, set: { enabled in Task { await store.setPluginEnabled(enabled, id: plugin.id) } }))
+            Toggle("启用", isOn: Binding(get: { store.book?.disabledPluginIDs.contains(plugin.id) != true }, set: { enabled in
+                operationError = ""
+                Task { _ = await store.setPluginEnabled(enabled, id: plugin.id, onError: { operationError = $0 }) }
+            }))
                 .toggleStyle(.switch).controlSize(.mini).fixedSize().disabled(store.isBusy)
+          }
+          if !operationError.isEmpty { Text(operationError).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
         }.padding(.vertical, 4)
     }
 }
@@ -286,7 +348,11 @@ private struct CompactMethodRow: View {
                 ForEach(Array(method.steps.enumerated()), id: \.offset) { index, step in
                     HStack(alignment: .top, spacing: 7) {
                         Text("\(index + 1).").foregroundStyle(.secondary)
-                        Text(step).textSelection(.enabled)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(step).textSelection(.enabled)
+                            let action = method.executions?.first { $0.stepIndex == index }?.actionID ?? "ai.analyze"
+                            Text("执行：" + (ReadingWorkflowRuntime.actions.first { $0.id == action }?.title ?? action)).font(.caption2).foregroundStyle(.secondary)
+                        }
                     }.font(.caption)
                 }
             }.padding(.top, 5)

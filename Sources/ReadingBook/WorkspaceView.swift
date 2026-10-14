@@ -29,7 +29,7 @@ struct WorkspaceView: View {
                         }
                     }
                 } else { WelcomeView() }
-                if store.isBusy && !viewingWorkflow { footer }
+                if store.isBusy && !viewingWorkflow && !viewingGraph { footer }
             }
             .background(Color(nsColor: .windowBackgroundColor))
             .onAppear { detailWidth = geometry.size.width }
@@ -42,6 +42,7 @@ struct WorkspaceView: View {
         .navigationSplitViewStyle(.balanced)
         .toolbar { workspaceToolbar }
         .environmentObject(pdfController)
+        .serviceProfileChangeConfirmation(store: store)
         .tint(Palette.accent)
         .onOpenURL { url in Task { await store.openInternalURL(url) } }
         .sheet(item: sheetBinding, onDismiss: finishSheetDismissal) { sheet in
@@ -101,13 +102,15 @@ struct WorkspaceView: View {
                         routeButton("我的理解", icon: "square.and.pencil", route: "editor")
                         if !store.enabledViews.isEmpty {
                             Text("AI 为这本书选择").font(.caption2).foregroundStyle(.tertiary).padding(.horizontal, 12).padding(.top, 17)
-                            ForEach(store.enabledViews.filter { ![ComponentKind.workflow, .query, .editor].contains($0.kind) }) { view in
+                            ForEach(WorkspaceComponentRegistry.shared.navigationViews(store.enabledViews)) { view in
                                 routeButton(view.title, icon: view.kind.icon, route: view.id)
                                     .contextMenu { Button("移除此组件入口") { Task { await store.removeView(view.id) } } }
                             }
                         }
                         Menu {
-                            ForEach(ComponentKind.allCases, id: \.self) { kind in Button(kind.title) { store.activate(kind) } }
+                            ForEach(WorkspaceComponentRegistry.shared.components) { component in
+                                Button(store.installedComponent(for: component.kind) == nil && !component.permanent ? "添加\(component.title)" : "打开\(component.title)") { store.activate(component.kind) }
+                            }
                         } label: { Label("添加组件", systemImage: "square.grid.2x2").font(.caption).padding(10) }.menuStyle(.borderlessButton).disabled(store.isBusy)
                     }
                 }.padding(.horizontal, 12)
@@ -230,13 +233,14 @@ struct WorkspaceView: View {
     private var servicePicker: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("自己的 AI", systemImage: "sparkles").font(.headline)
-            Picker("已保存的服务", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0) })) {
+            Picker("已保存的服务", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0); if store.serviceProfileDraft.pendingChange != nil { servicePopover = false } })) {
                 if store.selectedServiceID == nil { Text("未保存配置").tag("") }
                 ForEach(store.savedServices) { service in Text(service.name).tag(service.id) }
             }.disabled(store.isBusy)
             Text(store.settings.model.isEmpty ? "尚未配置模型" : store.settings.model).font(.caption).foregroundStyle(.secondary)
             HStack { Button("管理 / 新建") { servicePopover = false; store.showingSettings = true }; Spacer(); Button("测试") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty) }
             if !store.connectionStatus.isEmpty { Text(store.connectionStatus).font(.caption).foregroundStyle(.secondary) }
+            ServiceProfileLocalError(draft: store.serviceProfileDraft)
         }.padding(20).frame(width: 310)
     }
     private func moveSource(_ offset: Int) {
@@ -294,16 +298,8 @@ struct WorkspaceView: View {
         if store.route == "reader" { ReaderWorkspaceView(showPDF: $readerShowsPDF, showOutline: $readerOutline).id(store.bookID) }
         else {
             let kind = store.book?.views.first { $0.id == store.route }?.kind ?? ComponentKind(rawValue: store.route) ?? .workflow
-            switch kind {
-            case .cards: EntityCardsView(typeIDs: store.book?.views.first { $0.id == store.route }?.typeIDs ?? [])
-            case .timeline, .map: SpatialTimelineView()
-            case .mindmap: DocumentGraphView()
-            case .relations: RelationGraphView()
-            case .knowledge: KnowledgeLibraryView()
-            case .editor: DocumentEditorView()
-            case .query: EnhancedBookChatView()
-            case .workflow: ReadingWorkflowView()
-            }
+            if let component = WorkspaceComponentRegistry.shared.render(store.book?.views.first { $0.id == store.route }, kind: kind) { component }
+            else { EmptyState(title: "组件暂不可用", detail: "原书、已保存对象和笔记仍保留，请从侧栏选择可用组件。", icon: "puzzlepiece.extension") }
         }
     }
     private var footer: some View {
@@ -377,61 +373,6 @@ struct EmptyState: View {
             Text(title).font(.title3.weight(.medium)); Text(detail).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 440).lineSpacing(5)
             if let actionTitle, let action { Button(actionTitle, action: action).buttonStyle(.borderedProminent).padding(.top, 8) }
         }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-struct ObjectInspector: View {
-    @EnvironmentObject var store: AppStore
-    let id: String
-    var onClose: (() -> Void)? = nil
-    @State private var editingEntity: KnowledgeEntity?
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack { Text("关联与依据").font(.caption).foregroundStyle(.secondary); Spacer(); Button { if let onClose { onClose() } else { store.selectedObjectID = nil } } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("收起详情") }
-                if let entity = store.book?.entities.first(where: { $0.id == id }) {
-                    Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.caption).foregroundStyle(Palette.copper)
-                    Text(entity.name).font(.system(size: 21, design: .serif)); MarkdownText(markdown: entity.summary)
-                    Button("编辑卡片") { editingEntity = entity }.font(.caption).disabled(store.isBusy)
-                    Button("删除卡片", role: .destructive) { store.requestDeletion(.entity, id: entity.id, title: entity.name) }.font(.caption).disabled(store.isBusy)
-                    ForEach(entity.properties.keys.sorted(), id: \.self) { key in
-                        VStack(alignment: .leading, spacing: 5) { Text(fieldLabel(key, type: entity.typeID)).font(.caption).foregroundStyle(.secondary); MarkdownText(markdown: entity.properties[key] ?? "") }
-                    }
-                    if let note = entity.locationNote { Label(note, systemImage: "location").font(.caption).foregroundStyle(.secondary) }
-                    ForEach((store.book?.events ?? []).filter { $0.participantIDs.contains(id) || $0.placeIDs.contains(id) }) { event in Button(event.name) { store.focus(event.id) }.buttonStyle(.plain).foregroundStyle(Palette.accent) }
-                    EvidenceList(evidence: entity.evidence)
-                } else if let event = store.book?.events.first(where: { $0.id == id }) {
-                    Text("事件").font(.caption).foregroundStyle(Palette.copper); Text(event.name).font(.system(size: 21, design: .serif))
-                    Label(event.dateText, systemImage: "clock").font(.subheadline).foregroundStyle(.secondary)
-                    MarkdownText(markdown: event.summary)
-                    linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs)
-                    EvidenceList(evidence: event.evidence)
-                    Button("删除事件", role: .destructive) { store.requestDeletion(.event, id: event.id, title: event.name) }.font(.caption).disabled(store.isBusy)
-                } else if let document = store.book?.activeDocuments.first(where: { $0.id == id }) {
-                    Text("Markdown 文档").font(.caption).foregroundStyle(Palette.copper)
-                    Text(document.title).font(.title2)
-                    Button("打开文档") { store.openObject(document.id) }
-                    Button("添加一个画布节点") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
-                    Button("移入回收站", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy)
-                    EvidenceList(evidence: document.evidence)
-                } else if let unit = store.book?.units.first(where: { $0.id == id }) {
-                    Text(unit.chapter).font(.title3); Text(unit.locator).font(.caption).foregroundStyle(.secondary)
-                    Text(String(unit.text.prefix(500))).font(.caption).lineSpacing(5).textSelection(.enabled)
-                }
-                ForEach((store.book?.relations ?? []).filter { $0.fromID == id || $0.toID == id }) { relation in
-                    HStack { Button { store.focus(relation.fromID == id ? relation.toID : relation.fromID) } label: {
-                        Label("\(relation.label) · \(store.objectTitle(relation.fromID == id ? relation.toID : relation.fromID))", systemImage: "arrow.up.right").font(.caption)
-                    }.buttonStyle(.plain).foregroundStyle(Palette.accent); Spacer(); Button { Task { await store.removeConnection(relation.id, relation: true) } } label: { Image(systemName: "xmark.circle") }.buttonStyle(.plain).help("移除这条关系").disabled(store.isBusy) }
-                }
-                ForEach((store.book?.activeDocuments ?? []).filter { $0.linkedIDs.contains(id) }) { document in
-                    Button { Task { await store.openDocument(document) } } label: { Label(document.title, systemImage: "doc.text").font(.caption) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
-                }
-            }.padding(16)
-        }.background(.background).sheet(item: $editingEntity) { entity in EntityEditView(entity: entity).environmentObject(store) }
-    }
-    private func fieldLabel(_ key: String, type: String) -> String { store.book?.types.first { $0.id == type }?.fields.first { $0.key == key }?.label ?? key }
-    private func linkGroup(_ title: String, ids: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 8) { Text(title).font(.caption).foregroundStyle(.secondary); ForEach(ids, id: \.self) { target in Button(store.objectTitle(target)) { store.focus(target) }.buttonStyle(.plain).foregroundStyle(Palette.accent) } }
     }
 }
 

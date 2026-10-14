@@ -316,7 +316,7 @@ struct DocumentEditorView: View {
                     Spacer(minLength: 0)
                 }.padding(.horizontal, 16).padding(.vertical, 5)
             }
-            if let error = store.errorMessage, hasDocument {
+            if let error = store.documentError, hasDocument {
                 Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(Palette.copper).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 6)
             }
             if hasDocument {

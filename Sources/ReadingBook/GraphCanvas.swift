@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import AppKit
 
 struct GraphItem: Identifiable {
     var id: String
@@ -29,8 +30,14 @@ struct GraphSurface: View {
     var createDocument: (() -> Void)? = nil
     var title: String? = nil
     var isEnabled = true
+    var errorText: (() -> String?)? = nil
 
-    @State private var offsets: [String: CGSize] = [:]
+    private struct NodeDrag {
+        var id: String
+        var origin: CGPoint
+        var position: CGPoint
+    }
+    @State private var nodeDragState: NodeDrag?
     @State private var selectedNodeID: String?
     @State private var connectionFromID: String?
     @State private var connectionSide: PortSide = .trailing
@@ -50,8 +57,8 @@ struct GraphSurface: View {
     private var canvasWidth: Double { max(1000, (items.map(\.x).max() ?? 600) + 340) }
     private var canvasHeight: Double { max(650, (items.map(\.y).max() ?? 400) + 260) }
     private func point(_ item: GraphItem) -> CGPoint {
-        let offset = offsets[item.id] ?? .zero
-        return CGPoint(x: item.x + 110 + offset.width, y: item.y + 45 + offset.height)
+        let location = nodeDragState?.id == item.id ? nodeDragState!.position : CGPoint(x: item.x, y: item.y)
+        return CGPoint(x: location.x + 110, y: location.y + 45)
     }
     private func rect(_ item: GraphItem) -> CGRect {
         let center = point(item)
@@ -83,12 +90,8 @@ struct GraphSurface: View {
             ZStack(alignment: .topLeading) {
                 Palette.canvas.contentShape(Rectangle()).onTapGesture { backgroundTapped() }
                     .contextMenu { if let createDocument { Button("新建笔记") { createDocument() } } }
+                Rectangle().fill(ImagePaint(image: Image(nsImage: GraphGridTile.image), scale: 1)).opacity(0.18).allowsHitTesting(false).accessibilityHidden(true)
                 Canvas { context, size in
-                    for x in stride(from: 0.0, to: size.width, by: 24) {
-                        for y in stride(from: 0.0, to: size.height, by: 24) {
-                            context.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1.5, height: 1.5)), with: .color(.secondary.opacity(0.12)))
-                        }
-                    }
                     for edge in rendered {
                         context.stroke(edge.curve.path, with: .color(Palette.accent.opacity(0.55)), lineWidth: 1.5)
                         context.fill(edge.curve.arrow, with: .color(Palette.accent.opacity(0.65)))
@@ -103,6 +106,7 @@ struct GraphSurface: View {
                     nodeShell(item).position(point(item)).zIndex(item.id == selectedPhysicalID ? 2 : 1)
                 }
             }.frame(width: canvasWidth, height: canvasHeight)
+                .transaction { $0.animation = nil }
                 .coordinateSpace(name: canvasSpace)
                 .onContinuousHover { phase in
                     guard connectionFromID != nil, !draggingConnection, !savingConnection else { return }
@@ -121,15 +125,15 @@ struct GraphSurface: View {
         }
         .onChange(of: isEnabled) { _, enabled in
             if !enabled && !savingConnection { cancelConnection() }
-            if !enabled && !savingPosition { offsets.removeAll() }
+            if !enabled && !savingPosition { nodeDragState = nil }
         }
         .onChange(of: items.map(\.id)) { _, ids in
             if let id = connectionFromID, !ids.contains(id) { cancelConnection() }
             if let id = selectedNodeID, !ids.contains(id) { selectedNodeID = nil }
-            offsets = offsets.filter { ids.contains($0.key) }
+            if let drag = nodeDragState, !ids.contains(drag.id) { nodeDragState = nil }
         }
         .onChange(of: lines.map(\.id)) { _, ids in if let id = editingLineID, !ids.contains(id) { editingLineID = nil } }
-        .onDisappear { cancelConnection(); offsets.removeAll(); editingLineID = nil }
+        .onDisappear { cancelConnection(); nodeDragState = nil; editingLineID = nil }
     }
     @ViewBuilder private var statusOverlay: some View {
         if savingConnection || savingLine { Text("正在保存连线…").font(.caption).padding(9).readingGlass() }
@@ -145,10 +149,13 @@ struct GraphSurface: View {
     }
     private func nodeShell(_ item: GraphItem) -> some View {
         ZStack {
-            Group {
-                if connectionFromID != nil { nodeBody(item).gesture(TapGesture().onEnded { activate(item) }) }
-                else if move != nil { nodeBody(item).gesture(nodeDrag(item).exclusively(before: nodeTaps(item))) }
-                else { nodeBody(item).gesture(nodeTaps(item)) }
+            nodeBody(item).overlay {
+                GraphPointerBridge(enabled: isEnabled && !savingPosition && !savingConnection && !savingLine,
+                                   movable: move != nil && connectionFromID == nil && editingLineID == nil,
+                                   reservePorts: connect != nil,
+                                   click: { activate(item, opening: $0) },
+                                   drag: { updateNodeDrag(item, delta: $0, ended: $1) },
+                                   cancel: { if !savingPosition { nodeDragState = nil } })
             }
             .focusable().focusEffectDisabled().focused($focus, equals: .node(item.id))
             .onKeyPress(.return) { activate(item, opening: true); return .handled }
@@ -178,7 +185,11 @@ struct GraphSurface: View {
     private func port(_ item: GraphItem, side: PortSide) -> some View {
         Circle().fill(Palette.surface).overlay(Circle().stroke(selectedPhysicalID == item.id || connectionFromID == item.id ? Palette.accent : Palette.ink.opacity(0.45), lineWidth: 1.5))
             .frame(width: 8, height: 8).padding(8).contentShape(Circle())
-            .gesture(portDrag(item, side: side).exclusively(before: TapGesture().onEnded { portActivated(item, side: side) }))
+            .overlay {
+                GraphPointerBridge(enabled: isEnabled && !savingPosition && !savingConnection && !savingLine && editingLineID == nil,
+                                   movable: true, click: { _ in portActivated(item, side: side) },
+                                   drag: { updatePortDrag(item, side: side, delta: $0, ended: $1) }, cancel: { cancelConnection() })
+            }
             .focusable().focusEffectDisabled().focused($focus, equals: .port(item.id, side))
             .onKeyPress(.return) { portActivated(item, side: side); return .handled }
             .onKeyPress(.space) { portActivated(item, side: side); return .handled }
@@ -216,40 +227,44 @@ struct GraphSurface: View {
         }
         if let remove { Divider(); Button("移除节点，保留文档", role: .destructive) { remove(item.id) } }
     }
-    private func nodeTaps(_ item: GraphItem) -> some Gesture {
-        TapGesture(count: 2).exclusively(before: TapGesture(count: 1)).onEnded { result in
-            switch result { case .first: activate(item, opening: true); case .second: activate(item) }
+    private func updateNodeDrag(_ item: GraphItem, delta: CGSize, ended: Bool) {
+        guard isEnabled, !savingPosition, editingLineID == nil, connectionFromID == nil, let move else { return }
+        if nodeDragState == nil {
+            let origin = CGPoint(x: item.x, y: item.y)
+            nodeDragState = NodeDrag(id: item.id, origin: origin, position: origin)
+            selectedNodeID = item.id; select(item.targetID); message = ""
+        }
+        guard var drag = nodeDragState, drag.id == item.id else { return }
+        drag.position = CGPoint(x: max(10, drag.origin.x + delta.width), y: max(10, drag.origin.y + delta.height))
+        nodeDragState = drag
+        guard ended else { return }
+        savingPosition = true
+        let destination = drag.position
+        Task {
+            let saved = await move(item.id, destination.x, destination.y)
+            // Absolute display coordinates survive the model's save callback;
+            // adding a translation to the newly saved position would jump twice.
+            nodeDragState = nil; savingPosition = false
+            if !saved { message = (errorText?() ?? "位置未保存。") + "节点保留原位置。" }
         }
     }
-    private func nodeDrag(_ item: GraphItem) -> some Gesture {
-        DragGesture(minimumDistance: 6, coordinateSpace: .named(canvasSpace)).onChanged { value in
-            guard isEnabled, !savingPosition, editingLineID == nil else { return }
-            selectedNodeID = item.id; select(item.targetID); offsets[item.id] = value.translation
-        }.onEnded { value in
-            guard isEnabled, !savingPosition, editingLineID == nil, let move else { offsets[item.id] = nil; return }
-            let x = max(10, item.x + value.translation.width), y = max(10, item.y + value.translation.height)
-            offsets[item.id] = CGSize(width: x - item.x, height: y - item.y); savingPosition = true
-            Task { let saved = await move(item.id, x, y); offsets[item.id] = nil; savingPosition = false; if !saved { message = "位置未保存，节点保留原位置。" } }
+    private func updatePortDrag(_ item: GraphItem, side: PortSide, delta: CGSize, ended: Bool) {
+        guard isEnabled, !savingPosition, !savingConnection, !savingLine, editingLineID == nil else { return }
+        if !draggingConnection {
+            beginConnection(item, side: side)
+            guard connectionFromID == item.id else { return }
+            draggingConnection = true
         }
-    }
-    private func portDrag(_ item: GraphItem, side: PortSide) -> some Gesture {
-        DragGesture(minimumDistance: 3, coordinateSpace: .named(canvasSpace)).onChanged { value in
-            guard isEnabled, !savingPosition, !savingConnection, !savingLine, editingLineID == nil else { return }
-            if !draggingConnection {
-                beginConnection(item, side: side)
-                guard connectionFromID == item.id else { return }
-                draggingConnection = true
-            }
-            updateConnection(at: value.location)
-        }.onEnded { value in
-            guard isEnabled, !savingConnection, draggingConnection, let source = connectionFromID else { cancelConnection(); return }
-            draggingConnection = false
-            if let target = hitItem(at: value.location, excluding: source) { commitConnection(from: source, to: target.id) }
-            else { cancelConnection() }
-        }
+        let origin = rect(item)
+        let cursor = CGPoint(x: (side == .leading ? origin.minX : origin.maxX) + delta.width, y: origin.midY + delta.height)
+        updateConnection(at: cursor)
+        guard ended else { return }
+        draggingConnection = false
+        if let source = connectionFromID, let target = hitItem(at: cursor, excluding: source) { commitConnection(from: source, to: target.id) }
+        else { cancelConnection() }
     }
     private func activate(_ item: GraphItem, opening: Bool = false) {
-        guard isEnabled, !savingPosition, !savingConnection, !savingLine else { return }
+        guard isEnabled, nodeDragState == nil, !savingPosition, !savingConnection, !savingLine else { return }
         guard editingLineID == nil else { if let id = editingLineID { focus = .line(id) }; return }
         if let source = connectionFromID {
             if source != item.id { commitConnection(from: source, to: item.id) }
@@ -265,7 +280,7 @@ struct GraphSurface: View {
         } else { beginConnection(item, side: side) }
     }
     private func beginConnection(_ item: GraphItem, side: PortSide) {
-        guard isEnabled, connect != nil, !savingPosition, !savingConnection, !savingLine else { return }
+        guard isEnabled, nodeDragState == nil, connect != nil, !savingPosition, !savingConnection, !savingLine else { return }
         guard editingLineID == nil else { if let id = editingLineID { focus = .line(id) }; return }
         selectedNodeID = item.id; select(item.targetID); connectionFromID = item.id; connectionSide = side
         connectionPoint = nil; connectionTargetID = nil; message = ""; focus = .node(item.id)
@@ -287,7 +302,7 @@ struct GraphSurface: View {
             let saved = await connect(from, to)
             savingConnection = false; draggingConnection = false
             if saved { cancelConnection() }
-            else { message = "连线未保存，起点已保留。点击目标重试，Esc 或点空白取消。" }
+            else { message = (errorText?() ?? "连线未保存。") + "起点已保留，点击目标重试，Esc 或点空白取消。" }
         }
     }
     private func cancelConnection() {
@@ -315,7 +330,7 @@ struct GraphSurface: View {
         }
     }
     private func beginRename(_ line: GraphLine) {
-        guard isEnabled, renameLine != nil, !savingPosition, !savingLine, !savingConnection else { return }
+        guard isEnabled, nodeDragState == nil, renameLine != nil, !savingPosition, !savingLine, !savingConnection else { return }
         if let id = editingLineID { focus = .line(id); return }
         cancelConnection(); lineDraft = line.label; editingLineID = line.id; focus = .line(line.id); message = ""
     }
@@ -327,13 +342,13 @@ struct GraphSurface: View {
             let saved = await renameLine(line.id, submittedLabel)
             savingLine = false
             if saved { editingLineID = nil; focus = nil; message = "" }
-            else { focus = .line(line.id); message = "改名未保存，已填写名称保留。" }
+            else { focus = .line(line.id); message = (errorText?() ?? "改名未保存。") + "已填写名称保留，回车重试或Esc取消。" }
         }
     }
     private func deleteLine(_ id: String) {
         guard isEnabled, !savingLine, !savingConnection, let removeLine else { return }
         cancelConnection(); savingLine = true
-        Task { let saved = await removeLine(id); savingLine = false; if saved && editingLineID == id { editingLineID = nil }; if !saved { message = "连线未移除，请重试。" } }
+        Task { let saved = await removeLine(id); savingLine = false; if saved && editingLineID == id { editingLineID = nil }; if !saved { message = errorText?() ?? "连线未移除，请重试。" } }
     }
     private func nodeNumber(_ item: GraphItem) -> Int { (items.firstIndex { $0.id == item.id } ?? 0) + 1 }
     private var previewCurve: GraphCurve? {
@@ -350,6 +365,12 @@ struct GraphSurface: View {
             return GraphAnchor(point: CGPoint(x: dx >= 0 ? rect.maxX : rect.minX, y: rect.midY), normal: CGVector(dx: dx >= 0 ? 1 : -1, dy: 0))
         }
         return GraphAnchor(point: CGPoint(x: rect.midX, y: dy >= 0 ? rect.maxY : rect.minY), normal: CGVector(dx: 0, dy: dy >= 0 ? 1 : -1))
+    }
+}
+
+private enum GraphGridTile {
+    static let image = NSImage(size: NSSize(width: 24, height: 24), flipped: true) { _ in
+        NSColor.gray.setFill(); NSBezierPath(ovalIn: CGRect(x: 11.25, y: 11.25, width: 1.5, height: 1.5)).fill(); return true
     }
 }
 

@@ -19,6 +19,7 @@ import ReadingCore
     @Published var editorTitle = "" { didSet { if editorDirty { persistDraft() } } }
     @Published var editorMarkdown = "" { didSet { if editorDirty { persistDraft() } } }
     @Published var editorDirty = false { didSet { if editorDirty { persistDraft() } } }
+    @Published var documentError: String?
     @Published var draftEvidence: [Evidence] = []
     @Published var sourceFileURL: URL?
     @Published var pdfPasswordRequest: PDFPasswordRequest?
@@ -50,6 +51,7 @@ import ReadingCore
     @Published var timeTo = 3000.0
     @Published var showUndated = true
     let repository: LibraryRepository
+    let serviceProfileDraft = ServiceProfileDraftState()
     let reader = AIReader()
     let pdfOCRReader = PDFOCRReader()
     private var loaded = false
@@ -82,7 +84,7 @@ import ReadingCore
         pdfNavigationToken += 1
         pdfPasswordRequest = nil
         let generation = navigationGeneration
-        bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []
+        bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
         if book?.units.contains(where: { $0.id == selectedUnitID }) != true { selectedUnitID = book?.units.first?.id }
         if let project = book {
@@ -143,6 +145,7 @@ import ReadingCore
                     activeReadingUnitID = unit.id
                     let result = try await reader.readNext(project: current, settings: settings, apiKey: apiKey)
                     try Task.checkCancellation(); try await repository.save(result); publish(result)
+                    if let failure = ReadingWorkflowRuntime.failureMessage(in: result, unitID: unit.id) { throw ReadingError.invalid(failure) }
                     requestsUsed = await reader.requestCount
                 }
                 while let current = book, !(await reader.synthesisComplete(project: current)) {
@@ -159,6 +162,12 @@ import ReadingCore
     private var requiresPDFRecognition: Bool {
         guard let book, book.originalName.lowercased().hasSuffix(".pdf") else { return false }
         return book.units.contains { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (book.coverage[$0.id]?.status ?? .pending) == .pending }
+    }
+    func resetWorkflowRetry(_ stepID: String, inBook expectedBookID: String) async {
+        guard var current = book, current.id == expectedBookID, !isBusy else { return }
+        isBusy = true; defer { isBusy = false }
+        do { try ReadingWorkflowRuntime.resetRetry(stepID: stepID, in: &current); try await repository.save(current); publish(current); activity = "已重置此步骤的重试预算，点击继续精读可重试。" }
+        catch { errorMessage = error.localizedDescription }
     }
     var providerReady: Bool {
         if settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errorMessage = "请先在模型设置中填写模型名称与服务地址。"; showingSettings = true; return false }
@@ -177,12 +186,12 @@ import ReadingCore
     func newDocument() {
         guard book != nil, !isRecognizingPDF else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档。"; return }
-        documentGeneration += 1
+        documentGeneration += 1; documentError = nil
         selectedDocumentID = nil; editorTitle = "新的理解"; editorMarkdown = "# 新的理解\n\n"; draftEvidence = []; editorDirty = true; route = "editor"
     }
     func discardDraft() {
         guard !isSavingDocument, let bookID else { return }
-        documentGeneration += 1
+        documentGeneration += 1; documentError = nil
         let document = book?.activeDocuments.first { $0.id == selectedDocumentID }
         editorDirty = false
         UserDefaults.standard.removeObject(forKey: "draft-\(bookID)")
@@ -203,12 +212,14 @@ import ReadingCore
             let markdown = try await repository.readDocument(bookID: current.id, document: document)
             guard current.id == bookID, generation == documentGeneration, !editorDirty else { return }
             editorMarkdown = markdown
+            documentError = nil
             editorTitle = document.title; selectedDocumentID = document.id; draftEvidence = document.evidence; editorDirty = false; route = "editor"
             selectedObjectID = document.id
         } catch { if current.id == bookID && generation == documentGeneration { errorMessage = error.localizedDescription } }
     }
     func saveCurrentDocument() async {
         guard var current = book, !isBusy, editorDirty else { return }
+        documentError = nil
         let savingBookID = current.id, savingDocumentID = selectedDocumentID
         let savingTitle = editorTitle, savingMarkdown = editorMarkdown, savingEvidence = draftEvidence
         isBusy = true; isSavingDocument = true; activity = "正在保存 Markdown…"
@@ -228,7 +239,7 @@ import ReadingCore
             } else {
                 editorDirty = true; persistDraft(); activity = "已保存上一版；保存期间的新编辑保留为待保存草稿。"
             }
-        } catch { errorMessage = error.localizedDescription }
+        } catch { documentError = error.localizedDescription }
     }
     func saveAnswer(_ message: ChatMessage) async {
         guard var current = book, !isBusy else { return }
@@ -330,23 +341,42 @@ import ReadingCore
         if !current.insights.contains(where: { $0.id == insightID }) { current.insights.append(ReadingInsight(id: insightID, unitIDs: [unitID], markdown: "【未读取，待识别】\(unit.locator)。该单元尚无可靠文本，不得推断其中的事实。")) }
         do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
     }
-    func activate(_ kind: ComponentKind) {
-        guard var current = book, !isBusy else { return }
-        let id = "manual-\(kind.rawValue)"
-        isBusy = true
-        if !current.views.contains(where: { $0.id == id || $0.kind == kind }) { current.views.append(ViewDefinition(id: id, title: kind.title, kind: kind)) }
-        publish(current); route = current.views.first { $0.kind == kind }?.id ?? kind.rawValue
-        Task { defer { isBusy = false }; do { try await repository.save(current) } catch { errorMessage = error.localizedDescription } }
+    func installedComponent(for kind: ComponentKind) -> ViewDefinition? {
+        if let component = WorkspaceComponentRegistry.shared.component(for: kind), component.permanent {
+            return ViewDefinition(id: component.kind.rawValue, title: component.title, kind: component.kind)
+        }
+        return enabledViews.first { WorkspaceComponentRegistry.shared.equivalent($0.kind, kind) }
     }
-    func importPlugin() {
+    func activate(_ kind: ComponentKind, open: Bool = true, onError: ((String) -> Void)? = nil) {
+        guard var current = book, !isBusy, let component = WorkspaceComponentRegistry.shared.component(for: kind) else { return }
+        if let existing = installedComponent(for: kind) { if open { route = existing.id }; return }
+        let view = ViewDefinition(id: "manual-\(component.kind.rawValue)", title: component.title, kind: component.kind)
+        guard !current.views.contains(where: { $0.id == view.id }) else {
+            let message = "同名组件入口由已停用声明包保留，请先启用该包。"
+            if let onError { onError(message) } else { errorMessage = message }; return
+        }
+        current.views.append(view); isBusy = true
+        Task {
+            defer { isBusy = false }
+            do { try await repository.save(current); publish(current); if open, bookID == current.id { route = view.id }; activity = "已添加\(component.title)。" }
+            catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription } }
+        }
+    }
+    func importPlugin(onError: ((String) -> Void)? = nil) {
         guard var current = book, !isBusy else { return }
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]; panel.message = "选择声明式插件 manifest.json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let data = try Data(contentsOf: url); guard data.count <= 1_000_000 else { throw ReadingError.invalid("插件包超过 1 MB。") }
             let manifest = try JSONDecoder().decode(PluginManifest.self, from: data); try PluginEngine.install(manifest, into: &current)
-            isBusy = true; publish(current); Task { defer { isBusy = false }; do { try await repository.save(current) } catch { errorMessage = error.localizedDescription } }
-        } catch { errorMessage = error.localizedDescription }
+            guard bookID == current.id else { throw ReadingError.invalid("书籍已切换，请重新导入插件。") }
+            isBusy = true
+            Task {
+                defer { isBusy = false }
+                do { try await repository.save(current); publish(current); activity = "已安装\(manifest.name)，声明已保存。" }
+                catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription } }
+            }
+        } catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription } }
     }
     func exportProject() {
         guard let current = book, !isBusy else { return }
@@ -398,18 +428,20 @@ import ReadingCore
         do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
     }
     @discardableResult
-    func moveNode(id: String, x: Double, y: Double) async -> Bool {
-        guard var current = book else { errorMessage = "请先打开书籍，再移动画布节点。"; return false }
-        guard !isBusy else { errorMessage = "当前任务尚未结束，请稍后移动节点。"; return false }
-        guard let index = current.nodes.firstIndex(where: { $0.id == id }) else { errorMessage = "画布节点已移除或不存在，请重新选择节点。"; return false }
+    func moveNode(id: String, x: Double, y: Double, onError: ((String) -> Void)? = nil) async -> Bool {
+        func fail(_ message: String) -> Bool { if let onError { onError(message) } else { errorMessage = message }; return false }
+        guard var current = book else { return fail("请先打开书籍，再移动画布节点。") }
+        guard !isBusy else { return fail("当前任务尚未结束，请稍后移动节点。") }
+        guard x.isFinite, y.isFinite, let index = current.nodes.firstIndex(where: { $0.id == id }) else { return fail("画布节点已移除，或坐标无效，请重新选择节点。") }
         isBusy = true; defer { isBusy = false }
         current.nodes[index].x = x; current.nodes[index].y = y
-        do { try await repository.save(current); publish(current); return true } catch { errorMessage = error.localizedDescription; return false }
+        do { try await repository.save(current); publish(current); return true } catch { return fail(error.localizedDescription) }
     }
     @discardableResult
-    func connectNodes(from: String, to: String, label: String) async -> Bool {
-        guard let current = book else { errorMessage = "请先打开书籍，再连接画布节点。"; return false }
-        guard !isBusy else { errorMessage = "当前任务尚未结束，请稍后连接节点。"; return false }
+    func connectNodes(from: String, to: String, label: String, onError: ((String) -> Void)? = nil) async -> Bool {
+        func fail(_ message: String) -> Bool { if let onError { onError(message) } else { errorMessage = message }; return false }
+        guard let current = book else { return fail("请先打开书籍，再连接画布节点。") }
+        guard !isBusy else { return fail("当前任务尚未结束，请稍后连接节点。") }
         isBusy = true; defer { isBusy = false }
         do {
             let connected = try GraphConnections.connecting(from: from, to: to, label: label, in: current)
@@ -418,12 +450,13 @@ import ReadingCore
             publish(connected)
             activity = "画布节点已连接。"
             return true
-        } catch { errorMessage = error.localizedDescription; return false }
+        } catch { return fail(error.localizedDescription) }
     }
     @discardableResult
-    func renameCanvasEdge(id: String, label: String) async -> Bool {
-        guard let current = book else { errorMessage = "请先打开书籍，再修改连线关系。"; return false }
-        guard !isBusy else { errorMessage = "当前任务尚未结束，请稍后修改连线。"; return false }
+    func renameCanvasEdge(id: String, label: String, onError: ((String) -> Void)? = nil) async -> Bool {
+        func fail(_ message: String) -> Bool { if let onError { onError(message) } else { errorMessage = message }; return false }
+        guard let current = book else { return fail("请先打开书籍，再修改连线关系。") }
+        guard !isBusy else { return fail("当前任务尚未结束，请稍后修改连线。") }
         isBusy = true; defer { isBusy = false }
         do {
             let renamed = try GraphConnections.renaming(edgeID: id, label: label, in: current)
@@ -432,24 +465,30 @@ import ReadingCore
             publish(renamed)
             activity = "连线关系已改名。"
             return true
-        } catch { errorMessage = error.localizedDescription; return false }
+        } catch { return fail(error.localizedDescription) }
     }
-    func setPluginEnabled(_ enabled: Bool, id: String) async {
-        guard var current = book, !isBusy else { return }
+    @discardableResult
+    func setPluginEnabled(_ enabled: Bool, id: String, onError: ((String) -> Void)? = nil) async -> Bool {
+        guard var current = book, !isBusy else { return false }
         isBusy = true; defer { isBusy = false }
-        do { try PluginEngine.setEnabled(enabled, pluginID: id, in: &current); try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
+        do { try PluginEngine.setEnabled(enabled, pluginID: id, in: &current); try await repository.save(current); publish(current); return true }
+        catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription }; return false }
     }
-    func saveEntity(_ entity: KnowledgeEntity) async {
-        guard var current = book, !isBusy, let index = current.entities.firstIndex(where: { $0.id == entity.id }) else { return }
-        guard !entity.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { errorMessage = "名称不能为空。"; return }
-        guard (entity.latitude == nil) == (entity.longitude == nil) else { errorMessage = "经度和纬度需要同时填写，或同时留空。"; return }
-        if let latitude = entity.latitude, !latitude.isFinite || !(-90...90).contains(latitude) { errorMessage = "纬度应在 -90 到 90 之间。"; return }
-        if let longitude = entity.longitude, !longitude.isFinite || !(-180...180).contains(longitude) { errorMessage = "经度应在 -180 到 180 之间。"; return }
+    @discardableResult
+    func saveEntity(_ entity: KnowledgeEntity, inBook expectedBookID: String? = nil, onError: ((String) -> Void)? = nil) async -> Bool {
+        func fail(_ message: String) -> Bool { if let onError { onError(message) } else { errorMessage = message }; return false }
+        guard var current = book, expectedBookID == nil || current.id == expectedBookID else { return fail("书籍已切换，编辑草稿保留，请回到原书保存。") }
+        guard !isBusy, let index = current.entities.firstIndex(where: { $0.id == entity.id }) else { return fail("当前任务尚未完成，或卡片已被移除。") }
+        guard !entity.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return fail("名称不能为空。") }
+        guard (entity.latitude == nil) == (entity.longitude == nil) else { return fail("经度和纬度需要同时填写，或同时留空。") }
+        if let latitude = entity.latitude, !latitude.isFinite || !(-90...90).contains(latitude) { return fail("纬度应在 -90 到 90 之间。") }
+        if let longitude = entity.longitude, !longitude.isFinite || !(-180...180).contains(longitude) { return fail("经度应在 -180 到 180 之间。") }
+        guard let type = current.types.first(where: { $0.id == entity.typeID }), type.fields.filter(\.required).allSatisfy({ entity.properties[$0.key]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }) else { return fail("请选择已有类型，并填写该类型的必填字段。") }
         isBusy = true; defer { isBusy = false }
         var edited = entity
         if edited.latitude != nil, (edited.latitude != current.entities[index].latitude || edited.longitude != current.entities[index].longitude), edited.locationNote?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false { edited.locationNote = "用户手动指定坐标；尚未作外部考证。" }
         current.entities[index] = edited; current.audit.append(ToolAudit(name: "user_edit", summary: "用户编辑卡片：\(entity.name)"))
-        do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
+        do { try await repository.save(current); publish(current); return true } catch { return fail(error.localizedDescription) }
     }
     var enabledViews: [ViewDefinition] {
         guard let current = book else { return [] }

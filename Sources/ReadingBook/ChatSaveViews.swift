@@ -13,6 +13,7 @@ private struct AnswerSaveRequest: Identifiable {
 struct EnhancedBookChatView: View {
     @EnvironmentObject var store: AppStore
     @State private var question = ""
+    @State private var selectionMode = false
     @State private var selectedAnswers = Set<String>()
     @State private var renderedSelections: [String: RenderedMarkdownSelection] = [:]
     @State private var saveRequest: AnswerSaveRequest?
@@ -20,12 +21,12 @@ struct EnhancedBookChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !selectedAnswers.isEmpty { selectionBar }
+            if selectionMode { selectionBar }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
                         if store.book?.chats.isEmpty != false {
-                            EmptyState(title: "顺着一个问题，读得更深", detail: "选择文字保存摘录，或勾选多条回答合并。公式可选择 Markdown 源文。", icon: "bubble.left.and.bubble.right").frame(minHeight: 200)
+                            EmptyState(title: "顺着一个问题，读得更深", detail: "在回答的保存菜单中选片段或合并多条。公式可选择 Markdown 源文。", icon: "bubble.left.and.bubble.right").frame(minHeight: 200)
                         }
                         ForEach(store.book?.chats ?? []) { message in answerCard(message).id(message.id) }
                     }.padding(.horizontal, 18).padding(.vertical, 16).frame(maxWidth: 900).frame(maxWidth: .infinity)
@@ -41,12 +42,13 @@ struct EnhancedBookChatView: View {
                     .help("发送问题").accessibilityLabel("发送问题")
             }.padding(12).readingGlass().padding(.horizontal, 18).padding(.bottom, 12)
         }
-        .onChange(of: store.bookID) { _, _ in selectedAnswers.removeAll(); renderedSelections.removeAll(); saveRequest = nil }
+        .onChange(of: store.bookID) { _, _ in selectionMode = false; selectedAnswers.removeAll(); renderedSelections.removeAll(); saveRequest = nil }
         .sheet(item: $saveRequest, onDismiss: {
             if openTrashAfterSheet { openTrashAfterSheet = false; store.showingTrash = true }
         }) { request in
             AnswerSaveSheet(bookID: request.bookID, sourceAnswer: request.sourceAnswer, parts: request.parts,
-                            showTrash: { openTrashAfterSheet = true; saveRequest = nil })
+                            showTrash: { openTrashAfterSheet = true; saveRequest = nil },
+                            onSaved: { selectionMode = false; selectedAnswers.removeAll() })
                 .environmentObject(store).frame(minWidth: 520, idealWidth: 680, minHeight: 440, idealHeight: 600)
         }
     }
@@ -55,12 +57,12 @@ struct EnhancedBookChatView: View {
         HStack(spacing: 10) {
             Label("已选 \(selectedAnswers.count) 条", systemImage: "checkmark.circle.fill").font(.caption.weight(.medium))
             Spacer()
-            Button("清空") { selectedAnswers.removeAll() }.buttonStyle(.borderless)
-            Button("合并预览…") {
+            Button("取消多选") { selectionMode = false; selectedAnswers.removeAll() }.buttonStyle(.borderless)
+            Button("合并保存…") {
                 guard let book = store.book else { return }
                 let parts = book.chats.filter { $0.role == "assistant" && selectedAnswers.contains($0.id) }.map { SavedAnswerPart(answer: $0) }
                 saveRequest = AnswerSaveRequest(bookID: book.id, sourceAnswer: nil, parts: parts)
-            }.buttonStyle(.borderedProminent).disabled(store.isBusy)
+            }.buttonStyle(.borderedProminent).disabled(store.isBusy || selectedAnswers.isEmpty)
         }.controlSize(.small).padding(.horizontal, 18).padding(.vertical, 6)
             .background(Palette.paper).overlay(alignment: .bottom) { Divider().opacity(0.5) }
     }
@@ -75,22 +77,28 @@ struct EnhancedBookChatView: View {
                     .font(.caption.weight(.semibold)).foregroundStyle(assistant ? Palette.accent : .secondary)
                 Spacer()
                 if assistant {
-                    Toggle("合并", isOn: Binding(get: { selectedAnswers.contains(message.id) }, set: { selected in
-                        if selected { selectedAnswers.insert(message.id) } else { selectedAnswers.remove(message.id) }
-                    })).toggleStyle(.checkbox).font(.caption).help("将这条回答加入合并选择")
+                    if selectionMode {
+                        Toggle("选择", isOn: Binding(get: { selectedAnswers.contains(message.id) }, set: { selected in
+                            if selected { selectedAnswers.insert(message.id) } else { selectedAnswers.remove(message.id) }
+                        })).toggleStyle(.checkbox).font(.caption).help("将这条回答加入合并选择").disabled(store.isBusy)
+                    }
                     Menu("保存") {
-                        Button("保存完整回答…") { request(parts: [SavedAnswerPart(answer: message)]) }
-                        Button("选择 Markdown 片段…") {
-                            saveRequest = AnswerSaveRequest(bookID: bookID, sourceAnswer: message, parts: [])
-                        }
+                        answerActions(message, bookID: bookID, prepared: prepared)
                     }.font(.caption).menuStyle(.borderlessButton).fixedSize().disabled(store.isBusy)
+                        .help("保存完整回答、精确 Markdown 片段，或进入多选合并；也可右键回答")
+                        .accessibilityLabel("保存回答")
                 }
             }.controlSize(.small)
             ChatMarkdownBody(markdown: prepared, onSelectionChange: assistant ? { selection in
                 guard store.bookID == bookID,
                       store.book?.chats.first(where: { $0.id == message.id })?.content == message.content else { return }
-                if let selection, selection.sourceMarkdown == prepared { renderedSelections[message.id] = selection }
-                else { renderedSelections.removeValue(forKey: message.id) }
+                if let selection, selection.sourceMarkdown == prepared {
+                    if renderedSelections[message.id] != selection || renderedSelections.count != 1 { renderedSelections = [message.id: selection] }
+                } else if renderedSelections[message.id] != nil { renderedSelections.removeValue(forKey: message.id) }
+            } : nil, onSelectionSave: assistant && !store.isBusy ? { selection in
+                guard store.bookID == bookID, selection.sourceMarkdown == prepared,
+                      store.book?.chats.first(where: { $0.id == message.id })?.content == message.content else { return }
+                saveRenderedSelection(message, bookID: bookID, selection: selection)
             } : nil)
             if assistant, let selection = renderedSelections[message.id], selection.sourceMarkdown == prepared {
                 ViewThatFits(in: .horizontal) {
@@ -115,6 +123,23 @@ struct EnhancedBookChatView: View {
             }
         }.padding(16).background(assistant ? Palette.surface : Palette.accent.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.line.opacity(0.65), lineWidth: 0.65))
+            .contextMenu {
+                if assistant { answerActions(message, bookID: bookID, prepared: prepared) }
+            }
+    }
+
+    @ViewBuilder private func answerActions(_ message: ChatMessage, bookID: String, prepared: String) -> some View {
+        if let selection = renderedSelections[message.id], selection.sourceMarkdown == prepared {
+            Button("保存选区为语义摘记…") { saveRenderedSelection(message, bookID: bookID, selection: selection) }.disabled(store.isBusy)
+            Divider()
+        }
+        Button("保存完整回答…") { request(parts: [SavedAnswerPart(answer: message)], bookID: bookID) }.disabled(store.isBusy)
+        Button("选择 Markdown 片段…") { requestSource(message, bookID: bookID) }.disabled(store.isBusy)
+        Divider()
+        Button(selectionMode ? "加入合并选择" : "多选合并…") {
+            guard store.bookID == bookID else { return }
+            selectedAnswers.insert(message.id); selectionMode = true
+        }.disabled(store.isBusy)
     }
 
     private func selectionSummary(_ selection: RenderedMarkdownSelection) -> some View {
@@ -126,18 +151,29 @@ struct EnhancedBookChatView: View {
 
     private func selectionActions(_ message: ChatMessage, bookID: String, selection: RenderedMarkdownSelection) -> some View {
         HStack(spacing: 10) {
-            Button("选源文") { saveRequest = AnswerSaveRequest(bookID: bookID, sourceAnswer: message, parts: []) }
+            Button("选源文") { requestSource(message, bookID: bookID) }
                 .buttonStyle(.borderless).help("从只读 Markdown 中选择连续原文，精确保留公式")
             Button("保存选段…") {
-                request(parts: [SavedAnswerPart(messageID: message.id, sourceContent: message.content,
-                                               text: selection.text, kind: .renderedText)])
-            }
+                saveRenderedSelection(message, bookID: bookID, selection: selection)
+            }.keyboardShortcut("s", modifiers: [.command, .shift]).help("保存语义摘录 · ⌘⇧S；公式建议选择源文")
         }.font(.caption).controlSize(.small).fixedSize().disabled(store.isBusy)
     }
 
-    private func request(parts: [SavedAnswerPart]) {
-        guard let bookID = store.bookID else { return }
+    private func request(parts: [SavedAnswerPart], bookID expectedBookID: String? = nil) {
+        guard !store.isBusy, let bookID = store.bookID, expectedBookID == nil || expectedBookID == bookID else { return }
         saveRequest = AnswerSaveRequest(bookID: bookID, sourceAnswer: nil, parts: parts)
+    }
+    private func requestSource(_ message: ChatMessage, bookID: String) {
+        guard !store.isBusy, store.bookID == bookID,
+              store.book?.chats.first(where: { $0.id == message.id })?.content == message.content else { return }
+        saveRequest = AnswerSaveRequest(bookID: bookID, sourceAnswer: message, parts: [])
+    }
+    private func saveRenderedSelection(_ message: ChatMessage, bookID: String, selection: RenderedMarkdownSelection) {
+        guard !selection.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              selection.sourceMarkdown == ChatMarkdownBody.prepare(message.content, bookID: bookID),
+              store.bookID == bookID, store.book?.chats.first(where: { $0.id == message.id })?.content == message.content else { return }
+        request(parts: [SavedAnswerPart(messageID: message.id, sourceContent: message.content,
+                                      text: selection.text, kind: .renderedText)], bookID: bookID)
     }
     private func send() {
         guard !store.isBusy, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -153,6 +189,7 @@ private struct AnswerSaveSheet: View {
     let sourceAnswer: ChatMessage?
     let parts: [SavedAnswerPart]
     let showTrash: () -> Void
+    let onSaved: () -> Void
     @State private var selectedSource = ""
     @State private var preparedSource = ""
     @State private var composition: SavedAnswerComposition?
@@ -215,6 +252,7 @@ private struct AnswerSaveSheet: View {
             prepare([SavedAnswerPart(messageID: answer.id, sourceContent: answer.content, text: selection, kind: .markdownExcerpt)], source: selection)
         }
         .onChange(of: store.bookID) { _, id in if id != bookID { localError = "书籍已切换，请关闭并重新选择。"; composition = nil } }
+        .interactiveDismissDisabled(saving)
     }
 
     @ViewBuilder private var sourceNotice: some View {
@@ -298,9 +336,9 @@ private struct AnswerSaveSheet: View {
         guard let composition = readyComposition, !saving, !store.isBusy, store.bookID == bookID else { return }
         saving = true; localError = nil
         Task {
-            let saved = await store.saveAnswerComposition(composition, title: title)
+            let saved = await store.saveAnswerComposition(composition, title: title, onError: { localError = $0 })
             saving = false
-            if saved { dismiss() } else { localError = store.errorMessage ?? "未能保存，标题与选区已保留，请重试。" }
+            if saved { onSaved(); dismiss() } else if localError == nil { localError = "未能保存，标题与选区已保留，请重试。" }
         }
     }
 
@@ -317,10 +355,11 @@ private struct ChatMarkdownBody: View {
     @EnvironmentObject var store: AppStore
     var markdown: String
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)? = nil
+    var onSelectionSave: ((RenderedMarkdownSelection) -> Void)? = nil
     var body: some View {
         RichMarkdownView(markdown: markdown,
                          baseDirectory: store.sourceFileURL?.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("docs", isDirectory: true),
-                         onSelectionChange: onSelectionChange)
+                         onSelectionChange: onSelectionChange, onSelectionSave: onSelectionSave)
             .environment(\.openURL, OpenURLAction { url in
                 if url.scheme == "readingbook" { Task { await store.openInternalURL(url) }; return .handled }
                 return ["https", "http"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded

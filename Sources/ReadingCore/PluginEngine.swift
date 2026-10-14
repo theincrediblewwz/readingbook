@@ -26,13 +26,26 @@ public enum PluginEngine {
             ReadingMethod(id: "research", name: "研究笔记", goal: "整理研究问题、方法、材料、发现与局限。", steps: ["逐单元读取材料和方法细节", "记录可核对的发现与证据", "区分来源事实、作者解释和推断", "整理局限、争议及后续问题"]),
             ReadingMethod(id: "active-retelling", name: "主动复述", goal: "逐段用自己的话简短复述，再核对术语、条件与遗漏，提出理解问题。", steps: ["逐段简短复述正文、公式含义及注释，不补充书外信息", "核对术语、限制条件、推理连接及不确定处", "记录自己尚未理解的问题和需要回查的原文"])
         ]
-        for method in methods where !project.methods.contains(where: { $0.id == method.id }) { project.methods.append(method) }
+        let actionBindings: [String: [String]] = [
+            "narrative": ["ai.analyze", "facts.extract", "facts.extract", "reading.review"],
+            "analytical": ["ai.analyze", "facts.extract", "ai.analyze", "reading.review"],
+            "textbook": ["ai.analyze", "facts.extract", "facts.extract", "reading.review"],
+            "research": ["ai.analyze", "facts.extract", "ai.analyze", "reading.review"],
+            "active-retelling": ["ai.analyze", "ai.analyze", "reading.review"]
+        ]
+        for method in methods where !project.methods.contains(where: { $0.id == method.id }) {
+            var executable = method
+            executable.steps.append("由宿主核验本单元保存的引文和对象关联；语义疑点继续保留待核对。")
+            let actions = (actionBindings[method.id] ?? method.steps.map { _ in "ai.analyze" }) + ["citations.verify"]
+            executable.executions = actions.enumerated().map { ReadingStepExecution(stepIndex: $0.offset, actionID: $0.element) }
+            project.methods.append(executable)
+        }
         for unit in project.units where project.coverage[unit.id] == nil { project.coverage[unit.id] = CoverageEntry() }
         // Views are selected by the reading plan, rather than forcing person cards onto every book.
     }
 
     /// OpenAI Chat Completions function tools. Optional fields may be omitted; no tool edits user documents.
-    public static var tools: [[String: Any]] {
+    private static var builtInToolSchemas: [[String: Any]] {
         let string: [String: Any] = ["type": "string", "maxLength": 32_768]
         let id: [String: Any] = ["type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.-]+$", "description": "稳定 ID：1–128 位 ASCII 字母、数字、点、下划线或短横线；实体、事件、文档和关系之间不能重名。"]
         let text: [String: Any] = ["type": "string", "minLength": 1, "maxLength": 400]
@@ -41,7 +54,8 @@ public enum PluginEngine {
         let field = object(["key": id, "label": text, "required": ["type": "boolean"]], required: ["key", "label"])
         let type = object(["id": id, "name": text, "icon": ["type": "string", "maxLength": 128], "fields": array(field, maximum: 64)], required: ["id", "name"])
         let view = object(["id": id, "title": text, "kind": ["type": "string", "enum": ComponentKind.allCases.map(\.rawValue)], "typeIDs": array(id, maximum: 128)], required: ["id", "title", "kind"])
-        let method = object(["id": id, "name": text, "goal": ["type": "string", "minLength": 1, "maxLength": 4_000], "steps": array(["type": "string", "minLength": 1, "maxLength": 4_000], minimum: 1, maximum: 24)], required: ["id", "name", "goal", "steps"])
+        let execution = object(["stepIndex": ["type": "integer", "minimum": 0, "maximum": 23], "actionID": ["type": "string", "enum": ReadingWorkflowRuntime.actions.map(\.id)], "configuration": ["type": "object", "additionalProperties": ["type": "string", "maxLength": 4000], "maxProperties": 16], "maxAttempts": ["type": "integer", "minimum": 1, "maximum": 8]], required: ["stepIndex", "actionID"])
+        let method = object(["id": id, "name": text, "goal": ["type": "string", "minLength": 1, "maxLength": 4_000], "steps": array(["type": "string", "minLength": 1, "maxLength": 4_000], minimum: 1, maximum: 24), "executions": array(execution, minimum: 1, maximum: 24)], required: ["id", "name", "goal", "steps"])
         let entity = object([
             "id": id, "typeID": id, "name": text, "summary": string,
             "properties": ["type": "object", "additionalProperties": ["type": "string", "maxLength": 8_000], "maxProperties": 64],
@@ -66,7 +80,7 @@ public enum PluginEngine {
             function("events_upsert", "创建或合并同一知识事件；placeIDs 和 participantIDs 引用既有实体 ID。地图与时间轴共用这个事件 ID。未知年份省略，dateText 保留原文及不确定性。", object(["events": array(event, minimum: 1, maximum: 128)], required: ["events"])),
             function("relations_link", "以证据连接已经存在的实体、事件或文档，不创建悬空引用，不编辑文档正文。", object(["relations": array(relation, minimum: 1, maximum: 128)], required: ["relations"])),
             function("views_configure", "添加或配置当前书适用的默认组件视图。kind 只能选系统支持的组件；typeIDs 只引用已定义类型。不会生成视图独有的知识副本。", object(["views": array(view, minimum: 1, maximum: 32)], required: ["views"])),
-            function("methods_define", "声明自定义读书法：目标及自然语言步骤。它是受限配置，不是可执行脚本，也不能跳过完整阅读覆盖。", object(["methods": array(method, minimum: 1, maximum: 32)], required: ["methods"])),
+            function("methods_define", "定义读书法的目标、步骤及可执行动作绑定。executions按stepIndex逐项覆盖步骤，actionID从宿主动作注册表选择；未提供时按兼容AI分析动作执行。每步有输入输出、校验与检查点，不能跳过逐段回执。", object(["methods": array(method, minimum: 1, maximum: 32)], required: ["methods"])),
             function("reading_plan", "预读后选择已有读书法，可先自定义；正文阶段只允许增加方法，不能减少现有步骤。正文阶段成功后返回当前全部宿主stepID，finish须完整交齐。该操作不增加正文覆盖。", object(["methodIDs": array(id, minimum: 1, maximum: 16), "rationale": ["type": "string", "minLength": 1, "maxLength": 8_000], "focus": array(text, maximum: 32)], required: ["methodIDs", "rationale", "focus"])),
             function("read_receipt", "仅提交宿主当前batchID清单内的全部片段回执；不得自编清单、遗漏、重复或加入片段。summary用自己的话极简复述本段，保留关键条件、公式和注释；空白段写空白分隔。textHash原样复制，startQuote/endQuote精确复制宿主给出的首尾锚点，issues明确疑点。回执验证齐全后才开放知识抽取。", object(["batchID": id, "receipts": array(receipt, minimum: 1, maximum: 24)], required: ["batchID", "receipts"])),
             function("reading_finish", "全部片段回执齐全后，提交本次全部获准源单元的细读笔记及每个宿主stepID对应的执行结果。stepResults须精确覆盖选定读书法全部步骤，引用本单元paragraphIDs；不适用也写出原因。unitIDs必须与获准单元完全一致；evidence逐一覆盖且quote为连续原文。源提取警告和回执疑点保留待复核。", object(["unitIDs": array(id, minimum: 1, maximum: 128), "markdown": ["type": "string", "minLength": 1, "maxLength": 160_000], "evidence": evidenceList, "stepResults": array(stepResult, minimum: 1, maximum: 384)], required: ["unitIDs", "markdown", "evidence", "stepResults"])),
@@ -75,26 +89,18 @@ public enum PluginEngine {
         ]
     }
 
-    public static func apply(name: String, arguments: Data, to project: inout BookProject, allowedUnitIDs: Set<String>) throws -> String {
-        guard arguments.count <= maximumPayloadBytes else { throw invalid("工具参数超过 256 KiB。") }
-        let input: [String: Any]
-        do {
-            guard let parsed = try JSONSerialization.jsonObject(with: arguments) as? [String: Any] else { throw invalid("工具参数必须是 JSON 对象。") }
-            input = parsed
-        } catch { throw invalid("工具参数不是有效 JSON 对象：\(error.localizedDescription)") }
-        if name == "knowledge_search" { return try search(input, project: project) }
-        var candidate = project
-        let summary = try execute(name: name, input: input, project: &candidate, allowed: allowedUnitIDs)
-        candidate.audit.append(ToolAudit(name: name, summary: summary))
-        let result = try JSONSerialization.data(withJSONObject: ["ok": true, "tool": name, "summary": summary], options: [.sortedKeys])
-        guard let response = String(data: result, encoding: .utf8) else { throw invalid("无法编码工具结果。") }
-        project = candidate
-        return response
+    public static let registry: PluginToolRegistry = {
+        do { return try makeRegistry() } catch { preconditionFailure("内置插件注册失败：\(error)") }
+    }()
+    public static var tools: [[String: Any]] { registry.schemas() }
+    public static func apply(name: String, arguments: Data, to project: inout BookProject, allowedUnitIDs: Set<String>, registry: PluginToolRegistry = PluginEngine.registry, phase: PluginToolPhase? = nil) throws -> String {
+        try registry.apply(name: name, arguments: arguments, to: &project, allowedUnitIDs: allowedUnitIDs, phase: phase)
     }
 
     public static func install(_ manifest: PluginManifest, into project: inout BookProject) throws {
         guard try JSONEncoder().encode(manifest).count <= maximumPayloadBytes else { throw invalid("插件声明包超过 256 KiB。") }
         try validateID(manifest.id)
+        guard !manifest.id.hasPrefix("builtin.") else { throw invalid("builtin.为内置插件保留标识。") }
         try nonempty(manifest.name, field: "插件名称", maximum: 400)
         guard (1...1_000_000).contains(manifest.version), manifest.description.count <= 8_000 else { throw invalid("插件版本或说明不合法。") }
         guard project.plugins.count < 64, !project.plugins.contains(where: { $0.id == manifest.id }) else { throw invalid("插件 ID 已安装或插件数量达到上限；不会覆盖已有插件。") }
@@ -160,121 +166,168 @@ public enum PluginEngine {
         project = candidate
     }
 
-    private static func execute(name: String, input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
-        if ["cards_upsert", "events_upsert", "relations_link", "map_attach", "timeline_attach", "reading_finish"].contains(name) {
-            try ReadingLedger.requireComplete(unitIDs: allowed, in: project)
+    private struct BuiltInPlugin: ReadingToolPlugin {
+        let info: ReadingPluginInfo
+        let tools: [RegisteredReadingTool]
+        func register(in registry: inout PluginToolRegistry) throws { for tool in tools { try registry.register(tool) } }
+    }
+    private static func makeRegistry() throws -> PluginToolRegistry {
+        let index = Dictionary(uniqueKeysWithValues: builtInToolSchemas.compactMap { schema -> (String, [String: Any])? in
+            guard let function = schema["function"] as? [String: Any], let name = function["name"] as? String else { return nil }
+            return (name, schema)
+        })
+        @Sendable func input(_ data: Data) throws -> [String: Any] {
+            guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw invalid("工具参数必须是JSON对象。") }
+            return value
         }
-        switch name {
-        case "read_receipt":
-            return try recordReceipts(input, project: &project, allowed: allowed)
-        case "types_define":
-            try keys(input, allowed: ["types"])
-            let values = try objects(input, key: "types", maximum: 64).map(parseType)
-            try uniqueIDs(values.map(\.id))
-            for value in values {
-                guard !isDisabledType(value.id, in: project) else { throw invalid("该类型由已停用声明包提供：\(value.id)") }
-                try validate(value)
-                if let old = project.types.first(where: { $0.id == value.id }) {
-                    guard old == value else { throw invalid("类型 ID 已有不同定义：\(value.id)") }
-                } else { project.types.append(value) }
-            }
-            try validateDefinitionCounts(project)
-            return "已登记 \(values.count) 个通用类型。"
-        case "methods_define":
-            try keys(input, allowed: ["methods"])
-            let values = try objects(input, key: "methods", maximum: 32).map(parseMethod)
-            try uniqueIDs(values.map(\.id))
-            for value in values {
-                guard !isDisabledMethod(value.id, in: project) else { throw invalid("该读书法由已停用声明包提供：\(value.id)") }
-                try validate(value)
-                if let old = project.methods.first(where: { $0.id == value.id }) {
-                    guard old == value else { throw invalid("读书法 ID 已有不同定义：\(value.id)") }
-                } else { project.methods.append(value) }
-            }
-            try validateDefinitionCounts(project)
-            return "已登记 \(values.count) 个读书法。"
-        case "views_configure":
-            try keys(input, allowed: ["views"])
-            let values = try objects(input, key: "views", maximum: 32).map(parseView)
-            try uniqueIDs(values.map(\.id))
-            for value in values { try upsertView(value, project: &project) }
-            return "已配置 \(values.count) 个组件视图。"
-        case "reading_plan":
-            try keys(input, allowed: ["methodIDs", "rationale", "focus"])
-            let ids = try strings(input, key: "methodIDs", required: true, maximum: 16)
-            guard !ids.isEmpty else { throw invalid("阅读计划至少选择一种读书法。") }
-            try uniqueIDs(ids)
-            guard ids.allSatisfy({ id in project.methods.contains(where: { $0.id == id }) }) else { throw invalid("阅读计划引用了不存在的读书法。") }
-            guard !ids.contains(where: { isDisabledMethod($0, in: project) }) else { throw invalid("阅读计划不能选择已停用声明包提供的读书法。") }
-            if !allowed.isEmpty {
-                guard let old = project.plan, Set(old.methodIDs).isSubset(of: Set(ids)) else { throw invalid("正文阶段只能增加读书法，不能删减原方案以跳过步骤；重新改选请另行预读。") }
-            }
-            let rationale = try string(input, key: "rationale", maximum: 8_000)
-            let focus = try strings(input, key: "focus", required: true, maximum: 32)
-            project.plan = ReadingPlan(methodIDs: ids, rationale: rationale, focus: focus)
-            if !allowed.isEmpty {
-                let requirements = try project.units.filter { allowed.contains($0.id) }.flatMap { try ReadingLedger.stepRequirements(for: $0, in: project) }
-                let data = try JSONEncoder().encode(requirements)
-                guard let text = String(data: data, encoding: .utf8), text.count <= 14_000 else { throw invalid("新增读书法步骤超出当前可返回清单预算；请使用更精简的步骤。") }
-                return "已扩展方案；reading_finish须交齐以下全部步骤：\n" + text
-            }
-            return "已选择 \(ids.count) 种读书法；正文覆盖未改变。"
-        case "cards_upsert":
-            try keys(input, allowed: ["entities"])
-            let values = try objects(input, key: "entities", maximum: 128)
-            try uniqueIDs(try values.map { try string($0, key: "id", maximum: 128) })
-            for value in values { try upsertEntity(value, project: &project, allowed: allowed) }
-            return "已创建或合并 \(values.count) 张实体卡，证据已保留。"
-        case "events_upsert":
-            try keys(input, allowed: ["events"])
-            let values = try objects(input, key: "events", maximum: 128)
-            try uniqueIDs(try values.map { try string($0, key: "id", maximum: 128) })
-            for value in values { try upsertEvent(value, project: &project, allowed: allowed) }
-            return "已创建或合并 \(values.count) 个共享事件。"
-        case "relations_link":
-            try keys(input, allowed: ["relations"])
-            let values = try objects(input, key: "relations", maximum: 128)
-            try uniqueIDs(try values.map { try string($0, key: "id", maximum: 128) })
-            for value in values {
-                try keys(value, allowed: ["id", "fromID", "toID", "label", "evidence"])
-                let id = try identifier(value, key: "id"), from = try identifier(value, key: "fromID"), to = try identifier(value, key: "toID")
-                let label = try string(value, key: "label", maximum: 400)
-                let evidence = try parseEvidence(value, project: project, allowed: allowed)
-                guard objectExists(from, in: project), objectExists(to, in: project) else { throw invalid("关系引用了不存在的实体、事件或文档。") }
-                guard !project.entities.contains(where: { $0.id == id }), !project.events.contains(where: { $0.id == id }), !project.documents.contains(where: { $0.id == id }) else { throw invalid("关系 ID 与已有知识对象冲突。") }
-                if let index = project.relations.firstIndex(where: { $0.id == id }) {
-                    guard project.relations[index].fromID == from, project.relations[index].toID == to, project.relations[index].label == label else { throw invalid("关系 ID 已指向不同关系。") }
-                    project.relations[index].evidence = union(project.relations[index].evidence, evidence)
-                } else { project.relations.append(KnowledgeRelation(id: id, fromID: from, toID: to, label: label, evidence: evidence)) }
-            }
-            return "已连接 \(values.count) 条有证据的关系。"
-        case "map_attach", "timeline_attach":
-            try keys(input, allowed: ["eventID", "viewID", "title", "evidence"])
-            let id = try identifier(input, key: "eventID")
-            guard let index = project.events.firstIndex(where: { $0.id == id }) else { throw invalid("请先创建事件，再把同一事件 ID 接入组件。") }
-            let evidence = try parseEvidence(input, project: project, allowed: allowed)
-            let kind: ComponentKind = name == "map_attach" ? .map : .timeline
-            if kind == .map {
-                guard !project.events[index].placeIDs.isEmpty,
-                      project.events[index].placeIDs.allSatisfy({ place in project.entities.contains(where: { $0.id == place }) }) else { throw invalid("地图事件必须引用已经存在的地点实体。") }
-            }
-            let viewID = try optionalString(input, key: "viewID", maximum: 128) ?? kind.rawValue
-            try validateID(viewID)
-            guard !isDisabledView(viewID, in: project) else { throw invalid("该视图由已停用声明包提供：\(viewID)") }
-            let requestedTitle = try optionalString(input, key: "title", maximum: 400)
-            if let viewIndex = project.views.firstIndex(where: { $0.id == viewID }) {
-                guard project.views[viewIndex].kind == kind else { throw invalid("视图 ID 已属于其他组件。") }
-                if let title = requestedTitle { project.views[viewIndex].title = title }
-            } else {
-                try upsertView(ViewDefinition(id: viewID, title: requestedTitle ?? kind.title, kind: kind), project: &project)
-            }
-            project.events[index].evidence = union(project.events[index].evidence, evidence)
-            return "已将同一事件 \(id) 接入\(kind.title)（视图 \(viewID)）；未复制事件。"
-        case "reading_finish":
-            return try finish(input, project: &project, allowed: allowed)
-        default:
-            throw invalid("未注册的插件工具：\(name)")
+        var registry = PluginToolRegistry()
+        try registry.install(BuiltInPlugin(info: ReadingPluginInfo(id: "builtin.knowledge", name: "知识要素"), tools: [
+            try RegisteredReadingTool(pluginID: "builtin.knowledge", schema: index["knowledge_search"]!, phases: [.reading, .workflow], requiresReceipts: false, readOnly: true) { data, project, allowed in try search(input(data), project: project) },
+            try RegisteredReadingTool(pluginID: "builtin.knowledge", schema: index["types_define"]!, phases: [.planning, .reading, .workflow], requiresReceipts: false, readOnly: false) { data, project, allowed in try defineTypesTool(input(data), project: &project, allowed: allowed) },
+            try RegisteredReadingTool(pluginID: "builtin.knowledge", schema: index["cards_upsert"]!, phases: [.reading, .workflow], requiresReceipts: true, readOnly: false) { data, project, allowed in try cardsTool(input(data), project: &project, allowed: allowed) },
+            try RegisteredReadingTool(pluginID: "builtin.knowledge", schema: index["events_upsert"]!, phases: [.reading, .workflow], requiresReceipts: true, readOnly: false) { data, project, allowed in try eventsTool(input(data), project: &project, allowed: allowed) },
+            try RegisteredReadingTool(pluginID: "builtin.knowledge", schema: index["relations_link"]!, phases: [.reading, .workflow], requiresReceipts: true, readOnly: false) { data, project, allowed in try relationsTool(input(data), project: &project, allowed: allowed) }
+        ]))
+        try registry.install(BuiltInPlugin(info: ReadingPluginInfo(id: "builtin.workspace", name: "阅读组件"), tools: [
+            try RegisteredReadingTool(pluginID: "builtin.workspace", schema: index["views_configure"]!, phases: [.planning, .reading, .workflow], requiresReceipts: false, readOnly: false) { data, project, allowed in try configureViewsTool(input(data), project: &project, allowed: allowed) },
+            try RegisteredReadingTool(pluginID: "builtin.workspace", schema: index["map_attach"]!, phases: [.reading, .workflow], requiresReceipts: true, readOnly: false) { data, project, allowed in try attachTool(input(data), project: &project, allowed: allowed, kind: .map) },
+            try RegisteredReadingTool(pluginID: "builtin.workspace", schema: index["timeline_attach"]!, phases: [.reading, .workflow], requiresReceipts: true, readOnly: false) { data, project, allowed in try attachTool(input(data), project: &project, allowed: allowed, kind: .timeline) }
+        ]))
+        try registry.install(BuiltInPlugin(info: ReadingPluginInfo(id: "builtin.reading", name: "顺序阅读"), tools: [
+            try RegisteredReadingTool(pluginID: "builtin.reading", schema: index["methods_define"]!, phases: [.planning, .reading, .workflow], requiresReceipts: false, readOnly: false) { data, project, allowed in try defineMethodsTool(input(data), project: &project, allowed: allowed) },
+            try RegisteredReadingTool(pluginID: "builtin.reading", schema: index["reading_plan"]!, phases: [.planning, .reading, .workflow], requiresReceipts: false, readOnly: false) { data, project, allowed in try planTool(input(data), project: &project, allowed: allowed) },
+            try RegisteredReadingTool(pluginID: "builtin.reading", schema: index["read_receipt"]!, phases: [.receipt], requiresReceipts: false, readOnly: false) { data, project, allowed in try recordReceiptsTool(input(data), project: &project, allowed: allowed) },
+            try RegisteredReadingTool(pluginID: "builtin.reading", schema: index["reading_finish"]!, phases: [.reading], requiresReceipts: true, readOnly: false) { data, project, allowed in try finishTool(input(data), project: &project, allowed: allowed) },
+            try RegisteredReadingTool(pluginID: "builtin.reading", schema: ReadingWorkflowRuntime.completionTool, phases: [.workflow], requiresReceipts: true) { data, project, allowed in try ReadingWorkflowRuntime.complete(arguments: data, to: &project, allowedUnitIDs: allowed) }
+        ]))
+        return registry
+    }
+
+    private static func recordReceiptsTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        return try recordReceipts(input, project: &project, allowed: allowed)
+    }
+
+    private static func defineTypesTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        try keys(input, allowed: ["types"])
+        let values = try objects(input, key: "types", maximum: 64).map(parseType)
+        try uniqueIDs(values.map(\.id))
+        for value in values {
+            guard !isDisabledType(value.id, in: project) else { throw invalid("该类型由已停用声明包提供：\(value.id)") }
+            try validate(value)
+            if let old = project.types.first(where: { $0.id == value.id }) {
+                guard old == value else { throw invalid("类型 ID 已有不同定义：\(value.id)") }
+            } else { project.types.append(value) }
         }
+        try validateDefinitionCounts(project)
+        return "已登记 \(values.count) 个通用类型。"
+    }
+
+    private static func defineMethodsTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        try keys(input, allowed: ["methods"])
+        let values = try objects(input, key: "methods", maximum: 32).map(parseMethod)
+        try uniqueIDs(values.map(\.id))
+        for value in values {
+            guard !isDisabledMethod(value.id, in: project) else { throw invalid("该读书法由已停用声明包提供：\(value.id)") }
+            try validate(value)
+            if let old = project.methods.first(where: { $0.id == value.id }) {
+                guard old == value else { throw invalid("读书法 ID 已有不同定义：\(value.id)") }
+            } else { project.methods.append(value) }
+        }
+        try validateDefinitionCounts(project)
+        return "已登记 \(values.count) 个读书法。"
+    }
+
+    private static func configureViewsTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        try keys(input, allowed: ["views"])
+        let values = try objects(input, key: "views", maximum: 32).map(parseView)
+        try uniqueIDs(values.map(\.id))
+        for value in values { try upsertView(value, project: &project) }
+        return "已配置 \(values.count) 个组件视图。"
+    }
+
+    private static func planTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        try keys(input, allowed: ["methodIDs", "rationale", "focus"])
+        let ids = try strings(input, key: "methodIDs", required: true, maximum: 16)
+        guard !ids.isEmpty else { throw invalid("阅读计划至少选择一种读书法。") }
+        try uniqueIDs(ids)
+        guard ids.allSatisfy({ id in project.methods.contains(where: { $0.id == id }) }) else { throw invalid("阅读计划引用了不存在的读书法。") }
+        guard !ids.contains(where: { isDisabledMethod($0, in: project) }) else { throw invalid("阅读计划不能选择已停用声明包提供的读书法。") }
+        if !allowed.isEmpty {
+            guard let old = project.plan, Set(old.methodIDs).isSubset(of: Set(ids)) else { throw invalid("正文阶段只能增加读书法，不能删减原方案以跳过步骤；重新改选请另行预读。") }
+        }
+        let rationale = try string(input, key: "rationale", maximum: 8_000)
+        let focus = try strings(input, key: "focus", required: true, maximum: 32)
+        project.plan = ReadingPlan(methodIDs: ids, rationale: rationale, focus: focus)
+        if !allowed.isEmpty {
+            let requirements = try project.units.filter { allowed.contains($0.id) }.flatMap { try ReadingLedger.stepRequirements(for: $0, in: project) }
+            let data = try JSONEncoder().encode(requirements)
+            guard let text = String(data: data, encoding: .utf8), text.count <= 14_000 else { throw invalid("新增读书法步骤超出当前可返回清单预算；请使用更精简的步骤。") }
+            return "已扩展方案；reading_finish须交齐以下全部步骤：\n" + text
+        }
+        return "已选择 \(ids.count) 种读书法；正文覆盖未改变。"
+    }
+
+    private static func cardsTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        try keys(input, allowed: ["entities"])
+        let values = try objects(input, key: "entities", maximum: 128)
+        try uniqueIDs(try values.map { try string($0, key: "id", maximum: 128) })
+        for value in values { try upsertEntity(value, project: &project, allowed: allowed) }
+        return "已创建或合并 \(values.count) 张实体卡，证据已保留。"
+    }
+
+    private static func eventsTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        try keys(input, allowed: ["events"])
+        let values = try objects(input, key: "events", maximum: 128)
+        try uniqueIDs(try values.map { try string($0, key: "id", maximum: 128) })
+        for value in values { try upsertEvent(value, project: &project, allowed: allowed) }
+        return "已创建或合并 \(values.count) 个共享事件。"
+    }
+
+    private static func relationsTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        try keys(input, allowed: ["relations"])
+        let values = try objects(input, key: "relations", maximum: 128)
+        try uniqueIDs(try values.map { try string($0, key: "id", maximum: 128) })
+        for value in values {
+            try keys(value, allowed: ["id", "fromID", "toID", "label", "evidence"])
+            let id = try identifier(value, key: "id"), from = try identifier(value, key: "fromID"), to = try identifier(value, key: "toID")
+            let label = try string(value, key: "label", maximum: 400)
+            let evidence = try parseEvidence(value, project: project, allowed: allowed)
+            guard objectExists(from, in: project), objectExists(to, in: project) else { throw invalid("关系引用了不存在的实体、事件或文档。") }
+            guard !project.entities.contains(where: { $0.id == id }), !project.events.contains(where: { $0.id == id }), !project.documents.contains(where: { $0.id == id }) else { throw invalid("关系 ID 与已有知识对象冲突。") }
+            if let index = project.relations.firstIndex(where: { $0.id == id }) {
+                guard project.relations[index].fromID == from, project.relations[index].toID == to, project.relations[index].label == label else { throw invalid("关系 ID 已指向不同关系。") }
+                project.relations[index].evidence = union(project.relations[index].evidence, evidence)
+            } else { project.relations.append(KnowledgeRelation(id: id, fromID: from, toID: to, label: label, evidence: evidence)) }
+        }
+        return "已连接 \(values.count) 条有证据的关系。"
+    }
+
+    private static func attachTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>, kind: ComponentKind) throws -> String {
+        try keys(input, allowed: ["eventID", "viewID", "title", "evidence"])
+        let id = try identifier(input, key: "eventID")
+        guard let index = project.events.firstIndex(where: { $0.id == id }) else { throw invalid("请先创建事件，再把同一事件 ID 接入组件。") }
+        let evidence = try parseEvidence(input, project: project, allowed: allowed)
+                if kind == .map {
+            guard !project.events[index].placeIDs.isEmpty,
+                  project.events[index].placeIDs.allSatisfy({ place in project.entities.contains(where: { $0.id == place }) }) else { throw invalid("地图事件必须引用已经存在的地点实体。") }
+        }
+        let viewID = try optionalString(input, key: "viewID", maximum: 128) ?? kind.rawValue
+        try validateID(viewID)
+        guard !isDisabledView(viewID, in: project) else { throw invalid("该视图由已停用声明包提供：\(viewID)") }
+        let requestedTitle = try optionalString(input, key: "title", maximum: 400)
+        if let viewIndex = project.views.firstIndex(where: { $0.id == viewID }) {
+            guard project.views[viewIndex].kind == kind else { throw invalid("视图 ID 已属于其他组件。") }
+            if let title = requestedTitle { project.views[viewIndex].title = title }
+        } else {
+            try upsertView(ViewDefinition(id: viewID, title: requestedTitle ?? kind.title, kind: kind), project: &project)
+        }
+        project.events[index].evidence = union(project.events[index].evidence, evidence)
+        return "已将同一事件 \(id) 接入\(kind.title)（视图 \(viewID)）；未复制事件。"
+    }
+
+    private static func finishTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        try ReadingWorkflowRuntime.requireComplete(unitIDs: allowed, in: project)
+        return try finish(input, project: &project, allowed: allowed)
     }
 
     private static func upsertEntity(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws {
@@ -455,8 +508,17 @@ public enum PluginEngine {
     }
 
     private static func parseMethod(_ input: [String: Any]) throws -> ReadingMethod {
-        try keys(input, allowed: ["id", "name", "goal", "steps"])
-        return ReadingMethod(id: try identifier(input, key: "id"), name: try string(input, key: "name", maximum: 400), goal: try string(input, key: "goal", maximum: 4_000), steps: try strings(input, key: "steps", required: true, maximum: 24, stringMaximum: 4_000))
+        try keys(input, allowed: ["id", "name", "goal", "steps", "executions"])
+        var method = ReadingMethod(id: try identifier(input, key: "id"), name: try string(input, key: "name", maximum: 400), goal: try string(input, key: "goal", maximum: 4_000), steps: try strings(input, key: "steps", required: true, maximum: 24, stringMaximum: 4_000))
+        if input["executions"] != nil {
+            method.executions = try objects(input, key: "executions", maximum: 24).map { item in
+                try keys(item, allowed: ["stepIndex", "actionID", "configuration", "maxAttempts"])
+                guard let index = try integer(item, key: "stepIndex") else { throw invalid("执行步骤缺少stepIndex。") }
+                return ReadingStepExecution(stepIndex: index, actionID: try string(item, key: "actionID", maximum: 128), configuration: try stringMap(item, key: "configuration"), maxAttempts: try integer(item, key: "maxAttempts") ?? 3)
+            }
+        }
+        try ReadingWorkflowRuntime.validate(method: method)
+        return method
     }
 
     private static func parseView(_ input: [String: Any]) throws -> ViewDefinition {
@@ -479,6 +541,7 @@ public enum PluginEngine {
         try nonempty(method.goal, field: "读书法目标", maximum: 4_000)
         guard (1...24).contains(method.steps.count) else { throw invalid("读书法应包含 1 至 24 个步骤。") }
         for step in method.steps { try nonempty(step, field: "读书法步骤", maximum: 4_000) }
+        try ReadingWorkflowRuntime.validate(method: method)
     }
 
     private static func validate(_ view: ViewDefinition, project: BookProject) throws {

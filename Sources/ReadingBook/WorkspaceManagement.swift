@@ -82,11 +82,11 @@ extension AppStore {
         catch { errorMessage = error.localizedDescription }
     }
     @discardableResult
-    func removeConnection(_ id: String, relation: Bool = false) async -> Bool {
+    func removeConnection(_ id: String, relation: Bool = false, onError: ((String) -> Void)? = nil) async -> Bool {
         guard var project = book, !isBusy else { return false }; isBusy = true; defer { isBusy = false }
         if relation { project.relations.removeAll { $0.id == id } } else { project.edges.removeAll { $0.id == id } }
         do { try await repository.save(project); publish(project); activity = "连线已移除，节点内容保留。"; return true }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription }; return false }
     }
     func removeView(_ id: String) async {
         guard var project = book, !isBusy else { return }; isBusy = true; defer { isBusy = false }

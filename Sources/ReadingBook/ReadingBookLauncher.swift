@@ -9,9 +9,9 @@ enum ReadingBookLauncher {
         if CommandLine.arguments.contains("--verify-resources") {
             do {
                 try PackagedResourceVerification.run()
-                print("ReadingBook 0.6.0 资源检查 OK")
+                print("ReadingBook 0.7.0 资源检查 OK")
             } catch {
-                let message = "ReadingBook 0.6.0 资源检查失败：\(error.localizedDescription)\n"
+                let message = "ReadingBook 0.7.0 资源检查失败：\(error.localizedDescription)\n"
                 try? FileHandle.standardError.write(contentsOf: Data(message.utf8))
                 exit(1)
             }

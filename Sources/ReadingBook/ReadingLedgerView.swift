@@ -9,6 +9,7 @@ struct ReadingLedgerView: View {
     @State private var showSteps = false
     @State private var showingUnits = false
     @State private var unitSearch = ""
+    @State private var retryStepID: String?
     private var unit: SourceUnit? {
         let id = chosenUnitID.isEmpty ? (store.activeReadingUnitID ?? store.selectedUnitID) : chosenUnitID
         return store.book?.units.first { $0.id == id } ?? store.book?.units.first
@@ -68,8 +69,15 @@ struct ReadingLedgerView: View {
                     warning(message.isEmpty ? "本单元处理失败，已保存回执保留。" : message)
                 }
                 if issueCount > 0 { warning("\(issueCount) 段回执记录了疑点，展开逐项核对。") }
+                if let failure = (book.workflowRuns ?? []).last(where: { $0.unitID == unit.id && $0.status == .failed }) {
+                    warning(failure.error ?? "步骤执行失败，检查点已保留。")
+                    Button("查看失败步骤") { expanded = true; showSteps = true }.font(.caption).buttonStyle(.borderless)
+                }
                 if requirements == nil && book.plan != nil { warning("读书法步骤清单暂不可用，请检查当前方案。") }
             }.softPanel()
+                .confirmationDialog("重置此步骤的重试预算？", isPresented: Binding(get: { retryStepID != nil }, set: { if !$0 { retryStepID = nil } })) {
+                    if let id = retryStepID { Button("重置预算，保留已完成步骤") { Task { await store.resetWorkflowRetry(id, inBook: book.id); retryStepID = nil } } }
+                } message: { Text("只清零失败步骤的尝试次数。已完成输出、原书与笔记保留；点击继续精读才会发出新请求。") }
                 .popover(isPresented: $showingUnits, arrowEdge: .bottom) { unitPicker(book) }
                 .onChange(of: store.bookID) { _, _ in chosenUnitID = ""; expanded = false; showSteps = false; showingUnits = false; unitSearch = "" }
         }
@@ -101,10 +109,39 @@ struct ReadingLedgerView: View {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(requirements) { step in
                     let result = results.first { $0.stepID == step.stepID && $0.methodHash == step.methodHash }
+                    let run = (book.workflowRuns ?? []).first { $0.stepID == step.stepID }
                     VStack(alignment: .leading, spacing: 6) {
                         Label(step.stepText, systemImage: result == nil ? "circle" : "checkmark.circle.fill").font(.system(size: 16)).foregroundStyle(result == nil ? .secondary : Palette.accent)
                         if let result { Text(result.result).font(.system(size: 16)).lineSpacing(4).textSelection(.enabled) }
                         else { Text("尚无本步骤结果").font(.caption).foregroundStyle(.secondary) }
+                        if let run {
+                            HStack {
+                                Text(ReadingWorkflowRuntime.actions.first { $0.id == run.actionID }?.title ?? run.actionID)
+                                Text(run.status == .completed ? "已执行" : run.status == .failed ? "执行失败" : "执行中")
+                                Spacer(minLength: 4)
+                                Text("尝试 \(run.attempts) 次")
+                            }.font(.caption).foregroundStyle(run.status == .failed ? Palette.copper : .secondary)
+                            DisclosureGroup("输入、工具与执行输出") {
+                                VStack(alignment: .leading, spacing: 7) {
+                                    Text("输入：本单元 \(run.input.paragraphIDs.count) 个已核对片段，\(run.input.previousStepIDs.count) 个前序步骤输出。")
+                                    if !run.input.configuration.isEmpty { Text(run.input.configuration.keys.sorted().map { "\($0)：\(run.input.configuration[$0] ?? "")" }.joined(separator: "\n")) }
+                                    Text(run.toolNames.isEmpty ? "尚无成功工具调用记录" : "已调用：" + run.toolNames.joined(separator: " · "))
+                                    if let output = run.output {
+                                        Text(output.result).textSelection(.enabled)
+                                        if let reason = output.noChangesReason { Text("未新增知识：" + reason).foregroundStyle(.secondary) }
+                                        ForEach(Array(output.issues.enumerated()), id: \.offset) { _, issue in warning(issue) }
+                                    }
+                                    if let error = run.error { warning(error) }
+                                }.padding(.top, 6)
+                            }.font(.caption)
+                            if run.status == .failed, let execution = try? ReadingWorkflowRuntime.execution(for: step, in: book), run.attempts >= execution.maxAttempts {
+                                Button("重置此步骤的重试预算…") { retryStepID = step.stepID }.font(.caption).disabled(store.isBusy)
+                            }
+                        } else if result != nil {
+                            Text("历史步骤结果；未记录独立动作执行。").font(.caption).foregroundStyle(.secondary)
+                        } else if let execution = try? ReadingWorkflowRuntime.execution(for: step, in: book) {
+                            Text("待执行：" + (ReadingWorkflowRuntime.actions.first { $0.id == execution.actionID }?.title ?? execution.actionID)).font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }.padding(.top, 10)

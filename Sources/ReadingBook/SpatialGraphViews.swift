@@ -124,7 +124,7 @@ struct SpatialTimelineView: View {
                 }
                 Button("全部") { fitTime() }.font(.caption).controlSize(.mini)
             }
-            TimelineRangeControl(lower: $store.timeFrom, upper: $store.timeTo, bounds: bounds, events: store.book?.events ?? [], selectedID: store.selectedObjectID, select: selectEvent)
+            TimelineRangeControl(lower: $store.timeFrom, upper: $store.timeTo, bounds: bounds, events: store.book?.events ?? [], selectedID: store.selectedObjectID, select: selectEvent).id(store.bookID)
         }.padding(.horizontal, 18).padding(.top, 9).padding(.bottom, 6).background(Palette.surface)
             .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 0.5) }
     }
@@ -243,6 +243,7 @@ struct EntityCardsView: View {
 struct DocumentGraphView: View {
     @EnvironmentObject var store: AppStore
     @State private var inspectedID: String?
+    @State private var operationError: String?
     private var nodes: [CanvasNode] {
         guard let book = store.book else { return [] }
         let hidden = Set(book.trashedDocuments.map(\.id))
@@ -263,25 +264,25 @@ struct DocumentGraphView: View {
                     },
                     move: { id, x, y in
                         guard store.bookID == sourceBookID else { return false }
-                        return await store.moveNode(id: id, x: x, y: y)
+                        return await store.moveNode(id: id, x: x, y: y, onError: { operationError = $0 })
                     },
                     remove: { id in Task { guard store.bookID == sourceBookID else { return }; await store.removeCanvasNode(id) } },
                     connect: { from, to in
                         guard store.bookID == sourceBookID else { return false }
-                        return await store.connectNodes(from: from, to: to, label: "延伸")
+                        return await store.connectNodes(from: from, to: to, label: "延伸", onError: { operationError = $0 })
                     },
                     renameLine: { id, label in
                         guard store.bookID == sourceBookID else { return false }
-                        return await store.renameCanvasEdge(id: id, label: label)
+                        return await store.renameCanvasEdge(id: id, label: label, onError: { operationError = $0 })
                     },
                     removeLine: { id in
                         guard store.bookID == sourceBookID else { return false }
-                        return await store.removeConnection(id)
+                        return await store.removeConnection(id, onError: { operationError = $0 })
                     },
                     deselect: { store.selectedObjectID = nil },
                     inspect: { id in inspectedID = id },
                     createDocument: { store.newDocument() },
-                    title: "思维导图", isEnabled: !store.isBusy
+                    title: "思维导图", isEnabled: !store.isBusy, errorText: { operationError }
                 ).id(sourceBookID)
             } else {
                 EmptyState(title: "从第一篇理解开始", detail: "在“我的理解”写一篇笔记，或主动保存 AI 回答。双击节点打开文档，从节点边缘的圆点拖出连线。", icon: "point.3.connected.trianglepath.dotted")
