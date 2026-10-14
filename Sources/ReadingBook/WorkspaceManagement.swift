@@ -81,11 +81,12 @@ extension AppStore {
         do { try await repository.save(project); publish(project); activity = "文档节点已加入导图。" }
         catch { errorMessage = error.localizedDescription }
     }
-    func removeConnection(_ id: String, relation: Bool = false) async {
-        guard var project = book, !isBusy else { return }; isBusy = true; defer { isBusy = false }
+    @discardableResult
+    func removeConnection(_ id: String, relation: Bool = false) async -> Bool {
+        guard var project = book, !isBusy else { return false }; isBusy = true; defer { isBusy = false }
         if relation { project.relations.removeAll { $0.id == id } } else { project.edges.removeAll { $0.id == id } }
-        do { try await repository.save(project); publish(project); activity = "连线已移除，节点内容保留。" }
-        catch { errorMessage = error.localizedDescription }
+        do { try await repository.save(project); publish(project); activity = "连线已移除，节点内容保留。"; return true }
+        catch { errorMessage = error.localizedDescription; return false }
     }
     func removeView(_ id: String) async {
         guard var project = book, !isBusy else { return }; isBusy = true; defer { isBusy = false }

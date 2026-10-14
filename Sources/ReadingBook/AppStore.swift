@@ -397,18 +397,42 @@ import ReadingCore
         if current.bookmarks.contains(unitID) { current.bookmarks.removeAll { $0 == unitID } } else { current.bookmarks.append(unitID) }
         do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
     }
-    func moveNode(id: String, x: Double, y: Double) async {
-        guard var current = book, !isBusy, let index = current.nodes.firstIndex(where: { $0.id == id }) else { return }
+    @discardableResult
+    func moveNode(id: String, x: Double, y: Double) async -> Bool {
+        guard var current = book else { errorMessage = "请先打开书籍，再移动画布节点。"; return false }
+        guard !isBusy else { errorMessage = "当前任务尚未结束，请稍后移动节点。"; return false }
+        guard let index = current.nodes.firstIndex(where: { $0.id == id }) else { errorMessage = "画布节点已移除或不存在，请重新选择节点。"; return false }
         isBusy = true; defer { isBusy = false }
         current.nodes[index].x = x; current.nodes[index].y = y
-        do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
+        do { try await repository.save(current); publish(current); return true } catch { errorMessage = error.localizedDescription; return false }
     }
-    func connectNodes(from: String, to: String, label: String) async {
-        guard var current = book, !isBusy, from != to, current.nodes.contains(where: { $0.id == from }), current.nodes.contains(where: { $0.id == to }) else { return }
-        guard !current.edges.contains(where: { $0.fromID == from && $0.toID == to && $0.label == label }) else { return }
+    @discardableResult
+    func connectNodes(from: String, to: String, label: String) async -> Bool {
+        guard let current = book else { errorMessage = "请先打开书籍，再连接画布节点。"; return false }
+        guard !isBusy else { errorMessage = "当前任务尚未结束，请稍后连接节点。"; return false }
         isBusy = true; defer { isBusy = false }
-        current.edges.append(CanvasEdge(fromID: from, toID: to, label: label))
-        do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
+        do {
+            let connected = try GraphConnections.connecting(from: from, to: to, label: label, in: current)
+            guard connected.edges.count != current.edges.count else { activity = "这两个画布节点之间已有同名关系。"; return true }
+            try await repository.save(connected)
+            publish(connected)
+            activity = "画布节点已连接。"
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+    @discardableResult
+    func renameCanvasEdge(id: String, label: String) async -> Bool {
+        guard let current = book else { errorMessage = "请先打开书籍，再修改连线关系。"; return false }
+        guard !isBusy else { errorMessage = "当前任务尚未结束，请稍后修改连线。"; return false }
+        isBusy = true; defer { isBusy = false }
+        do {
+            let renamed = try GraphConnections.renaming(edgeID: id, label: label, in: current)
+            guard renamed.edges != current.edges else { return true }
+            try await repository.save(renamed)
+            publish(renamed)
+            activity = "连线关系已改名。"
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
     }
     func setPluginEnabled(_ enabled: Bool, id: String) async {
         guard var current = book, !isBusy else { return }

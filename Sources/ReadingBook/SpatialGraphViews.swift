@@ -55,7 +55,6 @@ struct SpatialTimelineView: View {
                     .popover(isPresented: $showingEvents) { eventList }
                 Menu {
                     Toggle("保留时间待考事件", isOn: $store.showUndated)
-                    Button("显示全部时间") { fitTime() }
                     Button("地图适合全部标记") { camera = .automatic }
                 } label: { Image(systemName: "line.3.horizontal.decrease") }.help("时间与地图选项")
             }
@@ -241,129 +240,61 @@ struct EntityCardsView: View {
     }
 }
 
-private struct GraphItem: Identifiable { var id: String; var targetID: String; var title: String; var subtitle: String; var x: Double; var y: Double }
-private struct GraphLine: Identifiable { var id: String; var from: String; var to: String; var label: String }
-private struct GraphSurface: View {
-    var items: [GraphItem]
-    var lines: [GraphLine]
-    var selectedID: String?
-    var select: (String) -> Void
-    var open: ((String) -> Void)? = nil
-    var move: ((String, Double, Double) -> Void)? = nil
-    var remove: ((String) -> Void)? = nil
-    @State private var offsets: [String: CGSize] = [:]
-    private var canvasWidth: Double { max(1000, (items.map(\.x).max() ?? 600) + 320) }
-    private var canvasHeight: Double { max(650, (items.map(\.y).max() ?? 400) + 240) }
-    private func point(_ item: GraphItem) -> CGPoint { let offset = offsets[item.id] ?? .zero; return CGPoint(x: item.x + 110 + offset.width, y: item.y + 45 + offset.height) }
-    var body: some View {
-        ScrollView([.horizontal, .vertical]) {
-            ZStack(alignment: .topLeading) {
-                Canvas { context, size in
-                    for x in stride(from: 0.0, to: size.width, by: 24) { for y in stride(from: 0.0, to: size.height, by: 24) { context.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1.5, height: 1.5)), with: .color(.secondary.opacity(0.12))) } }
-                    for line in lines {
-                        guard let from = items.first(where: { $0.id == line.from }), let to = items.first(where: { $0.id == line.to }) else { continue }
-                        let a = point(from), b = point(to); var path = Path(); path.move(to: a); path.addCurve(to: b, control1: CGPoint(x: (a.x + b.x) / 2, y: a.y), control2: CGPoint(x: (a.x + b.x) / 2, y: b.y))
-                        context.stroke(path, with: .color(Palette.accent.opacity(0.35)), lineWidth: 1.4)
-                        context.draw(Text(line.label).font(.system(size: 11)).foregroundColor(.secondary), at: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 10))
-                    }
-                }.frame(width: canvasWidth, height: canvasHeight)
-                ForEach(items) { item in
-                    Group {
-                        if move != nil { node(item).gesture(drag(item).exclusively(before: taps(item))) }
-                        else { node(item).gesture(taps(item)) }
-                    }.position(point(item)).contextMenu {
-                        Button("选中节点") { select(item.targetID) }
-                        if let open { Button("打开内容") { open(item.targetID) } }
-                        if let remove { Divider(); Button("移除画布节点（保留文档）", role: .destructive) { remove(item.id) } }
-                    }
-                }
-            }.frame(width: canvasWidth, height: canvasHeight)
-        }
-    }
-    private func node(_ item: GraphItem) -> some View {
-        VStack(alignment: .leading, spacing: 8) { Text(item.subtitle).font(.caption2).foregroundStyle(Palette.accent); Text(item.title).font(.system(size: 16, weight: .medium, design: .serif)).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading) }
-            .padding(15).frame(width: 220, height: 90).background(.background, in: RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(selectedID == item.targetID ? Palette.accent : .primary.opacity(0.12), lineWidth: selectedID == item.targetID ? 2 : 1)).shadow(color: .black.opacity(0.025), radius: 8, y: 3)
-            .contentShape(RoundedRectangle(cornerRadius: 13)).accessibilityLabel(item.title)
-    }
-    private func taps(_ item: GraphItem) -> some Gesture {
-        TapGesture(count: 2).exclusively(before: TapGesture(count: 1)).onEnded { value in
-            switch value { case .first: if let open { open(item.targetID) } else { select(item.targetID) }; case .second: select(item.targetID) }
-        }
-    }
-    private func drag(_ item: GraphItem) -> some Gesture {
-        DragGesture(minimumDistance: 6).onChanged { value in select(item.targetID); offsets[item.id] = value.translation }.onEnded { value in
-            move?(item.id, max(10, item.x + value.translation.width), max(10, item.y + value.translation.height)); offsets[item.id] = nil
-        }
-    }
-}
-
 struct DocumentGraphView: View {
     @EnvironmentObject var store: AppStore
-    @State private var from = ""
-    @State private var to = ""
-    @State private var label = "延伸"
-    @State private var showingConnections = false
+    @State private var inspectedID: String?
     private var nodes: [CanvasNode] {
-        guard let book = store.book else { return [] }; let hidden = Set(book.trashedDocuments.map(\.id))
+        guard let book = store.book else { return [] }
+        let hidden = Set(book.trashedDocuments.map(\.id))
         return book.nodes.filter { !hidden.contains($0.targetID) }
     }
     var body: some View {
-        VStack(spacing: 0) {
-            CompactWorkspaceHeader("思维导图", subtitle: "\(nodes.count) 个节点") {
-                if let id = store.selectedObjectID {
-                    Button { store.openObject(id) } label: { Image(systemName: "arrow.up.right.square") }.help("打开所选内容")
-                }
-                Button {
-                    if let selected = nodes.first(where: { $0.targetID == store.selectedObjectID }) { from = selected.id }
-                    showingConnections.toggle()
-                } label: { Label("连线", systemImage: "link") }.disabled(nodes.count < 2 || store.isBusy)
-                    .popover(isPresented: $showingConnections) { connectionEditor }
-                Button { store.newDocument() } label: { Image(systemName: "square.and.pencil") }.help("写下理解").disabled(store.isBusy)
-                Menu {
-                    Text("单击选中 · 拖动整理")
-                    Text("双击或右键打开内容")
-                    Button("查看知识库") { store.activate(.knowledge) }.disabled(store.isBusy)
-                } label: { Image(systemName: "ellipsis") }.help("导图操作")
-            }
+        Group {
             if let book = store.book, !nodes.isEmpty {
-                GraphSurface(items: nodes.map { node in GraphItem(id: node.id, targetID: node.targetID, title: store.objectTitle(node.targetID), subtitle: book.activeDocuments.contains { $0.id == node.targetID } ? "Markdown" : "知识节点", x: node.x, y: node.y) }, lines: book.edges.filter { edge in nodes.contains { $0.id == edge.fromID } && nodes.contains { $0.id == edge.toID } }.map { GraphLine(id: $0.id, from: $0.fromID, to: $0.toID, label: $0.label) }, selectedID: store.selectedObjectID, select: store.focus, open: store.openObject, move: { id, x, y in Task { await store.moveNode(id: id, x: x, y: y) } }, remove: { id in Task { await store.removeCanvasNode(id) } }).allowsHitTesting(!store.isBusy)
-            } else { EmptyState(title: "从第一篇理解开始", detail: "写一篇笔记，或主动保存 AI 回答。文档会成为可连接的节点。", icon: "point.3.connected.trianglepath.dotted") }
-        }.onChange(of: nodes.map(\.id)) { _, ids in
-            if !ids.contains(from) { from = "" }; if !ids.contains(to) { to = "" }
-        }.onChange(of: store.bookID) { _, _ in from = ""; to = ""; showingConnections = false }
-    }
-    private var connectionEditor: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("连接两个节点").font(.headline); Spacer(); Button { showingConnections = false } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("关闭连线工具") }
-            Picker("起点", selection: $from) {
-                Text("选择起点").tag("")
-                ForEach(nodes) { node in Text(store.objectTitle(node.targetID)).tag(node.id) }
+                let sourceBookID = book.id
+                let nodeIDs = Set(nodes.map(\.id))
+                GraphSurface(
+                    items: nodes.map { node in GraphItem(id: node.id, targetID: node.targetID, title: store.objectTitle(node.targetID), subtitle: book.activeDocuments.contains { $0.id == node.targetID } ? "Markdown" : "知识节点", x: node.x, y: node.y) },
+                    lines: book.edges.filter { nodeIDs.contains($0.fromID) && nodeIDs.contains($0.toID) }.map { GraphLine(id: $0.id, from: $0.fromID, to: $0.toID, label: $0.label) },
+                    selectedID: store.selectedObjectID, select: store.focus,
+                    open: { id in
+                        if book.activeDocuments.contains(where: { $0.id == id }) || book.units.contains(where: { $0.id == id }) { store.openObject(id) }
+                        else { inspectedID = id }
+                    },
+                    move: { id, x, y in
+                        guard store.bookID == sourceBookID else { return false }
+                        return await store.moveNode(id: id, x: x, y: y)
+                    },
+                    remove: { id in Task { guard store.bookID == sourceBookID else { return }; await store.removeCanvasNode(id) } },
+                    connect: { from, to in
+                        guard store.bookID == sourceBookID else { return false }
+                        return await store.connectNodes(from: from, to: to, label: "延伸")
+                    },
+                    renameLine: { id, label in
+                        guard store.bookID == sourceBookID else { return false }
+                        return await store.renameCanvasEdge(id: id, label: label)
+                    },
+                    removeLine: { id in
+                        guard store.bookID == sourceBookID else { return false }
+                        return await store.removeConnection(id)
+                    },
+                    deselect: { store.selectedObjectID = nil },
+                    inspect: { id in inspectedID = id },
+                    createDocument: { store.newDocument() },
+                    title: "思维导图", isEnabled: !store.isBusy
+                ).id(sourceBookID)
+            } else {
+                EmptyState(title: "从第一篇理解开始", detail: "在“我的理解”写一篇笔记，或主动保存 AI 回答。双击节点打开文档，从节点边缘的圆点拖出连线。", icon: "point.3.connected.trianglepath.dotted")
             }
-            Picker("终点", selection: $to) {
-                Text("选择终点").tag("")
-                ForEach(nodes) { node in Text(store.objectTitle(node.targetID)).tag(node.id) }
-            }
-            HStack {
-                TextField("关系名称", text: $label).textFieldStyle(.roundedBorder)
-                Button("连接") { Task { await store.connectNodes(from: from, to: to, label: label) } }.disabled(from.isEmpty || to.isEmpty || from == to || store.isBusy || label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            if let book = store.book, !book.edges.isEmpty {
-                Divider()
-                Menu("管理已有连线") {
-                    ForEach(book.edges) { edge in
-                        Button("移除：\(edge.label) · \(book.nodes.first(where: { $0.id == edge.fromID }).map { store.objectTitle($0.targetID) } ?? "节点") → \(book.nodes.first(where: { $0.id == edge.toID }).map { store.objectTitle($0.targetID) } ?? "节点")") {
-                            Task { await store.removeConnection(edge.id) }
-                        }
-                    }
-                }.disabled(store.isBusy)
-                Text("移除连线会保留两端节点和 Markdown。").font(.caption2).foregroundStyle(.secondary)
-            }
-        }.padding(16).frame(width: 310).controlSize(.small)
+        }.popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
+            if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 330, height: 500) }
+        }.onChange(of: store.bookID) { _, _ in inspectedID = nil }
     }
 }
 
 struct RelationGraphView: View {
     @EnvironmentObject var store: AppStore
+    @State private var inspectedID: String?
     private var items: [GraphItem] {
         guard let book = store.book else { return [] }
         let objects = book.entities.map { entity in (entity.id, entity.name, book.types.first(where: { $0.id == entity.typeID })?.name ?? "要素") } + book.events.map { ($0.id, $0.name, "事件") }
@@ -383,13 +314,14 @@ struct RelationGraphView: View {
         return lines
     }
     var body: some View {
-        VStack(spacing: 0) {
-            CompactWorkspaceHeader("关系图谱", subtitle: "\(items.count) 个节点") {
-                Image(systemName: "info.circle").foregroundStyle(.secondary).help("实体、事件与有依据的关系；最多展示 160 个节点。选中后可通过窗口工具栏查看详情。")
-            }
-            if items.isEmpty { EmptyState(title: "关系来自阅读", detail: "AI 发现的依赖、参与、发生于等关系会在这里连接。点击节点可以查看卡片与原文。", icon: "point.3.filled.connected.trianglepath.dotted") }
-            else { GraphSurface(items: items, lines: lines, selectedID: store.selectedObjectID, select: store.focus) }
-        }
+        Group {
+            if items.isEmpty { EmptyState(title: "关系来自阅读", detail: "AI 发现的依赖、参与、发生于等关系会在这里连接。双击节点查看卡片与原文。", icon: "point.3.filled.connected.trianglepath.dotted") }
+            else { GraphSurface(items: items, lines: lines, selectedID: store.selectedObjectID, select: store.focus,
+                                open: { inspectedID = $0 }, deselect: { store.selectedObjectID = nil }, inspect: { inspectedID = $0 },
+                                title: "关系图谱", isEnabled: !store.isBusy).id(store.bookID) }
+        }.popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
+            if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 330, height: 500) }
+        }.onChange(of: store.bookID) { _, _ in inspectedID = nil }
     }
 }
 

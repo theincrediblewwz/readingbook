@@ -154,88 +154,154 @@ private struct AnswerSaveSheet: View {
     let parts: [SavedAnswerPart]
     let showTrash: () -> Void
     @State private var selectedSource = ""
+    @State private var preparedSource = ""
     @State private var composition: SavedAnswerComposition?
     @State private var title = ""
     @State private var localError: String?
     @State private var saving = false
+    @State private var previewExpanded = true
+    @State private var initialized = false
+
+    private var readyComposition: SavedAnswerComposition? {
+        guard sourceAnswer == nil || preparedSource == selectedSource else { return nil }
+        return composition
+    }
+    private var isSemanticExcerpt: Bool { parts.contains { $0.kind == .renderedText } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Text(sheetTitle).font(.headline)
+                Text("保存摘记").font(.headline)
                 Spacer()
-                if sourceAnswer != nil, composition != nil {
-                    Button("重选源文") { self.composition = nil; selectedSource = ""; localError = nil }
-                        .help("返回只读 Markdown，重新选择连续片段").disabled(saving)
-                }
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
-            }.controlSize(.small).padding(.horizontal, 16).padding(.vertical, 12)
+                Text(sourceAnswer != nil ? "Markdown 原文片段" : isSemanticExcerpt ? "渲染区语义摘录" : "\(parts.count) 条回答")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(.horizontal, 16).padding(.vertical, 12)
             Divider().opacity(0.5)
-            if let composition { preview(composition) }
-            else if let answer = sourceAnswer { sourceSelector(answer) }
-            else { Spacer(); if localError == nil { Text("正在准备预览…").foregroundStyle(.secondary).padding(16) }; Spacer() }
-            if let localError { Text(localError).font(.caption).foregroundStyle(.red).textSelection(.enabled).padding(.horizontal, 16).padding(.vertical, 8) }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("标题").font(.subheadline).foregroundStyle(.secondary)
+                    TextField("文档标题", text: $title).textFieldStyle(.roundedBorder).disabled(saving)
+                }.controlSize(.small)
+                sourceNotice
+                if let answer = sourceAnswer {
+                    GeometryReader { geometry in sourceWorkspace(answer, height: geometry.size.height) }
+                } else if let composition = readyComposition {
+                    documentPreview(composition)
+                } else {
+                    VStack { Spacer(); Text(localError == nil ? "正在准备预览…" : "请检查下方提示，尚未保存。").font(.callout).foregroundStyle(.secondary); Spacer() }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                if let localError {
+                    ScrollView {
+                        Text(localError).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(height: localError.count > 100 ? 64 : 34)
+                }
+            }.padding(.horizontal, 16).padding(.vertical, 12)
+            Divider().opacity(0.5)
+            saveBar
         }
-        .task { if sourceAnswer == nil { prepare(parts) } }
+        .task { initialize() }
+        .task(id: selectedSource) {
+            guard let answer = sourceAnswer else { return }
+            let selection = selectedSource
+            if selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                composition = nil; preparedSource = selection; return
+            }
+            // Coalesce drag-selection notifications without moving the native
+            // source view or enabling save for an earlier selection.
+            do { try await Task.sleep(nanoseconds: 75_000_000) } catch { return }
+            guard !Task.isCancelled, selectedSource == selection else { return }
+            prepare([SavedAnswerPart(messageID: answer.id, sourceContent: answer.content, text: selection, kind: .markdownExcerpt)], source: selection)
+        }
         .onChange(of: store.bookID) { _, id in if id != bookID { localError = "书籍已切换，请关闭并重新选择。"; composition = nil } }
     }
 
-    private var sheetTitle: String {
-        guard let composition else { return sourceAnswer != nil ? "1  选择 Markdown 源文" : "回答摘记预览" }
-        if sourceAnswer != nil { return "2  预览并保存原文片段" }
-        return composition.parts.contains(where: { $0.kind == .renderedText }) ? "语义摘录预览" : "回答摘记预览"
+    @ViewBuilder private var sourceNotice: some View {
+        if sourceAnswer != nil {
+            Text("选择只读源文中的连续片段；公式请选全分隔符。即时预览保留对应问题与原答引用。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        } else if isSemanticExcerpt {
+            Text("语义文本不还原公式、图片或 Markdown 排版；需要精确保留时，请使用 Markdown 源文片段。")
+                .font(.caption).foregroundStyle(Palette.copper).fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text("按会话顺序保留问题、消息 ID 与原答引用；确认后保存为 Markdown 与导图节点。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
     }
 
-    private func sourceSelector(_ answer: ChatMessage) -> some View {
+    private func sourceWorkspace(_ answer: ChatMessage, height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("只读连续原文 · 公式请选全分隔符，不在此编辑原答。").font(.caption).foregroundStyle(.secondary)
-            MarkdownSourceSelector(source: answer.content) { source, text in
-                selectedSource = source == answer.content ? text : ""
-            }.frame(maxWidth: .infinity, maxHeight: .infinity).overlay(RoundedRectangle(cornerRadius: 8).stroke(.primary.opacity(0.10)))
-            HStack(spacing: 10) {
-                Text(selectedSource.isEmpty ? "拖动选择需要保留的片段" : "已选 \(selectedSource.count) 字 · 精确保留源文").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("预览片段") {
-                    prepare([SavedAnswerPart(messageID: answer.id, sourceContent: answer.content, text: selectedSource, kind: .markdownExcerpt)])
-                }.buttonStyle(.borderedProminent).disabled(selectedSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.bookID != bookID)
-            }.controlSize(.small)
-        }.padding(16)
-    }
-
-    private func preview(_ composition: SavedAnswerComposition) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) { Text("标题").font(.subheadline).foregroundStyle(.secondary); TextField("文档标题", text: $title).textFieldStyle(.roundedBorder) }.controlSize(.small)
-            HStack(spacing: 6) {
-                Text("\(composition.messageIDs.count) 条回答 · 会话顺序 · 问题与引用保留")
-                if composition.parts.contains(where: { $0.kind == .renderedText }) { Text("· 公式以源文为准").foregroundStyle(Palette.copper) }
-            }.font(.caption).foregroundStyle(.secondary)
-            ScrollView { ChatMarkdownBody(markdown: previewMarkdown(composition)).padding(12).frame(maxWidth: .infinity, alignment: .leading) }
-                .background(Palette.paper, in: RoundedRectangle(cornerRadius: 9))
-            HStack(spacing: 10) {
-                Text("Markdown + 导图节点").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Text("原回答 · 只读 Markdown").font(.caption.weight(.medium))
                 Spacer(minLength: 0)
-                if store.book?.documents.first(where: { $0.id == composition.documentID })?.trashedAt != nil {
-                    Button("回收站恢复") { showTrash() }.help("恢复已保存的原摘记，不另建副本")
-                }
-                Button(saving ? "保存中…" : "确认保存") {
-                    saving = true
-                    Task {
-                        let saved = await store.saveAnswerComposition(composition, title: title)
-                        saving = false
-                        if saved { dismiss() } else { localError = store.errorMessage ?? "未能保存，请重新检查选择。" }
+                Text(selectedSource.isEmpty ? "拖动选择" : "已选 \(selectedSource.count) 字").font(.caption).foregroundStyle(.secondary)
+            }
+            MarkdownSourceSelector(source: answer.content) { source, text in
+                guard !saving else { return }
+                selectedSource = source == answer.content ? text : ""
+            }.frame(minHeight: 60, maxHeight: .infinity)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.line)).allowsHitTesting(!saving)
+            DisclosureGroup(isExpanded: $previewExpanded) {
+                Group {
+                    if let composition { documentPreview(composition) }
+                    else {
+                        Text(selectedSource.isEmpty ? "选择后即时显示完整摘记，包含对应问题和原答的证据/文档引用。" : "正在核对连续原文与来源…")
+                            .font(.caption).foregroundStyle(.secondary).padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     }
-                }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                    .disabled(saving || store.isBusy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.bookID != bookID)
-            }.controlSize(.small)
-        }.padding(16)
+                }.frame(height: max(40, min(220, (height - 40) * 0.40))).padding(.top, 5)
+            } label: {
+                Text(readyComposition == nil && !selectedSource.isEmpty ? "正在更新选区预览…" : "即时预览 · 问题与来源").font(.caption.weight(.medium))
+            }.tint(Palette.accent)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func prepare(_ parts: [SavedAnswerPart]) {
+    private func documentPreview(_ composition: SavedAnswerComposition) -> some View {
+        ScrollView {
+            ChatMarkdownBody(markdown: ChatMarkdownBody.prepare(previewMarkdown(composition), bookID: bookID))
+                .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        }.background(Palette.paper, in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private var saveBar: some View {
+        HStack(spacing: 10) {
+            Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
+            Spacer(minLength: 0)
+            if let composition = readyComposition,
+               store.book?.documents.first(where: { $0.id == composition.documentID })?.trashedAt != nil {
+                Button("回收站恢复") { showTrash() }.help("恢复已保存的原摘记，不另建副本").disabled(saving)
+            }
+            Button(saving ? "保存中…" : "保存摘记") { save() }
+                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                .disabled(readyComposition == nil || saving || store.isBusy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.bookID != bookID)
+        }.controlSize(.small).padding(.horizontal, 16).padding(.vertical, 10)
+    }
+
+    private func initialize() {
+        guard !initialized else { return }; initialized = true
+        if let answer = sourceAnswer, let book = store.book, book.id == bookID {
+            let question = book.chats.prefix(while: { $0.id != answer.id }).last(where: { $0.role == "user" })?.content ?? "回答摘记"
+            title = String(question.replacingOccurrences(of: "\n", with: " ").prefix(70))
+        } else { prepare(parts, seedTitle: true) }
+    }
+
+    private func prepare(_ parts: [SavedAnswerPart], source: String = "", seedTitle: Bool = false) {
         guard let book = store.book, book.id == bookID else { localError = "书籍已切换，请重新选择。"; return }
         do {
             let prepared = try SavedAnswerComposition.build(project: book, parts: parts)
-            composition = prepared; title = prepared.suggestedTitle; localError = nil
-        } catch { localError = error.localizedDescription }
+            composition = prepared; preparedSource = source; localError = nil
+            if seedTitle { title = prepared.suggestedTitle }
+        } catch { composition = nil; preparedSource = source; localError = error.localizedDescription }
+    }
+
+    private func save() {
+        guard let composition = readyComposition, !saving, !store.isBusy, store.bookID == bookID else { return }
+        saving = true; localError = nil
+        Task {
+            let saved = await store.saveAnswerComposition(composition, title: title)
+            saving = false
+            if saved { dismiss() } else { localError = store.errorMessage ?? "未能保存，标题与选区已保留，请重试。" }
+        }
     }
 
     private func previewMarkdown(_ composition: SavedAnswerComposition) -> String {

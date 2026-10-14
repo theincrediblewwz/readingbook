@@ -24,7 +24,7 @@ struct WorkspaceView: View {
                 if store.book != nil {
                     HSplitView {
                         content.frame(maxWidth: .infinity, maxHeight: .infinity)
-                        if store.route != "reader", showsInspector, geometry.size.width >= 920, let id = store.selectedObjectID {
+                        if store.route != "reader", !viewingGraph, showsInspector, geometry.size.width >= 920, let id = store.selectedObjectID {
                             ObjectInspector(id: id, onClose: { showsInspector = false }).frame(minWidth: 250, idealWidth: 280, maxWidth: 340)
                         }
                     }
@@ -35,7 +35,7 @@ struct WorkspaceView: View {
             .onAppear { detailWidth = geometry.size.width }
             .onChange(of: geometry.size.width) { _, width in
                 detailWidth = width
-                if width < 920, showsInspector { showsInspector = false; compactInspector = true }
+                if width < 920, showsInspector, !viewingGraph { showsInspector = false; compactInspector = true }
             }
             }
         }
@@ -69,6 +69,7 @@ struct WorkspaceView: View {
             return true
         }
         .onChange(of: store.bookID) { _, _ in readerShowsPDF = true; showsInspector = false; compactInspector = false }
+        .onChange(of: store.route) { _, _ in if viewingGraph { showsInspector = false; compactInspector = false } }
     }
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -114,7 +115,6 @@ struct WorkspaceView: View {
             Divider().opacity(0.5)
             AIServiceBar().environmentObject(store)
             HStack {
-                Button { store.showingSettings = true } label: { Image(systemName: "slider.horizontal.3") }.help("自己的 AI")
                 Button { store.showingPlugins = true } label: { Image(systemName: "puzzlepiece.extension") }.help("插件与读书法")
                 Spacer()
                 Menu { Button("导入书项目…") { store.importProject() }; Button("导出完整书项目…") { store.exportProject() }; Button("回收站") { store.showingTrash = true } } label: { Image(systemName: "square.and.arrow.up") }.menuStyle(.borderlessButton).frame(width: 25)
@@ -134,6 +134,10 @@ struct WorkspaceView: View {
     }
     private var viewingPDF: Bool { store.route == "reader" && readerShowsPDF && store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     private var viewingWorkflow: Bool { store.route == "workflow" || store.book?.views.first(where: { $0.id == store.route })?.kind == .workflow }
+    private var viewingGraph: Bool {
+        let kind = store.book?.views.first(where: { $0.id == store.route })?.kind ?? ComponentKind(rawValue: store.route)
+        return kind == .mindmap || kind == .relations
+    }
     @ToolbarContentBuilder private var workspaceToolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
             HStack(spacing: 10) {
@@ -180,8 +184,6 @@ struct WorkspaceView: View {
                             Button("缩小") { pdfController.command(.zoomOut) }
                             Button("显示 / 收起缩略图") { pdfController.command(.toggleThumbnails) }
                             Button("连续 / 单页") { pdfController.command(.toggleContinuous) }
-                            Button("查找 PDF 文字") { pdfController.command(.toggleSearch) }
-                            Button("框选区域批注（扫描页）") { pdfController.command(.createRegion) }.disabled(!pdfController.isReady || store.isBusy)
                         }
                     }
                     Button(store.book?.bookmarks.contains(unit.id) == true ? "移除书签" : "添加书签") { Task { await store.toggleBookmark(unit.id) } }.disabled(store.isBusy)
@@ -191,10 +193,12 @@ struct WorkspaceView: View {
                     HStack(spacing: 4) { Image(systemName: "textformat.size"); if viewingPDF { Text("\(pdfController.zoomPercent)%").font(.caption.monospacedDigit()) } }
                 }.help("阅读模式、缩放、目录与书签")
                 if viewingPDF {
-                    Button { pdfController.command(.toggleSearch) } label: { Image(systemName: "magnifyingglass") }.help("查找 PDF 文字").disabled(!pdfController.isReady)
+                    Button { pdfController.command(.toggleSearch) } label: { Image(systemName: "magnifyingglass") }
+                        .keyboardShortcut("f", modifiers: [.command])
+                        .help("查找 PDF 文字（⌘F）").accessibilityLabel("查找 PDF 文字").disabled(!pdfController.isReady)
                 }
             }
-            if store.selectedObjectID != nil {
+            if store.selectedObjectID != nil, !viewingGraph {
                 Button {
                     if detailWidth >= 920, store.route != "reader" { showsInspector.toggle() }
                     else { compactInspector.toggle() }
@@ -216,7 +220,6 @@ struct WorkspaceView: View {
                 Button("导出完整书项目…") { store.exportProject() }.disabled(store.book == nil)
                 Divider()
                 Button("插件与读书法") { store.showingPlugins = true }
-                Button("AI 服务配置") { store.showingSettings = true }
                 Button("回收站") { store.showingTrash = true }
                 Divider()
                 Text(store.activity)

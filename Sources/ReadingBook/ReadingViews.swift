@@ -296,7 +296,6 @@ struct DocumentEditorView: View {
     @State private var discardingDraft = false
     @State private var showingDocuments = false
     @State private var documentSearch = ""
-    @FocusState private var titleFocused: Bool
     private var hasDocument: Bool { store.selectedDocumentID != nil || store.editorDirty }
     private var currentDocument: DocumentRecord? { store.book?.activeDocuments.first { $0.id == store.selectedDocumentID } }
     private var documents: [DocumentRecord] {
@@ -344,9 +343,11 @@ struct DocumentEditorView: View {
             }.help("选择或搜索 Markdown 笔记")
             if hasDocument {
                 TextField("文档标题", text: Binding(get: { store.editorTitle }, set: { store.editorTitle = $0; store.editorDirty = true }))
-                    .font(.system(size: 17, weight: .medium)).textFieldStyle(.plain).focused($titleFocused)
+                    .font(.system(size: 17, weight: .medium)).textFieldStyle(.plain)
                     .frame(minWidth: compact ? 80 : 160).layoutPriority(1).disabled(store.isRecognizingPDF)
-                    .help("修改标题后保存，即可重命名笔记")
+                    .accessibilityLabel("文档标题")
+                    .accessibilityHint("直接编辑标题，保存后即完成笔记重命名。")
+                    .help("直接编辑标题，保存或按 ⌘S 完成重命名")
             } else { Text("我的理解").font(.system(size: 17, weight: .semibold)).lineLimit(1); Spacer(minLength: 0) }
             if compact {
                 Button { preview.toggle() } label: { Image(systemName: preview ? "square.and.pencil" : "eye") }.help(preview ? "返回编辑" : "预览 Markdown").disabled(!hasDocument)
@@ -360,17 +361,17 @@ struct DocumentEditorView: View {
     }
     private var documentMenu: some View {
         Menu {
-            Button("新建笔记") { store.newDocument(); preview = false }.disabled(store.editorDirty || store.isBusy)
-            Button("重命名") { titleFocused = true }.disabled(!hasDocument || store.isRecognizingPDF)
-            if store.editorDirty { Button("放弃未保存修改…", role: .destructive) { discardingDraft = true }.disabled(store.isSavingDocument) }
-            Divider()
+            if store.editorDirty {
+                Button("放弃未保存修改…", role: .destructive) { discardingDraft = true }.disabled(store.isSavingDocument)
+                Divider()
+            }
             if let document = currentDocument {
                 Button("加入导图") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
                 Button("导出 .md…") { store.exportMarkdown() }.disabled(store.editorDirty || store.isBusy)
                 Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
             }
             Button("查看回收站") { store.showingTrash = true }
-        } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().help("新建、重命名、导图与文档管理")
+        } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().help("草稿、导图与文档管理")
     }
     private var documentPicker: some View {
         VStack(alignment: .leading, spacing: 10) {
