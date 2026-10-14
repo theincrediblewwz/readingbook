@@ -141,7 +141,7 @@ public enum BookImporter {
             guard extractedBytes <= maximumTextBytes else { throw ReadingError.invalid("PDF 提取文本超过 64 MiB，请按卷导入。") }
             let blank = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let notice = blank
-                ? "此 PDF 页没有可提取文本，可能是扫描页或空白页。首版尚未执行 OCR；此页必须人工核对，不能视为已完整读取。"
+                ? "此 PDF 页没有可提取文本，可能是扫描页或空白页。请使用大模型 OCR 逐页识别，并对照原始 PDF 核对。"
                 : "PDF 提取保留页号；行号来自提取文本。图片、图表、公式、双栏顺序与脚注可能未正确提取，请对照原页核对。"
             units += try splitText(text, chapter: title, page: index + 1, warning: notice, startingOrder: units.count)
         }

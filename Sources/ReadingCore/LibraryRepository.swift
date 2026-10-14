@@ -72,8 +72,14 @@ public actor LibraryRepository {
         guard Set(existing.documents.map(\.id)).isSubset(of: Set(project.documents.map(\.id))) else {
             throw ReadingError.invalid("项目中的 Markdown 引用比磁盘版本少，已阻止覆盖。请重新载入书籍。")
         }
-        try validatePackageFiles(project, in: directory, strictContents: false, verifySourceHash: false)
-        try atomicWrite(encode(project), to: try child(directory, "project.json"))
+        var updated = project
+        // Only the explicit trash/restore API changes this canonical status. A stale reader
+        // or editor window cannot silently revive a document through a routine save.
+        for saved in existing.documents {
+            if let index = updated.documents.firstIndex(where: { $0.id == saved.id }) { updated.documents[index].trashedAt = saved.trashedAt }
+        }
+        try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false)
+        try atomicWrite(encode(updated), to: try child(directory, "project.json"))
     }
 
     public func readDocument(bookID: String, document: DocumentRecord) throws -> String {
@@ -99,10 +105,15 @@ public actor LibraryRepository {
         var updated = project
         // Retain references written by another window before this editor was opened.
         for saved in existing.documents where !updated.documents.contains(where: { $0.id == saved.id }) { updated.documents.append(saved) }
+        for saved in existing.documents {
+            if let index = updated.documents.firstIndex(where: { $0.id == saved.id }) { updated.documents[index].trashedAt = saved.trashedAt }
+        }
         var record = document
         if let previous = existing.documents.first(where: { $0.id == document.id }) {
             guard previous.relativePath == document.relativePath else { throw ReadingError.invalid("不能通过保存正文改变文档路径。") }
+            guard previous.trashedAt == nil else { throw ReadingError.invalid("文档已在回收站，请先恢复后再编辑；原 Markdown 已保留。") }
             record.createdAt = previous.createdAt
+            record.trashedAt = previous.trashedAt
         }
         record.updatedAt = Date()
         if let index = updated.documents.firstIndex(where: { $0.id == record.id }) { updated.documents[index] = record }
@@ -124,6 +135,74 @@ public actor LibraryRepository {
         return updated
     }
 
+    public func setDocumentTrashed(project: BookProject, documentID: String, trashed: Bool) throws -> BookProject {
+        guard Self.isSafeID(documentID) else { throw ReadingError.invalid("文档 ID 不合法。") }
+        let directory = try bookDirectory(project.id, mustExist: true)
+        try recoverDocument(in: directory)
+        var updated = try readProject(in: directory)
+        guard updated.id == project.id, updated.sourceHash == project.sourceHash,
+              updated.originalName == project.originalName else { throw ReadingError.invalid("回收操作中的书籍身份与磁盘记录不符。") }
+        guard let index = updated.documents.firstIndex(where: { $0.id == documentID }) else { throw ReadingError.invalid("文档不属于此书籍。") }
+        guard (updated.documents[index].trashedAt != nil) != trashed else { return updated }
+        updated.documents[index].trashedAt = trashed ? Date() : nil
+        updated.documents[index].updatedAt = Date()
+        updated.audit.append(ToolAudit(name: trashed ? "document_trash" : "document_restore", summary: "\(trashed ? "移入回收站" : "恢复")文档：\(updated.documents[index].title)；Markdown 与导图关联保留。"))
+        try validate(updated)
+        try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false)
+        try atomicWrite(encode(updated), to: try child(directory, "project.json"))
+        return updated
+    }
+
+    public func archiveBook(project: BookProject) throws {
+        let source = try bookDirectory(project.id, mustExist: true)
+        try recoverDocument(in: source)
+        let canonical = try readProject(in: source)
+        guard canonical.id == project.id, canonical.sourceHash == project.sourceHash,
+              canonical.originalName == project.originalName else { throw ReadingError.invalid("回收操作中的书籍身份与磁盘记录不符。") }
+        try validate(canonical)
+        try validatePackageFiles(canonical, in: source, strictContents: false, verifySourceHash: true)
+        try validateArchiveTree(source)
+        let destination = try archivedBookDirectory(project.id, mustExist: false)
+        try requireVacant(destination)
+        do { try files.moveItem(at: source, to: destination) }
+        catch { throw ReadingError.invalid("书籍未能完整移入回收站。原书及可能的目标文件均已保留，请检查 books/\(project.id) 与 trash/\(project.id)：\(error.localizedDescription)") }
+    }
+
+    public func archivedBooks() throws -> [BookProject] {
+        let trash = try trashDirectory()
+        let children = try files.contentsOfDirectory(at: trash, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        var result: [BookProject] = []
+        for directory in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            if directory.lastPathComponent == ".DS_Store" { continue }
+            do {
+                let checked = try archivedBookDirectory(directory.lastPathComponent, mustExist: true)
+                try recoverDocument(in: checked)
+                let project = try readProject(in: checked)
+                guard project.id == directory.lastPathComponent else { throw ReadingError.invalid("回收书籍 ID 与目录不一致。") }
+                try validate(project)
+                try validatePackageFiles(project, in: checked, strictContents: false, verifySourceHash: true)
+                try validateArchiveTree(checked)
+                result.append(project)
+            } catch { throw ReadingError.invalid("回收书籍 \(directory.lastPathComponent) 读取失败，文件已保留：\(error.localizedDescription)") }
+        }
+        return result.sorted { $0.importedAt > $1.importedAt }
+    }
+
+    public func restoreBook(id: String) throws -> BookProject {
+        let source = try archivedBookDirectory(id, mustExist: true)
+        try recoverDocument(in: source)
+        let project = try readProject(in: source)
+        guard project.id == id else { throw ReadingError.invalid("回收书籍 ID 与目录不一致。") }
+        try validate(project)
+        try validatePackageFiles(project, in: source, strictContents: false, verifySourceHash: true)
+        try validateArchiveTree(source)
+        let destination = try bookDirectory(id, mustExist: false)
+        try requireVacant(destination)
+        do { try files.moveItem(at: source, to: destination) }
+        catch { throw ReadingError.invalid("书籍恢复未完成。回收目录及可能的目标文件均已保留，请检查 trash/\(id) 与 books/\(id)：\(error.localizedDescription)") }
+        return project
+    }
+
     public func sourceURL(for project: BookProject) -> URL {
         // This nonthrowing lookup never produces an escaping path for a forged model.
         guard let directory = try? bookDirectory(project.id, mustExist: false),
@@ -135,17 +214,42 @@ public actor LibraryRepository {
         return url
     }
 
+    public func checkOCRPage(project: BookProject, page: Int) throws {
+        if let reason = OCRIntegration.unavailableReason(project: project, page: page) { throw ReadingError.invalid(reason) }
+        let ids = project.units.filter { $0.page == page }.map(\.id)
+        // Typed Markdown links may exist without structured evidence metadata.
+        for document in project.documents {
+            let text = try readDocument(bookID: project.id, document: document)
+            if ids.contains(where: { text.contains("[unit:\($0)]") || text.contains("/unit/\($0)") }) { throw ReadingError.invalid("Markdown 正文含有此页引用，已保留原引用；请在新导入的项目中识别。") }
+        }
+    }
+
+    public func saveOCRPage(project: BookProject, result: OCRPageResult) throws -> BookProject {
+        let directory = try bookDirectory(project.id, mustExist: true)
+        try recoverDocument(in: directory)
+        let existing = try readProject(in: directory)
+        guard existing.sourceHash == project.sourceHash, existing.units == project.units else { throw ReadingError.invalid("识别期间原文层已变化，请重新载入后继续。") }
+        try checkOCRPage(project: existing, page: result.page)
+        let updated = try OCRIntegration.applying(result, to: existing)
+        try validate(updated)
+        try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: true)
+        try atomicWrite(encode(updated), to: try child(directory, "project.json"))
+        return updated
+    }
+
     public func exportProject(_ project: BookProject, to url: URL) throws {
         try validateExportURL(url)
         guard !files.fileExists(atPath: url.path) else { throw ReadingError.invalid("导出位置已经存在，请选择新的 .readingbook 文件夹名。") }
         let directory = try bookDirectory(project.id, mustExist: true)
         try recoverDocument(in: directory)
-        try validate(project)
-        try validatePackageFiles(project, in: directory, strictContents: false, verifySourceHash: true)
+        let canonical = try readProject(in: directory)
+        guard canonical.id == project.id, canonical.sourceHash == project.sourceHash, canonical.originalName == project.originalName else { throw ReadingError.invalid("导出时项目身份与磁盘记录不符。") }
+        try validate(canonical)
+        try validatePackageFiles(canonical, in: directory, strictContents: false, verifySourceHash: true)
         let staging = try temporaryDirectory(near: url.deletingLastPathComponent(), prefix: ".readingbook-export-")
         defer { removeOwnTemporary(staging) }
-        try writePackage(project, source: sourceURL(for: project), documentsFrom: directory, to: staging)
-        try validatePackageFiles(project, in: staging, strictContents: true, verifySourceHash: true)
+        try writePackage(canonical, source: sourceURL(for: canonical), documentsFrom: directory, to: staging)
+        try validatePackageFiles(canonical, in: staging, strictContents: true, verifySourceHash: true)
         try files.moveItem(at: staging, to: url)
     }
 
@@ -239,6 +343,7 @@ public actor LibraryRepository {
         _ = try uniqueIDs(project.audit.map(\.id), label: "操作记录")
         let pluginIDs = try uniqueIDs(project.plugins.map(\.id), label: "插件")
         let knowledgeIDs = entityIDs.union(eventIDs).union(documentIDs)
+        guard entityIDs.isDisjoint(with: eventIDs), entityIDs.isDisjoint(with: documentIDs), eventIDs.isDisjoint(with: documentIDs) else { throw ReadingError.invalid("实体、事件与文档必须使用互不冲突的稳定 ID。") }
         let targets = knowledgeIDs.union(documentIDs).union(unitIDs).union(insightIDs)
         guard project.documents.count <= 10_000, project.entities.count <= 100_000,
               project.events.count <= 100_000, project.nodes.count <= 100_000,
@@ -248,6 +353,14 @@ public actor LibraryRepository {
         for (index, unit) in project.units.enumerated() {
             guard unit.order == index, unit.text.count <= 5_000, unit.lineStart > 0, unit.lineEnd >= unit.lineStart,
                   unit.page.map({ $0 > 0 && $0 <= 20_000 }) ?? true else { throw ReadingError.invalid("原文单元顺序、页行定位或长度无效：\(unit.id)") }
+        }
+        let recognizedPages = project.ocrPages ?? []
+        guard recognizedPages.count <= 20_000, Set(recognizedPages.map(\.page)).count == recognizedPages.count else { throw ReadingError.invalid("OCR 页记录重复或超过上限。") }
+        for page in recognizedPages {
+            guard (1...20_000).contains(page.page), !page.model.isEmpty, page.model.count <= 240,
+                  page.issues.count <= 200, page.issues.allSatisfy({ $0.count <= 4000 }),
+                  !page.unitIDs.isEmpty, Set(page.unitIDs).isSubset(of: unitIDs),
+                  page.unitIDs.allSatisfy({ sourceUnits[$0]?.page == page.page }) else { throw ReadingError.invalid("OCR 来源记录与页面单元不一致。") }
         }
         guard Set(project.coverage.keys).isSubset(of: unitIDs),
               project.coverage.values.allSatisfy({ $0.attempts >= 0 && $0.attempts <= 1_000_000 }),
@@ -372,6 +485,45 @@ public actor LibraryRepository {
         guard rootURL.isFileURL else { throw ReadingError.invalid("书库必须使用本地文件夹。") }
         _ = try ensureDirectory(rootURL)
         return try ensureDirectory(try child(rootURL, "books"))
+    }
+
+    private func trashDirectory() throws -> URL {
+        guard rootURL.isFileURL else { throw ReadingError.invalid("书库必须使用本地文件夹。") }
+        _ = try ensureDirectory(rootURL)
+        return try ensureDirectory(try child(rootURL, "trash"))
+    }
+
+    private func archivedBookDirectory(_ id: String, mustExist: Bool) throws -> URL {
+        guard id.count == 36, UUID(uuidString: id) != nil else { throw ReadingError.invalid("回收书籍 ID 必须为 UUID。") }
+        let url = try child(try trashDirectory(), id)
+        if mustExist { try requireDirectory(url) }
+        return url
+    }
+
+    private func requireVacant(_ url: URL) throws {
+        let symbolic = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
+        guard !files.fileExists(atPath: url.path), !symbolic else { throw ReadingError.invalid("目标已存在；不会覆盖已有书籍或回收数据。") }
+    }
+
+    /// Verify the complete moved tree, including undeclared recovery files, without following links.
+    private func validateArchiveTree(_ directory: URL) throws {
+        try requireDirectory(directory)
+        var pending = [directory], count = 0, total = 0
+        while let parent = pending.popLast() {
+            for entry in try files.contentsOfDirectory(at: parent, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]) {
+                count += 1
+                guard count <= 100_000 else { throw ReadingError.invalid("书籍目录条目过多，已保留原目录。") }
+                let checked = try child(parent, entry.lastPathComponent)
+                let values = try checked.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+                guard values.isSymbolicLink != true else { throw ReadingError.invalid("回收目录不允许符号链接。") }
+                if values.isDirectory == true { pending.append(checked) }
+                else {
+                    guard values.isRegularFile == true, let size = values.fileSize, size >= 0,
+                          size <= Self.packageLimit, total <= Self.packageLimit - size else { throw ReadingError.invalid("书籍目录含特殊文件或总大小超过 512 MiB。") }
+                    total += size
+                }
+            }
+        }
     }
 
     private func bookDirectory(_ id: String, mustExist: Bool) throws -> URL {

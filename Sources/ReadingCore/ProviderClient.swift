@@ -18,9 +18,11 @@ enum ProviderClient {
         let content: String?
         let refusal: String?
         let tool_calls: [ToolCall]?
+        let reasoning_content: String?
 
         var conversationValue: [String: Any] {
             var value: [String: Any] = ["role": "assistant", "content": content.map { $0 as Any } ?? NSNull()]
+            if let reasoning = reasoning_content { value["reasoning_content"] = reasoning }
             if let calls = tool_calls, !calls.isEmpty {
                 value["tool_calls"] = calls.map { call in
                     ["id": call.id, "type": call.type,
@@ -82,28 +84,44 @@ enum ProviderClient {
         let model = settings.model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty, model.count <= 240 else { throw ReadingError.invalid("请先填写模型名称。") }
         guard (1...10_000).contains(settings.maxRequestsPerRun),
-              (64...32_768).contains(settings.maxOutputTokens) else {
-            throw ReadingError.invalid("请求预算应为 1–10000 次，单次输出预算应为 64–32768 token。")
+              (64...1_048_576).contains(settings.maxOutputTokens),
+              settings.contextWindowTokens.map({ (1024...4_194_304).contains($0) }) ?? true else {
+            throw ReadingError.invalid("请求或 token 预算超出允许范围，请核对模型的上下文与输出上限。")
         }
         guard apiKey.utf8.count <= 8192, !apiKey.contains("\r"), !apiKey.contains("\n") else {
             throw ReadingError.invalid("密钥格式无效。")
         }
         var body: [String: Any] = ["model": model, "messages": messages, "stream": false, "n": 1]
         if !tools.isEmpty { body["tools"] = tools; body["tool_choice"] = "auto" }
-        // This adapter targets compatible Chat Completions providers. Some
-        // newer official models require max_completion_tokens instead, and
-        // are intentionally not retried silently with another parameter.
-        let outputKey = "max_tokens"
+        let outputKey = settings.tokenLimitParameter ?? "max_tokens"
+        guard ["max_tokens", "max_completion_tokens"].contains(outputKey) else { throw ReadingError.invalid("不支持的输出 token 参数。") }
         body[outputKey] = settings.maxOutputTokens
         let initial = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
-        // Without a provider tokenizer, bytes deliberately overestimate input.
-        let estimate = initial.count + 128
-        let outputLimit = min(settings.maxOutputTokens, remainingTokens - estimate)
+        guard initial.count <= 16 * 1024 * 1024 else { throw ReadingError.invalid("模型请求超过 16 MiB，请缩小页图或内容范围。") }
+        // Base64 bytes are transport data, not text tokens. Price images separately
+        // using a conservative planning estimate; providers/model families differ.
+        var imageCount = 0
+        var estimationBody = body
+        estimationBody["messages"] = messages.map { message -> [String: Any] in
+            var value = message
+            if let parts = message["content"] as? [[String: Any]] {
+                value["content"] = parts.map { part -> [String: Any] in
+                    guard part["type"] as? String == "image_url" else { return part }
+                    imageCount += 1
+                    return ["type": "image_url", "image_url": ["url": "<page-image>", "detail": "high"]]
+                }
+            }
+            return value
+        }
+        let textBytes = try JSONSerialization.data(withJSONObject: estimationBody, options: [.sortedKeys]).count
+        let estimate = textBytes + imageCount * 16_384 + 128
+        let capacity = min(remainingTokens, settings.contextWindowTokens ?? remainingTokens)
+        let outputLimit = min(settings.maxOutputTokens, capacity - estimate)
         guard outputLimit >= 64 else {
-            throw ReadingError.invalid("本次操作达到 96000 token 的保护上限；未提交当前分析，请缩小内容单元或重新开始。")
+            throw ReadingError.invalid("本次内容接近模型上下文或任务 token 上限；请缩小范围或核对配置，当前结果未提交。")
         }
         body[outputKey] = outputLimit
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 120)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 600)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -115,8 +133,8 @@ enum ProviderClient {
     static func perform(_ prepared: Prepared) async throws -> Result {
         try Task.checkCancellation()
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 120
-        configuration.timeoutIntervalForResource = 180
+        configuration.timeoutIntervalForRequest = 600
+        configuration.timeoutIntervalForResource = 1800
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.urlCredentialStorage = nil

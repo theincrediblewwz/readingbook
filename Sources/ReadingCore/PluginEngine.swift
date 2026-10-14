@@ -130,7 +130,7 @@ public enum PluginEngine {
             guard [event.name, event.summary].contains(where: { $0.localizedCaseInsensitiveContains(query) }) else { continue }
             matches.append(["kind": "event", "id": event.id, "name": String(event.name.prefix(120)), "summary": String(event.summary.prefix(180)), "dateText": String(event.dateText.prefix(120)), "placeIDs": Array(event.placeIDs.prefix(3)), "participantIDs": Array(event.participantIDs.prefix(3))])
         }
-        for document in project.documents where matches.count < limit {
+        for document in project.activeDocuments where matches.count < limit {
             if document.title.localizedCaseInsensitiveContains(query) { matches.append(["kind": "document-metadata", "id": document.id, "title": String(document.title.prefix(160))]) }
         }
         var bounded = false

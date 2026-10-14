@@ -1,0 +1,171 @@
+{
+  "verifiedAt": "2026-10-14",
+  "providers": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "baseURL": "https://api.deepseek.com/v1/chat/completions",
+      "documentationURL": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "models": [
+        {
+          "id": "deepseek-flash",
+          "name": "DeepSeek V4.1 Flash",
+          "contextTokens": 1048576,
+          "maxOutputTokens": 393216,
+          "vision": true,
+          "tools": true,
+          "tokenParameter": "max_tokens",
+          "documentationURL": "https://api-docs.deepseek.com/api/list-models/"
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro",
+          "contextTokens": 1048576,
+          "maxOutputTokens": 393216,
+          "vision": false,
+          "tools": true,
+          "tokenParameter": "max_tokens",
+          "documentationURL": "https://api-docs.deepseek.com/api/list-models/"
+        }
+      ]
+    },
+    {
+      "id": "qwen",
+      "name": "通义千问 · 百炼（北京）",
+      "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "documentationURL": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions/",
+      "models": [
+        {
+          "id": "qwen3.8-flash",
+          "name": "Qwen3.8 Flash",
+          "contextTokens": 1000000,
+          "maxOutputTokens": 131072,
+          "vision": true,
+          "tools": true,
+          "tokenParameter": "max_completion_tokens",
+          "documentationURL": "https://help.aliyun.com/zh/model-studio/qwen3-8-flash"
+        },
+        {
+          "id": "qwen3.5-plus-2026-04-20",
+          "name": "Qwen3.5 Plus · 2026-04-20",
+          "contextTokens": 1000000,
+          "maxOutputTokens": 65536,
+          "vision": true,
+          "tools": true,
+          "tokenParameter": "max_completion_tokens",
+          "documentationURL": "https://help.aliyun.com/zh/model-studio/qwen3-5-plus"
+        }
+      ]
+    },
+    {
+      "id": "moonshot",
+      "name": "Kimi · Moonshot（中国）",
+      "baseURL": "https://api.moonshot.cn/v1/chat/completions",
+      "documentationURL": "https://platform.kimi.com/docs/api/chat",
+      "models": [
+        {
+          "id": "kimi-k3",
+          "name": "Kimi K3",
+          "contextTokens": null,
+          "maxOutputTokens": 1048576,
+          "vision": true,
+          "tools": true,
+          "tokenParameter": "max_completion_tokens",
+          "documentationURL": "https://platform.kimi.com/docs/api/chat"
+        }
+      ]
+    },
+    {
+      "id": "zhipu",
+      "name": "智谱 GLM · BigModel",
+      "baseURL": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "documentationURL": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3",
+      "models": [
+        {
+          "id": "glm-5.3",
+          "name": "GLM-5.3",
+          "contextTokens": null,
+          "maxOutputTokens": 131072,
+          "vision": false,
+          "tools": true,
+          "tokenParameter": "max_tokens",
+          "documentationURL": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3"
+        }
+      ]
+    },
+    {
+      "id": "doubao",
+      "name": "豆包 · 火山方舟（北京）",
+      "baseURL": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+      "documentationURL": "https://docs.volcengine.com/docs/ark/context-management?lang=zh",
+      "models": [
+        {
+          "id": "doubao-seed-2-1-pro-260915",
+          "name": "Doubao Seed 2.1 Pro · 260915",
+          "contextTokens": null,
+          "maxOutputTokens": null,
+          "vision": true,
+          "tools": true,
+          "tokenParameter": "max_completion_tokens",
+          "documentationURL": "https://docs.volcengine.com/docs/ark/model-list?lang=en"
+        },
+        {
+          "id": "doubao-seed-2-1-lite-260915",
+          "name": "Doubao Seed 2.1 Lite · 260915",
+          "contextTokens": null,
+          "maxOutputTokens": null,
+          "vision": true,
+          "tools": true,
+          "tokenParameter": "max_completion_tokens",
+          "documentationURL": "https://docs.volcengine.com/docs/ark/model-list?lang=en"
+        }
+      ]
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "baseURL": "https://api.openai.com/v1/chat/completions",
+      "documentationURL": "https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create",
+      "models": [
+        {
+          "id": "gpt-5.4-mini-2026-03-17",
+          "name": "GPT-5.4 Mini · 2026-03-17",
+          "contextTokens": 400000,
+          "maxOutputTokens": 128000,
+          "vision": true,
+          "tools": true,
+          "tokenParameter": "max_completion_tokens",
+          "documentationURL": "https://developers.openai.com/api/docs/models/gpt-5.4-mini"
+        }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic · Claude（OpenAI 兼容）",
+      "baseURL": "https://api.anthropic.com/v1/chat/completions",
+      "documentationURL": "https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk",
+      "models": [
+        {
+          "id": "claude-sonnet-5-5",
+          "name": "Claude Sonnet 5.5",
+          "contextTokens": null,
+          "maxOutputTokens": null,
+          "vision": true,
+          "tools": true,
+          "tokenParameter": "max_completion_tokens",
+          "documentationURL": "https://platform.claude.com/docs/en/models/overview"
+        },
+        {
+          "id": "claude-haiku-5-5",
+          "name": "Claude Haiku 5.5",
+          "contextTokens": null,
+          "maxOutputTokens": null,
+          "vision": true,
+          "tools": true,
+          "tokenParameter": "max_completion_tokens",
+          "documentationURL": "https://platform.claude.com/docs/en/models/overview"
+        }
+      ]
+    }
+  ]
+}

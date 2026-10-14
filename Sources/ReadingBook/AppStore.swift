@@ -23,6 +23,16 @@ import ReadingCore
     @Published var errorMessage: String?
     @Published var showingSettings = false
     @Published var showingPlugins = false
+    @Published var showingOCR = false
+    @Published var showingTrash = false
+    @Published var isRecognizingPDF = false
+    @Published var savedServices: [SavedAIService] = []
+    @Published var selectedServiceID: String?
+    @Published var serviceName = "我的 AI"
+    @Published var ocrServiceID: String?
+    @Published var connectionStatus = ""
+    @Published var archivedBooks: [BookProject] = []
+    @Published var deletionRequest: WorkspaceDeletion?
     @Published var settings = ProviderSettings()
     @Published var apiKey = ""
     @Published var requestsUsed = 0
@@ -31,10 +41,11 @@ import ReadingCore
     @Published var showUndated = true
     let repository: LibraryRepository
     let reader = AIReader()
+    let pdfOCRReader = PDFOCRReader()
     private var loaded = false
     private var navigationGeneration = 0
     private var documentGeneration = 0
-    private var task: Task<Void, Never>?
+    var task: Task<Void, Never>?
     var book: BookProject? { books.first { $0.id == bookID } }
     var selectedUnit: SourceUnit? { book?.units.first { $0.id == selectedUnitID } }
     var visibleEvents: [KnowledgeEvent] {
@@ -47,7 +58,7 @@ import ReadingCore
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("ReadingBook", isDirectory: true)
         repository = LibraryRepository(rootURL: root)
         if let data = UserDefaults.standard.data(forKey: "provider"), let saved = try? JSONDecoder().decode(ProviderSettings.self, from: data) { settings = saved }
-        do { apiKey = try Keychain.read() } catch { errorMessage = error.localizedDescription }
+        loadServiceProfiles()
     }
     func load() async {
         guard !loaded else { return }; loaded = true
@@ -97,6 +108,7 @@ import ReadingCore
     }
     func makePlan() {
         guard let project = book, !isBusy, providerReady else { return }
+        guard !requiresPDFRecognition else { showingOCR = true; activity = "请先识别扫描页，或在对照原页后确认空白内容。"; return }
         isBusy = true; activity = "AI 正在预读与选择方法、类型和组件…"
         task = Task {
             do {
@@ -110,6 +122,7 @@ import ReadingCore
     }
     func startReading() {
         guard book != nil, !isBusy, providerReady else { return }
+        guard !requiresPDFRecognition else { showingOCR = true; activity = "扫描页尚未识别；请先 OCR，避免把空提取结果当成已读。"; return }
         isBusy = true; route = "workflow"; activity = "准备顺序精读…"
         task = Task {
             await reader.resetBudget()
@@ -141,6 +154,10 @@ import ReadingCore
         }
     }
     func pause() { guard !isSavingDocument else { return }; task?.cancel(); activity = "正在暂停，已保存结果可以继续阅读。" }
+    private var requiresPDFRecognition: Bool {
+        guard let book, book.originalName.lowercased().hasSuffix(".pdf") else { return false }
+        return book.units.contains { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (book.coverage[$0.id]?.status ?? .pending) == .pending }
+    }
     var providerReady: Bool {
         if settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errorMessage = "请先在模型设置中填写模型名称与服务地址。"; showingSettings = true; return false }
         return true
@@ -151,20 +168,19 @@ import ReadingCore
     }
     func saveSettings() {
         do {
-            guard (1...2000).contains(settings.maxRequestsPerRun), (512...16000).contains(settings.maxOutputTokens) else { throw ReadingError.invalid("请求预算或输出上限超出允许范围。") }
-            try Keychain.write(apiKey)
-            UserDefaults.standard.set(try JSONEncoder().encode(settings), forKey: "provider")
+            try persistServiceProfile()
             showingSettings = false; activity = "模型配置已保存，密钥保存在系统钥匙串。"
         } catch { errorMessage = error.localizedDescription }
     }
     func newDocument() {
-        guard book != nil else { return }
+        guard book != nil, !isRecognizingPDF else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档。"; return }
         documentGeneration += 1
         selectedDocumentID = nil; editorTitle = "新的理解"; editorMarkdown = "# 新的理解\n\n"; draftEvidence = []; editorDirty = true; route = "editor"
     }
     func openDocument(_ document: DocumentRecord) async {
         guard let current = book else { return }
+        guard document.trashedAt == nil else { errorMessage = "文档已在回收站，请先恢复。"; showingTrash = true; return }
         guard !editorDirty else {
             if selectedDocumentID == document.id { route = "editor"; return }
             errorMessage = "请先保存当前文档。"; return
@@ -228,7 +244,7 @@ import ReadingCore
                 await reader.resetBudget()
                 var documents: [String: String] = [:]
                 var remaining = 200_000
-                for document in current.documents {
+                for document in current.activeDocuments {
                     let content = try await repository.readDocument(bookID: current.id, document: document)
                     let bounded = String(content.prefix(max(0, remaining)))
                     documents[document.id] = bounded; remaining -= bounded.count
@@ -248,7 +264,11 @@ import ReadingCore
         if let event = book?.events.first(where: { $0.id == id }), let year = event.startYear {
             if Double(year) < timeFrom || Double(year) > timeTo { timeFrom = Double(year - 2); timeTo = Double((event.endYear ?? year) + 2) }
         }
-        if let document = book?.documents.first(where: { $0.id == id }) { Task { await openDocument(document) } }
+    }
+    func openObject(_ id: String) {
+        if let document = book?.activeDocuments.first(where: { $0.id == id }) { Task { await openDocument(document) } }
+        else if let unit = book?.units.first(where: { $0.id == id }) { selectedUnitID = unit.id; route = "reader" }
+        else { focus(id) }
     }
     func follow(_ evidence: Evidence) { selectedUnitID = evidence.unitID; route = "reader" }
     func openInternalURL(_ url: URL) async {
@@ -326,6 +346,7 @@ import ReadingCore
         }
     }
     func newNote(for unit: SourceUnit) {
+        guard !isRecognizingPDF else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档。"; return }
         selectedObjectID = unit.id; newDocument(); editorTitle = "关于\(unit.chapter)的理解"
         let quote = String(unit.text.prefix(240))
@@ -392,24 +413,30 @@ import ReadingCore
     }
     private func restoreDraft() {
         guard let bookID, let data = UserDefaults.standard.data(forKey: "draft-\(bookID)"), let draft = try? JSONDecoder().decode(DocumentDraft.self, from: data) else { return }
-        selectedDocumentID = draft.documentID; editorTitle = draft.title; editorMarkdown = draft.markdown; draftEvidence = draft.evidence; editorDirty = true; route = "editor"; activity = "已恢复上次尚未保存的文档草稿。"
+        selectedDocumentID = book?.activeDocuments.contains(where: { $0.id == draft.documentID }) == true ? draft.documentID : nil
+        editorTitle = draft.title; editorMarkdown = draft.markdown; draftEvidence = draft.evidence; editorDirty = true; route = "editor"; activity = "已恢复上次尚未保存的文档草稿。"
     }
     func objectTitle(_ id: String) -> String { book?.entities.first { $0.id == id }?.name ?? book?.events.first { $0.id == id }?.name ?? book?.documents.first { $0.id == id }?.title ?? id }
 }
 
 enum Keychain {
     static let service = "org.readingbook.provider"
-    static func read() throws -> String {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "api-key", kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+    static func read(account: String = "api-key") throws -> String {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         var item: CFTypeRef?; let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { return "" }
         guard status == errSecSuccess, let data = item as? Data, let text = String(data: data, encoding: .utf8) else { throw ReadingError.invalid("钥匙串读取失败（\(status)）。") }; return text
     }
-    static func write(_ value: String) throws {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "api-key"]
+    static func write(_ value: String, account: String = "api-key") throws {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
         let attributes: [String: Any] = [kSecValueData as String: Data(value.utf8)]
         var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound { var addition = query; addition[kSecValueData as String] = Data(value.utf8); status = SecItemAdd(addition as CFDictionary, nil) }
         guard status == errSecSuccess else { throw ReadingError.invalid("钥匙串保存失败（\(status)）。") }
+    }
+    static func remove(account: String) throws {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw ReadingError.invalid("钥匙串删除失败（\(status)）。") }
     }
 }

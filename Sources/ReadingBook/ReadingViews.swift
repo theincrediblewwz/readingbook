@@ -4,9 +4,13 @@ import ReadingCore
 
 struct ReaderWorkspaceView: View {
     @EnvironmentObject var store: AppStore
-    @State private var showPDF = false
+    @State private var showPDF = true
+    @AppStorage("source-outline-visible") private var showOutline = true
+    private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     var body: some View {
+        GeometryReader { geometry in
         HSplitView {
+            if showOutline && geometry.size.width >= 720 {
             VStack(spacing: 12) {
                 TextField("搜索原文或章节", text: $store.search).textFieldStyle(.roundedBorder).padding(.horizontal, 14).padding(.top, 16)
                 ScrollViewReader { proxy in
@@ -29,19 +33,31 @@ struct ReaderWorkspaceView: View {
                     .onChange(of: store.selectedUnitID) { _, id in if let id { withAnimation { proxy.scrollTo(id, anchor: .center) }; if let bookID = store.bookID { UserDefaults.standard.set(id, forKey: "position-\(bookID)") } } }
                 }
             }.frame(minWidth: 195, idealWidth: 225, maxWidth: 280)
+            }
             if let unit = store.selectedUnit {
                 VStack(spacing: 0) {
                     HStack {
+                        Button { showOutline.toggle() } label: { Image(systemName: "sidebar.left") }.help("显示或收起原文搜索与章节栏；窄窗口自动收起").disabled(geometry.size.width < 720)
                         Button { move(-1) } label: { Image(systemName: "chevron.left") }.disabled(unit.order == 0)
                         Button { move(1) } label: { Image(systemName: "chevron.right") }.disabled(unit.order >= (store.book?.units.count ?? 0) - 1)
-                        Text(unit.locator).font(.caption).foregroundStyle(.secondary)
+                        Text(unit.locator).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         Spacer()
-                        if store.sourceFileURL?.pathExtension.lowercased() == "pdf" { Toggle("原始 PDF", isOn: $showPDF).toggleStyle(.switch).controlSize(.small) }
+                        if isPDF {
+                            Button { store.showingOCR = true } label: { Label("OCR", systemImage: "viewfinder") }.disabled(store.isBusy)
+                            Toggle("原始 PDF", isOn: $showPDF).toggleStyle(.switch).controlSize(.small)
+                        }
                         Button { Task { await store.toggleBookmark(unit.id) } } label: { Image(systemName: store.book?.bookmarks.contains(unit.id) == true ? "bookmark.fill" : "bookmark") }.help("书签").disabled(store.isBusy)
-                        Button { store.newNote(for: unit) } label: { Label("记一笔", systemImage: "square.and.pencil") }
+                        Button { store.newNote(for: unit) } label: { Image(systemName: "square.and.pencil") }.help("记一笔").disabled(store.isRecognizingPDF)
                     }.buttonStyle(.borderless).padding(.horizontal, 25).padding(.vertical, 14)
                     Divider().opacity(0.4)
-                    if showPDF, let url = store.sourceFileURL { OriginalPDFView(url: url, page: unit.page ?? 1) }
+                    if isPDF, showPDF, let url = store.sourceFileURL {
+                        if unit.warning != nil {
+                            HStack { Label(store.book?.ocrPages?.contains(where: { $0.page == unit.page }) == true ? "此页已有 OCR，待核对" : "此页提取内容待核对", systemImage: "doc.text.magnifyingglass").font(.caption).foregroundStyle(.secondary); Spacer(); Button("查看文本 / 识别稿") { showPDF = false }.font(.caption) }.padding(.horizontal, 24).padding(.vertical, 8)
+                        }
+                        PDFReaderView(url: url, page: unit.page) { page in
+                            if store.selectedUnit?.page != page { store.selectedUnitID = store.book?.units.first { $0.page == page }?.id }
+                        }
+                    }
                     else {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 22) {
@@ -54,8 +70,12 @@ struct ReaderWorkspaceView: View {
                                         if unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Button("保留为待识别，先继续其他内容") { Task { await store.deferUnit(unit.id) } }.font(.caption).disabled(store.isBusy) }
                                     }.padding(14).background(Palette.copper.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                                 }
-                                Text(unit.text.isEmpty ? "此单元尚未获得可读文本，请对照原始文件核查。" : unit.text)
-                                    .font(.system(size: 17, weight: .regular, design: .serif)).lineSpacing(10).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                                if ["md", "markdown"].contains(store.sourceFileURL?.pathExtension.lowercased() ?? "") || store.book?.ocrPages?.contains(where: { $0.page == unit.page }) == true {
+                                    MarkdownText(markdown: sourceMarkdown(unit))
+                                } else {
+                                    Text(unit.text.isEmpty ? "此单元尚未获得可读文本，请对照原始文件核查。" : unit.text)
+                                        .font(.system(size: 17, weight: .regular, design: .serif)).lineSpacing(10).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                                }
                                 Divider().padding(.vertical, 20)
                                 let insights = store.book?.insights.filter { $0.unitIDs.contains(unit.id) } ?? []
                                 ForEach(insights) { insight in
@@ -68,9 +88,16 @@ struct ReaderWorkspaceView: View {
                             }.frame(maxWidth: 740).padding(.horizontal, 40).padding(.vertical, 40).frame(maxWidth: .infinity)
                         }.background(Palette.paper)
                     }
-                }.frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
+                }.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
             } else { EmptyState(title: "选择一个章节", detail: "原文与 AI 结论的依据都会在这里展开。", icon: "book.pages") }
         }
+        }
+    }
+    private func sourceMarkdown(_ unit: SourceUnit) -> String {
+        if let page = unit.page, store.book?.ocrPages?.contains(where: { $0.page == page }) == true {
+            return store.book?.units.filter { $0.page == page }.map(\.text).joined() ?? unit.text
+        }
+        return unit.text
     }
     private var filteredUnits: [SourceUnit] {
         let units = store.book?.units ?? []
@@ -84,16 +111,6 @@ struct ReaderWorkspaceView: View {
     private func move(_ offset: Int) {
         guard let units = store.book?.units, let current = store.selectedUnitID, let index = units.firstIndex(where: { $0.id == current }), units.indices.contains(index + offset) else { return }
         store.selectedUnitID = units[index + offset].id
-    }
-}
-
-struct OriginalPDFView: NSViewRepresentable {
-    var url: URL
-    var page: Int
-    func makeNSView(context: Context) -> PDFView { let view = PDFView(); view.autoScales = true; view.displayMode = .singlePageContinuous; view.document = PDFDocument(url: url); return view }
-    func updateNSView(_ view: PDFView, context: Context) {
-        if view.document?.documentURL != url { view.document = PDFDocument(url: url) }
-        if let target = view.document?.page(at: max(0, page - 1)), view.currentPage != target { view.go(to: target) }
     }
 }
 
@@ -163,13 +180,14 @@ struct MarkdownText: View {
     @EnvironmentObject var store: AppStore
     var markdown: String
     var body: some View {
-        Text(rendered).font(.body).lineSpacing(6).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+        RichMarkdownView(markdown: preparedMarkdown, baseDirectory: store.sourceFileURL?.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("docs", isDirectory: true))
+            .frame(maxWidth: .infinity, alignment: .leading)
             .environment(\.openURL, OpenURLAction { url in
                 if url.scheme == "readingbook" { Task { await store.openInternalURL(url) }; return .handled }
                 return ["https", "http"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
             })
     }
-    private var rendered: AttributedString {
+    private var preparedMarkdown: String {
         var text = markdown
         for kind in ["unit", "doc"] {
             let pattern = "\\[\(kind):([A-Za-z0-9._-]+)\\]"
@@ -177,7 +195,7 @@ struct MarkdownText: View {
                 text = regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "[\(kind == "unit" ? "原文" : "文档") $1](readingbook://book/\(store.bookID ?? "")/\(kind == "unit" ? "unit" : "document")/$1)")
             }
         }
-        return (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .full))) ?? AttributedString(text)
+        return text
     }
 }
 
@@ -188,9 +206,13 @@ struct DocumentEditorView: View {
         HSplitView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack { Text("我的 Markdown").font(.caption.weight(.semibold)).foregroundStyle(.secondary); Spacer(); Button { store.newDocument() } label: { Image(systemName: "plus") }.buttonStyle(.plain) }.padding(.horizontal, 16).padding(.top, 18)
-                List(store.book?.documents ?? []) { document in
+                List(store.book?.activeDocuments ?? []) { document in
                     Button { Task { await store.openDocument(document) } } label: { Label(document.title, systemImage: document.origin == "user" ? "doc.text" : "sparkles").font(.subheadline).lineLimit(2).padding(.vertical, 5) }.buttonStyle(.plain)
                         .listRowBackground(store.selectedDocumentID == document.id ? Palette.accent.opacity(0.1) : .clear)
+                        .contextMenu {
+                            Button("加入导图") { Task { await store.addDocumentToGraph(document) } }
+                            Button("移入回收站", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }
+                        }
                 }.listStyle(.sidebar)
             }.frame(minWidth: 170, idealWidth: 200, maxWidth: 250)
             if store.selectedDocumentID != nil || store.editorDirty {
@@ -198,13 +220,16 @@ struct DocumentEditorView: View {
                     HStack {
                         TextField("文档标题", text: Binding(get: { store.editorTitle }, set: { store.editorTitle = $0; store.editorDirty = true })).font(.headline).textFieldStyle(.plain)
                         Toggle("预览", isOn: $preview).toggleStyle(.button)
+                        if let document = store.book?.activeDocuments.first(where: { $0.id == store.selectedDocumentID }) {
+                            Button { store.requestDeletion(.document, id: document.id, title: document.title) } label: { Image(systemName: "trash") }.help("文档移入回收站").disabled(store.isBusy)
+                        }
                         Button("导出 .md") { store.exportMarkdown() }.disabled(store.selectedDocumentID == nil || store.editorDirty)
                         Button(store.editorDirty ? "保存" : "已保存") { Task { await store.saveCurrentDocument() } }.buttonStyle(.borderedProminent).disabled(!store.editorDirty || store.isBusy)
                     }.padding(20)
                     Divider().opacity(0.4)
                     if preview { ScrollView { MarkdownText(markdown: store.editorMarkdown).padding(36).frame(maxWidth: 850).frame(maxWidth: .infinity) }.background(Palette.paper) }
                     else { TextEditor(text: Binding(get: { store.editorMarkdown }, set: { store.editorMarkdown = $0; store.editorDirty = true })).font(.system(size: 15, design: .monospaced)).scrollContentBackground(.hidden).padding(25).background(Palette.paper) }
-                }.frame(minWidth: 400, maxWidth: .infinity)
+                }.frame(minWidth: 360, maxWidth: .infinity).disabled(store.isRecognizingPDF)
             } else { EmptyState(title: "给理解留一个位置", detail: "你写下的想法与主动保存的 AI 回答，都是真实的 Markdown 文件。它们也会出现在文档导图中。", icon: "square.and.pencil", actionTitle: "写下理解", action: { store.newDocument() }) }
         }
     }

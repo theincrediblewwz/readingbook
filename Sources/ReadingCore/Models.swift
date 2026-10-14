@@ -144,6 +144,8 @@ public struct DocumentRecord: Codable, Identifiable, Hashable, Sendable {
     public var evidence: [Evidence]
     public var createdAt: Date
     public var updatedAt: Date
+    /// Missing in older JSON is decoded as nil; Markdown bodies stay in docs/ while trashed.
+    public var trashedAt: Date? = nil
     public init(id: String = UUID().uuidString, title: String, relativePath: String = "", origin: String = "user", linkedIDs: [String] = [], evidence: [Evidence] = []) {
         self.id = id; self.title = title; self.relativePath = relativePath.isEmpty ? "docs/\(id).md" : relativePath
         self.origin = origin; self.linkedIDs = linkedIDs; self.evidence = evidence; self.createdAt = Date(); self.updatedAt = Date()
@@ -219,6 +221,8 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var appliedOperationIDs: [String] = []
     public var lastUnitID: String? = nil
     public var bookmarks: [String] = []
+    /// Optional for compatibility with projects created before page OCR existed.
+    public var ocrPages: [OCRPageProvenance]? = nil
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units
     }
@@ -226,6 +230,8 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var progress: Double { units.isEmpty ? 0 : Double(completedCount) / Double(units.count) }
     public var reviewCount: Int { units.filter { coverage[$0.id]?.status == .needsReview || $0.warning != nil }.count }
     public var isFullyProcessed: Bool { !units.isEmpty && completedCount == units.count && reviewCount == 0 }
+    public var activeDocuments: [DocumentRecord] { documents.filter { $0.trashedAt == nil } }
+    public var trashedDocuments: [DocumentRecord] { documents.filter { $0.trashedAt != nil } }
 }
 
 public struct ProviderSettings: Codable, Sendable {
@@ -233,8 +239,11 @@ public struct ProviderSettings: Codable, Sendable {
     public var model: String
     public var maxRequestsPerRun: Int
     public var maxOutputTokens: Int
-    public init(baseURL: String = "http://localhost:11434/v1", model: String = "", maxRequestsPerRun: Int = 100, maxOutputTokens: Int = 6000) {
+    public var contextWindowTokens: Int? = nil
+    public var tokenLimitParameter: String? = nil
+    public init(baseURL: String = "http://localhost:11434/v1", model: String = "", maxRequestsPerRun: Int = 100, maxOutputTokens: Int = 6000, contextWindowTokens: Int? = nil, tokenLimitParameter: String? = nil) {
         self.baseURL = baseURL; self.model = model; self.maxRequestsPerRun = maxRequestsPerRun; self.maxOutputTokens = maxOutputTokens
+        self.contextWindowTokens = contextWindowTokens; self.tokenLimitParameter = tokenLimitParameter
     }
 }
 public enum ReadingError: LocalizedError {

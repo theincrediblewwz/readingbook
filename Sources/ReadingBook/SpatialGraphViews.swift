@@ -140,7 +140,9 @@ private struct GraphSurface: View {
     var lines: [GraphLine]
     var selectedID: String?
     var select: (String) -> Void
+    var open: ((String) -> Void)? = nil
     var move: ((String, Double, Double) -> Void)? = nil
+    var remove: ((String) -> Void)? = nil
     @State private var offsets: [String: CGSize] = [:]
     private var canvasWidth: Double { max(1000, (items.map(\.x).max() ?? 600) + 320) }
     private var canvasHeight: Double { max(650, (items.map(\.y).max() ?? 400) + 240) }
@@ -158,15 +160,31 @@ private struct GraphSurface: View {
                     }
                 }.frame(width: canvasWidth, height: canvasHeight)
                 ForEach(items) { item in
-                    Button { select(item.targetID) } label: {
-                        VStack(alignment: .leading, spacing: 8) { Text(item.subtitle).font(.caption2).foregroundStyle(Palette.accent); Text(item.title).font(.system(size: 16, weight: .medium, design: .serif)).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading) }
-                            .padding(15).frame(width: 220, height: 90).background(.background, in: RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(selectedID == item.targetID ? Palette.accent : .primary.opacity(0.12), lineWidth: selectedID == item.targetID ? 2 : 1)).shadow(color: .black.opacity(0.025), radius: 8, y: 3)
-                    }.buttonStyle(.plain).position(point(item))
-                        .simultaneousGesture(DragGesture(minimumDistance: 6).onChanged { value in offsets[item.id] = value.translation }.onEnded { value in
-                            if let move { move(item.id, max(10, item.x + value.translation.width), max(10, item.y + value.translation.height)); offsets[item.id] = nil }
-                        })
+                    Group {
+                        if move != nil { node(item).gesture(drag(item).exclusively(before: taps(item))) }
+                        else { node(item).gesture(taps(item)) }
+                    }.position(point(item)).contextMenu {
+                        Button("选中节点") { select(item.targetID) }
+                        if let open { Button("打开内容") { open(item.targetID) } }
+                        if let remove { Divider(); Button("移除画布节点（保留文档）", role: .destructive) { remove(item.id) } }
+                    }
                 }
             }.frame(width: canvasWidth, height: canvasHeight)
+        }
+    }
+    private func node(_ item: GraphItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) { Text(item.subtitle).font(.caption2).foregroundStyle(Palette.accent); Text(item.title).font(.system(size: 16, weight: .medium, design: .serif)).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading) }
+            .padding(15).frame(width: 220, height: 90).background(.background, in: RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(selectedID == item.targetID ? Palette.accent : .primary.opacity(0.12), lineWidth: selectedID == item.targetID ? 2 : 1)).shadow(color: .black.opacity(0.025), radius: 8, y: 3)
+            .contentShape(RoundedRectangle(cornerRadius: 13)).accessibilityLabel(item.title)
+    }
+    private func taps(_ item: GraphItem) -> some Gesture {
+        TapGesture(count: 2).exclusively(before: TapGesture(count: 1)).onEnded { value in
+            switch value { case .first: if let open { open(item.targetID) } else { select(item.targetID) }; case .second: select(item.targetID) }
+        }
+    }
+    private func drag(_ item: GraphItem) -> some Gesture {
+        DragGesture(minimumDistance: 6).onChanged { value in select(item.targetID); offsets[item.id] = value.translation }.onEnded { value in
+            move?(item.id, max(10, item.x + value.translation.width), max(10, item.y + value.translation.height)); offsets[item.id] = nil
         }
     }
 }
@@ -176,18 +194,24 @@ struct DocumentGraphView: View {
     @State private var from = ""
     @State private var to = ""
     @State private var label = "延伸"
+    private var nodes: [CanvasNode] {
+        guard let book = store.book else { return [] }; let hidden = Set(book.trashedDocuments.map(\.id))
+        return book.nodes.filter { !hidden.contains($0.targetID) }
+    }
     var body: some View {
         VStack(spacing: 0) {
-            HStack { VStack(alignment: .leading, spacing: 5) { Text("理解的脉络").font(.system(size: 27, design: .serif)); Text("每个文档节点打开同一份 Markdown，拖动可整理位置。").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button("写下理解") { store.newDocument() } }.padding(24)
-            if let book = store.book, !book.nodes.isEmpty {
+            HStack { VStack(alignment: .leading, spacing: 5) { Text("理解的脉络").font(.system(size: 27, design: .serif)); Text("单击选中 · 拖动整理 · 双击或右键打开内容").font(.caption).foregroundStyle(.secondary) }; Spacer(); if let id = store.selectedObjectID { Button("打开所选") { store.openObject(id) } }; Button("写下理解") { store.newDocument() } }.padding(24)
+            if let book = store.book, !nodes.isEmpty {
+                ScrollView(.horizontal) {
                 HStack {
-                    Picker("从", selection: $from) { Text("选择起点").tag(""); ForEach(book.nodes) { node in Text(store.objectTitle(node.targetID)).tag(node.id) } }.frame(maxWidth: 220)
-                    Picker("到", selection: $to) { Text("选择终点").tag(""); ForEach(book.nodes) { node in Text(store.objectTitle(node.targetID)).tag(node.id) } }.frame(maxWidth: 220)
+                    Picker("从", selection: $from) { Text("选择起点").tag(""); ForEach(nodes) { node in Text(store.objectTitle(node.targetID)).tag(node.id) } }.frame(width: 175)
+                    Picker("到", selection: $to) { Text("选择终点").tag(""); ForEach(nodes) { node in Text(store.objectTitle(node.targetID)).tag(node.id) } }.frame(width: 175)
                     TextField("关系", text: $label).frame(width: 90).textFieldStyle(.roundedBorder)
                     Button("连接") { Task { await store.connectNodes(from: from, to: to, label: label) } }.disabled(from.isEmpty || to.isEmpty || from == to || store.isBusy)
-                    Spacer()
+                    Menu("管理连线") { ForEach(book.edges) { edge in Button("移除：\(edge.label) · \(book.nodes.first(where: { $0.id == edge.fromID }).map { store.objectTitle($0.targetID) } ?? "节点")") { Task { await store.removeConnection(edge.id) } } } }.disabled(store.isBusy)
                 }.padding(.horizontal, 24).padding(.bottom, 15)
-                GraphSurface(items: book.nodes.map { node in GraphItem(id: node.id, targetID: node.targetID, title: store.objectTitle(node.targetID), subtitle: book.documents.contains { $0.id == node.targetID } ? "Markdown" : "知识节点", x: node.x, y: node.y) }, lines: book.edges.map { GraphLine(id: $0.id, from: $0.fromID, to: $0.toID, label: $0.label) }, selectedID: store.selectedObjectID, select: store.focus, move: { id, x, y in Task { await store.moveNode(id: id, x: x, y: y) } })
+                }
+                GraphSurface(items: nodes.map { node in GraphItem(id: node.id, targetID: node.targetID, title: store.objectTitle(node.targetID), subtitle: book.activeDocuments.contains { $0.id == node.targetID } ? "Markdown" : "知识节点", x: node.x, y: node.y) }, lines: book.edges.filter { edge in nodes.contains { $0.id == edge.fromID } && nodes.contains { $0.id == edge.toID } }.map { GraphLine(id: $0.id, from: $0.fromID, to: $0.toID, label: $0.label) }, selectedID: store.selectedObjectID, select: store.focus, open: store.openObject, move: { id, x, y in Task { await store.moveNode(id: id, x: x, y: y) } }, remove: { id in Task { await store.removeCanvasNode(id) } }).allowsHitTesting(!store.isBusy)
             } else { EmptyState(title: "从第一篇理解开始", detail: "写一篇笔记，或把 AI 的回答保存下来。文档会在这里成为可连接的节点。", icon: "point.3.connected.trianglepath.dotted") }
         }
     }
@@ -232,10 +256,13 @@ struct KnowledgeLibraryView: View {
                 HStack { Text("把读过的，变成自己的").font(.system(size: 28, design: .serif)); Spacer(); Button("写下理解") { store.newDocument() } }
                 TextField("搜索文档正文、阅读分析和要素", text: $query).textFieldStyle(.roundedBorder)
                 Text("我的 Markdown").font(.headline)
-                ForEach((store.book?.documents ?? []).filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || documentTexts[$0.id]?.localizedCaseInsensitiveContains(query) == true }) { document in
-                    Button { Task { await store.openDocument(document) } } label: { HStack { Image(systemName: "doc.text").foregroundStyle(Palette.accent); VStack(alignment: .leading, spacing: 6) { Text(document.title); Text(document.relativePath).font(.caption.monospaced()).foregroundStyle(.tertiary) }; Spacer(); Text(document.updatedAt, style: .date).font(.caption).foregroundStyle(.secondary); Image(systemName: "arrow.up.right").foregroundStyle(Palette.accent) }.softPanel() }.buttonStyle(.plain)
+                ForEach((store.book?.activeDocuments ?? []).filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || documentTexts[$0.id]?.localizedCaseInsensitiveContains(query) == true }) { document in
+                    Button { Task { await store.openDocument(document) } } label: { HStack { Image(systemName: "doc.text").foregroundStyle(Palette.accent); VStack(alignment: .leading, spacing: 6) { Text(document.title); Text(document.relativePath).font(.caption.monospaced()).foregroundStyle(.tertiary) }; Spacer(); Text(document.updatedAt, style: .date).font(.caption).foregroundStyle(.secondary); Image(systemName: "arrow.up.right").foregroundStyle(Palette.accent) }.softPanel() }.buttonStyle(.plain).contextMenu {
+                        Button("加入导图") { Task { await store.addDocumentToGraph(document) } }
+                        Button("移入回收站", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }
+                    }
                 }
-                if store.book?.documents.isEmpty != false { Text("还没有保存文档。你可以主动保存 AI 回答，或写下自己的理解。").font(.subheadline).foregroundStyle(.secondary) }
+                if store.book?.activeDocuments.isEmpty != false { Text("还没有保存文档。你可以主动保存 AI 回答，或写下自己的理解。").font(.subheadline).foregroundStyle(.secondary) }
                 Text("阅读分析").font(.headline).padding(.top, 10)
                 ForEach((store.book?.insights ?? []).filter { query.isEmpty || $0.markdown.localizedCaseInsensitiveContains(query) }) { insight in
                     VStack(alignment: .leading, spacing: 14) { MarkdownText(markdown: insight.markdown); HStack { ForEach(insight.unitIDs, id: \.self) { id in Button(id) { store.selectedUnitID = id; store.route = "reader" }.font(.caption) }; Spacer(); Button("保存为文档") { Task { await store.saveInsight(insight) } }.font(.caption).disabled(store.isBusy) } }.softPanel()
@@ -248,10 +275,10 @@ struct KnowledgeLibraryView: View {
         }.task(id: documentCacheKey) {
             documentTexts = [:]
             guard let book = store.book else { return }; var loaded: [String: String] = [:]
-            do { for document in book.documents { try Task.checkCancellation(); loaded[document.id] = try await store.repository.readDocument(bookID: book.id, document: document) }; if !Task.isCancelled && store.book?.id == book.id { documentTexts = loaded } }
+            do { for document in book.activeDocuments { try Task.checkCancellation(); loaded[document.id] = try await store.repository.readDocument(bookID: book.id, document: document) }; if !Task.isCancelled && store.book?.id == book.id { documentTexts = loaded } }
             catch is CancellationError { }
             catch { store.errorMessage = error.localizedDescription }
         }
     }
-    private var documentCacheKey: String { (store.book?.id ?? "") + (store.book?.documents.map { $0.id + String($0.updatedAt.timeIntervalSince1970) }.joined(separator: "|") ?? "") }
+    private var documentCacheKey: String { (store.book?.id ?? "") + (store.book?.activeDocuments.map { $0.id + String($0.updatedAt.timeIntervalSince1970) }.joined(separator: "|") ?? "") }
 }

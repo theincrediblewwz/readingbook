@@ -1,0 +1,118 @@
+import SwiftUI
+import ReadingCore
+
+struct WorkspaceDeletion {
+    enum Kind: Equatable { case book, document, entity, event }
+    var kind: Kind
+    var id: String
+    var title: String
+    var detail: String {
+        switch kind {
+        case .book: return "整本书及本机副本中的文档将移入回收站，可以恢复。导入前的原始文件保持原样。"
+        case .document: return "Markdown 将移入回收站，画布和知识库暂时隐藏它；恢复后保留原内容与节点。聊天记录保留。"
+        case .entity, .event: return "移除此派生对象，并清理地图、时间轴、关系和画布中的结构化关联。原书和 Markdown 正文保留；此对象没有一键恢复。"
+        }
+    }
+}
+
+extension AppStore {
+    func requestDeletion(_ kind: WorkspaceDeletion.Kind, id: String, title: String) {
+        guard !isBusy else { return }
+        deletionRequest = WorkspaceDeletion(kind: kind, id: id, title: title)
+    }
+    func confirmDeletion(_ request: WorkspaceDeletion) {
+        guard !isBusy else { return }
+        deletionRequest = nil
+        guard !editorDirty else { errorMessage = "请先保存正在编辑的 Markdown，再删除内容。"; return }
+        isBusy = true
+        task = Task {
+            defer { isBusy = false }
+            do {
+                if request.kind == .book {
+                    guard let project = books.first(where: { $0.id == request.id }) else { return }
+                    try await repository.archiveBook(project: project)
+                    books.removeAll { $0.id == project.id }
+                    if bookID == project.id { bookID = nil; selectedUnitID = nil; selectedObjectID = nil; selectedDocumentID = nil; sourceFileURL = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = [] }
+                    activity = "书籍已移入回收站。"
+                } else if let project = book {
+                    let updated: BookProject
+                    switch request.kind {
+                    case .document: updated = try await repository.setDocumentTrashed(project: project, documentID: request.id, trashed: true)
+                    case .entity: updated = try KnowledgeDeletion.removingEntity(id: request.id, from: project); try await repository.save(updated)
+                    case .event: updated = try KnowledgeDeletion.removingEvent(id: request.id, from: project); try await repository.save(updated)
+                    case .book: return
+                    }
+                    publish(updated)
+                    if selectedObjectID == request.id { selectedObjectID = nil }
+                    if selectedDocumentID == request.id { selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; UserDefaults.standard.removeObject(forKey: "draft-\(project.id)") }
+                    activity = request.kind == .document ? "文档已移入回收站，可以恢复。" : "派生对象及结构化关联已移除。"
+                }
+                archivedBooks = try await repository.archivedBooks()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+    func reloadTrash() async {
+        do { archivedBooks = try await repository.archivedBooks() } catch { errorMessage = error.localizedDescription }
+    }
+    func restoreBook(_ id: String) async {
+        guard !isBusy else { return }; isBusy = true; defer { isBusy = false }
+        do { let restored = try await repository.restoreBook(id: id); publish(restored); archivedBooks = try await repository.archivedBooks(); activity = "书籍已恢复到书库。" }
+        catch { errorMessage = error.localizedDescription }
+    }
+    func restoreDocument(bookID: String, documentID: String) async {
+        guard !isBusy, let project = books.first(where: { $0.id == bookID }) else { return }
+        isBusy = true; defer { isBusy = false }
+        do { let updated = try await repository.setDocumentTrashed(project: project, documentID: documentID, trashed: false); publish(updated); activity = "Markdown 与原节点已恢复。" }
+        catch { errorMessage = error.localizedDescription }
+    }
+    func removeCanvasNode(_ id: String) async {
+        guard var project = book, !isBusy else { return }; isBusy = true; defer { isBusy = false }
+        project.nodes.removeAll { $0.id == id }; project.edges.removeAll { $0.fromID == id || $0.toID == id }
+        do { try await repository.save(project); publish(project); activity = "已移除画布节点，文档仍在知识库中。" }
+        catch { errorMessage = error.localizedDescription }
+    }
+    func addDocumentToGraph(_ document: DocumentRecord) async {
+        guard var project = book, !isBusy, document.trashedAt == nil else { return }
+        isBusy = true; defer { isBusy = false }
+        let index = project.nodes.count
+        project.nodes.append(CanvasNode(targetID: document.id, x: Double(index % 3) * 270 + 60, y: Double(index / 3) * 150 + 60))
+        do { try await repository.save(project); publish(project); activity = "文档节点已加入导图。" }
+        catch { errorMessage = error.localizedDescription }
+    }
+    func removeConnection(_ id: String, relation: Bool = false) async {
+        guard var project = book, !isBusy else { return }; isBusy = true; defer { isBusy = false }
+        if relation { project.relations.removeAll { $0.id == id } } else { project.edges.removeAll { $0.id == id } }
+        do { try await repository.save(project); publish(project); activity = "连线已移除，节点内容保留。" }
+        catch { errorMessage = error.localizedDescription }
+    }
+    func removeView(_ id: String) async {
+        guard var project = book, !isBusy else { return }; isBusy = true; defer { isBusy = false }
+        project.views.removeAll { $0.id == id }
+        do { try await repository.save(project); publish(project); if route == id { route = "reader" }; activity = "组件入口已移除，原有知识数据保留。" }
+        catch { errorMessage = error.localizedDescription }
+    }
+}
+
+struct LibraryTrashView: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack { Text("回收站").font(.system(size: 26, design: .serif)); Spacer(); Button("完成") { dismiss() } }
+            Text("书籍和 Markdown 保留在本机，可恢复。此版本不提供永久清空。").font(.caption).foregroundStyle(.secondary)
+            List {
+                Section("书籍") {
+                    ForEach(store.archivedBooks) { book in HStack { Label(book.title, systemImage: "book.closed"); Spacer(); Button("恢复") { Task { await store.restoreBook(book.id) } }.disabled(store.isBusy) } }
+                    if store.archivedBooks.isEmpty { Text("没有回收的书籍").foregroundStyle(.secondary) }
+                }
+                ForEach(store.books.filter { !$0.trashedDocuments.isEmpty }) { book in
+                    Section("\(book.title) · Markdown") {
+                        ForEach(book.trashedDocuments) { document in
+                            HStack { Label(document.title, systemImage: "doc.text"); Spacer(); Button("恢复") { Task { await store.restoreDocument(bookID: book.id, documentID: document.id) } }.disabled(store.isBusy) }
+                        }
+                    }
+                }
+            }.listStyle(.inset)
+        }.padding(25).task { await store.reloadTrash() }
+    }
+}

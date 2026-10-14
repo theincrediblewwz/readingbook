@@ -4,17 +4,19 @@ import ReadingCore
 
 struct WorkspaceView: View {
     @EnvironmentObject var store: AppStore
+    @State private var compactInspector = false
     var body: some View {
         NavigationSplitView {
             sidebar.navigationSplitViewColumnWidth(min: 210, ideal: 238, max: 290)
         } detail: {
+            GeometryReader { geometry in
             VStack(spacing: 0) {
                 header
                 Divider().opacity(0.45)
                 if store.book != nil {
                     HSplitView {
                         content.frame(maxWidth: .infinity, maxHeight: .infinity)
-                        if let id = store.selectedObjectID, store.book?.documents.contains(where: { $0.id == id }) != true {
+                        if geometry.size.width >= 1060, let id = store.selectedObjectID, store.book?.activeDocuments.contains(where: { $0.id == id }) != true {
                             ObjectInspector(id: id).frame(minWidth: 270, idealWidth: 310, maxWidth: 380)
                         }
                     }
@@ -22,10 +24,17 @@ struct WorkspaceView: View {
                 footer
             }
             .background(Color(nsColor: .windowBackgroundColor))
+            }
         }
+        .navigationSplitViewStyle(.balanced)
         .tint(Palette.accent)
         .onOpenURL { url in Task { await store.openInternalURL(url) } }
-        .sheet(isPresented: $store.showingSettings) { ProviderSettingsView().environmentObject(store).frame(width: 590, height: 540) }
+        .sheet(isPresented: $store.showingSettings) { ProviderSettingsView().environmentObject(store).frame(width: 660, height: 760) }
+        .sheet(isPresented: $store.showingOCR) { PDFOCRPanel().environmentObject(store).frame(width: 590, height: 510) }
+        .sheet(isPresented: $store.showingTrash) { LibraryTrashView().environmentObject(store).frame(width: 620, height: 550) }
+        .confirmationDialog("删除保存的内容？", isPresented: Binding(get: { store.deletionRequest != nil }, set: { if !$0 { store.deletionRequest = nil } }), presenting: store.deletionRequest) { request in
+            Button(request.kind == .book || request.kind == .document ? "移入回收站" : "删除对象", role: .destructive) { store.confirmDeletion(request) }
+        } message: { request in Text("“\(request.title)”\n" + request.detail) }
         .sheet(isPresented: $store.showingPlugins) { PluginLibraryView().environmentObject(store).frame(width: 660, height: 580) }
         .alert("需要处理", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("知道了", role: .cancel) { store.errorMessage = nil }
@@ -54,10 +63,12 @@ struct WorkspaceView: View {
                                 VStack(alignment: .leading, spacing: 4) { Text(book.title).lineLimit(1).font(.subheadline.weight(.medium)); ProgressView(value: book.progress).tint(Palette.accent).frame(width: 95) }
                                 Spacer(minLength: 0)
                             }.padding(9).background(store.bookID == book.id ? Palette.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 10))
-                        }.buttonStyle(.plain).disabled(store.isBusy)
+                        }.buttonStyle(.plain).disabled(store.isBusy).contextMenu {
+                            Button("移入回收站", role: .destructive) { store.requestDeletion(.book, id: book.id, title: book.title) }
+                        }
                     }
                     Button { store.chooseBook() } label: { Label("导入一本书", systemImage: "plus").font(.subheadline).padding(10) }.buttonStyle(.plain).foregroundStyle(.secondary).disabled(store.isBusy)
-                    if let book = store.book {
+                    if store.book != nil {
                         Divider().padding(.vertical, 16)
                         Text("阅读工作台").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary).padding(.horizontal, 12)
                         routeButton("原文阅读", icon: "book.pages", route: "reader")
@@ -68,6 +79,7 @@ struct WorkspaceView: View {
                             Text("AI 为这本书选择").font(.caption2).foregroundStyle(.tertiary).padding(.horizontal, 12).padding(.top, 17)
                             ForEach(store.enabledViews.filter { ![ComponentKind.workflow, .query, .editor].contains($0.kind) }) { view in
                                 routeButton(view.title, icon: view.kind.icon, route: view.id)
+                                    .contextMenu { Button("移除此组件入口") { Task { await store.removeView(view.id) } } }
                             }
                         }
                         Menu {
@@ -77,11 +89,12 @@ struct WorkspaceView: View {
                 }.padding(.horizontal, 12)
             }
             Divider().opacity(0.5)
+            AIServiceBar().environmentObject(store)
             HStack {
                 Button { store.showingSettings = true } label: { Image(systemName: "slider.horizontal.3") }.help("自己的 AI")
                 Button { store.showingPlugins = true } label: { Image(systemName: "puzzlepiece.extension") }.help("插件与读书法")
                 Spacer()
-                Menu { Button("导入书项目…") { store.importProject() }; Button("导出完整书项目…") { store.exportProject() } } label: { Image(systemName: "square.and.arrow.up") }.menuStyle(.borderlessButton).frame(width: 25)
+                Menu { Button("导入书项目…") { store.importProject() }; Button("导出完整书项目…") { store.exportProject() }; Button("回收站") { store.showingTrash = true } } label: { Image(systemName: "square.and.arrow.up") }.menuStyle(.borderlessButton).frame(width: 25)
             }.buttonStyle(.plain).foregroundStyle(.secondary).padding(20)
         }.background(.ultraThinMaterial)
     }
@@ -94,10 +107,15 @@ struct WorkspaceView: View {
     private var header: some View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(store.book?.title ?? "你的下一次发现").font(.system(size: 18, weight: .semibold, design: .serif))
+                Text(store.book?.title ?? "你的下一次发现").font(.system(size: 18, weight: .semibold, design: .serif)).lineLimit(1).truncationMode(.middle)
                 Text(routeTitle).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            if store.selectedObjectID != nil {
+                Button { compactInspector.toggle() } label: { Image(systemName: "info.circle") }.help("查看所选对象").popover(isPresented: $compactInspector) {
+                    if let id = store.selectedObjectID { ObjectInspector(id: id).environmentObject(store).frame(width: 340, height: 540) }
+                }
+            }
             if let book = store.book {
                 Text("\(book.completedCount) / \(book.units.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 if store.isBusy { Button { store.pause() } label: { Label(store.isSavingDocument ? "保存中" : "暂停", systemImage: store.isSavingDocument ? "doc" : "pause.fill") }.disabled(store.isSavingDocument) }
@@ -186,8 +204,9 @@ struct ObjectInspector: View {
                     Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.caption).foregroundStyle(Palette.copper)
                     Text(entity.name).font(.system(size: 26, design: .serif)); MarkdownText(markdown: entity.summary)
                     Button("编辑卡片") { editingEntity = entity }.font(.caption).disabled(store.isBusy)
+                    Button("删除卡片", role: .destructive) { store.requestDeletion(.entity, id: entity.id, title: entity.name) }.font(.caption).disabled(store.isBusy)
                     ForEach(entity.properties.keys.sorted(), id: \.self) { key in
-                        VStack(alignment: .leading, spacing: 5) { Text(fieldLabel(key, type: entity.typeID)).font(.caption).foregroundStyle(.secondary); Text(entity.properties[key] ?? "").textSelection(.enabled) }
+                        VStack(alignment: .leading, spacing: 5) { Text(fieldLabel(key, type: entity.typeID)).font(.caption).foregroundStyle(.secondary); MarkdownText(markdown: entity.properties[key] ?? "") }
                     }
                     if let note = entity.locationNote { Label(note, systemImage: "location").font(.caption).foregroundStyle(.secondary) }
                     ForEach((store.book?.events ?? []).filter { $0.participantIDs.contains(id) || $0.placeIDs.contains(id) }) { event in Button(event.name) { store.focus(event.id) }.buttonStyle(.plain).foregroundStyle(Palette.accent) }
@@ -198,16 +217,24 @@ struct ObjectInspector: View {
                     MarkdownText(markdown: event.summary)
                     linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs)
                     EvidenceList(evidence: event.evidence)
+                    Button("删除事件", role: .destructive) { store.requestDeletion(.event, id: event.id, title: event.name) }.font(.caption).disabled(store.isBusy)
+                } else if let document = store.book?.activeDocuments.first(where: { $0.id == id }) {
+                    Text("Markdown 文档").font(.caption).foregroundStyle(Palette.copper)
+                    Text(document.title).font(.title2)
+                    Button("打开文档") { store.openObject(document.id) }
+                    Button("添加一个画布节点") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
+                    Button("移入回收站", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy)
+                    EvidenceList(evidence: document.evidence)
                 } else if let unit = store.book?.units.first(where: { $0.id == id }) {
                     Text(unit.chapter).font(.title3); Text(unit.locator).font(.caption).foregroundStyle(.secondary)
                     Text(String(unit.text.prefix(500))).font(.caption).lineSpacing(5).textSelection(.enabled)
                 }
                 ForEach((store.book?.relations ?? []).filter { $0.fromID == id || $0.toID == id }) { relation in
-                    Button { store.focus(relation.fromID == id ? relation.toID : relation.fromID) } label: {
+                    HStack { Button { store.focus(relation.fromID == id ? relation.toID : relation.fromID) } label: {
                         Label("\(relation.label) · \(store.objectTitle(relation.fromID == id ? relation.toID : relation.fromID))", systemImage: "arrow.up.right").font(.caption)
-                    }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                    }.buttonStyle(.plain).foregroundStyle(Palette.accent); Spacer(); Button { Task { await store.removeConnection(relation.id, relation: true) } } label: { Image(systemName: "xmark.circle") }.buttonStyle(.plain).help("移除这条关系").disabled(store.isBusy) }
                 }
-                ForEach((store.book?.documents ?? []).filter { $0.linkedIDs.contains(id) }) { document in
+                ForEach((store.book?.activeDocuments ?? []).filter { $0.linkedIDs.contains(id) }) { document in
                     Button { Task { await store.openDocument(document) } } label: { Label(document.title, systemImage: "doc.text").font(.caption) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
                 }
             }.padding(22)

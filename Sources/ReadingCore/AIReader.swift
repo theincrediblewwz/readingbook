@@ -5,7 +5,7 @@ import Foundation
 public actor AIReader {
     public private(set) var requestCount: Int = 0
     private var operationActive = false
-    private let operationTokenLimit = 96_000
+    private var operationTokenLimit = 196_000
     private let roundLimit = 12
 
     public init() {}
@@ -18,7 +18,7 @@ public actor AIReader {
     }
 
     public func plan(project: BookProject, settings: ProviderSettings, apiKey: String) async throws -> BookProject {
-        try beginOperation()
+        try beginOperation(settings: settings)
         defer { operationActive = false }
         guard !project.units.isEmpty else { throw ReadingError.invalid("当前书没有可预读的原文单元。") }
         var staged = project
@@ -66,7 +66,7 @@ public actor AIReader {
     }
 
     public func readNext(project: BookProject, settings: ProviderSettings, apiKey: String) async throws -> BookProject {
-        try beginOperation()
+        try beginOperation(settings: settings)
         defer { operationActive = false }
         var staged = project
         PluginEngine.seed(&staged)
@@ -129,7 +129,7 @@ public actor AIReader {
     /// result before asking for the next node, so every intermediate merge is
     /// resumable without resending already-completed groups.
     public func synthesizeNext(project: BookProject, settings: ProviderSettings, apiKey: String) async throws -> BookProject {
-        try beginOperation()
+        try beginOperation(settings: settings)
         defer { operationActive = false }
         try Task.checkCancellation()
         let step = try nextSynthesisStep(project)
@@ -193,7 +193,7 @@ public actor AIReader {
 
     public func answer(question: String, project: BookProject, settings: ProviderSettings, apiKey: String,
                        documents: [String: String] = [:]) async throws -> ChatMessage {
-        try beginOperation()
+        try beginOperation(settings: settings)
         defer { operationActive = false }
         let question = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, question.count <= 4000 else { throw ReadingError.invalid("问题不能为空，且最多为 4000 字。") }
@@ -201,10 +201,10 @@ public actor AIReader {
         let relevantInsights = project.insights.filter { score($0.markdown, terms: terms) > 0 }.prefix(6)
         let relevantEntities = project.entities.filter { score($0.name + " " + $0.summary + " " + $0.aliases.joined(separator: " "), terms: terms) > 0 }.prefix(12)
         let relevantEvents = project.events.filter { score($0.name + " " + $0.summary, terms: terms) > 0 }.prefix(8)
-        let relevantDocuments = project.documents.filter { score($0.title, terms: terms) > 0 }.prefix(12)
+        let relevantDocuments = project.activeDocuments.filter { score($0.title, terms: terms) > 0 }.prefix(12)
         var documentBudget = 16_000
         var documentExcerpts: [DocumentExcerpt] = []
-        let rankedDocuments = project.documents.compactMap { record -> (DocumentRecord, String, Int)? in
+        let rankedDocuments = project.activeDocuments.compactMap { record -> (DocumentRecord, String, Int)? in
             guard let body = documents[record.id], !body.isEmpty else { return nil }
             let relevance = score(record.title + " " + body, terms: terms)
             return relevance > 0 ? (record, body, relevance) : nil
@@ -245,7 +245,7 @@ public actor AIReader {
             let documentScope = documents.isEmpty ? "当前查询未读取用户 Markdown 文档正文。" : "已检查本次提供的 Markdown 文档，但没有匹配片段。"
             return ChatMessage(role: "assistant", content: "当前有界检索没有找到足够依据，暂不能据此回答。可尝试书中的原词、人物/概念名称，或先运行阅读分析。" + documentScope)
         }
-        let metadata = project.documents.prefix(30).map { ["id": $0.id, "title": $0.title, "origin": $0.origin] }
+        let metadata = project.activeDocuments.prefix(30).map { ["id": $0.id, "title": $0.title, "origin": $0.origin] }
         let context: [String: Any] = ["bookTitle": project.title, "processedUnits": project.completedCount,
                                     "totalUnits": project.units.count, "sourceExcerpts": try jsonValue(excerpts),
                                     "insights": relevantInsights.map { String($0.markdown.prefix(1500)) },
@@ -362,8 +362,9 @@ public actor AIReader {
         return try await ProviderClient.perform(prepared)
     }
 
-    private func beginOperation() throws {
+    private func beginOperation(settings: ProviderSettings) throws {
         guard !operationActive else { throw ReadingError.invalid("已有模型任务正在运行，请先等待或暂停。") }
+        operationTokenLimit = min(4_194_304, max(1024, settings.contextWindowTokens ?? max(196_000, settings.maxOutputTokens + 64_000)))
         operationActive = true
     }
 
@@ -588,7 +589,7 @@ public actor AIReader {
                 if seen.insert(id).inserted { result.append(Evidence(unitID: id, quote: String(source.text.prefix(240)))) }
             } else {
                 guard documents.contains(where: { $0.id == id }),
-                      let record = project.documents.first(where: { $0.id == id }) else {
+                      let record = project.activeDocuments.first(where: { $0.id == id }) else {
                     throw ReadingError.invalid("回答引用了未提供或不存在的文档正文，未保存结果。")
                 }
                 validCitationCount += 1

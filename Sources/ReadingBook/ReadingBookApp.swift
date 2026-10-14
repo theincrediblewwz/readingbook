@@ -7,7 +7,7 @@ struct ReadingBookApp: App {
     var body: some Scene {
         WindowGroup {
             WorkspaceView().environmentObject(store)
-                .frame(minWidth: 1060, minHeight: 720)
+                .frame(minWidth: 800, minHeight: 600)
                 .task { await store.load() }
         }
         .windowStyle(.hiddenTitleBar)
@@ -24,7 +24,7 @@ struct ReadingBookApp: App {
                 Button("暂停任务") { store.pause() }.keyboardShortcut(".").disabled(!store.isBusy)
             }
         }
-        Settings { ProviderSettingsView().environmentObject(store).frame(width: 570, height: 510) }
+        Settings { ProviderSettingsView().environmentObject(store).frame(width: 660, height: 760) }
     }
 }
 

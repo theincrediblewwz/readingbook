@@ -1,0 +1,55 @@
+:root {
+  color-scheme: light dark;
+  --ink: #303936; --muted: #77837b; --line: #dfe5df; --soft: #f3f6f1;
+  --accent: #3c6f59; --code: #f0f3ee; --danger: #a44634; --danger-bg: #fff4ef;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif;
+  font-size: 16px; line-height: 1.85; background: transparent;
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --ink: #dce4dc; --muted: #9aa99e; --line: #38453d; --soft: #25322a; --accent: #9bc8aa; --code: #233027; --danger: #eeb6a3; --danger-bg: #392c27; }
+}
+:root[data-theme="dark"] { --ink: #dce4dc; --muted: #9aa99e; --line: #38453d; --soft: #25322a; --accent: #9bc8aa; --code: #233027; --danger: #eeb6a3; --danger-bg: #392c27; }
+* { box-sizing: border-box; }
+html, body { padding: 0; margin: 0; width: 100%; overflow-x: hidden; overflow-y: hidden; background: transparent; color: var(--ink); }
+.markdown-body { width: 100%; padding: 2px 1px 8px; overflow-wrap: anywhere; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+p { margin: 0 0 1.1em; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.42; font-weight: 650; letter-spacing: -.025em; margin: 1.8em 0 .65em; scroll-margin-top: 20px; }
+h1 { font-size: 1.9em; margin-bottom: .8em; }
+h2 { font-size: 1.44em; padding-bottom: .35em; border-bottom: 1px solid var(--line); }
+h3 { font-size: 1.16em; }
+h4, h5, h6 { font-size: 1em; }
+strong { font-weight: 650; }
+a { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 2px; }
+ul, ol { padding-left: 1.6em; margin: .35em 0 1.15em; }
+li { padding-left: .15em; margin: .2em 0; }
+li > p { margin-bottom: .55em; }
+blockquote { margin: 1.35em 0; border-left: 3px solid var(--accent); padding: .65em 1.1em; color: var(--muted); background: var(--soft); border-radius: 0 8px 8px 0; }
+blockquote > :last-child { margin-bottom: 0; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
+code, pre { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: .87em; font-variant-ligatures: none; }
+:not(pre) > code { padding: .17em .35em; border-radius: 4px; background: var(--code); }
+pre { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: 17px 19px; margin: 1.25em 0; border: 1px solid var(--line); border-radius: 10px; background: var(--code); line-height: 1.68; tab-size: 4; overflow-wrap: normal; }
+pre code { font-size: 1em; padding: 0; background: none; white-space: pre; }
+.table-scroll { max-width: 100%; overflow-x: auto; margin: 1.3em 0; border: 1px solid var(--line); border-radius: 9px; }
+table { border-collapse: collapse; width: 100%; margin: 0; font-size: .92em; line-height: 1.65; }
+th, td { padding: 11px 15px; border-bottom: 1px solid var(--line); text-align: left; min-width: 90px; }
+th { background: var(--soft); font-weight: 600; white-space: nowrap; }
+tbody tr:last-child td { border-bottom: 0; }
+tr:nth-child(even) td { background: color-mix(in srgb, var(--soft) 45%, transparent); }
+.math-display { width: 100%; overflow-x: auto; overflow-y: hidden; margin: 1.1em 0 1.35em; padding: 10px 2px 12px; overscroll-behavior-x: contain; }
+.math-display .katex-display { display: inline-block; min-width: 100%; margin: 0; }
+.math-display .katex-display > .katex { white-space: nowrap; }
+.katex { font-size: 1.08em; text-rendering: auto; }
+.math-inline { max-width: 100%; }
+.math-error { display: inline-block; max-width: 100%; color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 28%, transparent); background: var(--danger-bg); border-radius: 6px; padding: 7px 10px; }
+.math-error strong { display: block; font: 500 12px/1.6 -apple-system, sans-serif; margin-bottom: 4px; }
+.math-error code { white-space: pre-wrap; overflow-wrap: anywhere; background: none; padding: 0; }
+.image-placeholder, .renderer-note { display: block; padding: 16px 18px; margin: 1.15em 0; border: 1px dashed var(--line); border-radius: 9px; font-size: 13px; line-height: 1.8; color: var(--muted); background: var(--soft); }
+img { display: block; max-width: 100%; height: auto; border-radius: 7px; margin: 1.2em auto; }
+::selection { background: color-mix(in srgb, var(--accent) 23%, transparent); }
+@media (max-width: 480px) { :root { font-size: 15px; } h1 { font-size: 1.6em; } th, td { padding: 9px 11px; } pre { padding: 13px; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
