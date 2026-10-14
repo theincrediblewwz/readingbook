@@ -227,6 +227,7 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var paragraphReceipts: [ParagraphReceipt]? = nil
     public var readingStepResults: [ReadingStepResult]? = nil
     public var receiptBatch: ReadingReceiptBatch? = nil
+    public var readerAnnotations: [ReaderAnnotation]? = nil
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units
     }

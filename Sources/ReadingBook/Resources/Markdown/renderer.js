@@ -6,6 +6,7 @@
   const environments = '(?:equation|align|alignat|gather|multline|aligned|alignedat|gathered|split|cases|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix|CD)\\*?';
   const beginEnvironment = new RegExp('^\\\\begin\\{(' + environments + ')\\}');
   let currentRevision = 0;
+  let selectionEnabled = false;
 
   function escapedAt(source, position) {
     let backslashes = 0;
@@ -144,6 +145,8 @@
   function render(markdown, options) {
     const settings = options || {};
     currentRevision = Number(settings.revision) || 0;
+    selectionEnabled = !!settings.selectionEnabled;
+    global.getSelection?.()?.removeAllRanges();
     document.documentElement.dataset.theme = settings.theme === 'dark' ? 'dark' : 'light';
     const root = document.getElementById('content');
     root.innerHTML = renderHTML(markdown, settings);
@@ -161,6 +164,35 @@
   }
   global.ReadingBookMarkdown = Object.freeze({ render, renderHTML });
   if (global.document) {
+    let selectionTimer = null;
+    let lastSelectionKey = '';
+    function reportSelection() {
+      if (!selectionEnabled) return;
+      const root = document.getElementById('content'), selection = global.getSelection();
+      let text = '', containsMath = false;
+      if (root && selection && selection.rangeCount === 1 && !selection.isCollapsed &&
+          root.contains(selection.anchorNode) && root.contains(selection.focusNode)) {
+        const range = selection.getRangeAt(0);
+        containsMath = Array.from(root.querySelectorAll('.math-inline, .math-display, .math-error')).some(node => range.intersectsNode(node));
+        // KaTeX has an accessible MathML copy and a visual HTML copy. Preserve the
+        // selected semantic text once; exact TeX belongs to the source selector.
+        const fragment = range.cloneContents();
+        fragment.querySelectorAll('.katex-mathml').forEach(node => node.remove());
+        const container = document.createElement('div'); container.appendChild(fragment);
+        container.querySelectorAll('br').forEach(node => node.replaceWith(document.createTextNode('\n')));
+        container.querySelectorAll('p,li,pre,tr,h1,h2,h3,h4,h5,h6,blockquote,.math-display').forEach(node => node.appendChild(document.createTextNode('\n')));
+        text = container.textContent || '';
+        if (text.length > 32_768) text = ''; // Never silently truncate a saved excerpt.
+      }
+      const key = currentRevision + ':' + containsMath + ':' + text;
+      if (key === lastSelectionKey) return;
+      lastSelectionKey = key;
+      global.webkit?.messageHandlers?.readingbookSelection?.postMessage({ text, containsMath, revision: currentRevision });
+    }
+    document.addEventListener('selectionchange', () => {
+      clearTimeout(selectionTimer);
+      selectionTimer = setTimeout(reportSelection, 80);
+    });
     new ResizeObserver(reportHeight).observe(document.getElementById('content'));
     global.addEventListener('resize', reportHeight);
     document.addEventListener('click', event => {
@@ -172,7 +204,7 @@
       if (href.startsWith('#')) {
         try { document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ block: 'start' }); } catch (_) { }
       } else if (/^(readingbook:|https?:|mailto:)/i.test(href)) {
-        global.webkit?.messageHandlers?.readingbookLink?.postMessage({ href });
+        global.webkit?.messageHandlers?.readingbookLink?.postMessage({ href, revision: currentRevision });
       }
     });
   }

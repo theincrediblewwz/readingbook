@@ -1,18 +1,19 @@
 :root {
   color-scheme: light dark;
-  --ink: #303936; --muted: #77837b; --line: #dfe5df; --soft: #f3f6f1;
-  --accent: #3c6f59; --code: #f0f3ee; --danger: #a44634; --danger-bg: #fff4ef;
+  --ink: #273831; --muted: #77837b; --line: #E0E7E1; --soft: #F4F6F2;
+  --accent: #315D4D; --code: #f0f3ee; --danger: #a44634; --danger-bg: #fff4ef;
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif;
   font-size: 16px; line-height: 1.85; background: transparent;
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --ink: #dce4dc; --muted: #9aa99e; --line: #38453d; --soft: #25322a; --accent: #9bc8aa; --code: #233027; --danger: #eeb6a3; --danger-bg: #392c27; }
+  :root:not([data-theme="light"]) { --ink: #E1E9E2; --muted: #9aa99e; --line: #3A4941; --soft: #232D28; --accent: #A1CAB4; --code: #233027; --danger: #eeb6a3; --danger-bg: #392c27; }
 }
-:root[data-theme="dark"] { --ink: #dce4dc; --muted: #9aa99e; --line: #38453d; --soft: #25322a; --accent: #9bc8aa; --code: #233027; --danger: #eeb6a3; --danger-bg: #392c27; }
+:root[data-theme="dark"] { --ink: #E1E9E2; --muted: #9aa99e; --line: #3A4941; --soft: #232D28; --accent: #A1CAB4; --code: #233027; --danger: #eeb6a3; --danger-bg: #392c27; }
 * { box-sizing: border-box; }
 html, body { padding: 0; margin: 0; width: 100%; overflow-x: hidden; overflow-y: hidden; background: transparent; color: var(--ink); }
 .markdown-body { width: 100%; padding: 2px 1px 8px; overflow-wrap: anywhere; }
+.markdown-body { -webkit-user-select: text; user-select: text; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
 p { margin: 0 0 1.1em; }
@@ -34,6 +35,7 @@ code, pre { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size
 :not(pre) > code { padding: .17em .35em; border-radius: 4px; background: var(--code); }
 pre { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: 17px 19px; margin: 1.25em 0; border: 1px solid var(--line); border-radius: 10px; background: var(--code); line-height: 1.68; tab-size: 4; overflow-wrap: normal; }
 pre code { font-size: 1em; padding: 0; background: none; white-space: pre; }
+pre code.language-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .table-scroll { max-width: 100%; overflow-x: auto; margin: 1.3em 0; border: 1px solid var(--line); border-radius: 9px; }
 table { border-collapse: collapse; width: 100%; margin: 0; font-size: .92em; line-height: 1.65; }
 th, td { padding: 11px 15px; border-bottom: 1px solid var(--line); text-align: left; min-width: 90px; }

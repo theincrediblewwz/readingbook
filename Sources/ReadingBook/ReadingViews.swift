@@ -4,8 +4,9 @@ import ReadingCore
 
 struct ReaderWorkspaceView: View {
     @EnvironmentObject var store: AppStore
-    @State private var showPDF = true
-    @AppStorage("reader-outline-v3") private var showOutline = false
+    @Binding var showPDF: Bool
+    @Binding var showOutline: Bool
+    @EnvironmentObject var pdfController: PDFReaderController
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     var body: some View {
         GeometryReader { geometry in
@@ -16,58 +17,38 @@ struct ReaderWorkspaceView: View {
                     Divider()
                 }
                 VStack(spacing: 0) {
-                    readerBar(inlineOutline: inlineOutline)
-                    Divider().opacity(0.45)
                     if let unit = store.selectedUnit {
                         if isPDF, showPDF, let url = store.sourceFileURL {
                             let requestToken = store.pdfNavigationToken
-                            PDFReaderView(url: url, page: unit.page, navigationToken: requestToken) { page in
+                            let sourceBookID = store.bookID
+                            PDFReaderView(controller: pdfController, url: url, sourceHash: store.book?.sourceHash ?? "", page: unit.page, navigationToken: requestToken, password: store.pdfPassword(for: store.bookID), annotations: store.book?.readerAnnotations ?? [], canEditAnnotations: !store.isBusy, onPageChange: { page in
                                 guard store.pdfNavigationToken == requestToken else { return }
                                 if store.selectedUnit?.page != page {
                                     store.selectedUnitID = store.book?.units.first { $0.page == page }?.id
                                 }
-                            }
+                            }, onUnlock: { password in
+                                guard store.bookID == sourceBookID, store.pdfNavigationToken == requestToken, let sourceBookID else { return }
+                                store.rememberPDFPassword(password, bookID: sourceBookID)
+                            }, onSaveAnnotations: { annotations in
+                                guard store.bookID == sourceBookID else { return false }
+                                return await store.saveReaderAnnotations(annotations)
+                            }, onTrashAnnotation: { id, trashed in
+                                guard store.bookID == sourceBookID else { return false }
+                                return await store.setReaderAnnotationTrashed(id, trashed: trashed)
+                            })
                         } else { sourceText(unit) }
                     } else {
                         EmptyState(title: "选择一个章节", detail: "从左上角目录选择原文内容。", icon: "book.pages")
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity).layoutPriority(1)
             }
-        }
-    }
-    private func readerBar(inlineOutline: Bool) -> some View {
-        HStack(spacing: 12) {
-            Button { showOutline.toggle() } label: { Image(systemName: "list.bullet") }
-                .help(showOutline ? "收起原文目录与搜索" : "展开原文目录与搜索")
-                .accessibilityLabel("原文目录与搜索")
-                .popover(isPresented: Binding(get: { showOutline && !inlineOutline }, set: { if !$0 { showOutline = false } })) {
-                    outline.frame(width: 300, height: 480)
+            .overlay(alignment: .topLeading) {
+                if showOutline && !inlineOutline {
+                    outline.frame(width: min(310, geometry.size.width - 24), height: min(500, geometry.size.height - 24))
+                        .clipShape(RoundedRectangle(cornerRadius: 14)).shadow(color: .black.opacity(0.14), radius: 22, y: 8).padding(12)
                 }
-            if !isPDF || !showPDF {
-                Button { move(-1) } label: { Image(systemName: "chevron.left") }.help("上一内容单元").disabled(store.selectedUnit?.order == 0)
-                Button { move(1) } label: { Image(systemName: "chevron.right") }.help("下一内容单元").disabled(store.selectedUnit?.order == (store.book?.units.count ?? 0) - 1)
             }
-            Text(store.selectedUnit?.locator ?? "原文").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-            Spacer(minLength: 0)
-            if isPDF {
-                Menu {
-                    Button("原始 PDF") { showPDF = true }
-                    Button("文本 / OCR 识别稿") { showPDF = false }
-                    Divider()
-                    Button("用视觉模型识别页面…") { store.showingOCR = true }.disabled(store.isBusy)
-                    if store.selectedUnit?.warning != nil { Text("此单元仍需对照原页核对") }
-                } label: {
-                    HStack(spacing: 5) {
-                        if store.selectedUnit?.warning != nil { Image(systemName: "exclamationmark.circle").foregroundStyle(Palette.copper) }
-                        Text(showPDF ? "原始 PDF" : "识别稿").font(.caption)
-                    }
-                }.fixedSize().help("切换原始页面、识别稿或执行 OCR")
-            }
-            if let unit = store.selectedUnit {
-                Button { Task { await store.toggleBookmark(unit.id) } } label: { Image(systemName: store.book?.bookmarks.contains(unit.id) == true ? "bookmark.fill" : "bookmark") }.help("切换书签").disabled(store.isBusy)
-                Button { store.newNote(for: unit) } label: { Image(systemName: "square.and.pencil") }.help("对这一段记一笔").disabled(store.isRecognizingPDF)
-            }
-        }.buttonStyle(.borderless).controlSize(.small).padding(.horizontal, 14).frame(height: 36).background(.bar)
+        }
     }
     private var outline: some View {
         VStack(spacing: 0) {

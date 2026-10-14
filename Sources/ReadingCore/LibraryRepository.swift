@@ -73,6 +73,7 @@ public actor LibraryRepository {
             throw ReadingError.invalid("项目中的 Markdown 引用比磁盘版本少，已阻止覆盖。请重新载入书籍。")
         }
         var updated = project
+        updated.readerAnnotations = existing.readerAnnotations
         // Only the explicit trash/restore API changes this canonical status. A stale reader
         // or editor window cannot silently revive a document through a routine save.
         for saved in existing.documents {
@@ -103,6 +104,7 @@ public actor LibraryRepository {
         guard data.count <= Self.documentLimit else { throw ReadingError.invalid("单篇 Markdown 超过 16 MiB。") }
         try validateDocumentPath(document)
         var updated = project
+        updated.readerAnnotations = existing.readerAnnotations
         // Retain references written by another window before this editor was opened.
         for saved in existing.documents where !updated.documents.contains(where: { $0.id == saved.id }) { updated.documents.append(saved) }
         for saved in existing.documents {
@@ -149,6 +151,49 @@ public actor LibraryRepository {
         updated.audit.append(ToolAudit(name: trashed ? "document_trash" : "document_restore", summary: "\(trashed ? "移入回收站" : "恢复")文档：\(updated.documents[index].title)；Markdown 与导图关联保留。"))
         try validate(updated)
         try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false)
+        try atomicWrite(encode(updated), to: try child(directory, "project.json"))
+        return updated
+    }
+
+    /// Annotation edits use the canonical disk project so a reader window cannot overwrite newer knowledge or notes.
+    public func saveAnnotations(project: BookProject, annotations: [ReaderAnnotation]) throws -> BookProject {
+        let directory = try bookDirectory(project.id, mustExist: true)
+        try recoverDocument(in: directory)
+        var updated = try readProject(in: directory)
+        guard updated.sourceHash == project.sourceHash, updated.originalName == project.originalName,
+              !annotations.isEmpty, annotations.count <= 512, Set(annotations.map(\.id)).count == annotations.count else { throw ReadingError.invalid("批注保存来源已变化或批次无效。") }
+        var records = updated.readerAnnotations ?? []
+        for var annotation in annotations {
+            try ReaderAnnotationValidator.validate(annotation, in: updated)
+            if let index = records.firstIndex(where: { $0.id == annotation.id }) {
+                let old = records[index]
+                guard old.trashedAt == nil, old.sourceHash == annotation.sourceHash, old.page == annotation.page,
+                      old.text == annotation.text, old.rangeLocation == annotation.rangeLocation, old.rangeLength == annotation.rangeLength,
+                      old.quads == annotation.quads, old.effectiveKind == annotation.effectiveKind else { throw ReadingError.invalid("批注来源位置不能改写，已删除批注须先恢复。") }
+                annotation.createdAt = old.createdAt; annotation.trashedAt = nil
+                annotation.updatedAt = Date(); records[index] = annotation
+            } else {
+                guard annotation.trashedAt == nil else { throw ReadingError.invalid("新增批注不能直接置入回收站。") }
+                annotation.updatedAt = Date(); records.append(annotation)
+            }
+        }
+        updated.readerAnnotations = records
+        try validate(updated)
+        try atomicWrite(encode(updated), to: try child(directory, "project.json"))
+        return updated
+    }
+
+    public func setAnnotationTrashed(project: BookProject, annotationID: String, trashed: Bool) throws -> BookProject {
+        let directory = try bookDirectory(project.id, mustExist: true)
+        try recoverDocument(in: directory)
+        var updated = try readProject(in: directory)
+        guard updated.sourceHash == project.sourceHash, updated.originalName == project.originalName,
+              let index = updated.readerAnnotations?.firstIndex(where: { $0.id == annotationID }) else { throw ReadingError.invalid("批注不存在或来源已变化。") }
+        if (updated.readerAnnotations?[index].trashedAt != nil) != trashed {
+            updated.readerAnnotations?[index].trashedAt = trashed ? Date() : nil
+            updated.readerAnnotations?[index].updatedAt = Date()
+        }
+        try validate(updated)
         try atomicWrite(encode(updated), to: try child(directory, "project.json"))
         return updated
     }
@@ -320,6 +365,7 @@ public actor LibraryRepository {
     // MARK: Package validation
 
     private func validate(_ project: BookProject) throws {
+        try ReaderAnnotationValidator.validateAll(in: project)
         guard project.schemaVersion == 1 else { throw ReadingError.invalid("不支持此项目 schemaVersion：\(project.schemaVersion)。") }
         guard UUID(uuidString: project.id) != nil, project.id.count == 36,
               Self.isSafeFilename(project.originalName), !project.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

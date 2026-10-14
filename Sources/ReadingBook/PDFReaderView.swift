@@ -1,60 +1,75 @@
 import SwiftUI
 import AppKit
 import PDFKit
+import ReadingCore
 
 /// Displays the original PDF with PDFKit. Page numbers and callbacks are 1-based.
 /// OCR text is deliberately not substituted for the PDF's rendered page.
 struct PDFReaderView: NSViewRepresentable {
+    var controller: PDFReaderController
     var url: URL
+    var sourceHash: String
+    var password: String?
+    var annotations: [ReaderAnnotation]
+    var canEditAnnotations: Bool
+    var onUnlock: ((String) -> Void)?
+    var onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)?
+    var onTrashAnnotation: ((String, Bool) async -> Bool)?
     var page: Int?
     /// Increment for an explicit source navigation, even when selecting the same
     /// page again. PDF scroll callbacks should not increment this token.
     var navigationToken: Int
     var onPageChange: ((Int) -> Void)?
 
-    init(url: URL, page: Int? = nil, navigationToken: Int = 0, onPageChange: ((Int) -> Void)? = nil) {
-        self.url = url; self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
+    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil) {
+        self.controller = controller; self.url = url; self.sourceHash = sourceHash; self.password = password; self.annotations = annotations
+        self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
+        self.onUnlock = onUnlock; self.onSaveAnnotations = onSaveAnnotations; self.onTrashAnnotation = onTrashAnnotation
+        self.canEditAnnotations = canEditAnnotations
     }
 
     func makeNSView(context: Context) -> PDFReaderContainerView {
         let view = PDFReaderContainerView()
-        view.update(url: url, requestedPage: page, navigationToken: navigationToken, onPageChange: onPageChange)
+        view.update(from: self)
         return view
     }
 
     func updateNSView(_ nsView: PDFReaderContainerView, context: Context) {
-        nsView.update(url: url, requestedPage: page, navigationToken: navigationToken, onPageChange: onPageChange)
+        nsView.update(from: self)
     }
 
     static func dismantleNSView(_ nsView: PDFReaderContainerView, coordinator: ()) { nsView.shutdown() }
 }
 
-/// Native controls keep the toolbar usable when the surrounding reader narrows.
-/// There is no fixed minimum toolbar width and no custom PDF rasterization.
+/// The PDF fills the reader; navigation is controlled by the window toolbar.
+/// Search and annotation editing appear only when requested.
 @MainActor final class PDFReaderContainerView: NSView, NSSearchFieldDelegate {
+    private let bindingID = UUID()
+    private weak var controller: PDFReaderController?
+    private var sourceHash = ""
+    private var sessionPassword: String?
+    private var onUnlock: ((String) -> Void)?
+    private var onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)?
+    private var onTrashAnnotation: ((String, Bool) async -> Bool)?
+    private var canEditAnnotations = true
+    private var savedAnnotations: [ReaderAnnotation] = []
+    private var renderedAnnotations: [(PDFPage, PDFAnnotation)] = []
+    private var annotationIDs: [ObjectIdentifier: String] = [:]
+    private var annotationPanel: NSPanel?
+    private var editingAnnotationSheet = false
+    private var showingAnnotationList = false
     private enum FitMode: Int { case page, width, actual, custom }
-    private let pdfView = PDFView()
+    private let pdfView = AnnotationPDFView()
     private let thumbnails = PDFThumbnailView()
     private let thumbnailScroll = NSScrollView()
     private let contentStack = NSStackView()
     private let header = NSVisualEffectView()
-    private let pageField = NSTextField(string: "1")
-    private let countLabel = NSTextField(labelWithString: "/ —")
-    private let zoomLabel = NSTextField(labelWithString: "100%")
     private let searchField = NSSearchField()
     private let resultLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
-    private let fitPicker = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let zoomControls = NSStackView()
     private var searchRow = NSStackView()
-    private var searchButton = NSButton()
-    private var moreButton = NSButton()
-    private var previousButton = NSButton()
-    private var nextButton = NSButton()
     private var previousMatchButton = NSButton()
     private var nextMatchButton = NSButton()
-    private var thumbnailButton = NSButton()
-    private var contentButtons: [NSControl] = []
     private let overlay = NSVisualEffectView()
     private let overlayTitle = NSTextField(labelWithString: "")
     private let overlayDetail = NSTextField(wrappingLabelWithString: "")
@@ -95,6 +110,10 @@ struct PDFReaderView: NSViewRepresentable {
     required init?(coder: NSCoder) { fatalError("PDFReaderContainerView is created in code") }
 
     private func configure() {
+        pdfView.onRegion = { [weak self] page, rect in self?.createRegion(page: page, rect: rect) }
+        pdfView.onRegionError = { [weak self] message in self?.setStatus(message) }
+        pdfView.isManagedAnnotation = { [weak self] annotation in self?.annotationIDs[ObjectIdentifier(annotation)] != nil }
+        pdfView.onAnnotationTap = { [weak self] annotation in self?.openAnnotation(annotation) }
         pdfView.autoScales = false
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
@@ -105,6 +124,8 @@ struct PDFReaderView: NSViewRepresentable {
         pdfView.backgroundColor = .windowBackgroundColor
         NotificationCenter.default.addObserver(self, selector: #selector(pageChanged(_:)), name: .PDFViewPageChanged, object: pdfView)
         NotificationCenter.default.addObserver(self, selector: #selector(scaleChanged(_:)), name: .PDFViewScaleChanged, object: pdfView)
+        NotificationCenter.default.addObserver(self, selector: #selector(selectionChanged(_:)), name: .PDFViewSelectionChanged, object: pdfView)
+        NotificationCenter.default.addObserver(self, selector: #selector(annotationHit(_:)), name: .PDFViewAnnotationHit, object: pdfView)
 
         thumbnails.pdfView = pdfView
         thumbnails.thumbnailSize = NSSize(width: 86, height: 112)
@@ -133,36 +154,6 @@ struct PDFReaderView: NSViewRepresentable {
         thumbnailScroll.heightAnchor.constraint(equalTo: contentStack.heightAnchor).isActive = true
         pdfView.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        previousButton = symbolButton("chevron.left", "上一页", #selector(previousPage))
-        nextButton = symbolButton("chevron.right", "下一页", #selector(nextPage))
-        thumbnailButton = symbolButton("sidebar.left", "显示或收起缩略图", #selector(toggleThumbnails))
-        thumbnailButton.setButtonType(.toggle)
-        pageField.controlSize = .small
-        pageField.alignment = .right
-        pageField.target = self; pageField.action = #selector(jumpToPage)
-        pageField.setAccessibilityLabel("PDF 页码，按回车跳转")
-        pageField.widthAnchor.constraint(equalToConstant: 38).isActive = true
-        countLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        countLabel.textColor = .secondaryLabelColor
-        let zoomOut = symbolButton("minus.magnifyingglass", "缩小", #selector(zoomOut))
-        let zoomIn = symbolButton("plus.magnifyingglass", "放大", #selector(zoomIn))
-        zoomLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
-        zoomLabel.alignment = .center
-        zoomLabel.textColor = .secondaryLabelColor
-        fitPicker.addItems(withTitles: ["适合页面", "适合宽度", "实际大小", "自定比例"])
-        fitPicker.selectItem(at: FitMode.width.rawValue)
-        fitPicker.target = self; fitPicker.action = #selector(changeFit)
-        fitPicker.controlSize = .small
-        fitPicker.setAccessibilityLabel("PDF 缩放适合方式")
-        zoomControls.orientation = .horizontal; zoomControls.alignment = .centerY; zoomControls.spacing = 4
-        zoomControls.addArrangedSubview(zoomOut); zoomControls.addArrangedSubview(zoomLabel); zoomControls.addArrangedSubview(zoomIn)
-        searchButton = symbolButton("magnifyingglass", "查找文字（⌘F）", #selector(toggleSearch))
-        searchButton.setButtonType(.toggle)
-        searchButton.keyEquivalent = "f"; searchButton.keyEquivalentModifierMask = [.command]
-        moreButton = symbolButton("ellipsis", "更多 PDF 选项", #selector(showMoreMenu))
-        let navigation = row([thumbnailButton, previousButton, pageField, countLabel, nextButton, flexibleSpace(), zoomControls, fitPicker, searchButton, moreButton])
-        navigation.detachesHiddenViews = true
-
         searchField.placeholderString = "搜索 PDF 文字 · 回车查找"
         searchField.controlSize = .small
         searchField.sendsWholeSearchString = true
@@ -182,36 +173,35 @@ struct PDFReaderView: NSViewRepresentable {
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.isHidden = true
-        let toolbar = NSStackView(views: [navigation, searchRow, statusLabel])
+        // Navigation/zoom controls live in the window toolbar. Only explicitly opened search/status uses this row.
+        let toolbar = NSStackView(views: [searchRow, statusLabel])
         toolbar.orientation = .vertical
         toolbar.alignment = .leading
         toolbar.spacing = 6
         toolbar.detachesHiddenViews = true
         toolbar.translatesAutoresizingMaskIntoConstraints = false
-        header.material = .headerView
+        header.material = .popover
         header.blendingMode = .withinWindow
         header.state = .active
         header.addSubview(toolbar)
-        for line in [navigation, searchRow] { line.widthAnchor.constraint(equalTo: toolbar.widthAnchor).isActive = true }
+        searchRow.widthAnchor.constraint(equalTo: toolbar.widthAnchor).isActive = true
         NSLayoutConstraint.activate([
             toolbar.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 10),
             toolbar.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -10),
             toolbar.topAnchor.constraint(equalTo: header.topAnchor, constant: 6),
             toolbar.bottomAnchor.constraint(equalTo: header.bottomAnchor, constant: -6)
         ])
-        let stack = NSStackView(views: [header, contentStack])
-        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 0
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        header.translatesAutoresizingMaskIntoConstraints = false; header.isHidden = true
+        addSubview(contentStack); addSubview(header)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            header.widthAnchor.constraint(equalTo: stack.widthAnchor), contentStack.widthAnchor.constraint(equalTo: stack.widthAnchor)
+            contentStack.leadingAnchor.constraint(equalTo: leadingAnchor), contentStack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            contentStack.topAnchor.constraint(equalTo: topAnchor), contentStack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8), header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8), header.topAnchor.constraint(equalTo: topAnchor, constant: 8)
         ])
         header.setContentHuggingPriority(.required, for: .vertical)
         contentStack.setContentHuggingPriority(.defaultLow, for: .vertical)
         configureOverlay()
-        contentButtons = [previousButton, nextButton, pageField, zoomOut, zoomIn, fitPicker, searchField, thumbnailButton, searchButton, moreButton]
         refreshControls()
     }
 
@@ -246,8 +236,19 @@ struct PDFReaderView: NSViewRepresentable {
         overlay.isHidden = true
     }
 
-    func update(url: URL, requestedPage: Int?, navigationToken: Int, onPageChange: ((Int) -> Void)?) {
-        callback = onPageChange
+    func update(from input: PDFReaderView) {
+        let url = input.url, requestedPage = input.page, navigationToken = input.navigationToken
+        if controller !== input.controller {
+            controller?.unbind(id: bindingID)
+            controller = input.controller
+            input.controller.bind(id: bindingID) { [weak self] command in self?.perform(command) }
+        }
+        callback = input.onPageChange; onUnlock = input.onUnlock
+        onSaveAnnotations = input.onSaveAnnotations; onTrashAnnotation = input.onTrashAnnotation
+        sourceHash = input.sourceHash; sessionPassword = input.password
+        canEditAnnotations = input.canEditAnnotations
+        let annotationsChanged = input.annotations != savedAnnotations
+        savedAnnotations = input.annotations
         let canonical = url.standardizedFileURL
         if canonical != loadedURL {
             sourcePage = requestedPage; lastParentPage = requestedPage; lastParentNavigationToken = navigationToken
@@ -260,14 +261,21 @@ struct PDFReaderView: NSViewRepresentable {
                 && lastCallback?.token == navigationToken && lastCallback?.page == requestedPage
             lastParentPage = requestedPage; lastParentNavigationToken = navigationToken; sourcePage = requestedPage
             lastCallback = nil
-            guard !isAcknowledgement else { return }
-            allowsSearchAutoNavigation = false
-            invalidateNavigation()
-            if let requestedPage { navigate(to: requestedPage, notifyParent: false) }
+            if !isAcknowledgement {
+                allowsSearchAutoNavigation = false
+                invalidateNavigation()
+                if let requestedPage { navigate(to: requestedPage, notifyParent: false) }
+            }
         }
+        if document?.isLocked == true, let password = input.password, !password.isEmpty,
+           document?.unlock(withPassword: password) == true { showDocument() }
+        if annotationsChanged { renderSavedAnnotations(); if showingAnnotationList { showAnnotations() } }
+        refreshControls()
     }
 
     private func load(_ url: URL) {
+        if !editingAnnotationSheet { closeAnnotationPanel() }
+        pdfView.cancelRegionSelection()
         invalidateNavigation(); installingDocument = true
         defer { installingDocument = false }
         allowsSearchAutoNavigation = false; lastCallback = nil; setStatus("")
@@ -285,6 +293,7 @@ struct PDFReaderView: NSViewRepresentable {
             return
         }
         document = pdf
+        if pdf.isLocked, let sessionPassword, !sessionPassword.isEmpty { _ = pdf.unlock(withPassword: sessionPassword) }
         if pdf.isLocked { showLocked(); return }
         showDocument()
     }
@@ -297,6 +306,7 @@ struct PDFReaderView: NSViewRepresentable {
         overlay.isHidden = true; passwordField.stringValue = ""
         installingDocument = true
         pdfView.document = document
+        renderSavedAnnotations()
         thumbnails.pdfView = pdfView
         layoutThumbnails()
         let desired = sourcePage ?? 1
@@ -324,7 +334,7 @@ struct PDFReaderView: NSViewRepresentable {
         guard !password.isEmpty, password.count <= 1024, document.unlock(withPassword: password) else {
             passwordField.stringValue = ""; overlayDetail.stringValue = "密码不正确或文件无法解锁，请核对后重试。"; return
         }
-        passwordField.stringValue = ""; showDocument()
+        passwordField.stringValue = ""; sessionPassword = password; onUnlock?(password); showDocument()
     }
 
     private var currentPageNumber: Int? {
@@ -383,33 +393,22 @@ struct PDFReaderView: NSViewRepresentable {
         else { lastEmittedPage = pending.page }
     }
 
-    @objc private func jumpToPage() {
-        guard let number = Int(pageField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)),
-              let document, document.pageCount > 0, (1...document.pageCount).contains(number) else {
-            setStatus("请输入 1–\(document?.pageCount ?? 0) 之间的原 PDF 页码。"); refreshControls(); return
-        }
-        setStatus(""); navigate(to: number)
-    }
-
     @objc private func previousPage() { if let page = currentPageNumber, page > 1 { navigate(to: page - 1) } }
     @objc private func nextPage() { if let page = currentPageNumber, let document, page < document.pageCount { navigate(to: page + 1) } }
     @objc private func toggleThumbnails() {
-        thumbnailScroll.isHidden = thumbnailButton.state != .on
+        thumbnailScroll.isHidden.toggle()
         needsLayout = true; layoutSubtreeIfNeeded(); layoutThumbnails(); applyFit()
     }
 
     @objc private func zoomOut() { changeZoom(by: 1 / 1.2) }
     @objc private func zoomIn() { changeZoom(by: 1.2) }
     private func changeZoom(by factor: CGFloat) {
-        fitMode = .custom; fitPicker.selectItem(at: fitMode.rawValue)
+        fitMode = .custom
         pdfView.autoScales = false
         pdfView.scaleFactor = min(pdfView.maxScaleFactor, max(pdfView.minScaleFactor, pdfView.scaleFactor * factor))
         refreshControls()
     }
 
-    @objc private func changeFit() { fitMode = FitMode(rawValue: fitPicker.indexOfSelectedItem) ?? .width; applyFit() }
-    @objc private func showContinuousPages() { changePDFDisplayMode(.singlePageContinuous) }
-    @objc private func showSinglePage() { changePDFDisplayMode(.singlePage) }
     private func changePDFDisplayMode(_ mode: PDFDisplayMode) {
         let page = currentPageNumber
         pdfView.displayMode = mode
@@ -419,35 +418,14 @@ struct PDFReaderView: NSViewRepresentable {
 
     @objc private func toggleSearch() {
         searchRow.isHidden.toggle()
-        searchButton.state = searchRow.isHidden ? .off : .on
         if searchRow.isHidden { clearSearchState(); setStatus("") }
         else { window?.makeFirstResponder(searchField) }
+        header.isHidden = searchRow.isHidden && statusLabel.isHidden
         needsLayout = true
-    }
-
-    @objc private func showMoreMenu() {
-        let menu = NSMenu(title: "更多 PDF 选项")
-        menu.autoenablesItems = false
-        func item(_ title: String, action: Selector, checked: Bool = false) {
-            let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            entry.target = self; entry.state = checked ? .on : .off
-            entry.isEnabled = document != nil && document?.isLocked == false
-            menu.addItem(entry)
-        }
-        item("放大", action: #selector(zoomIn)); item("缩小", action: #selector(zoomOut))
-        menu.addItem(.separator())
-        item("连续", action: #selector(showContinuousPages), checked: pdfView.displayMode == .singlePageContinuous)
-        item("单页", action: #selector(showSinglePage), checked: pdfView.displayMode == .singlePage)
-        menu.popUp(positioning: nil, at: NSPoint(x: moreButton.bounds.minX, y: moreButton.bounds.maxY + 2), in: moreButton)
     }
 
     override func layout() {
         super.layout()
-        // Narrow reader columns keep page navigation, fit and find on one line.
-        // Zoom controls remain available in More when their inline group hides.
-        let hideZoom = bounds.width < 600, hideCount = bounds.width < 430
-        if zoomControls.isHidden != hideZoom { zoomControls.isHidden = hideZoom }
-        if countLabel.isHidden != hideCount { countLabel.isHidden = hideCount }
         let size = pdfView.bounds.size
         if abs(size.width - lastViewportSize.width) > 0.5 || abs(size.height - lastViewportSize.height) > 0.5 {
             lastViewportSize = size; layoutThumbnails(); applyFit()
@@ -505,14 +483,14 @@ struct PDFReaderView: NSViewRepresentable {
 
     private func refreshControls() {
         let ready = document != nil && document?.isLocked == false && (document?.pageCount ?? 0) > 0
-        for control in contentButtons { control.isEnabled = ready }
         let number = currentPageNumber ?? 1, count = ready ? document?.pageCount ?? 0 : 0
-        if pageField.currentEditor() == nil || window?.firstResponder !== pageField.currentEditor() { pageField.stringValue = String(number) }
-        countLabel.stringValue = count > 0 ? "/ \(count)" : "/ —"
-        zoomLabel.stringValue = "\(Int((pdfView.scaleFactor * 100).rounded()))%"
-        previousButton.isEnabled = ready && number > 1
-        nextButton.isEnabled = ready && number < count
         previousMatchButton.isEnabled = !matches.isEmpty; nextMatchButton.isEnabled = !matches.isEmpty
+        let zoom = Int((pdfView.scaleFactor * 100).rounded()), selected = !(pdfView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let id = bindingID, generation = documentGeneration, canEdit = canEditAnnotations
+        DispatchQueue.main.async { [weak self, weak controller] in
+            guard let self, self.documentGeneration == generation else { return }
+            controller?.update(id: id, page: number, pageCount: count, zoomPercent: zoom, isReady: ready, hasSelection: ready && selected, canEditAnnotations: canEdit)
+        }
     }
 
     @objc private func findText() {
@@ -597,7 +575,7 @@ struct PDFReaderView: NSViewRepresentable {
         if let field = notification.object as? NSSearchField, field === searchField, field.stringValue.isEmpty { clearSearchState(); setStatus("") }
     }
 
-    private func setStatus(_ text: String) { statusLabel.stringValue = text; statusLabel.toolTip = text; statusLabel.isHidden = text.isEmpty }
+    private func setStatus(_ text: String) { statusLabel.stringValue = text; statusLabel.toolTip = text; statusLabel.isHidden = text.isEmpty; header.isHidden = searchRow.isHidden && statusLabel.isHidden }
     private func row(_ views: [NSView]) -> NSStackView {
         let stack = NSStackView(views: views); stack.orientation = .horizontal; stack.alignment = .centerY; stack.spacing = 6
         for view in views { view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
@@ -616,7 +594,286 @@ struct PDFReaderView: NSViewRepresentable {
         searchGeneration += 1; document?.delegate = nil; document?.cancelFindString(); searchDelegate = nil
         NotificationCenter.default.removeObserver(self)
         thumbnails.pdfView = nil; pdfView.document = nil; document = nil; callback = nil
+        controller?.unbind(id: bindingID); controller = nil
+        // An external scene/state change can dismantle this reader even while its
+        // window is modal. Keep the draft sheet alive until explicit save/cancel.
+        if !editingAnnotationSheet { closeAnnotationPanel() }
+        sessionPassword = nil; onUnlock = nil; onSaveAnnotations = nil; onTrashAnnotation = nil
         if securityScoped { loadedURL?.stopAccessingSecurityScopedResource() }; securityScoped = false
+    }
+
+    private func perform(_ command: PDFReaderCommand) {
+        switch command {
+        case .prev: previousPage()
+        case .next: nextPage()
+        case .jump(let page):
+            guard let document, (1...document.pageCount).contains(page) else { setStatus("页码超出原PDF范围。"); return }
+            navigate(to: page)
+        case .zoomIn: zoomIn()
+        case .zoomOut: zoomOut()
+        case .fitPage: fitMode = .page; applyFit()
+        case .fitWidth: fitMode = .width; applyFit()
+        case .actualSize: fitMode = .actual; applyFit()
+        case .toggleSearch: toggleSearch()
+        case .toggleThumbnails: toggleThumbnails()
+        case .toggleContinuous: changePDFDisplayMode(pdfView.displayMode == .singlePageContinuous ? .singlePage : .singlePageContinuous)
+        case .createHighlight: createHighlight()
+        case .createRegion:
+            guard canEditAnnotations else { setStatus("当前任务运行中，请稍后添加区域批注。"); return }
+            guard document != nil, document?.isLocked == false else { return }
+            pdfView.armRegionSelection(); window?.makeFirstResponder(pdfView)
+            setStatus("拖动框选同一页内的区域，松开后填写批注；按Esc取消。")
+        case .showAnnotations: showAnnotations()
+        }
+    }
+
+    @objc private func selectionChanged(_ notification: Notification) { refreshControls() }
+
+    private func renderSavedAnnotations() {
+        for (page, annotation) in renderedAnnotations { page.removeAnnotation(annotation) }
+        renderedAnnotations = []; annotationIDs = [:]
+        guard let document, !document.isLocked else { return }
+        for record in savedAnnotations where record.trashedAt == nil && record.sourceHash == sourceHash {
+            guard record.page >= 1, record.page <= document.pageCount, let page = document.page(at: record.page - 1) else { continue }
+            for quad in record.quads {
+                guard [quad.x, quad.y, quad.width, quad.height].allSatisfy({ $0.isFinite }), quad.width > 0, quad.height > 0 else { continue }
+                let rect = NSRect(x: quad.x, y: quad.y, width: quad.width, height: quad.height).intersection(page.bounds(for: .cropBox))
+                guard !rect.isNull, !rect.isEmpty else { continue }
+                let annotation = PDFAnnotation(bounds: rect, forType: record.effectiveKind == .region ? .square : .highlight, withProperties: nil)
+                annotation.color = record.color.nativeColor.withAlphaComponent(record.effectiveKind == .region ? 0.9 : 0.42)
+                if record.effectiveKind == .region { let border = PDFBorder(); border.lineWidth = 1.5; annotation.border = border; annotation.interiorColor = record.color.nativeColor.withAlphaComponent(0.1) }
+                annotation.contents = record.comment.isEmpty ? record.text : record.comment
+                page.addAnnotation(annotation); renderedAnnotations.append((page, annotation))
+                annotationIDs[ObjectIdentifier(annotation)] = record.id
+            }
+        }
+        pdfView.needsDisplay = true
+    }
+
+    @objc private func annotationHit(_ notification: Notification) {
+        guard let annotation = notification.userInfo?["PDFAnnotationHit"] as? PDFAnnotation else { return }
+        openAnnotation(annotation)
+    }
+    private func openAnnotation(_ annotation: PDFAnnotation) {
+        guard let id = annotationIDs[ObjectIdentifier(annotation)], let record = savedAnnotations.first(where: { $0.id == id && $0.trashedAt == nil }) else { return }
+        editAnnotations([record])
+    }
+
+    private func createHighlight() {
+        guard canEditAnnotations else { setStatus("当前任务运行中，请稍后添加高亮。"); return }
+        guard let document, let selection = pdfView.currentSelection, onSaveAnnotations != nil else { setStatus("请先选择PDF文字；扫描页或无文字选择时，可用阅读菜单的“框选区域批注”。"); return }
+        do { editAnnotations(try ReaderAnnotationCapture.capture(selection: selection, document: document, sourceHash: sourceHash)) }
+        catch { setStatus(error.localizedDescription) }
+    }
+
+    private func createRegion(page: PDFPage, rect: CGRect) {
+        guard let document, page.document === document, !sourceHash.isEmpty, onSaveAnnotations != nil else { return }
+        let index = document.index(for: page)
+        guard index != NSNotFound else { return }
+        setStatus("")
+        let annotation = ReaderAnnotation(sourceHash: sourceHash, page: index + 1, text: "", rangeLocation: 0, rangeLength: 0, quads: [ReaderQuadRect(x: rect.origin.x, y: rect.origin.y, width: rect.width, height: rect.height)], kind: .region)
+        editAnnotations([annotation])
+    }
+
+    private func presentAnnotationPanel<V: View>(_ view: V, title: String, asSheet: Bool = false) {
+        guard let owner = window else { setStatus("阅读窗口尚未就绪，请稍后打开批注。"); return }
+        if asSheet {
+            guard owner.attachedSheet == nil else { setStatus("请先完成或关闭当前窗口的弹出表单，再编辑批注。"); return }
+            closeAnnotationPanel()
+        } else if editingAnnotationSheet { annotationPanel?.makeKeyAndOrderFront(nil); return }
+        if annotationPanel == nil {
+            // Editor sheets have no native close button: only successful save or
+            // the explicit cancel action can dismiss a draft, including during I/O.
+            let style: NSWindow.StyleMask = asSheet ? [.titled, .resizable] : [.titled, .closable, .resizable]
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 480), styleMask: style, backing: .buffered, defer: false)
+            panel.isReleasedWhenClosed = false; panel.minSize = NSSize(width: 330, height: 300)
+            annotationPanel = panel
+        }
+        guard let panel = annotationPanel else { return }
+        panel.title = title; panel.contentView = NSHostingView(rootView: view)
+        if asSheet { editingAnnotationSheet = true; owner.beginSheet(panel) }
+        else { if !panel.isVisible { panel.center(); owner.addChildWindow(panel, ordered: .above) }; panel.makeKeyAndOrderFront(nil) }
+    }
+
+    private func closeAnnotationPanel() {
+        if let panel = annotationPanel {
+            if let owner = panel.sheetParent { owner.endSheet(panel) }
+            else { panel.parent?.removeChildWindow(panel) }
+            panel.orderOut(nil); panel.close(); panel.contentView = nil
+        }
+        annotationPanel = nil; showingAnnotationList = false; editingAnnotationSheet = false
+    }
+
+    private func editAnnotations(_ records: [ReaderAnnotation]) {
+        guard let controller else { return }
+        guard window?.attachedSheet == nil else { setStatus("请先完成或关闭当前窗口的弹出表单，再编辑批注。"); return }
+        showingAnnotationList = false
+        let existing = records.count == 1 && savedAnnotations.contains(where: { $0.id == records[0].id })
+        let saveCallback = onSaveAnnotations, trashCallback = onTrashAnnotation
+        // The sheet owns its draft and retains this controller until it is explicitly
+        // dismissed; a cross-window navigation cannot silently destroy the text.
+        let editor = PDFAnnotationEditor(controller: controller, records: records, canDelete: existing, onSave: { [self] updated in
+            let saved = await saveCallback?(updated) ?? false
+            if saved { self.closeAnnotationPanel() }; return saved
+        }, onDelete: { [self] in
+            guard let record = records.first else { return false }
+            let saved = await trashCallback?(record.id, true) ?? false
+            if saved { self.closeAnnotationPanel() }; return saved
+        }, onCancel: { [self] in closeAnnotationPanel() })
+        presentAnnotationPanel(editor, title: existing ? "编辑高亮与批注" : "保存高亮与批注", asSheet: true)
+    }
+
+    private func showAnnotations() {
+        guard let controller else { return }
+        showingAnnotationList = true
+        let list = PDFAnnotationList(controller: controller, records: savedAnnotations, onLocate: { [weak self] record in
+            self?.closeAnnotationPanel(); self?.navigate(to: record.page)
+        }, onEdit: { [weak self] record in self?.editAnnotations([record]) }, onTrash: { [weak self] record, trashed in await self?.onTrashAnnotation?(record.id, trashed) ?? false })
+        presentAnnotationPanel(list, title: "本书PDF批注")
+    }
+}
+
+private extension ReaderAnnotationColor {
+    var nativeColor: NSColor { switch self { case .yellow: return .systemYellow; case .green: return .systemGreen; case .blue: return .systemBlue; case .pink: return .systemPink } }
+}
+
+/// Region mode intercepts PDFKit's text selection only while explicitly armed.
+/// Both endpoints must belong to the same page; coordinates are converted by PDFView, including rotation/crop.
+@MainActor private final class AnnotationPDFView: PDFView {
+    var onRegion: ((PDFPage, CGRect) -> Void)?
+    var onRegionError: ((String) -> Void)?
+    var isManagedAnnotation: ((PDFAnnotation) -> Bool)?
+    var onAnnotationTap: ((PDFAnnotation) -> Void)?
+    private var regionArmed = false
+    private var handlingManagedClick = false
+    private var regionStart: (page: PDFPage, pagePoint: CGPoint, viewPoint: CGPoint)?
+    private var regionPreview: NSView?
+
+    func armRegionSelection() { cancelRegionSelection(); regionArmed = true }
+    func cancelRegionSelection() { regionArmed = false; handlingManagedClick = false; regionStart = nil; regionPreview?.removeFromSuperview(); regionPreview = nil }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        if regionArmed { return bounds.contains(local) ? self : nil }
+        if NSApp.currentEvent?.modifierFlags.contains(.option) != true, managedAnnotation(at: local) != nil { return self }
+        return super.hitTest(point)
+    }
+    private func managedAnnotation(at point: CGPoint) -> PDFAnnotation? {
+        guard let page = page(for: point, nearest: false), let annotation = page.annotation(at: convert(point, to: page)), isManagedAnnotation?(annotation) == true else { return nil }
+        return annotation
+    }
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if !regionArmed {
+            if !event.modifierFlags.contains(.option), let annotation = managedAnnotation(at: point) { handlingManagedClick = true; onAnnotationTap?(annotation); return }
+            super.mouseDown(with: event); return
+        }
+        guard let page = page(for: point, nearest: false) else { cancelRegionSelection(); onRegionError?("请从PDF页面内开始框选。"); return }
+        regionStart = (page, convert(point, to: page), point)
+        let preview = NSView(frame: NSRect(origin: point, size: .zero)); preview.wantsLayer = true
+        preview.layer?.borderColor = NSColor.systemYellow.cgColor; preview.layer?.borderWidth = 1.5
+        preview.layer?.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.15).cgColor
+        addSubview(preview); regionPreview = preview
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard !handlingManagedClick else { return }
+        guard let start = regionStart else { if !regionArmed { super.mouseDragged(with: event) }; return }
+        let point = convert(event.locationInWindow, from: nil)
+        regionPreview?.frame = NSRect(x: min(point.x, start.viewPoint.x), y: min(point.y, start.viewPoint.y), width: abs(point.x - start.viewPoint.x), height: abs(point.y - start.viewPoint.y))
+    }
+    override func mouseUp(with event: NSEvent) {
+        if handlingManagedClick { handlingManagedClick = false; return }
+        guard let start = regionStart else { if !regionArmed { super.mouseUp(with: event) }; return }
+        let point = convert(event.locationInWindow, from: nil)
+        defer { cancelRegionSelection() }
+        guard let endPage = page(for: point, nearest: false), endPage === start.page else { onRegionError?("区域批注一次只能框选同一页，跨页拖框未保存，请分别框选。"); return }
+        let end = convert(point, to: start.page)
+        let rect = CGRect(x: min(end.x, start.pagePoint.x), y: min(end.y, start.pagePoint.y), width: abs(end.x - start.pagePoint.x), height: abs(end.y - start.pagePoint.y)).intersection(start.page.bounds(for: .cropBox))
+        guard !rect.isNull, rect.width >= 2, rect.height >= 2 else { onRegionError?("框选区域太小或在页面外，未保存。"); return }
+        onRegion?(start.page, rect)
+    }
+    override func keyDown(with event: NSEvent) {
+        if regionArmed && event.keyCode == 53 { cancelRegionSelection(); onRegionError?(""); return }
+        super.keyDown(with: event)
+    }
+}
+
+private struct PDFAnnotationEditor: View {
+    @ObservedObject var controller: PDFReaderController
+    let records: [ReaderAnnotation]
+    let canDelete: Bool
+    let onSave: ([ReaderAnnotation]) async -> Bool
+    let onDelete: () async -> Bool
+    let onCancel: () -> Void
+    @State private var color: ReaderAnnotationColor
+    @State private var comment: String
+    @State private var isSaving = false
+    @State private var failure = ""
+    @State private var confirmingCancel = false
+    init(controller: PDFReaderController, records: [ReaderAnnotation], canDelete: Bool, onSave: @escaping ([ReaderAnnotation]) async -> Bool, onDelete: @escaping () async -> Bool, onCancel: @escaping () -> Void) {
+        self.controller = controller
+        self.records = records; self.canDelete = canDelete; self.onSave = onSave; self.onDelete = onDelete; self.onCancel = onCancel
+        _color = State(initialValue: records.first?.color ?? .yellow); _comment = State(initialValue: records.first?.comment ?? "")
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(records.count > 1 ? "跨页/多段选择 · \(records.count) 处，一次保存" : "第 \(records.first?.page ?? 1) 页").font(.headline)
+            ScrollView { VStack(alignment: .leading, spacing: 10) { ForEach(records) { record in Text(record.effectiveKind == .region ? "已框选原页区域，未自动识别其中的文字。" : record.text).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) } } }.frame(maxHeight: 160)
+            Picker("高亮颜色", selection: $color) { ForEach(ReaderAnnotationColor.allCases, id: \.self) { Text($0.title).tag($0) } }.pickerStyle(.segmented)
+            Text("批注").font(.subheadline)
+            TextEditor(text: $comment).font(.body).frame(minHeight: 100).border(Color.secondary.opacity(0.2))
+            if comment.count > 16_000 { Text("批注最多16000字。").font(.caption).foregroundStyle(.red) }
+            HStack {
+                if canDelete { Button("移入回收列表", role: .destructive) { Task { isSaving = true; let saved = await onDelete(); isSaving = false; if !saved { failure = "删除未完成，原批注保留。" } } }.disabled(isSaving || !controller.canEditAnnotations) }
+                Spacer(); Button("取消") {
+                    if comment != (records.first?.comment ?? "") || color != (records.first?.color ?? .yellow) { confirmingCancel = true }
+                    else { onCancel() }
+                }.keyboardShortcut(.cancelAction).disabled(isSaving)
+                Button(isSaving ? "保存中…" : "保存") { Task { isSaving = true; let saved = await onSave(records.map { record in var copy = record; copy.color = color; copy.comment = comment; return copy }); isSaving = false; if !saved { failure = "保存未完成，已填写内容保留，请重试。" } } }.keyboardShortcut(.defaultAction).disabled(comment.count > 16_000 || isSaving || !controller.canEditAnnotations)
+            }
+            if !failure.isEmpty { Text(failure).font(.caption).foregroundStyle(.red) }
+            Text("独立保存到书项目，原PDF不改写。").font(.caption).foregroundStyle(.secondary)
+        }.padding(20).frame(minWidth: 320, minHeight: 360)
+        .alert("放弃尚未保存的批注？", isPresented: $confirmingCancel) {
+            Button("继续编辑", role: .cancel) {}
+            Button("放弃并关闭", role: .destructive, action: onCancel)
+        } message: { Text("关闭后会丢弃本次修改，原来已保存的批注保留。") }
+    }
+}
+
+private struct PDFAnnotationList: View {
+    @ObservedObject var controller: PDFReaderController
+    let records: [ReaderAnnotation]
+    let onLocate: (ReaderAnnotation) -> Void
+    let onEdit: (ReaderAnnotation) -> Void
+    let onTrash: (ReaderAnnotation, Bool) async -> Bool
+    @State private var showTrashed = false
+    @State private var savingID: String?
+    @State private var failure = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle("显示已删除批注", isOn: $showTrashed)
+            if !failure.isEmpty { Text(failure).font(.caption).foregroundStyle(.red) }
+            let visible = records.filter { showTrashed || $0.trashedAt == nil }.sorted { $0.page == $1.page ? $0.rangeLocation < $1.rangeLocation : $0.page < $1.page }
+            if visible.isEmpty { ContentUnavailableView("暂无批注", systemImage: "highlighter", description: Text("选中原PDF文字后，使用工具栏高亮按钮保存。")) }
+            ScrollView { LazyVStack(alignment: .leading, spacing: 16) {
+                ForEach(visible) { record in
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack { Text("第 \(record.page) 页").font(.caption.weight(.semibold)); Spacer(); if record.trashedAt != nil { Text("已删除").font(.caption).foregroundStyle(.secondary) } }
+                        Text(record.effectiveKind == .region ? "区域批注" : String(record.text.prefix(180))).font(.callout).textSelection(.enabled)
+                        if !record.comment.isEmpty { Text(String(record.comment.prefix(240))).font(.caption).foregroundStyle(.secondary) }
+                        HStack {
+                            Button("定位原页") { onLocate(record) }
+                            if record.trashedAt == nil { Button("编辑") { onEdit(record) }.disabled(!controller.canEditAnnotations); Button("删除", role: .destructive) { updateTrash(record, trashed: true) }.disabled(savingID != nil || !controller.canEditAnnotations) }
+                            else { Button("恢复") { updateTrash(record, trashed: false) }.disabled(savingID != nil || !controller.canEditAnnotations) }
+                        }.font(.caption)
+                        Divider()
+                    }
+                }
+            } }
+        }.padding(18).frame(minWidth: 320, minHeight: 300)
+    }
+    private func updateTrash(_ record: ReaderAnnotation, trashed: Bool) {
+        Task { savingID = record.id; let saved = await onTrash(record, trashed); savingID = nil; if !saved { failure = "操作未完成，原批注保留，请重试。" } }
     }
 }
 

@@ -7,6 +7,12 @@ struct WorkspaceView: View {
     @State private var compactInspector = false
     @State private var servicePopover = false
     @State private var columns: NavigationSplitViewVisibility = .detailOnly
+    @StateObject private var pdfController = PDFReaderController()
+    @State private var readerShowsPDF = true
+    @AppStorage("reader-outline-v3") private var readerOutline = false
+    @State private var activeSheet: WorkspaceSheet?
+    @State private var lastSheet: WorkspaceSheet?
+    @State private var sheetClosing = false
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
             sidebar.navigationSplitViewColumnWidth(min: 200, ideal: 226, max: 260)
@@ -28,15 +34,23 @@ struct WorkspaceView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar { workspaceToolbar }
+        .environmentObject(pdfController)
         .tint(Palette.accent)
         .onOpenURL { url in Task { await store.openInternalURL(url) } }
-        .sheet(isPresented: $store.showingSettings) { ProviderSettingsView().environmentObject(store).frame(width: 640, height: 660) }
-        .sheet(isPresented: $store.showingOCR) { PDFOCRPanel().environmentObject(store).frame(width: 590, height: 510) }
-        .sheet(isPresented: $store.showingTrash) { LibraryTrashView().environmentObject(store).frame(width: 620, height: 550) }
+        .sheet(item: sheetBinding, onDismiss: finishSheetDismissal) { sheet in
+            switch sheet {
+            case .settings: ProviderSettingsView().environmentObject(store).frame(width: 640, height: 660)
+            case .ocr: PDFOCRPanel().environmentObject(store).frame(width: 590, height: 510)
+            case .trash: LibraryTrashView().environmentObject(store).frame(width: 620, height: 550)
+            case .plugins: PluginLibraryView().environmentObject(store).frame(width: 660, height: 580)
+            case .password(let request): PDFPasswordSheet(request: request).environmentObject(store)
+            }
+        }
+        .onChange(of: modalSignature) { _, _ in reconcileSheet() }
+        .onAppear { reconcileSheet() }
         .confirmationDialog("删除保存的内容？", isPresented: Binding(get: { store.deletionRequest != nil }, set: { if !$0 { store.deletionRequest = nil } }), presenting: store.deletionRequest) { request in
             Button(request.kind == .book || request.kind == .document ? "移入回收站" : "删除对象", role: .destructive) { store.confirmDeletion(request) }
         } message: { request in Text("“\(request.title)”\n" + request.detail) }
-        .sheet(isPresented: $store.showingPlugins) { PluginLibraryView().environmentObject(store).frame(width: 660, height: 580) }
         .alert("需要处理", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("知道了", role: .cancel) { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
@@ -47,12 +61,13 @@ struct WorkspaceView: View {
             }
             return true
         }
+        .onChange(of: store.bookID) { _, _ in readerShowsPDF = true }
     }
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "book.closed.fill").font(.title2).foregroundStyle(Palette.accent)
-                VStack(alignment: .leading, spacing: 2) { Text("ReadingBook").font(.headline); Text("让阅读长成理解").font(.caption2).foregroundStyle(.secondary) }
+                BrandGlyph(name: "mark").frame(width: 30, height: 30).foregroundStyle(Palette.accent)
+                VStack(alignment: .leading, spacing: 3) { Text("ReadingBook").font(.system(size: 14, weight: .semibold)); Text("阅读 · 线索 · 理解").font(.system(size: 10)).foregroundStyle(.secondary) }
             }.padding(.horizontal, 18).padding(.top, 12).padding(.bottom, 16)
             ScrollView {
                 VStack(alignment: .leading, spacing: 5) {
@@ -60,7 +75,7 @@ struct WorkspaceView: View {
                     ForEach(store.books) { book in
                         Button { Task { await store.selectBook(book.id) } } label: {
                             HStack(spacing: 10) {
-                                RoundedRectangle(cornerRadius: 4).fill(Palette.accent.opacity(0.14)).frame(width: 28, height: 36).overlay(Image(systemName: "book.closed").font(.caption).foregroundStyle(Palette.accent))
+                                RoundedRectangle(cornerRadius: 5).fill(Palette.accent.opacity(0.09)).frame(width: 28, height: 36).overlay(BrandGlyph(name: "reader").frame(width: 18, height: 18).foregroundStyle(Palette.accent))
                                 VStack(alignment: .leading, spacing: 4) { Text(book.title).lineLimit(1).font(.subheadline.weight(.medium)); ProgressView(value: book.progress).tint(Palette.accent).frame(width: 95) }
                                 Spacer(minLength: 0)
                             }.padding(9).background(store.bookID == book.id ? Palette.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 10))
@@ -101,31 +116,76 @@ struct WorkspaceView: View {
     }
     private func routeButton(_ title: String, icon: String, route: String) -> some View {
         Button { store.route = route } label: {
-            Label(title, systemImage: icon).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 9)
-                .background(store.route == route ? Palette.accent.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 9))
+            HStack(spacing: 11) {
+                BrandGlyph(name: BrandNavigation.glyph(route: store.book?.views.first { $0.id == route }?.kind.rawValue ?? route)).frame(width: 18, height: 18)
+                Text(title).font(.system(size: 13, weight: store.route == route ? .semibold : .regular))
+                Spacer(minLength: 0)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 10)
+                .background(store.route == route ? Palette.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 9))
+                .overlay(alignment: .leading) { if store.route == route { Capsule().fill(Palette.accent).frame(width: 2, height: 15).padding(.leading, 3) } }
         }.buttonStyle(.plain).foregroundStyle(store.route == route ? Palette.accent : .primary)
     }
+    private var viewingPDF: Bool { store.route == "reader" && readerShowsPDF && store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     @ToolbarContentBuilder private var workspaceToolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
-            Menu {
-                Button("原文阅读") { store.route = "reader" }
-                Button("阅读流程") { store.route = "workflow" }
-                Button("与书对话") { store.route = "query" }
-                Button("我的理解") { store.route = "editor" }
-                ForEach(store.enabledViews.filter { ![ComponentKind.workflow, .query, .editor].contains($0.kind) }) { view in
-                    Button(view.title) { store.route = view.id }
+            HStack(spacing: 10) {
+                BrandGlyph(name: "mark").frame(width: 20, height: 20).foregroundStyle(Palette.accent)
+                Text(store.book?.title ?? "ReadingBook").font(.subheadline.weight(.semibold)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 156)
+                if store.route == "reader", store.book != nil {
+                    Button { readerOutline.toggle() } label: { Image(systemName: "list.bullet") }.help("展开或收起原文目录与搜索")
                 }
-                Divider()
-                Menu("添加组件") { ForEach(ComponentKind.allCases, id: \.self) { kind in Button(kind.title) { store.activate(kind) } } }
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: store.route == "reader" ? "book.pages" : "square.grid.2x2")
-                    Text(store.book?.title ?? "ReadingBook").font(.subheadline.weight(.medium)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 220)
-                    Image(systemName: "chevron.down").font(.caption2)
-                }
-            }.help("当前书籍：\(routeTitle) · 切换阅读、流程和组件")
+            }
         }
-        ToolbarItemGroup(placement: .primaryAction) {
+        ToolbarItem(placement: .principal) {
+            if store.route == "reader", store.book != nil {
+                if viewingPDF { PDFPageNavigation().environmentObject(pdfController) }
+                else {
+                    HStack(spacing: 10) {
+                        Button { moveSource(-1) } label: { Image(systemName: "chevron.left") }.help("上一原文单元").disabled(store.selectedUnit?.order == 0)
+                        Text(store.selectedUnit?.locator ?? "原文").font(.caption).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: 240)
+                        Button { moveSource(1) } label: { Image(systemName: "chevron.right") }.help("下一原文单元").disabled(store.selectedUnit?.order == (store.book?.units.count ?? 0) - 1)
+                    }
+                }
+            }
+        }
+        if #available(macOS 26.0, *) { ToolbarSpacer(.flexible, placement: .automatic) }
+        ToolbarItemGroup(placement: .automatic) {
+            if store.route == "reader", let unit = store.selectedUnit {
+                if viewingPDF {
+                    Menu {
+                        Button("高亮选中文字…") { pdfController.command(.createHighlight) }.disabled(!pdfController.hasSelection)
+                        Button("框选页面区域…") { pdfController.command(.createRegion) }
+                    } label: { Image(systemName: "highlighter") }.help("文字高亮或扫描页区域批注").disabled(!pdfController.isReady || store.isBusy)
+                    Button { pdfController.command(.showAnnotations) } label: { Image(systemName: "text.bubble") }.help("查看、编辑与恢复批注")
+                }
+                Menu {
+                    if store.sourceFileURL?.pathExtension.lowercased() == "pdf" {
+                        Button("原始 PDF") { readerShowsPDF = true }
+                        Button("文本 / OCR 识别稿") { readerShowsPDF = false }
+                        Button("用视觉模型识别页面…") { store.showingOCR = true }.disabled(store.isBusy)
+                        if viewingPDF {
+                            Divider()
+                            Button("适合宽度") { pdfController.command(.fitWidth) }
+                            Button("适合整页") { pdfController.command(.fitPage) }
+                            Button("实际大小") { pdfController.command(.actualSize) }
+                            Button("放大") { pdfController.command(.zoomIn) }
+                            Button("缩小") { pdfController.command(.zoomOut) }
+                            Button("显示 / 收起缩略图") { pdfController.command(.toggleThumbnails) }
+                            Button("连续 / 单页") { pdfController.command(.toggleContinuous) }
+                            Button("查找 PDF 文字") { pdfController.command(.toggleSearch) }
+                            Button("框选区域批注（扫描页）") { pdfController.command(.createRegion) }.disabled(!pdfController.isReady || store.isBusy)
+                        }
+                    }
+                    Button(store.book?.bookmarks.contains(unit.id) == true ? "移除书签" : "添加书签") { Task { await store.toggleBookmark(unit.id) } }.disabled(store.isBusy)
+                    Button("对这一段记一笔") { store.newNote(for: unit) }.disabled(store.isRecognizingPDF)
+                    if let message = unit.warning { Text(String(message.prefix(70))) }
+                } label: {
+                    HStack(spacing: 4) { Image(systemName: "textformat.size"); if viewingPDF { Text("\(pdfController.zoomPercent)%").font(.caption.monospacedDigit()) } }
+                }.help("阅读模式、缩放、目录与书签")
+                if viewingPDF {
+                    Button { pdfController.command(.toggleSearch) } label: { Image(systemName: "magnifyingglass") }.help("查找 PDF 文字").disabled(!pdfController.isReady)
+                }
+            }
             if store.selectedObjectID != nil {
                 Button { compactInspector.toggle() } label: { Image(systemName: "info.circle") }.help("查看所选对象")
                     .popover(isPresented: $compactInspector) {
@@ -133,28 +193,11 @@ struct WorkspaceView: View {
                     }
             }
             Button { servicePopover.toggle() } label: { Image(systemName: "sparkles") }.help("AI 服务：\(store.serviceName)")
-                .popover(isPresented: $servicePopover) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("自己的 AI").font(.headline)
-                        Picker("已保存的服务", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0) })) {
-                            if store.selectedServiceID == nil { Text("未保存配置").tag("") }
-                            ForEach(store.savedServices) { service in Text(service.name).tag(service.id) }
-                        }.disabled(store.isBusy)
-                        Text(store.settings.model.isEmpty ? "尚未配置模型" : store.settings.model).font(.caption).foregroundStyle(.secondary)
-                        HStack {
-                            Button("管理 / 新建") { servicePopover = false; store.showingSettings = true }
-                            Spacer()
-                            Button("测试") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty)
-                        }
-                        if !store.connectionStatus.isEmpty { Text(store.connectionStatus).font(.caption).foregroundStyle(.secondary) }
-                    }.padding(20).frame(width: 310)
-                }
+                .popover(isPresented: $servicePopover) { servicePicker }
             if let book = store.book {
-                if store.isBusy {
-                    Button { store.pause() } label: { Label(store.isExportingProject ? "导出中" : store.isSavingDocument ? "保存中" : "暂停", systemImage: store.isExportingProject || store.isSavingDocument ? "doc" : "pause.fill") }.disabled(store.isSavingDocument || store.isExportingProject)
-                } else {
-                    Button { store.startReading() } label: { Label(book.completedCount > 0 ? "继续精读" : "开始精读", systemImage: "play.fill") }
-                }
+                Button { store.isBusy ? store.pause() : store.startReading() } label: {
+                    Image(systemName: store.isBusy ? "pause.fill" : "play.fill")
+                }.help(store.isBusy ? (store.isImportingBookCommit || store.isCommittingLocalWrite ? "正在保存" : store.isExportingProject ? "正在导出" : "暂停任务") : (book.insights.isEmpty ? "开始精读" : "继续精读")).disabled(store.isSavingDocument || store.isExportingProject || store.isImportingBookCommit || store.isCommittingLocalWrite)
             }
             Menu {
                 Button("导入书籍…") { store.chooseBook() }
@@ -164,12 +207,74 @@ struct WorkspaceView: View {
                 Button("插件与读书法") { store.showingPlugins = true }
                 Button("AI 服务配置") { store.showingSettings = true }
                 Button("回收站") { store.showingTrash = true }
-            } label: { Image(systemName: "ellipsis.circle") }.help("导入、导出与设置")
+            } label: { Image(systemName: "ellipsis") }.help("导入、导出与设置")
         }
     }
-    private var routeTitle: String { store.book?.views.first { $0.id == store.route }?.title ?? (store.route == "reader" ? "原文与证据" : ComponentKind(rawValue: store.route)?.title ?? "阅读工作台") }
+    private var servicePicker: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("自己的 AI", systemImage: "sparkles").font(.headline)
+            Picker("已保存的服务", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0) })) {
+                if store.selectedServiceID == nil { Text("未保存配置").tag("") }
+                ForEach(store.savedServices) { service in Text(service.name).tag(service.id) }
+            }.disabled(store.isBusy)
+            Text(store.settings.model.isEmpty ? "尚未配置模型" : store.settings.model).font(.caption).foregroundStyle(.secondary)
+            HStack { Button("管理 / 新建") { servicePopover = false; store.showingSettings = true }; Spacer(); Button("测试") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty) }
+            if !store.connectionStatus.isEmpty { Text(store.connectionStatus).font(.caption).foregroundStyle(.secondary) }
+        }.padding(20).frame(width: 310)
+    }
+    private func moveSource(_ offset: Int) {
+        guard let units = store.book?.units, let id = store.selectedUnitID, let index = units.firstIndex(where: { $0.id == id }), units.indices.contains(index + offset) else { return }
+        store.navigateToUnit(units[index + offset].id)
+    }
+    private var modalSignature: String {
+        "\(store.showingSettings)|\(store.showingOCR)|\(store.showingTrash)|\(store.showingPlugins)|\(store.pdfPasswordRequest?.id.uuidString ?? "")|\(store.pdfPasswordRequest?.message ?? "")"
+    }
+    private var sheetBinding: Binding<WorkspaceSheet?> {
+        Binding(get: { activeSheet }, set: { value in
+            if value == nil { sheetClosing = true }
+            activeSheet = value
+        })
+    }
+    private func reconcileSheet() {
+        guard !sheetClosing else { return }
+        if let activeSheet {
+            let supersededByPassword: Bool
+            if case .password = activeSheet { supersededByPassword = false }
+            else { supersededByPassword = store.pdfPasswordRequest != nil }
+            if !activeSheet.isRequested(in: store) || supersededByPassword {
+                sheetClosing = true; self.activeSheet = nil
+            } else if case .password = activeSheet, let request = store.pdfPasswordRequest {
+                self.activeSheet = .password(request)
+            }
+            return
+        }
+        let next: WorkspaceSheet?
+        if let request = store.pdfPasswordRequest { next = .password(request) }
+        else if store.showingSettings { next = .settings }
+        else if store.showingOCR { next = .ocr }
+        else if store.showingTrash { next = .trash }
+        else if store.showingPlugins { next = .plugins }
+        else { next = nil }
+        lastSheet = next; activeSheet = next
+    }
+    private func finishSheetDismissal() {
+        if let lastSheet {
+            switch lastSheet {
+            case .settings: store.showingSettings = false
+            case .ocr: store.showingOCR = false
+            case .trash: store.showingTrash = false
+            case .plugins: store.showingPlugins = false
+            case .password(let request):
+                if store.pdfPasswordRequest?.id == request.id { store.cancelPDFPasswordRequest(request.id) }
+            }
+        }
+        lastSheet = nil; activeSheet = nil; sheetClosing = false
+        // onDismiss runs after the old sheet has actually left its window.
+        // Requests accumulated during dismissal are presented on the next turn.
+        DispatchQueue.main.async { reconcileSheet() }
+    }
     @ViewBuilder private var content: some View {
-        if store.route == "reader" { ReaderWorkspaceView().id(store.bookID) }
+        if store.route == "reader" { ReaderWorkspaceView(showPDF: $readerShowsPDF, showOutline: $readerOutline).id(store.bookID) }
         else {
             let kind = store.book?.views.first { $0.id == store.route }?.kind ?? ComponentKind(rawValue: store.route) ?? .workflow
             switch kind {
@@ -179,7 +284,7 @@ struct WorkspaceView: View {
             case .relations: RelationGraphView()
             case .knowledge: KnowledgeLibraryView()
             case .editor: DocumentEditorView()
-            case .query: BookChatView()
+            case .query: EnhancedBookChatView()
             case .workflow: ReadingWorkflowView()
             }
         }
@@ -195,12 +300,34 @@ struct WorkspaceView: View {
     }
 }
 
+private enum WorkspaceSheet: Identifiable {
+    case settings, ocr, trash, plugins, password(PDFPasswordRequest)
+    var id: String {
+        switch self {
+        case .settings: return "settings"
+        case .ocr: return "ocr"
+        case .trash: return "trash"
+        case .plugins: return "plugins"
+        case .password(let request): return "password-\(request.id)"
+        }
+    }
+    @MainActor func isRequested(in store: AppStore) -> Bool {
+        switch self {
+        case .settings: return store.showingSettings
+        case .ocr: return store.showingOCR
+        case .trash: return store.showingTrash
+        case .plugins: return store.showingPlugins
+        case .password(let request): return store.pdfPasswordRequest?.id == request.id
+        }
+    }
+}
+
 struct WelcomeView: View {
     @EnvironmentObject var store: AppStore
     var body: some View {
         VStack(spacing: 28) {
             Spacer()
-            Image(systemName: "book.pages.fill").font(.system(size: 62, weight: .ultraLight)).foregroundStyle(Palette.accent)
+            BrandGlyph(name: "mark").frame(width: 70, height: 70).foregroundStyle(Palette.accent)
             VStack(spacing: 12) {
                 Text("读一本书，\n留下一片自己的知识。").font(.system(size: 38, weight: .regular, design: .serif)).multilineTextAlignment(.center).lineSpacing(8)
                 Text("原文、人物与概念、时间与空间，以及你写下的理解。\n让自己的 AI 把它们连接起来。").font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center).lineSpacing(6)

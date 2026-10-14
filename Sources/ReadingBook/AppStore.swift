@@ -21,9 +21,14 @@ import ReadingCore
     @Published var editorDirty = false { didSet { if editorDirty { persistDraft() } } }
     @Published var draftEvidence: [Evidence] = []
     @Published var sourceFileURL: URL?
+    @Published var pdfPasswordRequest: PDFPasswordRequest?
+    @Published var pdfSessionPasswords: [String: String] = [:]
+    @Published var pdfUnlockedBookIDs: Set<String> = []
     @Published var isBusy = false
     @Published var isSavingDocument = false
     @Published var isExportingProject = false
+    @Published var isImportingBookCommit = false
+    @Published var isCommittingLocalWrite = false
     @Published var activity = "把一本书带进来，让理解慢慢长出来。"
     @Published var errorMessage: String?
     @Published var showingSettings = false
@@ -75,6 +80,7 @@ import ReadingCore
         guard !editorDirty else { errorMessage = "请先保存当前文档，再切换书籍。"; return }
         navigationGeneration += 1; documentGeneration += 1
         pdfNavigationToken += 1
+        pdfPasswordRequest = nil
         let generation = navigationGeneration
         bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
@@ -83,6 +89,8 @@ import ReadingCore
             let url = await repository.sourceURL(for: project)
             guard bookID == id && generation == navigationGeneration else { return }
             sourceFileURL = url
+            await preparePDFSession(bookID: id, sourceURL: url)
+            guard bookID == id && generation == navigationGeneration else { return }
         }
         let years = book?.events.compactMap(\.startYear) ?? []
         timeFrom = Double((years.min() ?? -5000) - 1); timeTo = Double((years.max() ?? 3000) + 1)
@@ -98,20 +106,7 @@ import ReadingCore
         panel.allowedContentTypes = [UTType.pdf, .plainText, .epub, UTType(filenameExtension: "md") ?? .text, UTType(filenameExtension: "markdown") ?? .text]
         if panel.runModal() == .OK, let url = panel.url { importBook(url) }
     }
-    func importBook(_ url: URL) {
-        guard !isBusy else { return }
-        guard !editorDirty else { errorMessage = "请先保存当前文档，再导入书籍。"; return }
-        isBusy = true; activity = "正在建立原文与内容清单…"
-        task = Task {
-            do {
-                var project = try await BookImporter.importFile(at: url); PluginEngine.seed(&project)
-                try Task.checkCancellation(); try await repository.create(project, sourceURL: url)
-                publish(project); isBusy = false; await selectBook(project.id); route = "reader"
-                activity = "已导入 \(project.units.count) 个内容单元；原文保留，可开始预读。"
-            } catch { handle(error) }
-            isBusy = false
-        }
-    }
+    func importBook(_ url: URL) { startBookImport(url) }
     func makePlan() {
         guard let project = book, !isBusy, providerReady else { return }
         guard !requiresPDFRecognition else { showingOCR = true; activity = "请先识别扫描页，或在对照原页后确认空白内容。"; return }
@@ -160,7 +155,7 @@ import ReadingCore
             requestsUsed = await reader.requestCount; isBusy = false
         }
     }
-    func pause() { guard !isSavingDocument, !isExportingProject else { return }; task?.cancel(); activity = "正在暂停，已保存结果可以继续阅读。" }
+    func pause() { guard !isSavingDocument, !isExportingProject, !isImportingBookCommit, !isCommittingLocalWrite else { return }; task?.cancel(); activity = "正在暂停，已保存结果可以继续阅读。" }
     private var requiresPDFRecognition: Bool {
         guard let book, book.originalName.lowercased().hasSuffix(".pdf") else { return false }
         return book.units.contains { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (book.coverage[$0.id]?.status ?? .pending) == .pending }

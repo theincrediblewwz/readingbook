@@ -33,6 +33,7 @@ extension AppStore {
                     guard let project = books.first(where: { $0.id == request.id }) else { return }
                     try await repository.archiveBook(project: project)
                     books.removeAll { $0.id == project.id }
+                    pdfSessionPasswords.removeValue(forKey: project.id); pdfUnlockedBookIDs.remove(project.id)
                     if bookID == project.id { bookID = nil; selectedUnitID = nil; selectedObjectID = nil; selectedDocumentID = nil; sourceFileURL = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = [] }
                     activity = "书籍已移入回收站。"
                 } else if let project = books.first(where: { $0.id == request.bookID }) {

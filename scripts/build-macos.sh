@@ -44,7 +44,7 @@ codesign --verify --strict --verbose=2 "$APP_PATH"
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" dist/ReadingBook-macos-universal.zip
 shasum -a 256 dist/ReadingBook-macos-universal.zip > dist/ReadingBook-macos-universal.zip.sha256
 {
-  echo "ReadingBook 0.3.0 preview"
+  echo "ReadingBook 0.4.0 preview"
   echo "Source commit: $(git rev-parse HEAD)"
   echo "Built UTC: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   echo "Architectures: $(lipo -archs "$APP_PATH/Contents/MacOS/ReadingBook")"

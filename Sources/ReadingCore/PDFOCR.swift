@@ -39,7 +39,7 @@ public actor PDFOCRReader {
         requestCount = 0; consumedTokens = 0; runTokenLimit = nil
     }
 
-    public func recognizePage(sourceURL: URL, page: Int, settings: ProviderSettings, apiKey: String) async throws -> OCRPageResult {
+    public func recognizePage(sourceURL: URL, page: Int, settings: ProviderSettings, apiKey: String, password: String? = nil) async throws -> OCRPageResult {
         guard !operationActive else { throw ReadingError.invalid("已有 OCR 页面正在处理，请等待或取消当前页面。") }
         guard (1...10_000).contains(settings.maxRequestsPerRun), requestCount < settings.maxRequestsPerRun else {
             throw ReadingError.invalid("本轮 OCR 已达到请求预算；本页尚未提交，请由你主动开始下一轮。")
@@ -55,7 +55,7 @@ public actor PDFOCRReader {
 
         #if os(macOS)
         let child = Task.detached(priority: .userInitiated) {
-            try autoreleasepool { try PDFOCRReader.renderPage(sourceURL: sourceURL, page: page) }
+            try autoreleasepool { try PDFOCRReader.renderPage(sourceURL: sourceURL, page: page, password: password) }
         }
         let image = try await withTaskCancellationHandler(operation: { try await child.value }, onCancel: { child.cancel() })
         try Task.checkCancellation()
@@ -151,7 +151,7 @@ public actor PDFOCRReader {
     }
 
     /// PDFKit owns page loading; Quartz applies the intrinsic /Rotate and effective CropBox once.
-    static func renderPage(sourceURL: URL, page: Int) throws -> RenderedPage {
+    static func renderPage(sourceURL: URL, page: Int, password: String? = nil) throws -> RenderedPage {
         try Task.checkCancellation()
         guard sourceURL.isFileURL, (1...20_000).contains(page) else { throw ReadingError.invalid("请选择本地 PDF 及从 1 开始的有效页号。") }
         let accessed = sourceURL.startAccessingSecurityScopedResource()
@@ -161,9 +161,11 @@ public actor PDFOCRReader {
               bytes > 0, bytes <= 256 * 1_024 * 1_024 else { throw ReadingError.invalid("OCR 原书必须是最多 256 MiB 的非空普通 PDF 文件。") }
         let data = try Data(contentsOf: sourceURL, options: .mappedIfSafe)
         guard data.count == bytes, data.count <= 256 * 1_024 * 1_024,
-              let pdf = PDFDocument(data: data), !pdf.isLocked, (1...20_000).contains(pdf.pageCount),
+              let pdf = PDFDocument(data: data) else { throw ReadingError.invalid("PDF 已损坏或读取时发生变化。") }
+        try BookImporter.unlockPDF(pdf, password: password)
+        guard (1...20_000).contains(pdf.pageCount),
               page <= pdf.pageCount, let pdfPage = pdf.page(at: page - 1), let rawPage = pdfPage.pageRef else {
-            throw ReadingError.invalid("PDF 已损坏、加密、超过页数限制，或指定页不存在。")
+            throw ReadingError.invalid("PDF 已损坏、超过页数限制，或指定页不存在。")
         }
         let media = rawPage.getBoxRect(.mediaBox), crop = rawPage.getBoxRect(.cropBox).intersection(media)
         guard !crop.isNull, !crop.isInfinite, crop.minX.isFinite, crop.minY.isFinite,

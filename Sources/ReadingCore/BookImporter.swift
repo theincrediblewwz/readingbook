@@ -9,6 +9,20 @@ import FoundationXML
 #endif
 #endif
 
+/// Passwords are supplied by the caller for this operation only and are never
+/// included in project metadata, errors or a rewritten PDF.
+public enum PDFPasswordError: LocalizedError, Equatable, Sendable {
+    case needsPassword
+    case wrongPassword
+
+    public var errorDescription: String? {
+        switch self {
+        case .needsPassword: return "此 PDF 需要打开密码。密码仅用于本次会话，不会保存。"
+        case .wrongPassword: return "PDF 密码不正确或无法解锁，请核对后重试。"
+        }
+    }
+}
+
 /// Imports original text into bounded, located units. Coverage records describe processing,
 /// not a promise that a model understood every detail of the original book.
 public enum BookImporter {
@@ -16,13 +30,13 @@ public enum BookImporter {
     static let maximumTextBytes = 64 * 1_024 * 1_024
     static let maximumUnits = 100_000
 
-    public static func importFile(at url: URL) async throws -> BookProject {
+    public static func importFile(at url: URL, password: String? = nil) async throws -> BookProject {
         let child = Task.detached(priority: .userInitiated) {
             #if os(macOS)
             let accessed = url.startAccessingSecurityScopedResource()
             defer { if accessed { url.stopAccessingSecurityScopedResource() } }
             #endif
-            return try importSynchronously(at: url)
+            return try importSynchronously(at: url, password: password)
         }
         return try await withTaskCancellationHandler(operation: { try await child.value }, onCancel: { child.cancel() })
     }
@@ -35,7 +49,7 @@ public enum BookImporter {
         #endif
     }
 
-    private static func importSynchronously(at url: URL) throws -> BookProject {
+    private static func importSynchronously(at url: URL, password: String?) throws -> BookProject {
         guard url.isFileURL else { throw ReadingError.invalid("请选择本地原书文件。") }
         let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
         guard values.isRegularFile == true, values.isSymbolicLink != true,
@@ -55,7 +69,7 @@ public enum BookImporter {
             guard data.count <= maximumTextBytes else { throw ReadingError.invalid("文本原书超过 64 MiB，请先拆分为卷。") }
             units = try splitText(decodeText(data), chapter: title, markdownHeadings: ext != "txt")
         #if os(macOS)
-        case "pdf": units = try importPDF(data, title: title)
+        case "pdf": units = try importPDF(data, title: title, password: password)
         case "epub": units = try importEPUB(data)
         #endif
         default:
@@ -128,10 +142,16 @@ public enum BookImporter {
     }
 
     #if os(macOS)
-    private static func importPDF(_ data: Data, title: String) throws -> [SourceUnit] {
-        guard let pdf = PDFDocument(data: data), !pdf.isLocked, pdf.pageCount > 0, pdf.pageCount <= 20_000 else {
-            throw ReadingError.invalid("PDF 损坏、被加密，或超过 20,000 页。请先解锁或分卷。")
-        }
+    static func unlockPDF(_ document: PDFDocument, password: String?) throws {
+        guard document.isLocked else { return }
+        guard let password else { throw PDFPasswordError.needsPassword }
+        guard password.count <= 1024, document.unlock(withPassword: password), !document.isLocked else { throw PDFPasswordError.wrongPassword }
+    }
+
+    private static func importPDF(_ data: Data, title: String, password: String?) throws -> [SourceUnit] {
+        guard let pdf = PDFDocument(data: data) else { throw ReadingError.invalid("PDF 损坏或无法读取。") }
+        try unlockPDF(pdf, password: password)
+        guard pdf.pageCount > 0, pdf.pageCount <= 20_000 else { throw ReadingError.invalid("PDF 没有有效页面，或超过 20,000 页。请按卷导入。") }
         var units: [SourceUnit] = [], extractedBytes = 0
         for index in 0..<pdf.pageCount {
             try Task.checkCancellation()

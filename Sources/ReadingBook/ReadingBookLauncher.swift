@@ -9,9 +9,9 @@ enum ReadingBookLauncher {
         if CommandLine.arguments.contains("--verify-resources") {
             do {
                 try PackagedResourceVerification.run()
-                print("ReadingBook 0.3.0 资源检查 OK")
+                print("ReadingBook 0.4.0 资源检查 OK")
             } catch {
-                let message = "ReadingBook 0.3.0 资源检查失败：\(error.localizedDescription)\n"
+                let message = "ReadingBook 0.4.0 资源检查失败：\(error.localizedDescription)\n"
                 try? FileHandle.standardError.write(contentsOf: Data(message.utf8))
                 exit(1)
             }
@@ -74,6 +74,12 @@ private enum PackagedResourceVerification {
         }
         guard let catalogURL = bundle.url(forResource: "provider-catalog", withExtension: "json") else {
             throw Failure(message: "缺少 provider-catalog.json。")
+        }
+        guard let symbolsURL = bundle.url(forResource: "symbols", withExtension: "json", subdirectory: "Brand"),
+              let symbols = try JSONSerialization.jsonObject(with: read(symbolsURL, inside: expected)) as? [String: Any],
+              let glyphs = symbols["glyphs"] as? [String: Any],
+              ["mark", "reader", "workflow", "chat", "note", "map", "mindmap", "relations", "knowledge"].allSatisfy({ glyphs[$0] != nil }) else {
+            throw Failure(message: "缺少 ReadingBook 品牌图标资源。")
         }
         let catalog = try JSONDecoder().decode(ProviderCatalog.self, from: read(catalogURL, inside: expected))
         guard !catalog.verifiedAt.isEmpty, !catalog.providers.isEmpty,

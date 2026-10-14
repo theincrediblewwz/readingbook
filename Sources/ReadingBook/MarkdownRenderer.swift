@@ -4,18 +4,30 @@ import WebKit
 import UniformTypeIdentifiers
 import ImageIO
 
+/// A transient selection from this exact trusted render. Rendered text is a semantic
+/// excerpt, not a claim that its bytes equal the Markdown source (especially math).
+struct RenderedMarkdownSelection: Equatable {
+    let text: String
+    let sourceMarkdown: String
+    let revision: Int
+    let containsMath: Bool
+}
+
 /// Offline Markdown + KaTeX. The surrounding SwiftUI ScrollView owns vertical scrolling.
 /// A base directory is an explicit grant for relative raster images only, never file links.
 struct RichMarkdownView: View {
     let markdown: String
     var baseDirectory: URL?
+    var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     @State private var contentHeight: CGFloat = 40
 
-    init(markdown: String, baseDirectory: URL? = nil) {
+    init(markdown: String, baseDirectory: URL? = nil,
+         onSelectionChange: ((RenderedMarkdownSelection?) -> Void)? = nil) {
         self.markdown = markdown
         self.baseDirectory = baseDirectory
+        self.onSelectionChange = onSelectionChange
     }
 
     var body: some View {
@@ -23,7 +35,8 @@ struct RichMarkdownView: View {
             if let resources = MarkdownResources.directory {
                 MarkdownWebView(markdown: markdown, baseDirectory: baseDirectory,
                                 resources: resources, theme: colorScheme == .dark ? "dark" : "light",
-                                height: $contentHeight, onOpenURL: { openURL($0) })
+                                height: $contentHeight, onOpenURL: { openURL($0) },
+                                onSelectionChange: onSelectionChange)
                     .frame(height: max(32, contentHeight))
             } else {
                 Text("离线 Markdown / 公式资源缺失，请重新安装完整的 ReadingBook.app。")
@@ -55,8 +68,9 @@ private struct MarkdownWebView: NSViewRepresentable {
     let theme: String
     @Binding var height: CGFloat
     var onOpenURL: (URL) -> Void
+    var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
 
-    func makeCoordinator() -> Coordinator { Coordinator(height: $height, onOpenURL: onOpenURL) }
+    func makeCoordinator() -> Coordinator { Coordinator(height: $height, onOpenURL: onOpenURL, onSelectionChange: onSelectionChange) }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -66,6 +80,7 @@ private struct MarkdownWebView: NSViewRepresentable {
         configuration.setURLSchemeHandler(handler, forURLScheme: MarkdownSchemeHandler.scheme)
         configuration.userContentController.add(context.coordinator, name: "readingbookSize")
         configuration.userContentController.add(context.coordinator, name: "readingbookLink")
+        configuration.userContentController.add(context.coordinator, name: "readingbookSelection")
         let webView = MarkdownContentWebView(frame: .zero, configuration: configuration)
         webView.underPageBackgroundColor = .clear
         webView.navigationDelegate = context.coordinator
@@ -79,6 +94,7 @@ private struct MarkdownWebView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.height = $height
         context.coordinator.onOpenURL = onOpenURL
+        context.coordinator.onSelectionChange = onSelectionChange
         context.coordinator.update(markdown: markdown, baseDirectory: baseDirectory, theme: theme)
     }
 
@@ -87,13 +103,16 @@ private struct MarkdownWebView: NSViewRepresentable {
         webView.navigationDelegate = nil
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "readingbookSize")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "readingbookLink")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "readingbookSelection")
+        coordinator.invalidate()
         coordinator.webView = nil
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-        struct State: Equatable { let markdown: String; let directory: URL?; let theme: String }
+        struct State: Equatable { let markdown: String; let directory: URL?; let theme: String; let selectionEnabled: Bool }
         var height: Binding<CGFloat>
         var onOpenURL: (URL) -> Void
+        var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
         weak var webView: WKWebView?
         var schemeHandler: MarkdownSchemeHandler?
         private var pending: State?
@@ -101,23 +120,32 @@ private struct MarkdownWebView: NSViewRepresentable {
         private var ready = false
         private var revision = 0
 
-        init(height: Binding<CGFloat>, onOpenURL: @escaping (URL) -> Void) {
-            self.height = height; self.onOpenURL = onOpenURL
+        init(height: Binding<CGFloat>, onOpenURL: @escaping (URL) -> Void,
+             onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?) {
+            self.height = height; self.onOpenURL = onOpenURL; self.onSelectionChange = onSelectionChange
         }
 
         func update(markdown: String, baseDirectory: URL?, theme: String) {
-            pending = State(markdown: markdown, directory: baseDirectory, theme: theme)
+            pending = State(markdown: markdown, directory: baseDirectory, theme: theme, selectionEnabled: onSelectionChange != nil)
             renderPending()
         }
+
+        func invalidate() { ready = false; revision += 1; pending = nil; displayed = nil; onSelectionChange = nil }
 
         private func renderPending() {
             guard ready, let webView, let state = pending, state != displayed else { return }
             displayed = state; revision += 1
+            let renderedRevision = revision
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.revision == renderedRevision else { return }
+                self.onSelectionChange?(nil)
+            }
             schemeHandler?.authorize(state.directory, revision: revision)
             // WebKit serializes these arguments. Markdown is never interpolated into JS/HTML.
             webView.callAsyncJavaScript("window.ReadingBookMarkdown.render(markdown, options)",
                                        arguments: ["markdown": state.markdown,
-                                                   "options": ["allowImages": state.directory != nil, "theme": state.theme, "revision": revision]],
+                                                   "options": ["allowImages": state.directory != nil, "theme": state.theme, "revision": revision,
+                                                               "selectionEnabled": state.selectionEnabled]],
                                        in: nil, in: .page) { [weak self] result in
                 if case .failure(let error) = result {
                     self?.displayed = nil
@@ -149,14 +177,28 @@ private struct MarkdownWebView: NSViewRepresentable {
             guard message.frameInfo.isMainFrame, message.webView === webView,
                   message.frameInfo.request.url?.host == "bundle",
                   message.frameInfo.request.url?.scheme == MarkdownSchemeHandler.scheme,
+                  message.frameInfo.request.url?.path == "/index.html",
                   let body = message.body as? [String: Any] else { return }
             if message.name == "readingbookSize", let measured = body["height"] as? NSNumber,
                let version = body["revision"] as? NSNumber, version.intValue == revision {
                 let value = measured.doubleValue
                 guard value.isFinite, (1...1_000_000).contains(value), abs(height.wrappedValue - CGFloat(value)) > 1 else { return }
-                DispatchQueue.main.async { [weak self] in self?.height.wrappedValue = CGFloat(value) }
+                let measuredRevision = revision
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.revision == measuredRevision else { return }
+                    self.height.wrappedValue = CGFloat(value)
+                }
             } else if message.name == "readingbookLink", let href = body["href"] as? String,
+                      let version = body["revision"] as? NSNumber, version.intValue == revision,
                       href.utf8.count <= 8_192, let url = URL(string: href) { open(url) }
+            else if message.name == "readingbookSelection", let version = body["revision"] as? NSNumber,
+                    version.intValue == revision, let state = displayed, state == pending, state.selectionEnabled,
+                    let selected = body["text"] as? String, selected.utf8.count <= 131_072,
+                    let containsMath = body["containsMath"] as? Bool {
+                if selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { onSelectionChange?(nil) }
+                else { onSelectionChange?(RenderedMarkdownSelection(text: selected, sourceMarkdown: state.markdown,
+                                                                    revision: revision, containsMath: containsMath)) }
+            }
         }
     }
 }

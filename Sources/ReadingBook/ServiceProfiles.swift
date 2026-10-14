@@ -145,7 +145,7 @@ extension AppStore {
                 configuration = profile.settings; key = try keyForService(id)
             }
         } catch { errorMessage = error.localizedDescription; return }
-        guard !configuration.model.isEmpty else { showingSettings = true; errorMessage = "请先保存一个支持图像输入的 OCR 模型配置。"; return }
+        guard !configuration.model.isEmpty else { showingOCR = false; showingSettings = true; errorMessage = "请先保存一个支持图像输入的 OCR 模型配置。"; return }
         let candidates = Array(Set(pages)).sorted().filter { OCRIntegration.unavailableReason(project: current, page: $0) == nil }
         guard !candidates.isEmpty else { errorMessage = "所选页均已被分析或引用，不能覆盖；请导入原书为新项目再识别。"; return }
         let runSettings = configuration, runKey = key
@@ -155,12 +155,14 @@ extension AppStore {
             await pdfOCRReader.resetBudget()
             do {
                 let source = await repository.sourceURL(for: current)
+                guard try await ensurePDFSession(bookID: current.id, sourceURL: source, resumeOCRPages: candidates) else { return }
+                let sourcePassword = pdfPassword(for: current.id)
                 for (index, page) in candidates.enumerated() {
                     try Task.checkCancellation()
                     guard let latest = book, latest.id == current.id else { throw CancellationError() }
                     try await repository.checkOCRPage(project: latest, page: page)
                     activity = "正在识别 PDF 第 \(page) 页（\(index + 1)/\(candidates.count)）…"
-                    let result = try await pdfOCRReader.recognizePage(sourceURL: source, page: page, settings: runSettings, apiKey: runKey)
+                    let result = try await pdfOCRReader.recognizePage(sourceURL: source, page: page, settings: runSettings, apiKey: runKey, password: sourcePassword)
                     try Task.checkCancellation()
                     let oldPage = selectedUnit?.page
                     let updated = try await repository.saveOCRPage(project: latest, result: result)
