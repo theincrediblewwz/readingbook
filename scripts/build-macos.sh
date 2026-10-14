@@ -24,7 +24,7 @@ done
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 lipo -create "$PACKAGE_ROOT/ReadingBook-arm64" "$PACKAGE_ROOT/ReadingBook-x86_64" -output "$APP_PATH/Contents/MacOS/ReadingBook"
 chmod 755 "$APP_PATH/Contents/MacOS/ReadingBook"
-lipo -verify_arch arm64 x86_64 "$APP_PATH/Contents/MacOS/ReadingBook"
+lipo "$APP_PATH/Contents/MacOS/ReadingBook" -verify_arch arm64 x86_64
 cp packaging/Info.plist "$APP_PATH/Contents/Info.plist"
 plutil -lint "$APP_PATH/Contents/Info.plist"
 swift scripts/make-icon.swift "$PACKAGE_ROOT/icon.iconset"
