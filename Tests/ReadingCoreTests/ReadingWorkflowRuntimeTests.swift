@@ -3,6 +3,20 @@ import XCTest
 @testable import ReadingCore
 
 final class ReadingWorkflowRuntimeTests: XCTestCase {
+    func testExecutableMathDeclarationImportsWithDefaultBindingOptions() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let manifest = try JSONDecoder().decode(PluginManifest.self, from: Data(contentsOf: root.appendingPathComponent("Examples/math-plugin.json")))
+        var value = try project()
+        try PluginEngine.install(manifest, into: &value)
+        let method = try XCTUnwrap(value.methods.first { $0.id == "example-math-reading" })
+        XCTAssertEqual(method.executions?.count, method.steps.count)
+        XCTAssertTrue(method.executions?.allSatisfy { $0.configuration.isEmpty && $0.maxAttempts == 3 } == true)
+        XCTAssertEqual(method.executions?.last?.actionID, "citations.verify")
+        XCTAssertNoThrow(try ReadingWorkflowRuntime.validate(method: method))
+        let restored = try JSONDecoder().decode(BookProject.self, from: JSONEncoder().encode(value))
+        XCTAssertEqual(restored.methods, value.methods)
+    }
+
     private func project(withReceipts: Bool = true, executions: [ReadingStepExecution]? = nil, steps: [String] = ["提取条件", "复核引用"]) throws -> BookProject {
         let unit = SourceUnit(id: "u1", order: 0, chapter: "第一章", text: "设 α > 0。\n\n结论依赖这个条件。\n")
         var project = BookProject(title: "测试", originalName: "test.md", sourceHash: "source", units: [unit])

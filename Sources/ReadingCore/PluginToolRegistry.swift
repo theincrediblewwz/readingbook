@@ -111,8 +111,10 @@ public struct PluginToolRegistry: Sendable {
             }
         }
         if !receipt {
-            guard try encoder.encode(candidate.paragraphReceipts) == encoder.encode(project.paragraphReceipts),
-                  try encoder.encode(candidate.receiptBatch) == encoder.encode(project.receiptBatch) else { throw ReadingError.invalid("插件不能改写逐段回执。") }
+            guard try encoder.encode(candidate.paragraphReceipts) == encoder.encode(project.paragraphReceipts) else { throw ReadingError.invalid("插件不能改写逐段回执。") }
+            // Finishing retires the active host batch, but never changes the
+            // admitted receipts or replaces it with a fabricated batch.
+            guard candidate.receiptBatch == project.receiptBatch || (finish && candidate.receiptBatch == nil) else { throw ReadingError.invalid("插件不能改写当前回执批次。") }
         }
         if !step && !finish {
             guard try encoder.encode(candidate.readingStepResults) == encoder.encode(project.readingStepResults),

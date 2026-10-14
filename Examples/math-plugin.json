@@ -1,7 +1,7 @@
 {
   "id": "example-math",
   "name": "数学精读",
-  "version": 1,
+  "version": 2,
   "description": "定义、命题、证明与反例；通过同一套插件接口扩展类型、读书法与视图。",
   "types": [
     {"id": "example-math-lemma", "name": "引理", "icon": "function", "fields": [
@@ -12,7 +12,14 @@
     ]}
   ],
   "methods": [
-    {"id": "example-math-reading", "name": "定义—证明—反例", "goal": "逐段核对每个条件与推导，不把熟悉的公式当作已经证明。", "steps": ["列出定义与适用条件", "按原文复述每步证明，记录依赖", "区分书中证明与自己的推断", "检查边界条件、例子和反例", "连接前置概念与后续命题，保留原文引用"]}
+    {"id": "example-math-reading", "name": "定义—证明—反例", "goal": "逐段核对每个条件与推导，不把熟悉的公式当作已经证明。", "steps": ["列出定义与适用条件", "按原文复述每步证明，记录依赖", "区分书中证明与自己的推断", "检查边界条件、例子和反例", "连接前置概念与后续命题，保留原文引用", "由宿主核对引文与对象关联，语义疑点仍待核对"], "executions": [
+      {"stepIndex": 0, "actionID": "facts.extract"},
+      {"stepIndex": 1, "actionID": "ai.analyze"},
+      {"stepIndex": 2, "actionID": "ai.analyze"},
+      {"stepIndex": 3, "actionID": "reading.review"},
+      {"stepIndex": 4, "actionID": "facts.extract"},
+      {"stepIndex": 5, "actionID": "citations.verify"}
+    ]}
   ],
   "views": [
     {"id": "example-math-cards", "title": "引理与证明", "kind": "cards", "typeIDs": ["example-math-lemma"]},
