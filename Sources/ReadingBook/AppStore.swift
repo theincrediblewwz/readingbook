@@ -51,7 +51,7 @@ import ReadingCore
     }
     func load() async {
         guard !loaded else { return }; loaded = true
-        do { books = try await repository.loadAll(); if let first = books.first { await selectBook(first.id); restoreDraft() } }
+        do { books = try await repository.loadAll(); if let first = books.first { await selectBook(first.id) } }
         catch { errorMessage = "书库读取失败，原文件已保留：\(error.localizedDescription)" }
     }
     func selectBook(_ id: String) async {
@@ -59,7 +59,7 @@ import ReadingCore
         guard !editorDirty else { errorMessage = "请先保存当前文档，再切换书籍。"; return }
         navigationGeneration += 1; documentGeneration += 1
         let generation = navigationGeneration
-        bookID = id; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""
+        bookID = id; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
         if book?.units.contains(where: { $0.id == selectedUnitID }) != true { selectedUnitID = book?.units.first?.id }
         if let project = book {
@@ -69,6 +69,7 @@ import ReadingCore
         }
         let years = book?.events.compactMap(\.startYear) ?? []
         timeFrom = Double((years.min() ?? -5000) - 1); timeTo = Double((years.max() ?? 3000) + 1)
+        restoreDraft()
     }
     func publish(_ project: BookProject) {
         if let index = books.firstIndex(where: { $0.id == project.id }) { books[index] = project }
@@ -159,6 +160,7 @@ import ReadingCore
     func newDocument() {
         guard book != nil else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档。"; return }
+        documentGeneration += 1
         selectedDocumentID = nil; editorTitle = "新的理解"; editorMarkdown = "# 新的理解\n\n"; draftEvidence = []; editorDirty = true; route = "editor"
     }
     func openDocument(_ document: DocumentRecord) async {
