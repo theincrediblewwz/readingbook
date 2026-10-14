@@ -320,6 +320,8 @@ import ReadingCore
         } else if current.coverage[unitID]?.status == .needsReview {
             let hasAnalysis = ReadingLedger.hasReadingAnalysis(unitID: unitID, in: current)
             current.coverage[unitID]?.status = hasAnalysis ? .completed : .pending
+            current.coverage[unitID]?.message = hasAnalysis ? "用户已对照原文核对内容及回执问题。" : "用户已核对源内容，仍待 AI 读取。"
+            current.coverage[unitID]?.updatedAt = Date()
             if !hasAnalysis { current.insights.removeAll { $0.id == "deferred-\(unitID)" && $0.unitIDs == [unitID] } }
         }
         current.audit.append(ToolAudit(name: "user_review", summary: "用户核对单元 \(unitID)"))

@@ -109,11 +109,11 @@ struct ReaderWorkspaceView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 if !isPDF { Text(unit.chapter).font(.system(size: 28, weight: .regular, design: .serif)) }
-                if let warning = unit.warning {
+                if let warning = unit.warning ?? (store.book?.coverage[unit.id]?.status == .needsReview ? store.book?.coverage[unit.id]?.message : nil) {
                     VStack(alignment: .leading, spacing: 10) {
                         Label("内容待核对", systemImage: "doc.text.magnifyingglass").font(.subheadline.weight(.medium))
                         Text(warning).font(.caption).foregroundStyle(.secondary)
-                        Button(unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "我已对照原页，确认这确实是空白内容" : "我已对照原文，确认此单元内容完整") { Task { await store.markReviewed(unit.id) } }.font(.caption).disabled(store.isBusy)
+                        Button(unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "我已对照原页，确认这确实是空白内容" : "我已对照原文核对内容及回执中的问题") { Task { await store.markReviewed(unit.id) } }.font(.caption).disabled(store.isBusy)
                         if unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Button("保留为待识别，先继续其他内容") { Task { await store.deferUnit(unit.id) } }.font(.caption).disabled(store.isBusy) }
                     }.padding(14).background(Palette.copper.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                 }
