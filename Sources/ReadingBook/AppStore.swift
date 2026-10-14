@@ -18,6 +18,7 @@ import ReadingCore
     @Published var draftEvidence: [Evidence] = []
     @Published var sourceFileURL: URL?
     @Published var isBusy = false
+    @Published var isSavingDocument = false
     @Published var activity = "把一本书带进来，让理解慢慢长出来。"
     @Published var errorMessage: String?
     @Published var showingSettings = false
@@ -31,6 +32,8 @@ import ReadingCore
     let repository: LibraryRepository
     let reader = AIReader()
     private var loaded = false
+    private var navigationGeneration = 0
+    private var documentGeneration = 0
     private var task: Task<Void, Never>?
     var book: BookProject? { books.first { $0.id == bookID } }
     var selectedUnit: SourceUnit? { book?.units.first { $0.id == selectedUnitID } }
@@ -54,10 +57,16 @@ import ReadingCore
     func selectBook(_ id: String) async {
         guard !isBusy else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档，再切换书籍。"; return }
-        bookID = id; selectedObjectID = nil; selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""
+        navigationGeneration += 1; documentGeneration += 1
+        let generation = navigationGeneration
+        bookID = id; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
         if book?.units.contains(where: { $0.id == selectedUnitID }) != true { selectedUnitID = book?.units.first?.id }
-        if let project = book { sourceFileURL = await repository.sourceURL(for: project) }
+        if let project = book {
+            let url = await repository.sourceURL(for: project)
+            guard bookID == id && generation == navigationGeneration else { return }
+            sourceFileURL = url
+        }
         let years = book?.events.compactMap(\.startYear) ?? []
         timeFrom = Double((years.min() ?? -5000) - 1); timeTo = Double((years.max() ?? 3000) + 1)
     }
@@ -130,7 +139,7 @@ import ReadingCore
             requestsUsed = await reader.requestCount; isBusy = false
         }
     }
-    func pause() { task?.cancel(); activity = "正在暂停，已保存结果可以继续阅读。" }
+    func pause() { guard !isSavingDocument else { return }; task?.cancel(); activity = "正在暂停，已保存结果可以继续阅读。" }
     var providerReady: Bool {
         if settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errorMessage = "请先在模型设置中填写模型名称与服务地址。"; showingSettings = true; return false }
         return true
@@ -154,23 +163,41 @@ import ReadingCore
     }
     func openDocument(_ document: DocumentRecord) async {
         guard let current = book else { return }
-        guard !editorDirty || selectedDocumentID == document.id else { errorMessage = "请先保存当前文档。"; return }
+        guard !editorDirty else {
+            if selectedDocumentID == document.id { route = "editor"; return }
+            errorMessage = "请先保存当前文档。"; return
+        }
+        documentGeneration += 1
+        let generation = documentGeneration
         do {
-            editorMarkdown = try await repository.readDocument(bookID: current.id, document: document)
+            let markdown = try await repository.readDocument(bookID: current.id, document: document)
+            guard current.id == bookID, generation == documentGeneration, !editorDirty else { return }
+            editorMarkdown = markdown
             editorTitle = document.title; selectedDocumentID = document.id; draftEvidence = document.evidence; editorDirty = false; route = "editor"
             selectedObjectID = document.id
-        } catch { errorMessage = error.localizedDescription }
+        } catch { if current.id == bookID && generation == documentGeneration { errorMessage = error.localizedDescription } }
     }
     func saveCurrentDocument() async {
         guard var current = book, !isBusy, editorDirty else { return }
+        let savingBookID = current.id, savingDocumentID = selectedDocumentID
+        let savingTitle = editorTitle, savingMarkdown = editorMarkdown, savingEvidence = draftEvidence
+        isBusy = true; isSavingDocument = true; activity = "正在保存 Markdown…"
+        defer { isBusy = false; isSavingDocument = false }
         do {
-            var document = current.documents.first { $0.id == selectedDocumentID } ?? DocumentRecord(title: editorTitle, linkedIDs: selectedObjectID.map { [$0] } ?? [], evidence: draftEvidence)
-            document.title = editorTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名笔记" : editorTitle; document.updatedAt = Date()
+            var document = current.documents.first { $0.id == savingDocumentID } ?? DocumentRecord(title: savingTitle, linkedIDs: selectedObjectID.map { [$0] } ?? [], evidence: savingEvidence)
+            document.title = savingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名笔记" : savingTitle; document.updatedAt = Date()
             if !current.nodes.contains(where: { $0.targetID == document.id }) {
                 let index = current.nodes.count; current.nodes.append(CanvasNode(targetID: document.id, x: Double(index % 3) * 270 + 60, y: Double(index / 3) * 150 + 60))
             }
-            current = try await repository.saveDocument(project: current, document: document, markdown: editorMarkdown)
-            publish(current); selectedDocumentID = document.id; editorDirty = false; UserDefaults.standard.removeObject(forKey: "draft-\(current.id)"); activity = "Markdown 文档已保存。"
+            current = try await repository.saveDocument(project: current, document: document, markdown: savingMarkdown)
+            publish(current)
+            let unchanged = bookID == savingBookID && selectedDocumentID == savingDocumentID && editorTitle == savingTitle && editorMarkdown == savingMarkdown && draftEvidence == savingEvidence
+            if bookID == savingBookID && selectedDocumentID == savingDocumentID { selectedDocumentID = document.id }
+            if unchanged {
+                editorDirty = false; UserDefaults.standard.removeObject(forKey: "draft-\(current.id)"); activity = "Markdown 文档已保存。"
+            } else {
+                editorDirty = true; persistDraft(); activity = "已保存上一版；保存期间的新编辑保留为待保存草稿。"
+            }
         } catch { errorMessage = error.localizedDescription }
     }
     func saveAnswer(_ message: ChatMessage) async {
@@ -178,6 +205,7 @@ import ReadingCore
         do {
             let stableID = "answer-\(message.id)"
             if let existing = current.documents.first(where: { $0.id == stableID }) { await openDocument(existing); return }
+            isBusy = true; defer { isBusy = false }
             let question = current.chats.prefix(while: { $0.id != message.id }).last(where: { $0.role == "user" })?.content ?? "与书对话"
             let title = String(question.prefix(60))
             let document = DocumentRecord(id: stableID, title: title, origin: "saved-answer", linkedIDs: selectedObjectID.map { [$0] } ?? [], evidence: message.evidence)
@@ -238,6 +266,7 @@ import ReadingCore
     }
     func markReviewed(_ unitID: String) async {
         guard var current = book, !isBusy, let index = current.units.firstIndex(where: { $0.id == unitID }) else { return }
+        isBusy = true; defer { isBusy = false }
         current.units[index].warning = nil
         if current.units[index].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             var entry = current.coverage[unitID] ?? CoverageEntry(); entry.status = .completed; entry.message = "用户确认此单元为原书空白。"; entry.updatedAt = Date(); current.coverage[unitID] = entry
@@ -249,6 +278,7 @@ import ReadingCore
     }
     func deferUnit(_ unitID: String) async {
         guard var current = book, !isBusy, let unit = current.units.first(where: { $0.id == unitID }) else { return }
+        isBusy = true; defer { isBusy = false }
         var entry = current.coverage[unitID] ?? CoverageEntry(); entry.status = .needsReview; entry.message = "用户保留本单元为待识别，未读取其中内容。"; entry.updatedAt = Date(); current.coverage[unitID] = entry
         let insightID = "deferred-\(unitID)"
         if !current.insights.contains(where: { $0.id == insightID }) { current.insights.append(ReadingInsight(id: insightID, unitIDs: [unitID], markdown: "【未读取，待识别】\(unit.locator)。该单元尚无可靠文本，不得推断其中的事实。")) }
@@ -257,9 +287,10 @@ import ReadingCore
     func activate(_ kind: ComponentKind) {
         guard var current = book, !isBusy else { return }
         let id = "manual-\(kind.rawValue)"
+        isBusy = true
         if !current.views.contains(where: { $0.id == id || $0.kind == kind }) { current.views.append(ViewDefinition(id: id, title: kind.title, kind: kind)) }
         publish(current); route = current.views.first { $0.kind == kind }?.id ?? kind.rawValue
-        Task { do { try await repository.save(current) } catch { errorMessage = error.localizedDescription } }
+        Task { defer { isBusy = false }; do { try await repository.save(current) } catch { errorMessage = error.localizedDescription } }
     }
     func importPlugin() {
         guard var current = book, !isBusy else { return }
@@ -268,7 +299,7 @@ import ReadingCore
         do {
             let data = try Data(contentsOf: url); guard data.count <= 1_000_000 else { throw ReadingError.invalid("插件包超过 1 MB。") }
             let manifest = try JSONDecoder().decode(PluginManifest.self, from: data); try PluginEngine.install(manifest, into: &current)
-            publish(current); Task { do { try await repository.save(current) } catch { errorMessage = error.localizedDescription } }
+            isBusy = true; publish(current); Task { defer { isBusy = false }; do { try await repository.save(current) } catch { errorMessage = error.localizedDescription } }
         } catch { errorMessage = error.localizedDescription }
     }
     func exportProject() {
@@ -303,6 +334,7 @@ import ReadingCore
         guard var current = book, !isBusy else { return }
         let id = "insight-\(insight.id)"
         if let existing = current.documents.first(where: { $0.id == id }) { await openDocument(existing); return }
+        isBusy = true; defer { isBusy = false }
         let title = "阅读笔记 · \(current.units.first { insight.unitIDs.contains($0.id) }?.chapter ?? current.title)"
         let evidence = insight.unitIDs.compactMap { id -> Evidence? in guard let unit = current.units.first(where: { $0.id == id }), !unit.text.isEmpty else { return nil }; return Evidence(unitID: id, quote: String(unit.text.prefix(180))) }
         let document = DocumentRecord(id: id, title: title, origin: "saved-analysis", linkedIDs: insight.unitIDs, evidence: evidence)
@@ -311,22 +343,26 @@ import ReadingCore
     }
     func toggleBookmark(_ unitID: String) async {
         guard var current = book, !isBusy else { return }
+        isBusy = true; defer { isBusy = false }
         if current.bookmarks.contains(unitID) { current.bookmarks.removeAll { $0 == unitID } } else { current.bookmarks.append(unitID) }
         do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
     }
     func moveNode(id: String, x: Double, y: Double) async {
         guard var current = book, !isBusy, let index = current.nodes.firstIndex(where: { $0.id == id }) else { return }
+        isBusy = true; defer { isBusy = false }
         current.nodes[index].x = x; current.nodes[index].y = y
         do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
     }
     func connectNodes(from: String, to: String, label: String) async {
         guard var current = book, !isBusy, from != to, current.nodes.contains(where: { $0.id == from }), current.nodes.contains(where: { $0.id == to }) else { return }
         guard !current.edges.contains(where: { $0.fromID == from && $0.toID == to && $0.label == label }) else { return }
+        isBusy = true; defer { isBusy = false }
         current.edges.append(CanvasEdge(fromID: from, toID: to, label: label))
         do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
     }
     func setPluginEnabled(_ enabled: Bool, id: String) async {
         guard var current = book, !isBusy else { return }
+        isBusy = true; defer { isBusy = false }
         do { try PluginEngine.setEnabled(enabled, pluginID: id, in: &current); try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
     }
     func saveEntity(_ entity: KnowledgeEntity) async {
@@ -335,6 +371,7 @@ import ReadingCore
         guard (entity.latitude == nil) == (entity.longitude == nil) else { errorMessage = "经度和纬度需要同时填写，或同时留空。"; return }
         if let latitude = entity.latitude, !latitude.isFinite || !(-90...90).contains(latitude) { errorMessage = "纬度应在 -90 到 90 之间。"; return }
         if let longitude = entity.longitude, !longitude.isFinite || !(-180...180).contains(longitude) { errorMessage = "经度应在 -180 到 180 之间。"; return }
+        isBusy = true; defer { isBusy = false }
         var edited = entity
         if edited.latitude != nil, (edited.latitude != current.entities[index].latitude || edited.longitude != current.entities[index].longitude), edited.locationNote?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false { edited.locationNote = "用户手动指定坐标；尚未作外部考证。" }
         current.entities[index] = edited; current.audit.append(ToolAudit(name: "user_edit", summary: "用户编辑卡片：\(entity.name)"))

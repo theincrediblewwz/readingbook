@@ -100,7 +100,7 @@ struct WorkspaceView: View {
             Spacer()
             if let book = store.book {
                 Text("\(book.completedCount) / \(book.units.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                if store.isBusy { Button { store.pause() } label: { Label("暂停", systemImage: "pause.fill") } }
+                if store.isBusy { Button { store.pause() } label: { Label(store.isSavingDocument ? "保存中" : "暂停", systemImage: store.isSavingDocument ? "doc" : "pause.fill") }.disabled(store.isSavingDocument) }
                 else { Button { store.startReading() } label: { Label(book.completedCount > 0 ? "继续精读" : "开始精读", systemImage: "sparkles") }.buttonStyle(.borderedProminent) }
             }
         }.padding(.horizontal, 28).padding(.vertical, 18)

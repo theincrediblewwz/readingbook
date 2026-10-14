@@ -14,7 +14,7 @@ struct ProviderSettingsView: View {
                 Text("兼容 Chat Completions 工具调用的模型。地址可为 /v1 或完整 /chat/completions；本机 Ollama 等服务可留空密钥。").font(.caption).foregroundStyle(.secondary)
                 Stepper("每轮最多 \(store.settings.maxRequestsPerRun) 次请求", value: $store.settings.maxRequestsPerRun, in: 1...2000, step: 10)
                 Stepper("单次输出最多 \(store.settings.maxOutputTokens) token", value: $store.settings.maxOutputTokens, in: 512...16000, step: 512)
-            }.formStyle(.grouped)
+            }.formStyle(.grouped).disabled(store.isBusy)
             Text("预读、每个内容单元与工具续轮都会消耗请求预算。达到上限后暂停，下次由你主动继续。首次运行先用短书或少量预算确认效果。").font(.caption).foregroundStyle(.secondary).lineSpacing(4)
             HStack { Button("关闭") { dismiss() }; Spacer(); Button("保存配置") { store.saveSettings(); if store.errorMessage == nil { dismiss() } }.buttonStyle(.borderedProminent).disabled(store.isBusy) }
         }.padding(28)

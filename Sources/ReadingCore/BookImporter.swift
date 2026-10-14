@@ -17,13 +17,14 @@ public enum BookImporter {
     static let maximumUnits = 100_000
 
     public static func importFile(at url: URL) async throws -> BookProject {
-        try await Task.detached(priority: .userInitiated) {
+        let child = Task.detached(priority: .userInitiated) {
             #if os(macOS)
             let accessed = url.startAccessingSecurityScopedResource()
             defer { if accessed { url.stopAccessingSecurityScopedResource() } }
             #endif
             return try importSynchronously(at: url)
-        }.value
+        }
+        return try await withTaskCancellationHandler(operation: { try await child.value }, onCancel: { child.cancel() })
     }
 
     static func sha256(_ data: Data) throws -> String {
