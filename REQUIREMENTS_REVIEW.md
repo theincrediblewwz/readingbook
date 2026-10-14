@@ -1,24 +1,24 @@
 # 0.4 需求与交付核对（待验）
 
-核对日期：2026-10-14。当前是 **0.4 预览源码，待 Actions 编译打包与 Mac 集中验收**。旧基线为 `5f71fb340727f6d531c5917290b9dd47ab3e03b9` 的 0.3.0；本文件按当前源码核对，新增能力不会倒记成旧版已有。所有操作验收见 [MAC_TEST_CHECKLIST.md](MAC_TEST_CHECKLIST.md)，勾选均保留为空。
+核对日期：2026-10-14。**0.4.0 已完成 Actions 编译打包，待 Mac 集中验收**，构建源码提交为 `cd3497e112dbc594bc9aa97129904caddc22f1fd`。旧基线为 `5f71fb340727f6d531c5917290b9dd47ab3e03b9` 的 0.3.0；本文件按当前源码核对，新增能力不会倒记成旧版已有。所有操作验收见 [MAC_TEST_CHECKLIST.md](MAC_TEST_CHECKLIST.md)，勾选均保留为空。
 
-**源码已实现**表示有对应代码，**部分**表示仍有能力边界，**待编译/真机验证**表示没有本批次 Mac 验收结果。Core 检查、打包成功或 Windows 浏览器结果不能代替真实模型、PDFKit 手势和 Mac 窗口验收。
+**源码已实现**表示有对应代码，**部分**表示仍有能力边界，**待真机验证**表示没有本批次 Mac 操作结果。Core 检查、打包成功或 Windows 浏览器结果不能代替真实模型、PDFKit 手势和 Mac 窗口验收。
 
 ## 0.4 补齐的三个缺口
 
 | 需求 | 当前状态与实现 | 必须保留的边界 |
 | --- | --- | --- |
-| PDF 文字高亮、扫描区域批注、颜色/评论及删除恢复 | 源码已实现，待编译/真机验证。`ReaderAnnotations.swift`、`LibraryRepository.swift`、`PDFReaderView.swift`、`AppStoreAnnotations.swift`：文字选择按页/范围捕获，跨页文字拆为对应页记录；扫描页可框选单页区域。批注独立持久化，支持黄/绿/蓝/粉、评论、编辑、已删列表及恢复。 | 不改写用户原件或书库原始 PDF；批注不等于 OCR 或阅读完成。文字高亮需要可选择文字，区域不伪造选中文字；跨页拖框明确拒绝。原 PDF 禁止复制时不绕过权限。 |
-| 回答渲染摘录、精确 Markdown 源文片段、多回答合并 | 源码已实现，待编译/真机验证。`ChatSaveViews.swift`、`AnswerSaving.swift`、`SavedAnswerComposition.swift`：原渲染区鼠标选段，或只读源文选择器选连续子串；多条 assistant 回答按会话顺序合并，保留各自问题、消息 ID、原文证据和文档引用，标题/正文预览确认后写真实 `.md` 与节点。 | 渲染选段明确是语义文本，不能冒称精确 Markdown/TeX；公式使用源文选择。保存前核对对应回答版本和源文连续子串，不能把编辑后文字冒充原答。稳定 ID 幂等，既存用户修改不覆盖；回收文档引导恢复，普通回答不自动收录。 |
-| 密码 PDF 导入、原页重开和 OCR | 源码已实现，待编译/真机验证。`PDFSessionAccess.swift`、`BookImporter.swift`、`PDFOCR.swift`：导入/重开/识别共用解锁链路，错误重试和取消明确处理，视觉请求前先解锁。 | 密码仅在进程内存，不写 Keychain/UserDefaults/项目或导出包；退出 App 后需要重新解锁。复制的是原加密 PDF。**提取/OCR 文本、聊天、批注和 Markdown 仍是普通本地书库格式，不是整库加密。** |
+| PDF 文字高亮、扫描区域批注、颜色/评论及删除恢复 | 源码已实现，待真机验证。`ReaderAnnotations.swift`、`LibraryRepository.swift`、`PDFReaderView.swift`、`AppStoreAnnotations.swift`：文字选择按页/范围捕获，跨页文字拆为对应页记录；扫描页可框选单页区域。批注独立持久化，支持黄/绿/蓝/粉、评论、编辑、已删列表及恢复。 | 不改写用户原件或书库原始 PDF；批注不等于 OCR 或阅读完成。文字高亮需要可选择文字，区域不伪造选中文字；跨页拖框明确拒绝。原 PDF 禁止复制时不绕过权限。 |
+| 回答渲染摘录、精确 Markdown 源文片段、多回答合并 | 源码已实现，待真机验证。`ChatSaveViews.swift`、`AnswerSaving.swift`、`SavedAnswerComposition.swift`：原渲染区鼠标选段，或只读源文选择器选连续子串；多条 assistant 回答按会话顺序合并，保留各自问题、消息 ID、原文证据和文档引用，标题/正文预览确认后写真实 `.md` 与节点。 | 渲染选段明确是语义文本，不能冒称精确 Markdown/TeX；公式使用源文选择。保存前核对对应回答版本和源文连续子串，不能把编辑后文字冒充原答。稳定 ID 幂等，既存用户修改不覆盖；回收文档引导恢复，普通回答不自动收录。 |
+| 密码 PDF 导入、原页重开和 OCR | 源码已实现，待真机验证。`PDFSessionAccess.swift`、`BookImporter.swift`、`PDFOCR.swift`：导入/重开/识别共用解锁链路，错误重试和取消明确处理，视觉请求前先解锁。 | 密码仅在进程内存，不写 Keychain/UserDefaults/项目或导出包；退出 App 后需要重新解锁。复制的是原加密 PDF。**提取/OCR 文本、聊天、批注和 Markdown 仍是普通本地书库格式，不是整库加密。** |
 
-本批次阅读 UI 也重整为：主导航只在侧栏与系统“工作台”菜单（⌘1–4），工具栏书名为普通文本；所有阅读/PDF 操作合入窗口工具栏，正文永久没有额外工具栏行，搜索按需浮层打开。`WorkspaceView.swift`、`ReadingBookApp.swift`、`PDFReaderController.swift`、`PDFPageNavigation.swift` 为对应路径。自有业务矢量图标家族与 App 图标、`BrandDesign.swift` / `Resources/Brand` / [DESIGN.md](DESIGN.md) 同步建立；窄窗溢出入口、Retina、浅深色与资源打包仍待编译及人工验收。
+本批次阅读 UI 也重整为：主导航只在侧栏与系统“工作台”菜单（⌘1–4），工具栏书名为普通文本；所有阅读/PDF 操作合入窗口工具栏，正文永久没有额外工具栏行，搜索按需浮层打开。`WorkspaceView.swift`、`ReadingBookApp.swift`、`PDFReaderController.swift`、`PDFPageNavigation.swift` 为对应路径。自有业务矢量图标家族与 App 图标、`BrandDesign.swift` / `Resources/Brand` / [DESIGN.md](DESIGN.md) 同步建立；图标资源已通过包内检查；窄窗溢出入口、Retina、浅深色仍待 Mac 人工验收。
 
 ## 用户整体要求与当前边界
 
 | 要求 | 当前状态 | 对应实现与边界 |
 | --- | --- | --- |
-| macOS 原生、Windows 开发、GitHub 开源、Actions 生成 `.app`，较大批次集中验收 | 源码已实现；0.4 待构建 | SwiftUI、macOS 15 起，macOS 26 玻璃效果；`Package.swift`、`.github/workflows/macos.yml`、`scripts/build-macos.sh`，Universal arm64/x86_64，临时签名 ZIP，MIT。尚无 Developer ID、公证、自动更新。 |
+| macOS 原生、Windows 开发、GitHub 开源、Actions 生成 `.app`，较大批次集中验收 | 源码已实现；0.4 构建通过 | SwiftUI、macOS 15 起，macOS 26 玻璃效果；`Package.swift`、`.github/workflows/macos.yml`、`scripts/build-macos.sh`，Universal arm64/x86_64，临时签名 ZIP，MIT。尚无 Developer ID、公证、自动更新。 |
 | 人物卡/时间轴/地图/思维导图/关系/知识库/编辑/查询/流程默认组件 | 源码已实现，待真机/模型验证 | 九种 `ComponentKind` 及宿主视图；有适用内容才生成对象/入口。MapKit 底图依赖网络。 |
 | AI 按书选择默认类型，或自行定义数学等新类型/字段 | 源码已实现，待真实模型验证 | `PluginEngine` 默认人物、地点、组织、概念、定义、定理、方法、论证、事物；`types_define`、`cards_upsert`，数学书不强制人物。 |
 | DSH 式组合、AI 实际调用工具创建内容与 UI | 部分，待真实模型验证 | 工具实际变更共享稳定 ID；manifest 可扩类型、方法和九种现有视图组合。地图/时间轴/卡片/关系共用对象并联动；尚不能运行时生成任意原生渲染器或执行任意插件代码。 |
@@ -34,7 +34,7 @@
 
 ## 保留的 0.3 基线
 
-0.3 的提交是 `5f71fb340727f6d531c5917290b9dd47ab3e03b9`。仓库 `PLAN.md` 记录 [0.3 Actions run](https://github.com/theincrediblewwz/readingbook/actions/runs/38545577885) 成功：30 项 XCTest、arm64/x86_64 编译、临时签名验证与打包资源自检。该记录仅属于旧提交/产物，不能用来宣称 0.4 已编译或 Mac 操作已通过。
+0.3 的提交是 `5f71fb340727f6d531c5917290b9dd47ab3e03b9`。[0.3 Actions run](https://github.com/theincrediblewwz/readingbook/actions/runs/38545577885) 成功：30 项 XCTest、arm64/x86_64 编译、临时签名验证与打包资源自检。该记录仅属于旧提交/产物，不能用来宣称 0.4 已编译或 Mac 操作已通过。
 
 0.3 引入的实际机制继续保留：
 
@@ -42,10 +42,12 @@
 - 已处理但待复核的单元带警告提供上文衔接，延期占位保持未读，不进入完整综合、不阻止后补 OCR。
 - PDF 明确导航令牌防旧页回调抢页，位置保存独立于折叠目录；草稿导出保护及存储/导入/导出账本校验。
 
-0.2 的旧 `completed` 没有逐段回执，不补造凭据；旧笔记仍保留。0.3 尚未完整提供的 PDF 持久批注、回答选段/多答合并、密码 PDF 导入/OCR 已在 0.4 源码补齐，待本批次构建与人工验收。0.3 的书名路由菜单、正文 PDF 控件布局也已由本批次的新导航替换，不再作为当前操作说明。
+0.2 的旧 `completed` 没有逐段回执，不补造凭据；旧笔记仍保留。0.3 尚未完整提供的 PDF 持久批注、回答选段/多答合并、密码 PDF 导入/OCR 已在 0.4 源码补齐并编译打包，待人工验收。0.3 的书名路由菜单、正文 PDF 控件布局也已由本批次的新导航替换，不再作为当前操作说明。
 
 ## 验证状态与未交付范围
 
-0.4 回答选区桥接已在 Windows Edge 离线检查语义文本、公式隐藏副本、代码、revision 清空、链接版本、文章边界和关闭选区回调，共 7 项通过，零远程请求/页面异常；新增纯内容测试等待 Actions。该检查不是 WKWebView / PDFKit 的 Mac 真机结果。批注、密码、工具栏与图标资源统一等待本批次 Actions 和 [Mac 操作清单](MAC_TEST_CHECKLIST.md)。
+[0.4 Actions run](https://github.com/theincrediblewwz/readingbook/actions/runs/38567091611) 成功：38 项 XCTest、arm64/x86_64 release 编译、临时签名验证与打包资源自检。下载后另行校验 artifact 摘要、应用 ZIP 的 SHA-256 / CRC、版本 0.4.0、双架构可执行文件与 0755 权限、20 个公式字体、7 家 11 款模型目录、品牌图标及实际 `.icns` 图像。应用 ZIP 的 SHA-256：`0d29fb44b5c0a303a741f038747d21f976a5cc77bd332b8fd2a37afbdf03067a`。这些结果对应上述构建源码提交；本记录更新只修改文档。
+
+0.4 回答选区桥接已在 Windows Edge 离线检查语义文本、公式隐藏副本、代码、revision 清空、链接版本、文章边界和关闭选区回调，共 7 项通过，零远程请求/页面异常；新增测试已在 Actions 通过。该检查不是 WKWebView / PDFKit 的 Mac 真机结果。批注、密码、工具栏仍按 [Mac 操作清单](MAC_TEST_CHECKLIST.md) 待验。
 
 任意运行时代码插件、AI 任意新增原生渲染器、完整 LaTeX 文档编译、云同步、跨项目格式兼容/迁移、整库加密、商业签名/公证/自动更新均未交付。原页对照、提取警告、待复核状态和用户自己的 Markdown 理解继续保留；逐段回执不能证明 AI 理解绝无遗漏。

@@ -2,7 +2,7 @@
 
 让自己的 AI 读书、创建知识要素、调用插件，并把阅读连接到自己写下的理解。
 
-原生 macOS 应用，SwiftUI，macOS 15+；macOS 26 使用系统 Liquid Glass。当前为 **0.4 预览源码，待编译打包和 Mac 集中验收**：最终提交与安装包状态见 [Actions](https://github.com/theincrediblewwz/readingbook/actions/workflows/macos.yml)。真实模型调用与 Mac 原生视觉尚未验收。集中操作顺序见 [Mac 测试清单](MAC_TEST_CHECKLIST.md)，历史要求与边界见 [需求核对](REQUIREMENTS_REVIEW.md)。
+原生 macOS 应用，SwiftUI，macOS 15+；macOS 26 使用系统 Liquid Glass。**0.4.0 预览包已完成 Actions 编译打包，待 Mac 集中验收**：[本次构建与下载](https://github.com/theincrediblewwz/readingbook/actions/runs/38567091611)，源码提交 `cd3497e112dbc594bc9aa97129904caddc22f1fd`。38 项核心测试、Universal 编译、临时签名验证和包内资源自检通过；真实模型调用与 Mac 原生交互尚未验收。集中操作顺序见 [Mac 测试清单](MAC_TEST_CHECKLIST.md)，历史要求与边界见 [需求核对](REQUIREMENTS_REVIEW.md)。
 
 ## 阅读怎样连接起来
 
@@ -35,7 +35,7 @@
 - 保存多套 AI 配置，切换、新建预设、删除、测试连接和选择 OCR 配置；内置 7 家服务的官方模型规格与链接，已核实的输出上限可选 Max。
 - 文档与书籍回收/恢复；移除卡片、事件、画布节点、连线与组件入口。导图单击选中、拖动位置、双击/右键打开，移动不再跳走。
 
-0.4 同步加入自有矢量图标家族与 App 图标，设计约定见 [DESIGN.md](DESIGN.md)；最终资源打包、工具栏在不同窗口宽度的呈现仍待编译和 Mac 人工验收。
+0.4 同步加入自有矢量图标家族与 App 图标，设计约定见 [DESIGN.md](DESIGN.md)；包内图标、公式字体和模型目录已核查，工具栏在不同窗口宽度的呈现仍待 Mac 人工验收。
 
 工具变更先在当前步骤中校验，完整结果保存后才增加覆盖率。失败或取消保留最后一次已保存结果；地图和时间轴不各存一份事件。
 

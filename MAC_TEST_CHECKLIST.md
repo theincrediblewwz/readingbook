@@ -1,6 +1,6 @@
 # 0.4 Mac 集中验收清单（待验）
 
-这份清单用于用户把 Actions 生成的 `.app` 复制到 Mac 后集中验收 0.4.0。旧基线为 `5f71fb340727f6d531c5917290b9dd47ab3e03b9` 的 0.3.0；本批次增加 PDF 持久批注、回答选段/多条合并保存与密码 PDF 链路，并重整窗口工具栏。当前源码待编译打包；所有勾选留空，源码、Actions 编译和 Windows 浏览器检查均不代替 Mac 操作结果。
+这份清单用于用户把 Actions 生成的 `.app` 复制到 Mac 后集中验收 0.4.0。旧基线为 `5f71fb340727f6d531c5917290b9dd47ab3e03b9` 的 0.3.0；本批次增加 PDF 持久批注、回答选段/多条合并保存与密码 PDF 链路，并重整窗口工具栏。[0.4 构建](https://github.com/theincrediblewwz/readingbook/actions/runs/38567091611) 已通过，包内源码提交为 `cd3497e112dbc594bc9aa97129904caddc22f1fd`。所有勾选留空，源码、Actions 编译和 Windows 浏览器检查均不代替 Mac 操作结果。
 
 记录：测试日期 ______；Mac / 芯片 ______；macOS ______；App 版本 ______；`build-info.txt` 源码提交 ______；Actions run ______。
 
