@@ -57,7 +57,7 @@ struct WorkspaceView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("书 库").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary).padding(.horizontal, 12).padding(.bottom, 5)
                     ForEach(store.books) { book in
-                        Button { Task { await store.selectBook(book.id); store.route = "reader" } } label: {
+                        Button { Task { await store.selectBook(book.id) } } label: {
                             HStack(spacing: 10) {
                                 RoundedRectangle(cornerRadius: 4).fill(Palette.accent.opacity(0.14)).frame(width: 28, height: 36).overlay(Image(systemName: "book.closed").font(.caption).foregroundStyle(Palette.accent))
                                 VStack(alignment: .leading, spacing: 4) { Text(book.title).lineLimit(1).font(.subheadline.weight(.medium)); ProgressView(value: book.progress).tint(Palette.accent).frame(width: 95) }
@@ -125,7 +125,7 @@ struct WorkspaceView: View {
     }
     private var routeTitle: String { store.book?.views.first { $0.id == store.route }?.title ?? (store.route == "reader" ? "原文与证据" : ComponentKind(rawValue: store.route)?.title ?? "阅读工作台") }
     @ViewBuilder private var content: some View {
-        if store.route == "reader" { ReaderWorkspaceView() }
+        if store.route == "reader" { ReaderWorkspaceView().id(store.bookID) }
         else {
             let kind = store.book?.views.first { $0.id == store.route }?.kind ?? ComponentKind(rawValue: store.route) ?? .workflow
             switch kind {

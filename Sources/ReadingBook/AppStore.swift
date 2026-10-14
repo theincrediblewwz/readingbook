@@ -70,7 +70,7 @@ import ReadingCore
         guard !editorDirty else { errorMessage = "请先保存当前文档，再切换书籍。"; return }
         navigationGeneration += 1; documentGeneration += 1
         let generation = navigationGeneration
-        bookID = id; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []
+        bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
         if book?.units.contains(where: { $0.id == selectedUnitID }) != true { selectedUnitID = book?.units.first?.id }
         if let project = book {
