@@ -28,7 +28,7 @@ struct PDFReaderView: NSViewRepresentable {
 
 /// Native controls keep the toolbar usable when the surrounding reader narrows.
 /// There is no fixed minimum toolbar width and no custom PDF rasterization.
-@MainActor final class PDFReaderContainerView: NSView, NSTextFieldDelegate {
+@MainActor final class PDFReaderContainerView: NSView, NSSearchFieldDelegate {
     private enum FitMode: Int { case page, width, actual, custom }
     private let pdfView = PDFView()
     private let thumbnails = PDFThumbnailView()
@@ -143,7 +143,7 @@ struct PDFReaderView: NSViewRepresentable {
         fitPicker.target = self; fitPicker.action = #selector(changeFit)
         fitPicker.controlSize = .small
         modePicker.addItems(withTitles: ["连续", "单页"])
-        modePicker.target = self; modePicker.action = #selector(changeMode)
+        modePicker.target = self; modePicker.action = #selector(changePDFDisplayMode)
         modePicker.controlSize = .small
         let sizing = row([zoomOut, zoomIn, zoomLabel, flexibleSpace(), fitPicker, modePicker])
 
@@ -342,7 +342,7 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     @objc private func changeFit() { fitMode = FitMode(rawValue: fitPicker.indexOfSelectedItem) ?? .width; applyFit() }
-    @objc private func changeMode() {
+    @objc private func changePDFDisplayMode() {
         let page = currentPageNumber
         pdfView.displayMode = modePicker.indexOfSelectedItem == 0 ? .singlePageContinuous : .singlePage
         if let page { navigate(to: page, fromParent: true) }

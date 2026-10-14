@@ -57,10 +57,18 @@ public enum OCRIntegration {
 }
 
 public enum ProviderProbe {
+    public static func validate(settings: ProviderSettings, apiKey: String) throws {
+        _ = try ProviderClient.prepare(messages: [["role": "user", "content": "检查配置"]], tools: [], settings: settings, apiKey: apiKey, remainingTokens: settings.contextWindowTokens ?? max(196_000, settings.maxOutputTokens + 64_000))
+    }
     public static func test(settings: ProviderSettings, apiKey: String) async throws -> String {
         var probe = settings; probe.maxOutputTokens = min(512, settings.maxOutputTokens)
         let prepared = try ProviderClient.prepare(messages: [["role": "user", "content": "请仅回复 OK。"]], tools: [], settings: probe, apiKey: apiKey, remainingTokens: probe.contextWindowTokens ?? 196_000)
-        let result = try await ProviderClient.perform(prepared)
+        let result: ProviderClient.Result
+        do { result = try await ProviderClient.perform(prepared) }
+        catch {
+            if error.localizedDescription.contains("输出被截断") { return "服务已返回有效响应，但短测试达到输出上限；推理模型可提高输出预算后实际验证。" }
+            throw error
+        }
         guard result.finishReason == "stop", let content = result.message.content, !content.isEmpty else { throw ReadingError.invalid("服务未返回完整文本。") }
         return "文本连接正常：" + String(content.prefix(60)) + "。工具调用与图像能力需另行实际使用确认。"
     }

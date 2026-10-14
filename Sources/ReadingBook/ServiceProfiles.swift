@@ -96,6 +96,7 @@ extension AppStore {
               (1...2000).contains(settings.maxRequestsPerRun), (64...1_048_576).contains(settings.maxOutputTokens),
               settings.contextWindowTokens.map({ (1024...4_194_304).contains($0) }) ?? true else { throw ReadingError.invalid("请填写配置名称、模型与有效的请求/token 上限。") }
         guard let url = URL(string: settings.baseURL), url.host != nil else { throw ReadingError.invalid("请填写完整的服务 URL。") }
+        try ProviderProbe.validate(settings: settings, apiKey: apiKey)
         let id = selectedServiceID ?? UUID().uuidString
         let profile = SavedAIService(id: id, name: String(serviceName.prefix(80)), settings: settings)
         try Keychain.write(apiKey, account: "profile-\(id)")

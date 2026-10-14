@@ -6,6 +6,7 @@ struct WorkspaceDeletion {
     var kind: Kind
     var id: String
     var title: String
+    var bookID: String?
     var detail: String {
         switch kind {
         case .book: return "整本书及本机副本中的文档将移入回收站，可以恢复。导入前的原始文件保持原样。"
@@ -18,7 +19,7 @@ struct WorkspaceDeletion {
 extension AppStore {
     func requestDeletion(_ kind: WorkspaceDeletion.Kind, id: String, title: String) {
         guard !isBusy else { return }
-        deletionRequest = WorkspaceDeletion(kind: kind, id: id, title: title)
+        deletionRequest = WorkspaceDeletion(kind: kind, id: id, title: title, bookID: bookID)
     }
     func confirmDeletion(_ request: WorkspaceDeletion) {
         guard !isBusy else { return }
@@ -34,7 +35,7 @@ extension AppStore {
                     books.removeAll { $0.id == project.id }
                     if bookID == project.id { bookID = nil; selectedUnitID = nil; selectedObjectID = nil; selectedDocumentID = nil; sourceFileURL = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = [] }
                     activity = "书籍已移入回收站。"
-                } else if let project = book {
+                } else if let project = books.first(where: { $0.id == request.bookID }) {
                     let updated: BookProject
                     switch request.kind {
                     case .document: updated = try await repository.setDocumentTrashed(project: project, documentID: request.id, trashed: true)
@@ -43,8 +44,8 @@ extension AppStore {
                     case .book: return
                     }
                     publish(updated)
-                    if selectedObjectID == request.id { selectedObjectID = nil }
-                    if selectedDocumentID == request.id { selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; UserDefaults.standard.removeObject(forKey: "draft-\(project.id)") }
+                    if bookID == project.id && selectedObjectID == request.id { selectedObjectID = nil }
+                    if bookID == project.id && selectedDocumentID == request.id { selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; UserDefaults.standard.removeObject(forKey: "draft-\(project.id)") }
                     activity = request.kind == .document ? "文档已移入回收站，可以恢复。" : "派生对象及结构化关联已移除。"
                 }
                 archivedBooks = try await repository.archivedBooks()
