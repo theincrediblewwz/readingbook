@@ -1,23 +1,23 @@
-# 0.7 需求与交付核对（待构建、待验）
+# 0.7 需求与交付核对（已构建、待 Mac 验收）
 
-核对日期：2026-10-14。**0.7.0 / build 7 待 Actions 编译打包与 Mac 集中验收**；本批尚无成功 run、产物摘要或真实 AI 请求验证。历史 0.6.0 / build 6 的构建源码 `26716f95b8f4ba64d960b6dbeeabea99f3467774` 与 [Actions 38577983738](https://github.com/theincrediblewwz/readingbook/actions/runs/38577983738) 成功记录保留；历史 0.5.0 的构建提交 `dd61057c556ae9d5cd26fd318e4001c2fbf07092` 与 [Actions 38572235069](https://github.com/theincrediblewwz/readingbook/actions/runs/38572235069) 同样仅适用于旧包。所有操作验收见 [MAC_TEST_CHECKLIST.md](MAC_TEST_CHECKLIST.md)，勾选均为空。
+核对日期：2026-10-14。**0.7.0 / build 7 已通过 [Actions 38586480214](https://github.com/theincrediblewwz/readingbook/actions/runs/38586480214)，待 Mac 集中验收**；构建源码 `c0c9a646ac627434c83f30ee1975abeddf8905ca`。59 项核心测试、Universal 编译、临时签名验证与资源自检通过；下载后核对版本、提交、架构、权限和关键资源。应用 ZIP 的 SHA-256 为 `2be095a9ab39d73895148df5dfffc5adc5c2b92267b4a3aacd6a9bbed66debe6`。尚无本批真实 AI 请求或 Mac 原生交互验收。历史 0.6.0 / build 6 的构建源码 `26716f95b8f4ba64d960b6dbeeabea99f3467774` 与 [Actions 38577983738](https://github.com/theincrediblewwz/readingbook/actions/runs/38577983738) 成功记录保留；历史 0.5.0 的构建提交 `dd61057c556ae9d5cd26fd318e4001c2fbf07092` 与 [Actions 38572235069](https://github.com/theincrediblewwz/readingbook/actions/runs/38572235069) 同样仅适用于旧包。所有操作验收见 [MAC_TEST_CHECKLIST.md](MAC_TEST_CHECKLIST.md)，勾选均为空。
 
-**源码已实现**表示有对应代码，**部分**表示仍有能力边界；0.7 尚待本批编译与真机验证。Core 检查、旧版打包成功或 Windows 浏览器结果不能代替真实模型、PDFKit/画布/时间端点手势和 Mac 窗口验收。
+**源码已实现**表示有对应代码，**部分**表示仍有能力边界；0.7 已编译，尚待真实模型与真机验证。Core 检查、打包成功或 Windows 浏览器结果不能代替真实模型、PDFKit/画布/时间端点手势和 Mac 窗口验收。
 
 ## 0.7 本批核对
 
 | 本批次要求 | 当前源码与验收重点 | 状态 |
 | --- | --- | --- |
-| 工具真实注册与 dispatch | `PluginToolRegistry.swift` 与 `PluginEngine.swift`：三个内置原生插件、13 个注册工具，含 `workflow_step_complete`；注册安装采用事务，执行校验阶段/只读/回执与原文、用户 Markdown、宿主账本边界。独立 native 工具可通过接口发现、执行和卸载，无需新增 Engine 中央分支。 | 源码及注册回归测试已补，待 Actions；不表示已调用真实模型。 |
-| UI 组件工厂注册 | `WorkspaceComponentRegistry.swift` 注册描述与渲染工厂，宿主从注册表发现/渲染组件；地图与时间轴为一个“时间与地图”导航入口。常驻组件显示打开，新增入口保存成功后留在插件页。 | 源码已实现，待编译与导航/添加失败验收。 |
-| 五套默认方法绑定实际动作 | 新建书的叙事追踪、论证精读、教材学习、研究笔记、主动复述绑定 `ai.analyze` / `facts.extract` / `reading.review` / `citations.verify`。已有同 ID 方法不覆盖，旧 `executions == nil` 通过兼容分析动作执行。 | 待 Actions 与真实样本逐步执行验收；不是仅把自然语言步骤拼进一次总结。 |
-| 按步骤保存、恢复与重试 | `ReadingWorkflowRuntime.swift`、`AIReader.swift` 与账本记录每步输入、输出、来源映射、尝试次数及检查点；一次推进后保存，续读跳过已完成步骤。失败保留事务前数据，达到上限后由用户显式重置，再继续才请求。 | 源码与 Core 回归已补，待编译及中断/重启/预算验收。 |
-| 抽取凭据与本地引文核验 | `facts.extract` 记录实际知识工具调用和对象变化，或提交明确无变化理由；`citations.verify` 在宿主本地核对原文引文与对象关联。单元完成仍需齐全回执和步骤输出。 | 待编译与真实模型；本地引文存在性不等于语义正确或理解无遗漏。 |
+| 工具真实注册与 dispatch | `PluginToolRegistry.swift` 与 `PluginEngine.swift`：三个内置原生插件、13 个注册工具，含 `workflow_step_complete`；注册安装采用事务，执行校验阶段/只读/回执与原文、用户 Markdown、宿主账本边界。独立 native 工具可通过接口发现、执行和卸载，无需新增 Engine 中央分支。 | 注册接口 7 项回归通过；已编译，不表示已调用真实模型。 |
+| UI 组件工厂注册 | `WorkspaceComponentRegistry.swift` 注册描述与渲染工厂，宿主从注册表发现/渲染组件；地图与时间轴为一个“时间与地图”导航入口。常驻组件显示打开，新增入口保存成功后留在插件页。合并入口移除时一并清旧别名，卡片筛选入口独立。 | 已编译，待导航、添加失败与旧重复入口移除验收。 |
+| 五套默认方法绑定实际动作 | 新建书的叙事追踪、论证精读、教材学习、研究笔记、主动复述绑定 `ai.analyze` / `facts.extract` / `reading.review` / `citations.verify`。已有同 ID 方法不覆盖，旧 `executions == nil` 通过兼容分析动作执行。 | 已编译，流程 9 项回归通过；待真实样本逐步执行验收。 |
+| 按步骤保存、恢复与重试 | `ReadingWorkflowRuntime.swift`、`AIReader.swift` 与账本记录每步输入、输出、来源映射、尝试次数及检查点；一次推进后保存，续读跳过已完成步骤。失败保留事务前数据，达到上限后由用户显式重置，再继续才请求；预算暂停不消耗失败次数。 | Core 回归与编译通过，待 App 中断、重启和预算验收。 |
+| 抽取凭据与本地引文核验 | `facts.extract` 记录实际知识工具调用和对象变化，或提交明确无变化理由；`citations.verify` 在宿主本地核对原文引文与对象关联。单元完成仍需齐全回执和步骤输出。 | Core 回归与编译通过，待真实模型；本地引文存在性不等于语义正确或理解无遗漏。 |
 | 模型草稿与近端反馈 | 切换/新建前提供保存并继续、放弃更改并继续、取消；Keychain 读失败和保存验证失败保留原输入与密钥，错误留在操作附近。未保存模型草稿仅进程内存。 | 待小窗、侧栏/工具栏/独立设置入口和取消验收。 |
 | OCR 范围、跳过与预算 | 字符串页码明确区分非整数、越界、倒置和无对应页；显示本轮将识别、受保护/已有文本/已有转录跳过数及原因，另列预算外可续跑页数。前置配置错误留面板，预算到达正常停止。 | 待 PDF/密码链路、错误与真实视觉模型验收。 |
 | 卡片、聊天与错误去重 | `ObjectInspector.swift` 中就地编辑并保护切对象/关闭草稿；必填与已填字段优先，可选字段折叠。回答保存菜单按需进入多选并可取消；局部保存错误避免再弹同一全局提醒。 | 待 800×600、长字段、选区/多选切换和失败保留验收。 |
-| 图谱拖动与保存反馈稳定 | `GraphCanvas.swift` 节点/端口使用原生事件捕获、窗口位移与绝对坐标预览，预览保留到保存回调；只在拖动开始发布选择，网格采用静态 tile，保存反馈不伸缩底栏。 | 待编译与 Mac 鼠标/触控板；不能由静态代码认定拖动性能或命中已通过。 |
-| 时间端点的上下文变化 | 端点拖动的 bounds/宽度快照、取消和切书/切路由行为纳入本批修复与回归；保留单轴、同年、负年份、键盘和 AX。 | 待最终编译与 Mac 手势/缩放验收。 |
+| 图谱拖动与保存反馈稳定 | `GraphCanvas.swift` 节点/端口使用原生事件捕获、窗口位移与绝对坐标预览，预览保留到保存回调；只在拖动开始发布选择，网格采用静态 tile，保存反馈不伸缩底栏。 | 已编译，待 Mac 鼠标/触控板；不能由静态代码认定拖动性能或命中已通过。 |
+| 时间端点的上下文变化 | 端点拖动的 bounds/宽度快照、取消和切书/切路由行为纳入本批修复与回归；保留单轴、同年、负年份、键盘和 AX。 | 已编译，待 Mac 手势/缩放验收。 |
 
 本批新增的是随源码编译的 native 工具/组件接口与受控声明包；没有任意代码热加载、任意原生视图生成，也不声称功能、插件格式或安全模型已等同 DSH。
 
@@ -45,13 +45,13 @@
 | 回答渲染摘录、精确 Markdown 源文片段、多回答合并 | 源码已实现，待真机验证。`ChatSaveViews.swift`、`AnswerSaving.swift`、`SavedAnswerComposition.swift`：原渲染区鼠标选段，或只读源文选择器选连续子串；多条 assistant 回答按会话顺序合并，保留各自问题、消息 ID、原文证据和文档引用，标题/正文预览确认后写真实 `.md` 与节点。 | 渲染选段明确是语义文本，不能冒称精确 Markdown/TeX；公式使用源文选择。保存前核对对应回答版本和源文连续子串，不能把编辑后文字冒充原答。稳定 ID 幂等，既存用户修改不覆盖；回收文档引导恢复，普通回答不自动收录。 |
 | 密码 PDF 导入、原页重开和 OCR | 源码已实现，待真机验证。`PDFSessionAccess.swift`、`BookImporter.swift`、`PDFOCR.swift`：导入/重开/识别共用解锁链路，错误重试和取消明确处理，视觉请求前先解锁。 | 密码仅在进程内存，不写 Keychain/UserDefaults/项目或导出包；退出 App 后需要重新解锁。复制的是原加密 PDF。**提取/OCR 文本、聊天、批注和 Markdown 仍是普通本地书库格式，不是整库加密。** |
 
-0.4 建立的阅读导航继续保留：主导航只在侧栏与系统“工作台”菜单（⌘1–4），工具栏书名为普通文本；阅读/PDF 操作在窗口工具栏，原文正文没有额外工具栏行，搜索按需浮层。自有业务矢量图标、App 图标与 [DESIGN.md](DESIGN.md) 沿用；0.4–0.6 的包内资源检查仅是历史结果，0.7 打包及宽窄窗/Retina/浅深色仍待验证。
+0.4 建立的阅读导航继续保留：主导航只在侧栏与系统“工作台”菜单（⌘1–4），工具栏书名为普通文本；阅读/PDF 操作在窗口工具栏，原文正文没有额外工具栏行，搜索按需浮层。自有业务矢量图标、App 图标与 [DESIGN.md](DESIGN.md) 沿用；0.7 包内资源检查通过，宽窄窗/Retina/浅深色仍待 Mac 验证。
 
 ## 用户整体要求与当前边界
 
 | 要求 | 当前状态 | 对应实现与边界 |
 | --- | --- | --- |
-| macOS 原生、Windows 开发、GitHub 开源、Actions 生成 `.app`，较大批次集中验收 | 0.7 待构建与 Mac 验收；历史 0.6 已编译打包 | SwiftUI、macOS 15 起，macOS 26 玻璃效果；`Package.swift`、`.github/workflows/macos.yml`、`scripts/build-macos.sh`，Universal arm64/x86_64，临时签名 ZIP，MIT。尚无 Developer ID、公证、自动更新。 |
+| macOS 原生、Windows 开发、GitHub 开源、Actions 生成 `.app`，较大批次集中验收 | 0.7 已编译打包，待 Mac 验收 | SwiftUI、macOS 15 起，macOS 26 玻璃效果；`Package.swift`、`.github/workflows/macos.yml`、`scripts/build-macos.sh`，Universal arm64/x86_64，临时签名 ZIP，MIT。尚无 Developer ID、公证、自动更新。 |
 | 人物卡/时间轴/地图/思维导图/关系/知识库/编辑/查询/流程默认组件 | 源码已实现，待本批构建与真机/模型验证 | 九种 `ComponentKind`，注册表合并地图/时间轴为一个组件入口；有适用内容才生成对象/入口。MapKit 底图依赖网络。 |
 | AI 按书选择默认类型，或自行定义数学等新类型/字段 | 源码已实现，待真实模型验证 | `PluginEngine` 默认人物、地点、组织、概念、定义、定理、方法、论证、事物；`types_define`、`cards_upsert`，数学书不强制人物。 |
 | DSH 式组合、AI 实际调用工具创建内容与 UI | 部分，待本批构建与真实模型验证 | 0.7 工具/组件通过 native 注册接口实际 dispatch，声明包组合类型、方法和已有渲染器；共享稳定对象 ID。没有任意代码热加载或任意 UI 生成，不声称已等同 DSH。 |
