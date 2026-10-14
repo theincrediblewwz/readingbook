@@ -218,8 +218,16 @@ public actor AIReader {
         boostedIDs.formUnion(relevantEntities.flatMap { $0.evidence.map(\.unitID) })
         boostedIDs.formUnion(relevantEvents.flatMap { $0.evidence.map(\.unitID) })
         boostedIDs.formUnion(relevantDocuments.flatMap { $0.evidence.map(\.unitID) })
-        var ranked = project.units.map { ($0, score($0.text, terms: terms) + (boostedIDs.contains($0.id) ? 20 : 0)) }
-            .filter { $0.1 > 0 }.sorted { $0.1 == $1.1 ? $0.0.order < $1.0.order : $0.1 > $1.1 }
+        var ranked: [(SourceUnit, Int)] = []
+        for unit in project.units {
+            let relevance: Int = score(unit.text, terms: terms)
+            let boost: Int = boostedIDs.contains(unit.id) ? 20 : 0
+            if relevance + boost > 0 { ranked.append((unit, relevance + boost)) }
+        }
+        ranked.sort { lhs, rhs in
+            if lhs.1 == rhs.1 { return lhs.0.order < rhs.0.order }
+            return lhs.1 > rhs.1
+        }
         if ranked.isEmpty && ["总结", "概括", "全书", "主题", "主要内容"].contains(where: { question.contains($0) }) {
             let processed = orderedUnits(project).filter { project.coverage[$0.id]?.status == .completed }
             let positions = Set((0..<min(8, processed.count)).map { $0 * max(1, processed.count - 1) / max(1, min(8, processed.count) - 1) })
