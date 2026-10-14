@@ -44,7 +44,17 @@ struct WorkspaceComponentDescriptor: Identifiable {
     }
     func component(for kind: ComponentKind) -> WorkspaceComponentDescriptor? { aliases[kind].flatMap { entries[$0]?.descriptor } }
     func render(_ definition: ViewDefinition?, kind: ComponentKind) -> AnyView? { aliases[kind].flatMap { entries[$0]?.render(definition) } }
-    func equivalent(_ lhs: ComponentKind, _ rhs: ComponentKind) -> Bool { aliases[lhs] == aliases[rhs] }
+    func equivalent(_ lhs: ComponentKind, _ rhs: ComponentKind) -> Bool {
+        guard let componentID = aliases[lhs] else { return false }
+        return componentID == aliases[rhs]
+    }
+    func removalIDs(for view: ViewDefinition, in views: [ViewDefinition]) -> Set<String> {
+        // Navigation coalesces book-wide renderers. Remove the same group so an
+        // old hidden alias cannot reappear immediately after removing its entry.
+        // Filtered card collections remain independent entries.
+        guard view.kind != .cards else { return [view.id] }
+        return Set(views.filter { $0.id == view.id || equivalent($0.kind, view.kind) }.map(\.id))
+    }
     func navigationViews(_ views: [ViewDefinition]) -> [ViewDefinition] {
         var seen = Set<String>()
         return views.filter { view in

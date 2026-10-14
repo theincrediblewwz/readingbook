@@ -89,9 +89,11 @@ extension AppStore {
         catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription }; return false }
     }
     func removeView(_ id: String) async {
-        guard var project = book, !isBusy else { return }; isBusy = true; defer { isBusy = false }
-        project.views.removeAll { $0.id == id }
-        do { try await repository.save(project); publish(project); if route == id { route = "reader" }; activity = "组件入口已移除，原有知识数据保留。" }
+        guard var project = book, !isBusy, let view = project.views.first(where: { $0.id == id }) else { return }
+        isBusy = true; defer { isBusy = false }
+        let removedIDs = WorkspaceComponentRegistry.shared.removalIDs(for: view, in: project.views)
+        project.views.removeAll { removedIDs.contains($0.id) }
+        do { try await repository.save(project); publish(project); if removedIDs.contains(route) { route = "reader" }; activity = "组件入口已移除，原有知识数据保留；可从添加组件重新打开。" }
         catch { errorMessage = error.localizedDescription }
     }
 }

@@ -104,7 +104,10 @@ struct WorkspaceView: View {
                             Text("AI 为这本书选择").font(.caption2).foregroundStyle(.tertiary).padding(.horizontal, 12).padding(.top, 17)
                             ForEach(WorkspaceComponentRegistry.shared.navigationViews(store.enabledViews)) { view in
                                 routeButton(view.title, icon: view.kind.icon, route: view.id)
-                                    .contextMenu { Button("移除此组件入口") { Task { await store.removeView(view.id) } } }
+                                    .contextMenu {
+                                        let count = WorkspaceComponentRegistry.shared.removalIDs(for: view, in: store.book?.views ?? []).count
+                                        Button(count > 1 ? "移除此组件及 \(count - 1) 个旧重复入口" : "移除此组件入口") { Task { await store.removeView(view.id) } }
+                                    }
                             }
                         }
                         Menu {
