@@ -30,7 +30,7 @@ struct ReadingBookApp: App {
                 Button("我的理解") { store.route = "editor" }.keyboardShortcut("4")
             }
         }
-        Settings { ProviderSettingsView().environmentObject(store).frame(width: 640, height: 660) }
+        Settings { ProviderSettingsView().environmentObject(store).frame(width: 600, height: 560) }
     }
 }
 
@@ -52,7 +52,7 @@ enum Palette {
 
 struct SoftPanel: ViewModifier {
     func body(content: Content) -> some View {
-        content.padding(18).background(Palette.surface, in: RoundedRectangle(cornerRadius: 14))
+        content.padding(14).background(Palette.surface, in: RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.line.opacity(0.8), lineWidth: 0.75))
     }
 }

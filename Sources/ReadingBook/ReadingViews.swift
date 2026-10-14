@@ -88,8 +88,8 @@ struct ReaderWorkspaceView: View {
     }
     private func sourceText(_ unit: SourceUnit) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                if !isPDF { Text(unit.chapter).font(.system(size: 28, weight: .regular, design: .serif)) }
+            VStack(alignment: .leading, spacing: 16) {
+                if !isPDF { Text(unit.chapter).font(.system(size: 18, weight: .medium, design: .serif)).lineLimit(1).help(unit.chapter) }
                 if let warning = unit.warning ?? (store.book?.coverage[unit.id]?.status == .needsReview ? store.book?.coverage[unit.id]?.message : nil) {
                     VStack(alignment: .leading, spacing: 10) {
                         Label("内容待核对", systemImage: "doc.text.magnifyingglass").font(.subheadline.weight(.medium))
@@ -112,7 +112,7 @@ struct ReaderWorkspaceView: View {
                         Button("保存为我的文档") { Task { await store.saveInsight(insight) } }.font(.caption).disabled(store.isBusy)
                     }.softPanel()
                 }
-            }.frame(maxWidth: 740).padding(.horizontal, 28).padding(.vertical, 26).frame(maxWidth: .infinity)
+            }.frame(maxWidth: 740).padding(.horizontal, 20).padding(.vertical, 18).frame(maxWidth: .infinity)
         }.background(Palette.paper)
     }
     private func sourceMarkdown(_ unit: SourceUnit) -> String {
@@ -138,65 +138,132 @@ struct ReaderWorkspaceView: View {
 
 struct ReadingWorkflowView: View {
     @EnvironmentObject var store: AppStore
+    @State private var showMethods = false
+    @State private var showReview = false
+    @State private var showAudit = false
+    @State private var showSynthesis = false
     var body: some View {
-        ScrollView {
-            if let book = store.book {
-                VStack(alignment: .leading, spacing: 26) {
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 8) { Text("阅读有迹可循").font(.system(size: 30, design: .serif)); Text("先判断怎样读，再逐段处理，让线索连接成结构。").foregroundStyle(.secondary) }
-                        Spacer(); Button("重新预读") { store.makePlan() }.disabled(store.isBusy)
-                    }
-                    HStack(spacing: 16) {
-                        let analyzedIDs = Set(book.insights.filter { !$0.id.hasPrefix("deferred-") && !$0.id.hasPrefix("blank-") }.flatMap(\.unitIDs))
-                        metric("内容单元", value: "\(book.units.count)", detail: "按源顺序登记")
-                        metric("AI 分析", value: "\(book.units.filter { analyzedIDs.contains($0.id) }.count)", detail: "源质量核对另计")
-                        metric("待核对", value: "\(book.reviewCount)", detail: "提取或图文异常")
-                        metric("逐段回执", value: "\(book.paragraphReceipts?.count ?? 0)", detail: "本版开始留存")
-                    }
-                    HStack(spacing: 0) {
-                        flowStep("1", "预读选法", done: book.plan != nil)
-                        Image(systemName: "arrow.right").foregroundStyle(.tertiary)
-                        flowStep("2", "顺序精读", done: book.completedCount > 0)
-                        Image(systemName: "arrow.right").foregroundStyle(.tertiary)
-                        flowStep("3", "连接要素", done: !book.entities.isEmpty || !book.events.isEmpty)
-                        Image(systemName: "arrow.right").foregroundStyle(.tertiary)
-                        flowStep("4", "核对与沉淀", done: book.isFullyProcessed)
-                    }.softPanel()
-                    ReadingLedgerView()
-                    if let plan = book.plan {
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text("AI 选择的读法").font(.headline); MarkdownText(markdown: plan.rationale)
-                            ForEach(book.methods.filter { plan.methodIDs.contains($0.id) }) { method in
-                                VStack(alignment: .leading, spacing: 9) {
-                                    Text(method.name).font(.subheadline.weight(.semibold)).foregroundStyle(Palette.accent)
-                                    Text(method.goal).font(.caption).foregroundStyle(.secondary)
-                                    ForEach(Array(method.steps.enumerated()), id: \.offset) { index, step in HStack(alignment: .top) { Text(String(index + 1)).foregroundStyle(.tertiary); Text(step) }.font(.subheadline) }
-                                }.padding(.vertical, 8)
-                            }
-                            if !plan.focus.isEmpty { Text("关注：" + plan.focus.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
-                        }.softPanel()
-                    } else { EmptyState(title: "让 AI 先认识这本书", detail: "预读目录与样本后，它会选择读书法、内容类型和组件。预读不会增加全文覆盖率。", actionTitle: "开始预读", action: { store.makePlan() }).frame(height: 245) }
-                    if !book.audit.isEmpty {
-                        VStack(alignment: .leading, spacing: 13) {
-                            Text("最近调用的插件能力").font(.headline)
-                            ForEach(Array(book.audit.suffix(16).reversed())) { audit in
-                                HStack(alignment: .top, spacing: 14) { Image(systemName: "puzzlepiece.extension").foregroundStyle(Palette.accent); VStack(alignment: .leading, spacing: 4) { Text(audit.name).font(.caption.monospaced()); Text(audit.summary).font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(audit.createdAt, style: .time).font(.caption2).foregroundStyle(.tertiary) }
-                            }
-                        }.softPanel()
-                    }
-                    if let synthesis = book.syntheses.last(where: { $0.title == "全书综合" }) {
-                        VStack(alignment: .leading, spacing: 14) { Text("全书综合").font(.headline); MarkdownText(markdown: synthesis.markdown) }.softPanel()
-                    }
-                    Text("处理覆盖率表示登记内容的执行进度。模型理解、复杂图表与公式仍需要结合原文判断。").font(.caption).foregroundStyle(.secondary)
-                }.padding(30).frame(maxWidth: 1100).frame(maxWidth: .infinity)
+        VStack(spacing: 0) {
+            CompactWorkspaceHeader("阅读流程") {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { preReadButton; executionButton }
+                    Menu {
+                        Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.disabled(store.isBusy)
+                        Button(store.isBusy ? "暂停任务" : "开始 / 继续精读") { store.isBusy ? store.pause() : store.startReading() }.disabled(cannotPause)
+                    } label: { Image(systemName: "play.circle") }.help("预读、精读与暂停")
+                }
+            }
+            ScrollView {
+                if let book = store.book {
+                    VStack(alignment: .leading, spacing: 12) {
+                        overview(book)
+                        reviewSummary(book)
+                        ReadingLedgerView()
+                        if let plan = book.plan {
+                            DisclosureGroup(isExpanded: $showMethods) {
+                                VStack(alignment: .leading, spacing: 14) {
+                                    MarkdownText(markdown: plan.rationale)
+                                    ForEach(book.methods.filter { plan.methodIDs.contains($0.id) }) { method in
+                                        DisclosureGroup(method.name) {
+                                            VStack(alignment: .leading, spacing: 10) {
+                                                Text(method.goal).foregroundStyle(.secondary)
+                                                ForEach(Array(method.steps.enumerated()), id: \.offset) { index, step in
+                                                    HStack(alignment: .top, spacing: 8) { Text("\(index + 1).").foregroundStyle(.secondary); Text(step) }
+                                                }
+                                            }.font(.system(size: 16)).lineSpacing(4).padding(.top, 8)
+                                        }.font(.subheadline.weight(.medium))
+                                    }
+                                    if !plan.focus.isEmpty { Text("关注：" + plan.focus.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
+                                }.padding(.top, 12)
+                            } label: {
+                                HStack { Text("读书方案").font(.subheadline.weight(.medium)); Spacer(); Text(book.methods.filter { plan.methodIDs.contains($0.id) }.map(\.name).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                            }.softPanel()
+                        } else {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "book.closed").foregroundStyle(Palette.accent)
+                                VStack(alignment: .leading, spacing: 5) { Text("先预读选法，再顺序精读").font(.subheadline.weight(.medium)); Text("预读目录与样本，选择方法、类型和组件；不会增加全文覆盖。").font(.caption).foregroundStyle(.secondary) }
+                            }.softPanel()
+                        }
+                        if !book.audit.isEmpty {
+                            DisclosureGroup(isExpanded: $showAudit) {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    ForEach(Array(book.audit.suffix(16).reversed())) { audit in
+                                        HStack(alignment: .top, spacing: 10) {
+                                            VStack(alignment: .leading, spacing: 3) { Text(audit.name).font(.caption.monospaced()); Text(audit.summary).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                                            Spacer(minLength: 4); Text(audit.createdAt, style: .time).font(.caption2).foregroundStyle(.tertiary)
+                                        }
+                                    }
+                                }.padding(.top, 10)
+                            } label: { HStack { Text("插件调用记录").font(.subheadline.weight(.medium)); Spacer(); Text("最近 \(min(16, book.audit.count)) 条").font(.caption).foregroundStyle(.secondary) } }.softPanel()
+                        }
+                        if let synthesis = book.syntheses.last(where: { $0.title == "全书综合" }) {
+                            DisclosureGroup("全书综合", isExpanded: $showSynthesis) { MarkdownText(markdown: synthesis.markdown).padding(.top, 12) }.font(.subheadline.weight(.medium)).softPanel()
+                        }
+                        Text("执行进度与源质量分别核对；模型理解、复杂图表和公式仍需结合原文判断。").font(.caption).foregroundStyle(.secondary)
+                    }.padding(16).frame(maxWidth: 1000).frame(maxWidth: .infinity)
+                }
             }
         }
     }
-    private func metric(_ title: String, value: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) { Text(title).font(.caption).foregroundStyle(.secondary); Text(value).font(.system(size: 32, weight: .light, design: .rounded)); Text(detail).font(.caption2).foregroundStyle(.tertiary) }.frame(maxWidth: .infinity, alignment: .leading).softPanel()
+    private var cannotPause: Bool { store.isSavingDocument || store.isExportingProject || store.isImportingBookCommit || store.isCommittingLocalWrite }
+    private var preReadButton: some View { Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.disabled(store.isBusy) }
+    private var executionButton: some View {
+        Button { store.isBusy ? store.pause() : store.startReading() } label: {
+            Label(store.isBusy ? (cannotPause ? "处理中" : "暂停") : (store.book?.insights.isEmpty == false ? "继续精读" : "开始精读"), systemImage: store.isBusy ? "pause.fill" : "play.fill")
+        }.buttonStyle(.borderedProminent).disabled(cannotPause)
     }
-    private func flowStep(_ number: String, _ title: String, done: Bool) -> some View {
-        VStack(spacing: 10) { Text(done ? "✓" : number).font(.subheadline).frame(width: 32, height: 32).background(Palette.accent.opacity(done ? 0.18 : 0.06), in: Circle()); Text(title).font(.caption) }.frame(maxWidth: .infinity)
+    private func overview(_ book: BookProject) -> some View {
+        let analyzedIDs = Set(book.insights.filter { !$0.id.hasPrefix("deferred-") && !$0.id.hasPrefix("blank-") }.flatMap(\.unitIDs))
+        let analyzed = book.units.filter { analyzedIDs.contains($0.id) }.count
+        return VStack(alignment: .leading, spacing: 9) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 20) { metric("内容单元", value: book.units.count); metric("AI 分析", value: analyzed); metric("待核对", value: book.reviewCount); metric("逐段回执", value: book.paragraphReceipts?.count ?? 0) }
+                Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 6) {
+                    GridRow { metric("内容单元", value: book.units.count); metric("AI 分析", value: analyzed) }
+                    GridRow { metric("待核对", value: book.reviewCount); metric("逐段回执", value: book.paragraphReceipts?.count ?? 0) }
+                }
+            }
+            ProgressView(value: book.progress).tint(Palette.accent)
+                .help("核对完成 \(book.completedCount) / \(book.units.count)；AI 已分析但源质量待核对的单元另计。")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { flowStep("预读", done: book.plan != nil); flowStep("精读", done: book.completedCount > 0); flowStep("关联", done: !book.entities.isEmpty || !book.events.isEmpty); flowStep("核对", done: book.isFullyProcessed); Spacer(minLength: 0); Text("已核对 \(book.completedCount)/\(book.units.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+                Text("已核对完成 \(book.completedCount) / \(book.units.count) 单元").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            HStack(alignment: .top, spacing: 7) {
+                if store.isBusy { ProgressView().controlSize(.mini) }
+                Text(store.activity).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+        }.softPanel()
+    }
+    private func metric(_ title: String, value: Int) -> some View {
+        HStack(spacing: 5) { Text(title).foregroundStyle(.secondary); Text(value, format: .number).fontWeight(.medium).monospacedDigit() }.font(.caption).fixedSize()
+    }
+    private func flowStep(_ title: String, done: Bool) -> some View {
+        Label(title, systemImage: done ? "checkmark.circle.fill" : "circle").font(.caption).foregroundStyle(done ? Palette.accent : .secondary).fixedSize()
+    }
+    @ViewBuilder private func reviewSummary(_ book: BookProject) -> some View {
+        let units = book.units.filter { $0.warning != nil || book.coverage[$0.id]?.status == .needsReview || book.coverage[$0.id]?.status == .failed }
+        if !units.isEmpty {
+            DisclosureGroup(isExpanded: $showReview) {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(units) { unit in
+                        Button { store.navigateToUnit(unit.id); store.route = "reader" } label: {
+                            HStack(alignment: .top, spacing: 8) {
+                                VStack(alignment: .leading, spacing: 4) { Text(unit.locator).font(.caption.weight(.medium)); Text(reviewMessage(unit, in: book)).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
+                                Spacer(minLength: 0); Image(systemName: "arrow.up.right").font(.caption)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }.buttonStyle(.plain)
+                    }
+                }.padding(.top, 10)
+            } label: {
+                Label("需核对 \(book.reviewCount) · 失败 \(units.filter { book.coverage[$0.id]?.status == .failed }.count)", systemImage: "exclamationmark.circle").font(.subheadline.weight(.medium)).foregroundStyle(Palette.copper)
+            }.padding(12).background(Palette.copper.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+    private func reviewMessage(_ unit: SourceUnit, in book: BookProject) -> String {
+        if ReadingLedger.isDeferred(unitID: unit.id, in: book) { return "已延期，尚未读取；补齐识别后再继续。" }
+        let message = unit.warning ?? book.coverage[unit.id]?.message ?? ""
+        return message.isEmpty ? "请对照原文核对内容。" : message
     }
 }
 
@@ -227,72 +294,114 @@ struct DocumentEditorView: View {
     @EnvironmentObject var store: AppStore
     @State private var preview = false
     @State private var discardingDraft = false
+    @State private var showingDocuments = false
+    @State private var documentSearch = ""
+    @FocusState private var titleFocused: Bool
+    private var hasDocument: Bool { store.selectedDocumentID != nil || store.editorDirty }
+    private var currentDocument: DocumentRecord? { store.book?.activeDocuments.first { $0.id == store.selectedDocumentID } }
+    private var documents: [DocumentRecord] {
+        let all = store.book?.activeDocuments ?? []
+        return documentSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? all : all.filter { $0.title.localizedCaseInsensitiveContains(documentSearch.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
     var body: some View {
-        HSplitView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack { Text("我的 Markdown").font(.caption.weight(.semibold)).foregroundStyle(.secondary); Spacer(); Button { store.newDocument() } label: { Image(systemName: "plus") }.buttonStyle(.plain) }.padding(.horizontal, 16).padding(.top, 18)
-                List(store.book?.activeDocuments ?? []) { document in
-                    Button { Task { await store.openDocument(document) } } label: { Label(document.title, systemImage: document.origin == "user" ? "doc.text" : "sparkles").font(.subheadline).lineLimit(2).padding(.vertical, 5) }.buttonStyle(.plain)
-                        .listRowBackground(store.selectedDocumentID == document.id ? Palette.accent.opacity(0.1) : .clear)
-                        .contextMenu {
-                            Button("加入导图") { Task { await store.addDocumentToGraph(document) } }
-                            Button("移入回收站", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }
-                        }
-                }.listStyle(.sidebar)
-            }.frame(minWidth: 170, idealWidth: 200, maxWidth: 250)
-            if store.selectedDocumentID != nil || store.editorDirty {
-                VStack(spacing: 0) {
-                    VStack(spacing: 12) {
-                        HStack {
-                        TextField("文档标题", text: Binding(get: { store.editorTitle }, set: { store.editorTitle = $0; store.editorDirty = true })).font(.headline).textFieldStyle(.plain)
-                        if let document = store.book?.activeDocuments.first(where: { $0.id == store.selectedDocumentID }) {
-                            Button { store.requestDeletion(.document, id: document.id, title: document.title) } label: { Image(systemName: "trash") }.help("文档移入回收站").disabled(store.isBusy)
-                        }
-                        }
-                        HStack {
-                        Toggle("预览", isOn: $preview).toggleStyle(.button)
-                        Spacer(minLength: 0)
-                        if store.editorDirty { Button("放弃修改") { discardingDraft = true }.disabled(store.isSavingDocument) }
-                        Button("导出 .md") { store.exportMarkdown() }.disabled(store.selectedDocumentID == nil || store.editorDirty)
-                        Button(store.editorDirty ? "保存" : "已保存") { Task { await store.saveCurrentDocument() } }.buttonStyle(.borderedProminent).disabled(!store.editorDirty || store.isBusy)
-                        }
-                    }.padding(20)
-                    Divider().opacity(0.4)
-                    if preview { ScrollView { MarkdownText(markdown: store.editorMarkdown).padding(36).frame(maxWidth: 850).frame(maxWidth: .infinity) }.background(Palette.paper) }
-                    else { TextEditor(text: Binding(get: { store.editorMarkdown }, set: { store.editorMarkdown = $0; store.editorDirty = true })).font(.system(size: 15, design: .monospaced)).scrollContentBackground(.hidden).padding(25).background(Palette.paper) }
-                }.frame(minWidth: 360, maxWidth: .infinity).disabled(store.isRecognizingPDF)
-            } else { EmptyState(title: "给理解留一个位置", detail: "你写下的想法与主动保存的 AI 回答，都是真实的 Markdown 文件。它们也会出现在文档导图中。", icon: "square.and.pencil", actionTitle: "写下理解", action: { store.newDocument() }) }
+        VStack(spacing: 0) {
+            ViewThatFits(in: .horizontal) { editorToolbar(compact: false); editorToolbar(compact: true) }
+                .padding(.horizontal, 14).padding(.vertical, 8).frame(minHeight: 44)
+                .background(Palette.surface).overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 0.5) }
+                .popover(isPresented: $showingDocuments, arrowEdge: .bottom) { documentPicker }
+            if store.editorDirty || store.isSavingDocument {
+                HStack(spacing: 7) {
+                    if store.isSavingDocument { ProgressView().controlSize(.mini) }
+                    else { Circle().fill(Palette.copper).frame(width: 5, height: 5) }
+                    Text(store.isSavingDocument ? "正在保存 Markdown；期间的新编辑会保留为草稿。" : "有未保存修改，切换笔记前请保存或放弃。").font(.caption).foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }.padding(.horizontal, 16).padding(.vertical, 5)
+            }
+            if let error = store.errorMessage, hasDocument {
+                Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(Palette.copper).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 6)
+            }
+            if hasDocument {
+                if preview {
+                    ScrollView { MarkdownText(markdown: store.editorMarkdown).padding(22).frame(maxWidth: 850).frame(maxWidth: .infinity) }.background(Palette.paper)
+                } else {
+                    TextEditor(text: Binding(get: { store.editorMarkdown }, set: { store.editorMarkdown = $0; store.editorDirty = true }))
+                        .font(.system(size: 16, design: .monospaced)).scrollContentBackground(.hidden).padding(16).background(Palette.paper).disabled(store.isRecognizingPDF)
+                }
+            } else {
+                EmptyState(title: "写下你的理解", detail: "从左上角选择笔记，或新建一篇真实的 Markdown 文档。", icon: "square.and.pencil", actionTitle: "新建笔记", action: { store.newDocument() })
+            }
         }
         .confirmationDialog("放弃尚未保存的修改？", isPresented: $discardingDraft) {
             Button("放弃修改", role: .destructive) { store.discardDraft() }
         } message: { Text("清除当前草稿，恢复最近保存的内容；已保存的 Markdown 不会删除。") }
+        .onChange(of: store.bookID) { _, _ in showingDocuments = false; documentSearch = ""; preview = false }
     }
-}
-
-struct BookChatView: View {
-    @EnvironmentObject var store: AppStore
-    @State private var question = ""
-    var body: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 26) {
-                        if store.book?.chats.isEmpty != false { EmptyState(title: "顺着一个问题，读得更深", detail: "回答会检索本书原文与已保存文档。你可以把值得留下的回答保存成 Markdown 节点。", icon: "bubble.left.and.bubble.right").frame(minHeight: 280) }
-                        ForEach(store.book?.chats ?? []) { message in
-                            VStack(alignment: .leading, spacing: 13) {
-                                HStack { Label(message.role == "user" ? "你的问题" : "一起理解", systemImage: message.role == "user" ? "person.crop.circle" : "sparkles").font(.caption.weight(.semibold)).foregroundStyle(message.role == "user" ? .secondary : Palette.accent); Spacer(); if message.role == "assistant" { Button("保存为文档节点") { Task { await store.saveAnswer(message) } }.font(.caption).disabled(store.isBusy) } }
-                                MarkdownText(markdown: message.content)
-                                if message.role == "assistant" { EvidenceList(evidence: message.evidence) }
-                            }.padding(22).background(message.role == "user" ? Palette.accent.opacity(0.05) : Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 16)).id(message.id)
-                        }
-                    }.padding(30).frame(maxWidth: 880).frame(maxWidth: .infinity)
-                }.onChange(of: store.book?.chats.count) { _, _ in if let last = store.book?.chats.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } } }
+    private func editorToolbar(compact: Bool) -> some View {
+        HStack(spacing: compact ? 7 : 10) {
+            Button { showingDocuments.toggle() } label: {
+                if compact { Image(systemName: "doc.on.doc") }
+                else { Label("笔记", systemImage: "doc.on.doc") }
+            }.help("选择或搜索 Markdown 笔记")
+            if hasDocument {
+                TextField("文档标题", text: Binding(get: { store.editorTitle }, set: { store.editorTitle = $0; store.editorDirty = true }))
+                    .font(.system(size: 17, weight: .medium)).textFieldStyle(.plain).focused($titleFocused)
+                    .frame(minWidth: compact ? 80 : 160).layoutPriority(1).disabled(store.isRecognizingPDF)
+                    .help("修改标题后保存，即可重命名笔记")
+            } else { Text("我的理解").font(.system(size: 17, weight: .semibold)).lineLimit(1); Spacer(minLength: 0) }
+            if compact {
+                Button { preview.toggle() } label: { Image(systemName: preview ? "square.and.pencil" : "eye") }.help(preview ? "返回编辑" : "预览 Markdown").disabled(!hasDocument)
+            } else {
+                Picker("显示模式", selection: $preview) { Text("编辑").tag(false); Text("预览").tag(true) }.pickerStyle(.segmented).labelsHidden().frame(width: 116).disabled(!hasDocument)
             }
-            HStack(alignment: .bottom, spacing: 14) {
-                TextField("从这本书出发，问一个问题…", text: $question, axis: .vertical).lineLimit(2...6).textFieldStyle(.plain).onSubmit { send() }
-                Button { send() } label: { Image(systemName: "arrow.up").font(.headline).frame(width: 30, height: 30) }.buttonStyle(.borderedProminent).disabled(store.isBusy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }.padding(18).readingGlass().padding(.horizontal, 30).padding(.bottom, 22)
-        }
+            Button(store.isSavingDocument ? "保存中" : "保存") { Task { await store.saveCurrentDocument() } }
+                .buttonStyle(.borderedProminent).disabled(!store.editorDirty || store.isBusy).help(store.editorDirty ? "保存 Markdown 与标题修改" : "当前文档已保存")
+            documentMenu
+        }.controlSize(.small)
     }
-    private func send() { guard !store.isBusy, !question.isEmpty else { return }; let input = question; question = ""; store.ask(input) }
+    private var documentMenu: some View {
+        Menu {
+            Button("新建笔记") { store.newDocument(); preview = false }.disabled(store.editorDirty || store.isBusy)
+            Button("重命名") { titleFocused = true }.disabled(!hasDocument || store.isRecognizingPDF)
+            if store.editorDirty { Button("放弃未保存修改…", role: .destructive) { discardingDraft = true }.disabled(store.isSavingDocument) }
+            Divider()
+            if let document = currentDocument {
+                Button("加入导图") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
+                Button("导出 .md…") { store.exportMarkdown() }.disabled(store.editorDirty || store.isBusy)
+                Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
+            }
+            Button("查看回收站") { store.showingTrash = true }
+        } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().help("新建、重命名、导图与文档管理")
+    }
+    private var documentPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Markdown 笔记").font(.subheadline.weight(.medium)); Spacer()
+                Button { showingDocuments = false; store.newDocument(); preview = false } label: { Label("新建", systemImage: "plus") }.controlSize(.small).disabled(store.editorDirty || store.isBusy)
+            }
+            TextField("搜索笔记标题", text: $documentSearch).textFieldStyle(.roundedBorder)
+            if store.editorDirty { Text("当前有草稿，请先保存或放弃，再切换笔记。").font(.caption).foregroundStyle(Palette.copper) }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 3) {
+                    ForEach(documents) { document in
+                        Button {
+                            showingDocuments = false
+                            Task { await store.openDocument(document) }
+                        } label: {
+                            HStack(spacing: 9) {
+                                Image(systemName: document.origin == "user" ? "doc.text" : "sparkles").foregroundStyle(Palette.accent)
+                                Text(document.title).font(.system(size: 14)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                                if store.selectedDocumentID == document.id { Image(systemName: "checkmark").foregroundStyle(Palette.accent).font(.caption.weight(.semibold)) }
+                            }.padding(.horizontal, 9).padding(.vertical, 8).contentShape(Rectangle())
+                                .background(store.selectedDocumentID == document.id ? Palette.accent.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 7))
+                        }.buttonStyle(.plain).disabled(store.isBusy || (store.editorDirty && store.selectedDocumentID != document.id))
+                            .contextMenu {
+                                Button("加入导图") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
+                                Button("移入回收站…", role: .destructive) { showingDocuments = false; store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
+                            }
+                    }
+                    if documents.isEmpty { Text(documentSearch.isEmpty ? "还没有笔记，从新建开始。" : "没有匹配的笔记").font(.caption).foregroundStyle(.secondary).padding(12) }
+                }
+            }.frame(maxHeight: 330)
+        }.padding(14).frame(width: 330)
+    }
 }

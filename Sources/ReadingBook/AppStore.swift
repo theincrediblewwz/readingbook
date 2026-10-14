@@ -92,7 +92,7 @@ import ReadingCore
             await preparePDFSession(bookID: id, sourceURL: url)
             guard bookID == id && generation == navigationGeneration else { return }
         }
-        let years = book?.events.compactMap(\.startYear) ?? []
+        let years = book?.events.flatMap { [$0.startYear, $0.endYear].compactMap { $0 } } ?? []
         timeFrom = Double((years.min() ?? -5000) - 1); timeTo = Double((years.max() ?? 3000) + 1)
         restoreDraft()
     }

@@ -5,6 +5,8 @@ import ReadingCore
 struct WorkspaceView: View {
     @EnvironmentObject var store: AppStore
     @State private var compactInspector = false
+    @State private var showsInspector = false
+    @State private var detailWidth: CGFloat = 0
     @State private var servicePopover = false
     @State private var columns: NavigationSplitViewVisibility = .detailOnly
     @StateObject private var pdfController = PDFReaderController()
@@ -22,14 +24,19 @@ struct WorkspaceView: View {
                 if store.book != nil {
                     HSplitView {
                         content.frame(maxWidth: .infinity, maxHeight: .infinity)
-                        if store.route != "reader", geometry.size.width >= 1060, let id = store.selectedObjectID, store.book?.activeDocuments.contains(where: { $0.id == id }) != true {
-                            ObjectInspector(id: id).frame(minWidth: 270, idealWidth: 310, maxWidth: 380)
+                        if store.route != "reader", showsInspector, geometry.size.width >= 920, let id = store.selectedObjectID {
+                            ObjectInspector(id: id, onClose: { showsInspector = false }).frame(minWidth: 250, idealWidth: 280, maxWidth: 340)
                         }
                     }
                 } else { WelcomeView() }
-                if store.route != "reader" || store.isBusy || store.requestsUsed > 0 { footer }
+                if store.isBusy && !viewingWorkflow { footer }
             }
             .background(Color(nsColor: .windowBackgroundColor))
+            .onAppear { detailWidth = geometry.size.width }
+            .onChange(of: geometry.size.width) { _, width in
+                detailWidth = width
+                if width < 920, showsInspector { showsInspector = false; compactInspector = true }
+            }
             }
         }
         .navigationSplitViewStyle(.balanced)
@@ -39,10 +46,10 @@ struct WorkspaceView: View {
         .onOpenURL { url in Task { await store.openInternalURL(url) } }
         .sheet(item: sheetBinding, onDismiss: finishSheetDismissal) { sheet in
             switch sheet {
-            case .settings: ProviderSettingsView().environmentObject(store).frame(width: 640, height: 660)
-            case .ocr: PDFOCRPanel().environmentObject(store).frame(width: 590, height: 510)
-            case .trash: LibraryTrashView().environmentObject(store).frame(width: 620, height: 550)
-            case .plugins: PluginLibraryView().environmentObject(store).frame(width: 660, height: 580)
+            case .settings: ProviderSettingsView().environmentObject(store).frame(width: 600, height: 560)
+            case .ocr: PDFOCRPanel().environmentObject(store).frame(width: 560, height: 460)
+            case .trash: LibraryTrashView().environmentObject(store).frame(width: 600, height: 500)
+            case .plugins: PluginLibraryView().environmentObject(store).frame(width: 620, height: 520)
             case .password(let request): PDFPasswordSheet(request: request).environmentObject(store)
             }
         }
@@ -61,14 +68,14 @@ struct WorkspaceView: View {
             }
             return true
         }
-        .onChange(of: store.bookID) { _, _ in readerShowsPDF = true }
+        .onChange(of: store.bookID) { _, _ in readerShowsPDF = true; showsInspector = false; compactInspector = false }
     }
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 BrandGlyph(name: "mark").frame(width: 30, height: 30).foregroundStyle(Palette.accent)
                 VStack(alignment: .leading, spacing: 3) { Text("ReadingBook").font(.system(size: 14, weight: .semibold)); Text("阅读 · 线索 · 理解").font(.system(size: 10)).foregroundStyle(.secondary) }
-            }.padding(.horizontal, 18).padding(.top, 12).padding(.bottom, 16)
+            }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 12)
             ScrollView {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("书 库").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary).padding(.horizontal, 12).padding(.bottom, 5)
@@ -85,7 +92,7 @@ struct WorkspaceView: View {
                     }
                     Button { store.chooseBook() } label: { Label("导入一本书", systemImage: "plus").font(.subheadline).padding(10) }.buttonStyle(.plain).foregroundStyle(.secondary).disabled(store.isBusy)
                     if store.book != nil {
-                        Divider().padding(.vertical, 16)
+                        Divider().padding(.vertical, 11)
                         Text("阅读工作台").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary).padding(.horizontal, 12)
                         routeButton("原文阅读", icon: "book.pages", route: "reader")
                         routeButton("阅读流程", icon: ComponentKind.workflow.icon, route: "workflow")
@@ -111,7 +118,7 @@ struct WorkspaceView: View {
                 Button { store.showingPlugins = true } label: { Image(systemName: "puzzlepiece.extension") }.help("插件与读书法")
                 Spacer()
                 Menu { Button("导入书项目…") { store.importProject() }; Button("导出完整书项目…") { store.exportProject() }; Button("回收站") { store.showingTrash = true } } label: { Image(systemName: "square.and.arrow.up") }.menuStyle(.borderlessButton).frame(width: 25)
-            }.buttonStyle(.plain).foregroundStyle(.secondary).padding(20)
+            }.buttonStyle(.plain).foregroundStyle(.secondary).padding(14)
         }.background(.ultraThinMaterial)
     }
     private func routeButton(_ title: String, icon: String, route: String) -> some View {
@@ -120,12 +127,13 @@ struct WorkspaceView: View {
                 BrandGlyph(name: BrandNavigation.glyph(route: store.book?.views.first { $0.id == route }?.kind.rawValue ?? route)).frame(width: 18, height: 18)
                 Text(title).font(.system(size: 13, weight: store.route == route ? .semibold : .regular))
                 Spacer(minLength: 0)
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 10)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 8)
                 .background(store.route == route ? Palette.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 9))
                 .overlay(alignment: .leading) { if store.route == route { Capsule().fill(Palette.accent).frame(width: 2, height: 15).padding(.leading, 3) } }
         }.buttonStyle(.plain).foregroundStyle(store.route == route ? Palette.accent : .primary)
     }
     private var viewingPDF: Bool { store.route == "reader" && readerShowsPDF && store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
+    private var viewingWorkflow: Bool { store.route == "workflow" || store.book?.views.first(where: { $0.id == store.route })?.kind == .workflow }
     @ToolbarContentBuilder private var workspaceToolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
             HStack(spacing: 10) {
@@ -187,14 +195,17 @@ struct WorkspaceView: View {
                 }
             }
             if store.selectedObjectID != nil {
-                Button { compactInspector.toggle() } label: { Image(systemName: "info.circle") }.help("查看所选对象")
+                Button {
+                    if detailWidth >= 920, store.route != "reader" { showsInspector.toggle() }
+                    else { compactInspector.toggle() }
+                } label: { Image(systemName: showsInspector ? "sidebar.right" : "info.circle") }.help("展开或收起所选对象详情")
                     .popover(isPresented: $compactInspector) {
-                        if let id = store.selectedObjectID { ObjectInspector(id: id).environmentObject(store).frame(width: 340, height: 540) }
+                        if let id = store.selectedObjectID { ObjectInspector(id: id, onClose: { compactInspector = false }).environmentObject(store).frame(width: 330, height: 500) }
                     }
             }
             Button { servicePopover.toggle() } label: { Image(systemName: "sparkles") }.help("AI 服务：\(store.serviceName)")
                 .popover(isPresented: $servicePopover) { servicePicker }
-            if let book = store.book {
+            if let book = store.book, !viewingWorkflow {
                 Button { store.isBusy ? store.pause() : store.startReading() } label: {
                     Image(systemName: store.isBusy ? "pause.fill" : "play.fill")
                 }.help(store.isBusy ? (store.isImportingBookCommit || store.isCommittingLocalWrite ? "正在保存" : store.isExportingProject ? "正在导出" : "暂停任务") : (book.insights.isEmpty ? "开始精读" : "继续精读")).disabled(store.isSavingDocument || store.isExportingProject || store.isImportingBookCommit || store.isCommittingLocalWrite)
@@ -207,6 +218,9 @@ struct WorkspaceView: View {
                 Button("插件与读书法") { store.showingPlugins = true }
                 Button("AI 服务配置") { store.showingSettings = true }
                 Button("回收站") { store.showingTrash = true }
+                Divider()
+                Text(store.activity)
+                if store.requestsUsed > 0 { Text("本轮 \(store.requestsUsed) 次请求") }
             } label: { Image(systemName: "ellipsis") }.help("导入、导出与设置")
         }
     }
@@ -325,11 +339,11 @@ private enum WorkspaceSheet: Identifiable {
 struct WelcomeView: View {
     @EnvironmentObject var store: AppStore
     var body: some View {
-        VStack(spacing: 28) {
-            Spacer()
-            BrandGlyph(name: "mark").frame(width: 70, height: 70).foregroundStyle(Palette.accent)
+        ScrollView {
+        VStack(spacing: 20) {
+            BrandGlyph(name: "mark").frame(width: 52, height: 52).foregroundStyle(Palette.accent)
             VStack(spacing: 12) {
-                Text("读一本书，\n留下一片自己的知识。").font(.system(size: 38, weight: .regular, design: .serif)).multilineTextAlignment(.center).lineSpacing(8)
+                Text("读一本书，\n留下自己的理解。").font(.system(size: 28, weight: .regular, design: .serif)).multilineTextAlignment(.center).lineSpacing(6)
                 Text("原文、人物与概念、时间与空间，以及你写下的理解。\n让自己的 AI 把它们连接起来。").font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center).lineSpacing(6)
             }
             Button { store.chooseBook() } label: { Label("导入一本书", systemImage: "plus").padding(.horizontal, 18).padding(.vertical, 5) }.buttonStyle(.borderedProminent).controlSize(.large)
@@ -338,10 +352,10 @@ struct WelcomeView: View {
                 feature("逐段阅读", "book", "看见进度与原文依据")
                 feature("随书生长", "puzzlepiece.extension", "AI 选择组件和内容类型")
                 feature("写下理解", "square.and.pencil", "Markdown 留在自己手中")
-            }.padding(.top, 25)
-            Spacer()
-            Button("连接自己的 AI") { store.showingSettings = true }.buttonStyle(.plain).foregroundStyle(Palette.accent).padding(.bottom, 36)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(40)
+            }.padding(.top, 12)
+            Button("连接自己的 AI") { store.showingSettings = true }.buttonStyle(.plain).foregroundStyle(Palette.accent).padding(.top, 8)
+        }.frame(maxWidth: .infinity).padding(30)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     private func feature(_ title: String, _ icon: String, _ detail: String) -> some View {
         VStack(spacing: 8) { Image(systemName: icon).foregroundStyle(Palette.accent); Text(title).font(.subheadline.weight(.medium)); Text(detail).font(.caption).foregroundStyle(.secondary) }
@@ -355,25 +369,26 @@ struct EmptyState: View {
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: icon).font(.system(size: 36, weight: .light)).foregroundStyle(Palette.accent.opacity(0.7))
+        VStack(spacing: 12) {
+            Image(systemName: icon).font(.system(size: 28, weight: .light)).foregroundStyle(Palette.accent.opacity(0.7))
             Text(title).font(.title3.weight(.medium)); Text(detail).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 440).lineSpacing(5)
             if let actionTitle, let action { Button(actionTitle, action: action).buttonStyle(.borderedProminent).padding(.top, 8) }
-        }.padding(40).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 struct ObjectInspector: View {
     @EnvironmentObject var store: AppStore
     let id: String
+    var onClose: (() -> Void)? = nil
     @State private var editingEntity: KnowledgeEntity?
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack { Text("关联与依据").font(.caption).foregroundStyle(.secondary); Spacer(); Button { store.selectedObjectID = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }
+            VStack(alignment: .leading, spacing: 14) {
+                HStack { Text("关联与依据").font(.caption).foregroundStyle(.secondary); Spacer(); Button { if let onClose { onClose() } else { store.selectedObjectID = nil } } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("收起详情") }
                 if let entity = store.book?.entities.first(where: { $0.id == id }) {
                     Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.caption).foregroundStyle(Palette.copper)
-                    Text(entity.name).font(.system(size: 26, design: .serif)); MarkdownText(markdown: entity.summary)
+                    Text(entity.name).font(.system(size: 21, design: .serif)); MarkdownText(markdown: entity.summary)
                     Button("编辑卡片") { editingEntity = entity }.font(.caption).disabled(store.isBusy)
                     Button("删除卡片", role: .destructive) { store.requestDeletion(.entity, id: entity.id, title: entity.name) }.font(.caption).disabled(store.isBusy)
                     ForEach(entity.properties.keys.sorted(), id: \.self) { key in
@@ -383,7 +398,7 @@ struct ObjectInspector: View {
                     ForEach((store.book?.events ?? []).filter { $0.participantIDs.contains(id) || $0.placeIDs.contains(id) }) { event in Button(event.name) { store.focus(event.id) }.buttonStyle(.plain).foregroundStyle(Palette.accent) }
                     EvidenceList(evidence: entity.evidence)
                 } else if let event = store.book?.events.first(where: { $0.id == id }) {
-                    Text("事件").font(.caption).foregroundStyle(Palette.copper); Text(event.name).font(.system(size: 26, design: .serif))
+                    Text("事件").font(.caption).foregroundStyle(Palette.copper); Text(event.name).font(.system(size: 21, design: .serif))
                     Label(event.dateText, systemImage: "clock").font(.subheadline).foregroundStyle(.secondary)
                     MarkdownText(markdown: event.summary)
                     linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs)
@@ -408,7 +423,7 @@ struct ObjectInspector: View {
                 ForEach((store.book?.activeDocuments ?? []).filter { $0.linkedIDs.contains(id) }) { document in
                     Button { Task { await store.openDocument(document) } } label: { Label(document.title, systemImage: "doc.text").font(.caption) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
                 }
-            }.padding(22)
+            }.padding(16)
         }.background(.background).sheet(item: $editingEntity) { entity in EntityEditView(entity: entity).environmentObject(store) }
     }
     private func fieldLabel(_ key: String, type: String) -> String { store.book?.types.first { $0.id == type }?.fields.first { $0.key == key }?.label ?? key }

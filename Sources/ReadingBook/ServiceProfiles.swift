@@ -187,16 +187,16 @@ struct AIServiceBar: View {
     @AppStorage("ai-service-expanded") private var expanded = false
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 7) {
                 Picker("使用", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0) })) {
                     if store.selectedServiceID == nil { Text("未保存配置").tag("") }
                     ForEach(store.savedServices) { service in Text(service.name).tag(service.id) }
                 }.labelsHidden().disabled(store.isBusy)
                 Text(store.settings.model.isEmpty ? "尚未配置模型" : store.settings.model).font(.caption2).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
                 HStack { Button("管理 / 新建") { store.showingSettings = true }; Spacer(); Button("测试") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty) }.font(.caption)
-                if !store.connectionStatus.isEmpty { Text(store.connectionStatus).font(.caption2).foregroundStyle(.secondary).lineLimit(4) }
-            }.padding(.top, 9)
-        } label: { Label("AI · \(store.serviceName)", systemImage: "sparkles").font(.caption.weight(.medium)).lineLimit(1) }
-        .padding(14).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 12).padding(.bottom, 10)
+                if !store.connectionStatus.isEmpty { Text(store.connectionStatus).font(.caption2).foregroundStyle(.secondary).lineLimit(3).help(store.connectionStatus) }
+            }.padding(.top, 7).controlSize(.small)
+        } label: { Label("AI · \(store.serviceName)", systemImage: "sparkles").font(.system(size: 12, weight: .medium)).lineLimit(1) }
+        .padding(10).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10)).padding(.horizontal, 12).padding(.bottom, 8)
     }
 }

@@ -23,22 +23,23 @@ struct EnhancedBookChatView: View {
             if !selectedAnswers.isEmpty { selectionBar }
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 24) {
+                    LazyVStack(alignment: .leading, spacing: 16) {
                         if store.book?.chats.isEmpty != false {
-                            EmptyState(title: "顺着一个问题，读得更深", detail: "直接选择回答文字保存摘录，或勾选多条回答合成自己的文档。公式可从 Markdown 源文选择。", icon: "bubble.left.and.bubble.right").frame(minHeight: 260)
+                            EmptyState(title: "顺着一个问题，读得更深", detail: "选择文字保存摘录，或勾选多条回答合并。公式可选择 Markdown 源文。", icon: "bubble.left.and.bubble.right").frame(minHeight: 200)
                         }
                         ForEach(store.book?.chats ?? []) { message in answerCard(message).id(message.id) }
-                    }.padding(26).frame(maxWidth: 900).frame(maxWidth: .infinity)
+                    }.padding(.horizontal, 18).padding(.vertical, 16).frame(maxWidth: 900).frame(maxWidth: .infinity)
                 }.onChange(of: store.book?.chats.count) { _, _ in
                     if let last = store.book?.chats.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
             }
-            HStack(alignment: .bottom, spacing: 14) {
+            HStack(alignment: .bottom, spacing: 10) {
                 TextField("从这本书出发，问一个问题…", text: $question, axis: .vertical)
-                    .lineLimit(2...6).textFieldStyle(.plain).onSubmit { send() }
-                Button { send() } label: { Image(systemName: "arrow.up").font(.headline).frame(width: 30, height: 30) }
+                    .lineLimit(1...5).textFieldStyle(.plain).onSubmit { send() }
+                Button { send() } label: { Image(systemName: "arrow.up").font(.headline).frame(width: 26, height: 26) }
                     .buttonStyle(.borderedProminent).disabled(store.isBusy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }.padding(18).readingGlass().padding(.horizontal, 26).padding(.bottom, 20)
+                    .help("发送问题").accessibilityLabel("发送问题")
+            }.padding(12).readingGlass().padding(.horizontal, 18).padding(.bottom, 12)
         }
         .onChange(of: store.bookID) { _, _ in selectedAnswers.removeAll(); renderedSelections.removeAll(); saveRequest = nil }
         .sheet(item: $saveRequest, onDismiss: {
@@ -46,44 +47,45 @@ struct EnhancedBookChatView: View {
         }) { request in
             AnswerSaveSheet(bookID: request.bookID, sourceAnswer: request.sourceAnswer, parts: request.parts,
                             showTrash: { openTrashAfterSheet = true; saveRequest = nil })
-                .environmentObject(store).frame(minWidth: 620, idealWidth: 780, minHeight: 560, idealHeight: 720)
+                .environmentObject(store).frame(minWidth: 520, idealWidth: 680, minHeight: 440, idealHeight: 600)
         }
     }
 
     private var selectionBar: some View {
-        HStack {
-            Label("已选 \(selectedAnswers.count) 条 AI 回答", systemImage: "checkmark.circle.fill").font(.subheadline)
+        HStack(spacing: 10) {
+            Label("已选 \(selectedAnswers.count) 条", systemImage: "checkmark.circle.fill").font(.caption.weight(.medium))
             Spacer()
-            Button("清空") { selectedAnswers.removeAll() }
+            Button("清空") { selectedAnswers.removeAll() }.buttonStyle(.borderless)
             Button("合并预览…") {
                 guard let book = store.book else { return }
                 let parts = book.chats.filter { $0.role == "assistant" && selectedAnswers.contains($0.id) }.map { SavedAnswerPart(answer: $0) }
                 saveRequest = AnswerSaveRequest(bookID: book.id, sourceAnswer: nil, parts: parts)
             }.buttonStyle(.borderedProminent).disabled(store.isBusy)
-        }.padding(.horizontal, 26).padding(.vertical, 11).background(Palette.accent.opacity(0.07))
+        }.controlSize(.small).padding(.horizontal, 18).padding(.vertical, 6)
+            .background(Palette.paper).overlay(alignment: .bottom) { Divider().opacity(0.5) }
     }
 
     private func answerCard(_ message: ChatMessage) -> some View {
         let assistant = message.role == "assistant"
         let bookID = store.bookID ?? ""
         let prepared = ChatMarkdownBody.prepare(message.content, bookID: bookID)
-        return VStack(alignment: .leading, spacing: 13) {
-            HStack {
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
                 Label(assistant ? "一起理解" : "你的问题", systemImage: assistant ? "sparkles" : "person.crop.circle")
                     .font(.caption.weight(.semibold)).foregroundStyle(assistant ? Palette.accent : .secondary)
                 Spacer()
                 if assistant {
                     Toggle("合并", isOn: Binding(get: { selectedAnswers.contains(message.id) }, set: { selected in
                         if selected { selectedAnswers.insert(message.id) } else { selectedAnswers.remove(message.id) }
-                    })).toggleStyle(.checkbox).font(.caption)
-                    Menu("保存…") {
+                    })).toggleStyle(.checkbox).font(.caption).help("将这条回答加入合并选择")
+                    Menu("保存") {
                         Button("保存完整回答…") { request(parts: [SavedAnswerPart(answer: message)]) }
                         Button("选择 Markdown 片段…") {
                             saveRequest = AnswerSaveRequest(bookID: bookID, sourceAnswer: message, parts: [])
                         }
-                    }.font(.caption).disabled(store.isBusy)
+                    }.font(.caption).menuStyle(.borderlessButton).fixedSize().disabled(store.isBusy)
                 }
-            }
+            }.controlSize(.small)
             ChatMarkdownBody(markdown: prepared, onSelectionChange: assistant ? { selection in
                 guard store.bookID == bookID,
                       store.book?.chats.first(where: { $0.id == message.id })?.content == message.content else { return }
@@ -91,21 +93,46 @@ struct EnhancedBookChatView: View {
                 else { renderedSelections.removeValue(forKey: message.id) }
             } : nil)
             if assistant, let selection = renderedSelections[message.id], selection.sourceMarkdown == prepared {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("已选 \(selection.text.count) 字 · 渲染区语义文本").font(.caption.weight(.medium))
-                        Text(selection.containsMath ? "包含公式；需要精确保留 TeX 时请选择 Markdown 原文。" : "排版标记不在摘录中；需要源文时请选择 Markdown 片段。")
-                            .font(.caption2).foregroundStyle(.secondary)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        selectionSummary(selection)
+                        Spacer(minLength: 0)
+                        selectionActions(message, bookID: bookID, selection: selection)
                     }
-                    Spacer(minLength: 0)
-                    Button("保存选段…") {
-                        request(parts: [SavedAnswerPart(messageID: message.id, sourceContent: message.content,
-                                                       text: selection.text, kind: .renderedText)])
-                    }.font(.caption).disabled(store.isBusy)
-                }.padding(12).background(Palette.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+                    VStack(alignment: .leading, spacing: 6) {
+                        selectionSummary(selection)
+                        selectionActions(message, bookID: bookID, selection: selection)
+                    }
+                }.padding(.horizontal, 10).padding(.vertical, 7)
+                    .background(Palette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
             }
-            if assistant { EvidenceList(evidence: message.evidence) }
-        }.padding(22).background(assistant ? Color(nsColor: .textBackgroundColor) : Palette.accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
+            if assistant, !message.evidence.isEmpty {
+                DisclosureGroup {
+                    EvidenceList(evidence: message.evidence).padding(.top, 5)
+                } label: {
+                    Text("原文依据 · \(message.evidence.count) 处").font(.caption).foregroundStyle(.secondary)
+                }.tint(Palette.accent)
+            }
+        }.padding(16).background(assistant ? Palette.surface : Palette.accent.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.line.opacity(0.65), lineWidth: 0.65))
+    }
+
+    private func selectionSummary(_ selection: RenderedMarkdownSelection) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("语义摘录 · \(selection.text.count) 字").font(.caption.weight(.medium))
+            if selection.containsMath { Text("含公式，建议选源文").font(.caption).foregroundStyle(Palette.copper) }
+        }.help("渲染区只保存语义文本，不包含精确 Markdown / TeX。需要保留公式时请选择源文片段。")
+    }
+
+    private func selectionActions(_ message: ChatMessage, bookID: String, selection: RenderedMarkdownSelection) -> some View {
+        HStack(spacing: 10) {
+            Button("选源文") { saveRequest = AnswerSaveRequest(bookID: bookID, sourceAnswer: message, parts: []) }
+                .buttonStyle(.borderless).help("从只读 Markdown 中选择连续原文，精确保留公式")
+            Button("保存选段…") {
+                request(parts: [SavedAnswerPart(messageID: message.id, sourceContent: message.content,
+                                               text: selection.text, kind: .renderedText)])
+            }
+        }.font(.caption).controlSize(.small).fixedSize().disabled(store.isBusy)
     }
 
     private func request(parts: [SavedAnswerPart]) {
@@ -134,62 +161,73 @@ private struct AnswerSaveSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(composition == nil && sourceAnswer != nil ? "选择 Markdown 原文片段" : "保存回答摘记").font(.title2.weight(.medium))
-                    Text("由你确认后保存为真实 Markdown，并创建一个导图节点。").font(.caption).foregroundStyle(.secondary)
-                }
+            HStack(spacing: 10) {
+                Text(sheetTitle).font(.headline)
                 Spacer()
+                if sourceAnswer != nil, composition != nil {
+                    Button("重选源文") { self.composition = nil; selectedSource = ""; localError = nil }
+                        .help("返回只读 Markdown，重新选择连续片段").disabled(saving)
+                }
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
-            }.padding(22)
-            Divider()
+            }.controlSize(.small).padding(.horizontal, 16).padding(.vertical, 12)
+            Divider().opacity(0.5)
             if let composition { preview(composition) }
             else if let answer = sourceAnswer { sourceSelector(answer) }
-            else { Spacer(); Text(localError ?? "正在准备预览…").foregroundStyle(.secondary).padding(24); Spacer() }
-            if let localError { Text(localError).font(.caption).foregroundStyle(.red).padding(.horizontal, 22).padding(.vertical, 10) }
+            else { Spacer(); if localError == nil { Text("正在准备预览…").foregroundStyle(.secondary).padding(16) }; Spacer() }
+            if let localError { Text(localError).font(.caption).foregroundStyle(.red).textSelection(.enabled).padding(.horizontal, 16).padding(.vertical, 8) }
         }
         .task { if sourceAnswer == nil { prepare(parts) } }
         .onChange(of: store.bookID) { _, id in if id != bookID { localError = "书籍已切换，请关闭并重新选择。"; composition = nil } }
     }
 
+    private var sheetTitle: String {
+        guard let composition else { return sourceAnswer != nil ? "1  选择 Markdown 源文" : "回答摘记预览" }
+        if sourceAnswer != nil { return "2  预览并保存原文片段" }
+        return composition.parts.contains(where: { $0.kind == .renderedText }) ? "语义摘录预览" : "回答摘记预览"
+    }
+
     private func sourceSelector(_ answer: ChatMessage) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("在下面只读源文中拖动选择。片段逐字保留，不能在此编辑原答；公式请包含完整分隔符。").font(.callout).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("只读连续原文 · 公式请选全分隔符，不在此编辑原答。").font(.caption).foregroundStyle(.secondary)
             MarkdownSourceSelector(source: answer.content) { source, text in
                 selectedSource = source == answer.content ? text : ""
             }.frame(maxWidth: .infinity, maxHeight: .infinity).overlay(RoundedRectangle(cornerRadius: 8).stroke(.primary.opacity(0.10)))
-            HStack {
-                Text(selectedSource.isEmpty ? "尚未选择文字" : "已选 \(selectedSource.count) 字").font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Text(selectedSource.isEmpty ? "拖动选择需要保留的片段" : "已选 \(selectedSource.count) 字 · 精确保留源文").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("预览所选片段") {
+                Button("预览片段") {
                     prepare([SavedAnswerPart(messageID: answer.id, sourceContent: answer.content, text: selectedSource, kind: .markdownExcerpt)])
                 }.buttonStyle(.borderedProminent).disabled(selectedSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.bookID != bookID)
-            }
-        }.padding(22)
+            }.controlSize(.small)
+        }.padding(16)
     }
 
     private func preview(_ composition: SavedAnswerComposition) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("标题").foregroundStyle(.secondary); TextField("文档标题", text: $title).textFieldStyle(.roundedBorder) }
-            Text("\(composition.messageIDs.count) 条回答，按会话顺序排列；保留对应问题、消息 ID 与原答引用。正文在保存后可独立编辑。").font(.caption).foregroundStyle(.secondary)
-            ScrollView { ChatMarkdownBody(markdown: previewMarkdown(composition)).padding(18).frame(maxWidth: .infinity, alignment: .leading) }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) { Text("标题").font(.subheadline).foregroundStyle(.secondary); TextField("文档标题", text: $title).textFieldStyle(.roundedBorder) }.controlSize(.small)
+            HStack(spacing: 6) {
+                Text("\(composition.messageIDs.count) 条回答 · 会话顺序 · 问题与引用保留")
+                if composition.parts.contains(where: { $0.kind == .renderedText }) { Text("· 公式以源文为准").foregroundStyle(Palette.copper) }
+            }.font(.caption).foregroundStyle(.secondary)
+            ScrollView { ChatMarkdownBody(markdown: previewMarkdown(composition)).padding(12).frame(maxWidth: .infinity, alignment: .leading) }
                 .background(Palette.paper, in: RoundedRectangle(cornerRadius: 9))
-            HStack {
-                if sourceAnswer != nil { Button("重新选择片段") { self.composition = nil; selectedSource = ""; localError = nil } }
-                Spacer()
+            HStack(spacing: 10) {
+                Text("Markdown + 导图节点").font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
                 if store.book?.documents.first(where: { $0.id == composition.documentID })?.trashedAt != nil {
-                    Button("前往回收站恢复") { showTrash() }
+                    Button("回收站恢复") { showTrash() }.help("恢复已保存的原摘记，不另建副本")
                 }
-                Button(saving ? "正在保存…" : "确认保存为文档节点") {
+                Button(saving ? "保存中…" : "确认保存") {
                     saving = true
                     Task {
                         let saved = await store.saveAnswerComposition(composition, title: title)
                         saving = false
                         if saved { dismiss() } else { localError = store.errorMessage ?? "未能保存，请重新检查选择。" }
                     }
-                }.buttonStyle(.borderedProminent).disabled(saving || store.isBusy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.bookID != bookID)
-            }
-        }.padding(22)
+                }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .disabled(saving || store.isBusy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.bookID != bookID)
+            }.controlSize(.small)
+        }.padding(16)
     }
 
     private func prepare(_ parts: [SavedAnswerPart]) {
@@ -243,7 +281,7 @@ private struct MarkdownSourceSelector: NSViewRepresentable {
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.borderType = .noBorder
         let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400)); text.isEditable = false; text.isSelectable = true; text.isRichText = false
         text.font = .monospacedSystemFont(ofSize: 13, weight: .regular); text.textColor = .textColor; text.backgroundColor = .textBackgroundColor
-        text.textContainerInset = NSSize(width: 14, height: 14); text.isVerticallyResizable = true; text.isHorizontallyResizable = false
+        text.textContainerInset = NSSize(width: 10, height: 10); text.isVerticallyResizable = true; text.isHorizontallyResizable = false
         text.autoresizingMask = [.width]; text.textContainer?.widthTracksTextView = true
         text.minSize = .zero; text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         text.string = source; text.delegate = context.coordinator; scroll.documentView = text

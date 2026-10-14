@@ -99,8 +99,8 @@ struct LibraryTrashView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack { Text("回收站").font(.system(size: 26, design: .serif)); Spacer(); Button("完成") { dismiss() } }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack { Text("回收站").font(.system(size: 18, weight: .semibold)); Spacer(); Button("完成") { dismiss() } }
             Text("书籍和 Markdown 保留在本机，可恢复。此版本不提供永久清空。").font(.caption).foregroundStyle(.secondary)
             List {
                 Section("书籍") {
@@ -115,6 +115,6 @@ struct LibraryTrashView: View {
                     }
                 }
             }.listStyle(.inset)
-        }.padding(25).task { await store.reloadTrash() }
+        }.padding(18).controlSize(.small).task { await store.reloadTrash() }
     }
 }

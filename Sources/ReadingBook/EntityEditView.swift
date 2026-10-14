@@ -8,8 +8,8 @@ struct EntityEditView: View {
     @State private var latitude = ""
     @State private var longitude = ""
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("编辑 \(entity.name)").font(.system(size: 25, design: .serif))
+        VStack(alignment: .leading, spacing: 12) {
+            Text("编辑卡片").font(.system(size: 18, weight: .semibold))
             Form {
                 TextField("名称", text: $entity.name)
                 Picker("内容类型", selection: $entity.typeID) { ForEach(store.book?.types ?? []) { type in Text(type.name).tag(type.id) } }
@@ -20,10 +20,10 @@ struct EntityEditView: View {
                 }
                 HStack { TextField("纬度（可空）", text: $latitude); TextField("经度（可空）", text: $longitude) }
                 TextField("位置依据 / 待考说明", text: Binding(get: { entity.locationNote ?? "" }, set: { entity.locationNote = $0 }))
-            }.textFieldStyle(.roundedBorder)
+            }.formStyle(.grouped).textFieldStyle(.roundedBorder).frame(maxWidth: .infinity, maxHeight: .infinity)
             Text("原文依据保留；用户编辑会记录到操作历史。未知坐标请留空。").font(.caption).foregroundStyle(.secondary)
             HStack { Button("取消") { dismiss() }; Spacer(); Button("保存") { save() }.buttonStyle(.borderedProminent).disabled(store.isBusy) }
-        }.padding(28).frame(width: 570, height: 620)
+        }.padding(18).frame(width: 540, height: 540).controlSize(.small)
             .onAppear { latitude = entity.latitude.map { String($0) } ?? ""; longitude = entity.longitude.map { String($0) } ?? "" }
     }
     private var propertyKeys: [String] { Array(Set(entity.properties.keys).union(store.book?.types.first { $0.id == entity.typeID }?.fields.map(\.key) ?? [])).sorted() }
