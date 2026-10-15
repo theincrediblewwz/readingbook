@@ -464,12 +464,13 @@ struct PDFReaderView: NSViewRepresentable {
     private func installSearchEscapeMonitor() {
         guard searchEscapeMonitor == nil else { return }
         searchEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            MainActor.assumeIsolated {
+            let handled = MainActor.assumeIsolated {
                 guard let self, event.keyCode == 53, !self.searchRow.isHidden,
                       event.window === self.window, self.window?.attachedSheet == nil,
-                      !self.editingAnnotationSheet else { return event }
-                self.closeSearch(); return nil
+                      !self.editingAnnotationSheet else { return false }
+                self.closeSearch(); return true
             }
+            return handled ? nil : event
         }
     }
 
