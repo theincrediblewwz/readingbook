@@ -48,6 +48,11 @@ struct TimelineRangeControl: View {
                 Capsule().fill(Palette.accent.opacity(0.7)).frame(width: max(2, endX - startX), height: 4).offset(x: startX, y: axisY - 2)
                 // Draw all ticks cheaply; only the focused/selected event needs a label.
                 Canvas { context, _ in
+                    for index in 0...4 {
+                        let x = inset + mapping.width * CGFloat(index) / 4
+                        var tick = Path(); tick.move(to: CGPoint(x: x, y: axisY - 5)); tick.addLine(to: CGPoint(x: x, y: axisY + 7))
+                        context.stroke(tick, with: .color(Palette.ink.opacity(0.27)), lineWidth: 1)
+                    }
                     for event in events {
                         guard let year = event.startYear else { continue }
                         let point = CGPoint(x: mapping.x(Double(year)), y: axisY)
@@ -56,13 +61,15 @@ struct TimelineRangeControl: View {
                         context.fill(Path(ellipseIn: dot), with: .color(selected ? Palette.copper : Palette.ink.opacity(0.45)))
                     }
                 }.allowsHitTesting(false).accessibilityHidden(true)
-                thumb(.lower, at: startX, crowded: abs(startX - endX) < 18)
-                thumb(.upper, at: endX, crowded: abs(startX - endX) < 18)
-                HStack {
-                    Text(Self.yearLabel(Int(bounds.lowerBound)))
-                    Spacer()
-                    Text(Self.yearLabel(Int(bounds.upperBound)))
-                }.font(.caption2.monospacedDigit()).foregroundStyle(.secondary).padding(.horizontal, inset).offset(y: 45)
+                thumb(.lower, at: startX, crowded: abs(startX - endX) < 24)
+                thumb(.upper, at: endX, crowded: abs(startX - endX) < 24)
+                ForEach(0...4, id: \.self) { index in
+                    let year = bounds.lowerBound + mapping.span * Double(index) / 4
+                    Text(Self.yearLabel(Int(year.rounded())))
+                        .font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
+                        .fixedSize().frame(width: 0, alignment: index == 0 ? .leading : index == 4 ? .trailing : .center)
+                        .position(x: inset + mapping.width * CGFloat(index) / 4, y: 51)
+                }
             }
             .overlay(alignment: .topLeading) {
                 TimelinePointerInput(epoch: pointerEpoch,
@@ -75,7 +82,7 @@ struct TimelineRangeControl: View {
             }
             .transaction { $0.animation = nil }
             .onChange(of: geometry.size.width) { _, _ in cancelInteraction() }
-        }.frame(height: 60)
+        }.frame(height: 68)
             .onChange(of: bounds) { _, _ in cancelInteraction() }
             .onChange(of: focused) { _, next in
                 if let interaction, next != interaction.endpoint { cancelInteraction() }
@@ -87,9 +94,11 @@ struct TimelineRangeControl: View {
     private func thumb(_ endpoint: Endpoint, at position: CGFloat, crowded: Bool) -> some View {
         let isLower = endpoint == .lower
         let current = isLower ? lower : upper
-        return Circle().fill(Palette.surface)
-            .overlay(Circle().stroke(focused == endpoint || interaction?.endpoint == endpoint ? Palette.copper : Palette.accent, lineWidth: 2))
-            .frame(width: 14, height: 14).padding(6).contentShape(TimelineThumbHit(isLower: isLower, crowded: crowded))
+        return Circle().fill(Palette.accent)
+            .overlay(Circle().stroke(Palette.surface, lineWidth: 3))
+            .overlay(Circle().stroke(focused == endpoint || interaction?.endpoint == endpoint ? Palette.copper : Palette.accent.opacity(0.55), lineWidth: 1))
+            .shadow(color: Palette.accent.opacity(0.14), radius: 4, y: 1)
+            .frame(width: 20, height: 20).padding(6).contentShape(TimelineThumbHit(isLower: isLower, crowded: crowded))
             .focusable().focused($focused, equals: endpoint)
             .focusEffectDisabled()
             .onKeyPress(.leftArrow) { adjust(endpoint, by: -1); return .handled }
@@ -108,11 +117,11 @@ struct TimelineRangeControl: View {
         crowded ? axisY + (endpoint == .lower ? -8 : 8) : axisY
     }
     private func thumbRect(_ endpoint: Endpoint, at position: CGFloat, crowded: Bool) -> CGRect {
-        let rect = CGRect(x: position - 13, y: thumbY(endpoint, crowded: crowded) - 13, width: 26, height: 26)
+        let rect = CGRect(x: position - 16, y: thumbY(endpoint, crowded: crowded) - 16, width: 32, height: 32)
         return TimelineThumbHit.hitRect(in: rect, isLower: endpoint == .lower, crowded: crowded)
     }
     private func begin(at point: CGPoint, mapping: AxisMapping) {
-        let startX = mapping.x(lower), endX = mapping.x(upper), crowded = abs(startX - endX) < 18
+        let startX = mapping.x(lower), endX = mapping.x(upper), crowded = abs(startX - endX) < 24
         let hitsLower = thumbRect(.lower, at: startX, crowded: crowded).contains(point)
         let hitsUpper = thumbRect(.upper, at: endX, crowded: crowded).contains(point)
         let endpoint: Endpoint
@@ -121,8 +130,8 @@ struct TimelineRangeControl: View {
         else if hitsUpper { endpoint = .upper }
         else if crowded {
             let middle = (startX + endX) / 2
-            if point.x < middle - 13 { endpoint = .lower }
-            else if point.x > middle + 13 { endpoint = .upper }
+            if point.x < middle - 16 { endpoint = .lower }
+            else if point.x > middle + 16 { endpoint = .upper }
             else { endpoint = point.y <= axisY ? .lower : .upper }
         } else { endpoint = abs(point.x - startX) < abs(point.x - endX) ? .lower : .upper }
         let nearest = events.compactMap { event -> (String, CGFloat)? in

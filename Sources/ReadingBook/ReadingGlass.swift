@@ -3,10 +3,10 @@ import SwiftUI
 /// A small, shared spacing scale keeps controls calm and easy to acquire without
 /// turning a reading workspace into a wall of oversized buttons.
 enum ReadingLayout {
-    static let controlHeight: CGFloat = 40
+    static let controlHeight: CGFloat = 44
     static let groupSpacing: CGFloat = 8
     static let panelPadding: CGFloat = 16
-    static let nodeBrowserWidth: CGFloat = 300
+    static let nodeBrowserWidth: CGFloat = 370
     static let navigationRowHeight: CGFloat = 48
 }
 
@@ -19,7 +19,7 @@ enum ReadingMotion {
 /// Floating chrome has one material surface; child controls keep generous hit
 /// areas without adding another layer of glass over every icon.
 struct ReadingGlassSurface: ViewModifier {
-    var radius: CGFloat = 20
+    var radius: CGFloat = 22
     var interactive = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var scheme
@@ -31,8 +31,8 @@ struct ReadingGlassSurface: ViewModifier {
                     .strokeBorder(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.16 : 0.64), Palette.line.opacity(0.24)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.6)
                     .allowsHitTesting(false)
             }
-            .shadow(color: .black.opacity(scheme == .dark ? 0.20 : 0.085), radius: 20, x: 0, y: 8)
-            .shadow(color: Palette.accent.opacity(0.035), radius: 3, x: 0, y: 1)
+            .shadow(color: .black.opacity(scheme == .dark ? 0.23 : 0.06), radius: 24, x: 0, y: 10)
+            .shadow(color: Palette.accent.opacity(0.045), radius: 4, x: 0, y: 2)
     }
     @ViewBuilder private func surface(_ content: Content) -> some View {
         if reduceTransparency {

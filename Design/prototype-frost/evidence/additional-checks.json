@@ -1,0 +1,14 @@
+{
+  "checks": [
+    "Encrypted-PDF flow gives error and allows retry/unlock",
+    "Book recycle and restoration survive page changes, notes preserved",
+    "20 pointer samples keep node visible and monotonic; no repeated delta",
+    "Live resize closes node panel and exposes a working restore entry",
+    "Model form prevents silent loss when leaving with unsaved changes",
+    "Leaving reading workflow pauses simulation and preserves continuation",
+    "Reduced motion preference removes UI transitions",
+    "Escape closes search and all loaded resources remain local"
+  ],
+  "errors": [],
+  "consoleErrors": []
+}

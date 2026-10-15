@@ -1,0 +1,25 @@
+{
+  "checks": [
+    "Actual original PDF renders, previous/next pages",
+    "Find close X closes the search dialog",
+    "Companion collapses, closes, restores and drags within viewport",
+    "OCR demonstration runs sequential pages and opens math text",
+    "Annotation save, remove and local restore",
+    "Single timeline with two independently draggable endpoints",
+    "Map event restores time panel; dragging snaps; exact source return",
+    "Node drag moves once without routing; single click previews",
+    "Port-driven connection creates an edge without toolbar mode",
+    "Double click opens the linked Markdown document",
+    "Markdown title validation, save and real LaTeX preview",
+    "Dirty note navigation protects save/discard/cancel",
+    "Deleting a note hides its existing node; restore returns same document/node",
+    "Model save, known Max and unknown-spec disabled state; demo test",
+    "No real key entry or provider request",
+    "Add component excludes already-added components and removes newly added item",
+    "Sequential paragraph receipts stop on failure and resume to complete coverage",
+    "Multiple AI answers save only after explicit merged-note action",
+    "No runtime exceptions during complete task chains"
+  ],
+  "errors": [],
+  "consoleErrors": []
+}

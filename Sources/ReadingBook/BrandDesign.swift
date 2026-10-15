@@ -9,7 +9,7 @@ struct BrandGlyph: View {
         ZStack {
             BrandPath(commands: BrandSymbols.glyphs[name] ?? BrandSymbols.glyphs["reader"] ?? [])
                 .stroke(style: StrokeStyle(lineWidth: max(1.2, min(geometry.size.width, geometry.size.height) / 24 * 1.65), lineCap: .round, lineJoin: .round))
-            if name == "mark" { BrandPath(commands: BrandSymbols.glyphs["markAccent"] ?? []).fill(Palette.copper) }
+            if name == "mark" { BrandPath(commands: BrandSymbols.glyphs["markAccent"] ?? []).fill(Palette.accent) }
         }
         }.aspectRatio(1, contentMode: .fit).accessibilityHidden(true)
     }

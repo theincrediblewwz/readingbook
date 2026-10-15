@@ -38,6 +38,8 @@ struct GraphSurface: View {
     var interactionExclusion: CGRect? = nil
     var obscuredLeadingWidth: CGFloat = 0
     var obscuredTrailingWidth: CGFloat = 0
+    var scopeTitle: String? = nil
+    var toggleScope: (() -> Void)? = nil
 
     private struct NodeDrag {
         var id: String
@@ -68,16 +70,17 @@ struct GraphSurface: View {
     @FocusState private var focus: FocusTarget?
     private enum FocusTarget: Hashable { case node(String), port(String, PortSide), line(String) }
     private enum PortSide: Hashable { case leading, trailing }
+    private let nodeSize = CGSize(width: 232, height: 100)
     private var canNavigate: Bool {
         isEnabled && nodeDragState == nil && !draggingConnection && !savingPosition && !savingConnection && !savingLine && editingLineID == nil
     }
     private func point(_ item: GraphItem) -> CGPoint {
         let location = nodeDragState?.id == item.id ? nodeDragState!.position : CGPoint(x: item.x, y: item.y)
-        return CGPoint(x: location.x + 110, y: location.y + 45)
+        return CGPoint(x: location.x + nodeSize.width / 2, y: location.y + nodeSize.height / 2)
     }
     private func rect(_ item: GraphItem) -> CGRect {
         let center = point(item)
-        return CGRect(x: center.x - 110, y: center.y - 45, width: 220, height: 90)
+        return CGRect(x: center.x - nodeSize.width / 2, y: center.y - nodeSize.height / 2, width: nodeSize.width, height: nodeSize.height)
     }
     private var selectedPhysicalID: String? {
         if let id = selectedNodeID, items.first(where: { $0.id == id })?.targetID == selectedID { return id }
@@ -135,17 +138,17 @@ struct GraphSurface: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height).clipped()
             .transaction { $0.animation = nil }
-            .overlay(alignment: .topLeading) {
+            .overlay(alignment: .bottomLeading) {
                 statusOverlay.lineLimit(2).multilineTextAlignment(.leading)
-                    .frame(maxWidth: statusWidth(in: geometry.size), alignment: .leading)
-                    .padding(.leading, obscuredLeadingWidth + 12).padding(.top, 12).allowsHitTesting(false)
+                    .frame(maxWidth: min(300, statusWidth(in: geometry.size)), alignment: .leading)
+                    .padding(.leading, 24).padding(.bottom, geometry.size.width < 1050 ? 96 : 24).allowsHitTesting(false)
             }
-            .overlay(alignment: .bottomTrailing) {
+            .overlay(alignment: .bottom) {
                 cameraControls.background {
                     GeometryReader { controls in
                         Color.clear.preference(key: GraphControlsFrameKey.self, value: controls.frame(in: .named("graph-viewport")))
                     }
-                }.padding(12)
+                }.padding(.horizontal, 24).padding(.bottom, 24)
             }
             .coordinateSpace(name: "graph-viewport")
             .onPreferenceChange(GraphControlsFrameKey.self) { controlsRect = $0 }
@@ -160,7 +163,16 @@ struct GraphSurface: View {
             }
             .onAppear {
                 viewportSize = geometry.size
-                if !cameraInitialized { fitAll(); cameraInitialized = true; focusRequestedNode() }
+                if !cameraInitialized {
+                    fitAll()
+                    // Widely separated saved nodes remain untouched. Show a
+                    // readable starting area; “show all” remains explicit.
+                    if camera.scale < 0.72, let first = items.first(where: { $0.targetID == selectedID }) ?? items.first {
+                        camera.scale = 0.9
+                        camera.focus(point(first), in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
+                    }
+                    cameraInitialized = true; focusRequestedNode()
+                }
             }
             .onChange(of: geometry.size) { _, size in
                 cancelTransientInteractions(); viewportSize = size
@@ -189,7 +201,7 @@ struct GraphSurface: View {
         .onDisappear { cancelTransientInteractions(); editingLineID = nil }
     }
     private func visibleItems(in size: CGSize) -> [GraphItem] {
-        let viewport = CGRect(origin: .zero, size: size).insetBy(dx: -max(240, 110 * camera.scale + 24), dy: -max(100, 45 * camera.scale + 24))
+        let viewport = CGRect(origin: .zero, size: size).insetBy(dx: -max(240, nodeSize.width / 2 * camera.scale + 24), dy: -max(100, nodeSize.height / 2 * camera.scale + 24))
         return items.filter { item in
             if nodeDragState?.id == item.id { return true } // Keep the native drag receiver alive offscreen.
             let position = camera.screen(point(item), in: size)
@@ -215,9 +227,6 @@ struct GraphSurface: View {
     }
     private var cameraControls: some View {
         HStack(spacing: ReadingLayout.groupSpacing) {
-            Button { fitAll() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-                .help("显示全部节点").accessibilityLabel("显示全部节点")
-            Divider().frame(height: 18).padding(.horizontal, 2)
             Button { zoomViewport(by: 1 / 1.25, at: usableCenter) } label: { Image(systemName: "minus") }
                 .help("缩小画布").accessibilityLabel("缩小画布")
             Button { zoomViewport(by: 1 / camera.scale, at: usableCenter) } label: {
@@ -227,10 +236,20 @@ struct GraphSurface: View {
             Button { zoomViewport(by: 1.25, at: usableCenter) } label: { Image(systemName: "plus") }
                 .help("放大画布").accessibilityLabel("放大画布")
             Divider().frame(height: 18).padding(.horizontal, 2)
+            Button { fitAll() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+                .help("显示全部节点").accessibilityLabel("显示全部节点")
             Button { centerSelection() } label: { Image(systemName: "scope") }
                 .disabled(selectedPhysicalID == nil).help("定位选中节点").accessibilityLabel("定位选中节点")
+            if let scopeTitle, let toggleScope {
+                Divider().frame(height: 18).padding(.horizontal, 2)
+                Button(action: toggleScope) { Label(scopeTitle, systemImage: "line.3.horizontal.decrease") }.help("切换全书关系与当前原文关系")
+            }
+            if let createDocument {
+                Divider().frame(height: 18).padding(.horizontal, 2)
+                Button(action: createDocument) { Label("新建节点", systemImage: "plus") }.help("新建 Markdown 笔记与节点")
+            }
         }
-        .buttonStyle(ReadingToolbarButtonStyle()).padding(4).readingGlass()
+        .buttonStyle(ReadingToolbarButtonStyle()).padding(7).readingGlass(radius: 30)
         .disabled(!canNavigate).help("拖动空白或双指平移 · 捏合或 ⌘ 滚轮缩放")
     }
     private var usableCenter: CGPoint {
@@ -256,7 +275,7 @@ struct GraphSurface: View {
     private func fitAll() {
         guard canNavigate, viewportSize.width > 0 else { return }
         let bounds = items.map(rect).reduce(CGRect.null) { $0.union($1) }
-        camera.fit(bounds.isNull ? CGRect(x: 0, y: 0, width: 220, height: 90) : bounds, in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
+        camera.fit(bounds.isNull ? CGRect(origin: .zero, size: nodeSize) : bounds, in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
         connectionPoint = nil; connectionTargetID = nil
     }
     private func centerSelection() {
@@ -300,8 +319,8 @@ struct GraphSurface: View {
         } else if editingLineID != nil {
             Text(message.isEmpty ? "关系名称：回车保存，Esc 取消" : message).font(.caption).padding(9).readingGlass()
         } else if !message.isEmpty { Text(message).font(.caption).padding(9).readingGlass() }
-        else if let title {
-            Text("\(title) · \(items.count) 个节点").font(.caption).foregroundStyle(.secondary).padding(8).readingGlass()
+        else if title != nil {
+            Text("\(items.count) 个节点 · \(lines.count) 条连线").font(.system(size: 13)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.vertical, 11).readingGlass(radius: 14)
         }
     }
     private func nodeShell(_ item: GraphItem) -> some View {
@@ -322,26 +341,30 @@ struct GraphSurface: View {
             .accessibilityHint(connect == nil ? "单击选中，双击打开内容。" : "双击打开；拖动卡片移动，从边缘圆点拖到另一节点连线。")
             .accessibilityAction { activate(item, opening: true) }
             if connect != nil {
-                port(item, side: .leading).offset(x: -110)
-                port(item, side: .trailing).offset(x: 110)
+                port(item, side: .leading).offset(x: -nodeSize.width / 2)
+                port(item, side: .trailing).offset(x: nodeSize.width / 2)
             }
-        }.frame(width: 220, height: 90)
+        }.frame(width: nodeSize.width, height: nodeSize.height)
     }
     private func nodeBody(_ item: GraphItem) -> some View {
         let selected = selectedPhysicalID == item.id
         let target = connectionTargetID == item.id && connectionFromID != item.id
-        return VStack(alignment: .leading, spacing: 6) {
-            Text(item.subtitle).font(.caption2).foregroundStyle(Palette.accent)
-            Text(item.title).font(.system(size: 16, weight: .medium, design: .serif)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-        }.padding(12).frame(width: 220, height: 90)
-            .background(Palette.surface, in: RoundedRectangle(cornerRadius: 13))
-            .overlay(RoundedRectangle(cornerRadius: 13).stroke(target || connectionFromID == item.id ? Palette.copper : selected ? Palette.accent : Palette.line, lineWidth: target || selected || connectionFromID == item.id ? 2 : 1))
-            .shadow(color: .black.opacity(0.025), radius: 8, y: 3)
-            .contentShape(RoundedRectangle(cornerRadius: 13)).help(item.title)
+        return HStack(spacing: 12) {
+            Image(systemName: item.subtitle == "Markdown" ? "doc.text" : "circle.hexagongrid")
+                .font(.system(size: 26, weight: .regular)).foregroundStyle(Palette.accent.opacity(0.8)).frame(width: 30)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(item.title).font(.system(size: 18, weight: selected ? .semibold : .medium)).foregroundStyle(Palette.ink).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                Text(item.subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }.padding(16).frame(width: nodeSize.width, height: nodeSize.height)
+            .background(Palette.surface.opacity(0.96), in: RoundedRectangle(cornerRadius: 15))
+            .overlay(RoundedRectangle(cornerRadius: 15).stroke(target || connectionFromID == item.id ? Palette.copper : selected ? Palette.accent : Palette.line, lineWidth: target || selected || connectionFromID == item.id ? 2 : 1))
+            .shadow(color: Palette.accent.opacity(selected ? 0.10 : 0.035), radius: 14, y: 5)
+            .contentShape(RoundedRectangle(cornerRadius: 15)).help(item.title)
     }
     private func port(_ item: GraphItem, side: PortSide) -> some View {
-        Circle().fill(Palette.surface).overlay(Circle().stroke(selectedPhysicalID == item.id || connectionFromID == item.id ? Palette.accent : Palette.ink.opacity(0.45), lineWidth: 1.5))
-            .frame(width: 8, height: 8).padding(8).contentShape(Circle())
+        Circle().fill(Palette.accent.opacity(selectedPhysicalID == item.id || connectionFromID == item.id ? 1 : 0.55)).overlay(Circle().stroke(Palette.surface, lineWidth: 2))
+            .frame(width: 12, height: 12).padding(6).contentShape(Circle())
             .overlay {
                 GraphPointerBridge(enabled: isEnabled && !savingPosition && !savingConnection && !savingLine && editingLineID == nil,
                                    movable: true, resetID: gestureEpoch, click: { _ in portActivated(item, side: side) },

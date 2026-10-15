@@ -16,10 +16,10 @@ struct CompactWorkspaceHeader<Actions: View>: View {
                 .layoutPriority(1)
             if let subtitle { Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1) }
             Spacer(minLength: ReadingLayout.groupSpacing)
-            actions.controlSize(.regular).font(.system(size: 13)).frame(minHeight: ReadingLayout.controlHeight)
+            actions.controlSize(.large).font(.system(size: 15)).frame(minHeight: ReadingLayout.controlHeight)
         }
         .padding(.horizontal, ReadingLayout.panelPadding).padding(.vertical, 8).frame(minHeight: 56)
-        .background(Palette.surface)
-        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 0.5) }
+        .readingGlass(radius: 20)
+        .padding(.horizontal, 24).padding(.bottom, 14)
     }
 }

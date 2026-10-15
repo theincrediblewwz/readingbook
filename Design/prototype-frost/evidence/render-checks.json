@@ -1,0 +1,242 @@
+{
+  "results": [
+    {
+      "route": "reader",
+      "overflow": false,
+      "errors": [],
+      "panels": [
+        {
+          "id": "reader-companion",
+          "x": 1004,
+          "y": 106,
+          "width": 410,
+          "height": 430.59375,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "route": "parallel",
+      "overflow": false,
+      "errors": [],
+      "panels": []
+    },
+    {
+      "route": "map",
+      "overflow": false,
+      "errors": [],
+      "panels": [
+        {
+          "id": "map-time",
+          "x": 36,
+          "y": 614,
+          "width": 740,
+          "height": 376,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "route": "mindmap",
+      "overflow": false,
+      "errors": [],
+      "panels": [
+        {
+          "id": "mindmap-nodes",
+          "x": 1044,
+          "y": 106,
+          "width": 370,
+          "height": 817.984375,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "route": "notes",
+      "overflow": false,
+      "errors": [],
+      "panels": [
+        {
+          "id": "notes-list",
+          "x": 76,
+          "y": 106,
+          "width": 340,
+          "height": 594,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "route": "plugins",
+      "overflow": false,
+      "errors": [],
+      "panels": [
+        {
+          "id": "plugin-types",
+          "x": 1050,
+          "y": 110,
+          "width": 360,
+          "height": 728.1875,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "route": "models",
+      "overflow": false,
+      "errors": [],
+      "panels": [
+        {
+          "id": "model-services",
+          "x": 80,
+          "y": 110,
+          "width": 350,
+          "height": 447,
+          "outside": false
+        },
+        {
+          "id": "model-config",
+          "x": 455,
+          "y": 110,
+          "width": 850,
+          "height": 896,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "route": "workflow",
+      "overflow": false,
+      "errors": [],
+      "panels": [
+        {
+          "id": "reading-method",
+          "x": 1050,
+          "y": 110,
+          "width": 360,
+          "height": 842.59375,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "route": "chat",
+      "overflow": false,
+      "errors": [],
+      "panels": []
+    },
+    {
+      "route": "knowledge",
+      "overflow": false,
+      "errors": [],
+      "panels": []
+    },
+    {
+      "route": "library",
+      "overflow": false,
+      "errors": [],
+      "panels": []
+    },
+    {
+      "route": "cards",
+      "overflow": false,
+      "errors": [],
+      "panels": []
+    },
+    {
+      "route": "relations",
+      "overflow": false,
+      "errors": [],
+      "panels": [
+        {
+          "id": "relation-nodes",
+          "x": 1044,
+          "y": 106,
+          "width": 370,
+          "height": 704,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "route": "atlas",
+      "overflow": false,
+      "errors": [],
+      "panels": []
+    },
+    {
+      "route": "trash",
+      "overflow": false,
+      "errors": [],
+      "panels": []
+    },
+    {
+      "route": "reader",
+      "width": 800,
+      "overflow": false,
+      "panels": []
+    },
+    {
+      "route": "parallel",
+      "width": 800,
+      "overflow": false,
+      "panels": []
+    },
+    {
+      "route": "map",
+      "width": 800,
+      "overflow": false,
+      "panels": [
+        {
+          "id": "map-time",
+          "x": 36,
+          "y": 190,
+          "width": 740,
+          "height": 376,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "route": "mindmap",
+      "width": 800,
+      "overflow": false,
+      "panels": []
+    },
+    {
+      "route": "notes",
+      "width": 800,
+      "overflow": false,
+      "panels": []
+    },
+    {
+      "route": "plugins",
+      "width": 800,
+      "overflow": false,
+      "panels": []
+    },
+    {
+      "route": "models",
+      "width": 800,
+      "overflow": false,
+      "panels": [
+        {
+          "id": "model-config",
+          "x": 78,
+          "y": 126,
+          "width": 688,
+          "height": 456,
+          "outside": false
+        }
+      ]
+    },
+    {
+      "route": "workflow",
+      "width": 800,
+      "overflow": false,
+      "panels": []
+    }
+  ],
+  "errors": [],
+  "consoleErrors": []
+}

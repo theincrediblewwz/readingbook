@@ -37,14 +37,14 @@ import ReadingCore
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text(draft == nil ? "关联与依据" : "编辑卡片").font(.caption).foregroundStyle(.secondary)
+                Text(draft == nil ? "关联与依据" : "编辑卡片").font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
                 Button { request(.close) } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).help("收起详情").accessibilityLabel("收起详情").disabled(saving)
-            }.padding(.horizontal, 14).padding(.vertical, 11)
+                    .buttonStyle(ReadingToolbarButtonStyle()).help("收起详情").accessibilityLabel("收起详情").disabled(saving)
+            }.padding(.leading, 20).padding(.trailing, 8).padding(.vertical, 8)
             Divider().opacity(0.5)
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 18) {
                     if draft != nil {
                         if restoredDraft {
                             Text("已保留上次未保存的修改；可继续编辑、保存或取消。").font(.caption).foregroundStyle(Palette.copper)
@@ -55,7 +55,7 @@ import ReadingCore
                                 .font(.caption).tint(Palette.accent).disabled(saving)
                         }
                     } else { objectContents }
-                }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
             }
             if let localError {
                 ScrollView {
@@ -72,9 +72,9 @@ import ReadingCore
                     Spacer(minLength: 0)
                     Button(saving ? "保存中…" : "保存") { saveDraft() }
                         .buttonStyle(.borderedProminent).disabled(saving || store.isBusy)
-                }.controlSize(.regular).padding(.horizontal, 14).padding(.vertical, 10)
+                }.controlSize(.large).padding(.horizontal, 20).padding(.vertical, 14)
             }
-        }.background(.background)
+        }.background(Palette.surface.opacity(0.94))
             .interactiveDismissDisabled(hasChanges || saving)
             .onAppear { loadedBookID = store.bookID; displayedID = id; restoreDraft(checkOtherDrafts: true) }
             .onChange(of: id) { _, next in
@@ -102,16 +102,17 @@ import ReadingCore
 
     @ViewBuilder private var objectContents: some View {
         if let entity = store.book?.entities.first(where: { $0.id == objectID }) {
-            Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.caption).foregroundStyle(Palette.copper)
-            Text(entity.name).font(.system(size: 21, design: .serif)).textSelection(.enabled)
+            Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent.opacity(0.08), in: Capsule())
+            Text(entity.name).font(.system(size: 25, weight: .semibold)).textSelection(.enabled)
             if !entity.summary.isEmpty { MarkdownText(markdown: entity.summary) }
             HStack(spacing: 12) {
-                Button("编辑") { draft = EntityEditDraft(entity: entity); localError = nil; restoredDraft = false }
-                Button("删除", role: .destructive) { store.requestDeletion(.entity, id: entity.id, title: entity.name) }
-            }.font(.caption).disabled(store.isBusy)
+                Button { draft = EntityEditDraft(entity: entity); localError = nil; restoredDraft = false } label: { Label("编辑", systemImage: "square.and.pencil") }
+                Spacer(minLength: 0)
+                Menu { Button("删除卡片…", role: .destructive) { store.requestDeletion(.entity, id: entity.id, title: entity.name) } } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("卡片管理")
+            }.buttonStyle(ReadingToolbarButtonStyle()).font(.system(size: 15)).disabled(store.isBusy)
             ForEach(entity.properties.keys.sorted().filter { entity.properties[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }, id: \.self) { key in
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(fieldLabel(key, type: entity.typeID)).font(.caption).foregroundStyle(.secondary)
+                    Text(fieldLabel(key, type: entity.typeID)).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
                     MarkdownText(markdown: entity.properties[key] ?? "")
                 }
             }
@@ -122,42 +123,44 @@ import ReadingCore
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
             ForEach((store.book?.events ?? []).filter { $0.participantIDs.contains(objectID) || $0.placeIDs.contains(objectID) }) { event in
-                Button(event.name) { showObject(event.id) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                Button { showObject(event.id) } label: { Label(event.name, systemImage: "calendar").frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
             }
             EvidenceList(evidence: entity.evidence)
         } else if let event = store.book?.events.first(where: { $0.id == objectID }) {
-            Text("事件").font(.caption).foregroundStyle(Palette.copper)
-            Text(event.name).font(.system(size: 21, design: .serif))
+            Text("事件").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent.opacity(0.08), in: Capsule())
+            Text(event.name).font(.system(size: 25, weight: .semibold))
             Label(event.dateText, systemImage: "clock").font(.subheadline).foregroundStyle(.secondary)
             MarkdownText(markdown: event.summary)
             linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs)
             EvidenceList(evidence: event.evidence)
-            Button("删除事件", role: .destructive) { store.requestDeletion(.event, id: event.id, title: event.name) }.font(.caption).disabled(store.isBusy)
+            Menu { Button("删除事件…", role: .destructive) { store.requestDeletion(.event, id: event.id, title: event.name) } } label: { Label("事件管理", systemImage: "ellipsis").frame(minHeight: 44) }.menuStyle(.borderlessButton).fixedSize().font(.system(size: 14)).disabled(store.isBusy)
         } else if let document = store.book?.activeDocuments.first(where: { $0.id == objectID }) {
-            Text("Markdown 文档").font(.caption).foregroundStyle(Palette.copper)
-            Text(document.title).font(.title2)
-            Button("打开文档") { store.openObject(document.id) }
-            Button("添加一个画布节点") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
-            Button("移入回收站", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy)
+            Text("Markdown 文档").font(.system(size: 13)).foregroundStyle(Palette.accent)
+            Text(document.title).font(.system(size: 25, weight: .semibold))
+            Button { store.openObject(document.id) } label: { Label("打开文档", systemImage: "doc.text").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(ReadingToolbarButtonStyle())
+            Menu {
+                Button("添加画布节点") { Task { await store.addDocumentToGraph(document) } }
+                Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }
+            } label: { Label("文档管理", systemImage: "ellipsis").frame(minHeight: 44) }.menuStyle(.borderlessButton).fixedSize().font(.system(size: 14)).disabled(store.isBusy)
             EvidenceList(evidence: document.evidence)
         } else if let unit = store.book?.units.first(where: { $0.id == objectID }) {
             Text(unit.chapter).font(.title3); Text(unit.locator).font(.caption).foregroundStyle(.secondary)
-            Text(String(unit.text.prefix(500))).font(.caption).lineSpacing(5).textSelection(.enabled)
+            Text(String(unit.text.prefix(500))).font(.system(size: 15)).lineSpacing(6).textSelection(.enabled)
         } else {
             Text("对象已不存在，或已移入回收站。").font(.callout).foregroundStyle(.secondary)
         }
         ForEach((store.book?.relations ?? []).filter { $0.fromID == objectID || $0.toID == objectID }) { relation in
             HStack {
                 Button { showObject(relation.fromID == objectID ? relation.toID : relation.fromID) } label: {
-                    Label("\(relation.label) · \(store.objectTitle(relation.fromID == objectID ? relation.toID : relation.fromID))", systemImage: "arrow.up.right").font(.caption)
+                    Label("\(relation.label) · \(store.objectTitle(relation.fromID == objectID ? relation.toID : relation.fromID))", systemImage: "arrow.up.right").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundStyle(Palette.accent)
                 Spacer(minLength: 0)
                 Button { Task { await store.removeConnection(relation.id, relation: true) } } label: { Image(systemName: "xmark.circle") }
-                    .buttonStyle(.plain).help("移除这条关系").disabled(store.isBusy)
+                    .buttonStyle(ReadingToolbarButtonStyle()).help("移除这条关系").disabled(store.isBusy)
             }
         }
         ForEach((store.book?.activeDocuments ?? []).filter { $0.linkedIDs.contains(objectID) }) { document in
-            Button { Task { await store.openDocument(document) } } label: { Label(document.title, systemImage: "doc.text").font(.caption) }
+            Button { Task { await store.openDocument(document) } } label: { Label(document.title, systemImage: "doc.text").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }
                 .buttonStyle(.plain).foregroundStyle(Palette.accent)
         }
     }
@@ -234,9 +237,9 @@ import ReadingCore
     private func showObject(_ next: String) { request(.show(next)); store.focus(next) }
     private func linkGroup(_ title: String, ids: [String]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !ids.isEmpty { Text(title).font(.caption).foregroundStyle(.secondary) }
+            if !ids.isEmpty { Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary) }
             ForEach(ids, id: \.self) { target in
-                Button(store.objectTitle(target)) { showObject(target) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                Button { showObject(target) } label: { Text(store.objectTitle(target)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
             }
         }
     }

@@ -176,7 +176,7 @@ struct PDFReaderView: NSViewRepresentable {
 
         searchField.placeholderString = "搜索 PDF 文字 · 回车查找"
         searchField.controlSize = .regular
-        searchField.font = .systemFont(ofSize: 13)
+        searchField.font = .systemFont(ofSize: 15)
         searchField.setAccessibilityLabel("搜索 PDF 文字")
         searchField.heightAnchor.constraint(equalToConstant: 40).isActive = true
         // One visible close affordance closes the entire find panel. Keeping the
@@ -225,7 +225,7 @@ struct PDFReaderView: NSViewRepresentable {
             contentStack.topAnchor.constraint(equalTo: topAnchor), contentStack.bottomAnchor.constraint(equalTo: bottomAnchor),
             header.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 12),
             header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 82),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 16),
             header.widthAnchor.constraint(lessThanOrEqualToConstant: 500)
         ])
         let preferredSearchWidth = header.widthAnchor.constraint(equalToConstant: 500)

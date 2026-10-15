@@ -1,15 +1,15 @@
 :root {
   color-scheme: light dark;
-  --ink: #273831; --muted: #77837b; --line: #E0E7E1; --soft: #F4F6F2;
-  --accent: #315D4D; --code: #f0f3ee; --danger: #a44634; --danger-bg: #fff4ef;
+  --ink: #26313C; --muted: #6C7B93; --line: #DCE4F1; --soft: #F5F8FF;
+  --accent: #3569D5; --code: #EDF2FA; --danger: #a44634; --danger-bg: #fff4ef;
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif;
   font-size: 16px; line-height: 1.85; background: transparent;
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --ink: #E1E9E2; --muted: #9aa99e; --line: #3A4941; --soft: #232D28; --accent: #A1CAB4; --code: #233027; --danger: #eeb6a3; --danger-bg: #392c27; }
+  :root:not([data-theme="light"]) { --ink: #E6EDF9; --muted: #A3B1CB; --line: #36445C; --soft: #202A3B; --accent: #8BAEFF; --code: #202B40; --danger: #eeb6a3; --danger-bg: #392c27; }
 }
-:root[data-theme="dark"] { --ink: #E1E9E2; --muted: #9aa99e; --line: #3A4941; --soft: #232D28; --accent: #A1CAB4; --code: #233027; --danger: #eeb6a3; --danger-bg: #392c27; }
+:root[data-theme="dark"] { --ink: #E6EDF9; --muted: #A3B1CB; --line: #36445C; --soft: #202A3B; --accent: #8BAEFF; --code: #202B40; --danger: #eeb6a3; --danger-bg: #392c27; }
 * { box-sizing: border-box; }
 html, body { padding: 0; margin: 0; width: 100%; overflow-x: hidden; overflow-y: hidden; background: transparent; color: var(--ink); }
 .markdown-body { width: 100%; padding: 2px 1px 8px; overflow-wrap: anywhere; }

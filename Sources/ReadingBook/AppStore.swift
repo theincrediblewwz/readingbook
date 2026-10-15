@@ -211,6 +211,14 @@ import ReadingCore
         documentGeneration += 1; documentError = nil
         selectedDocumentID = nil; editorTitle = "新的理解"; editorMarkdown = "# 新的理解\n\n"; draftEvidence = []; editorDirty = true; route = "editor"
     }
+    func discardDraftForWorkspaceNavigation() {
+        guard !isSavingDocument, let bookID else { return }
+        documentGeneration += 1
+        editorDirty = false; documentError = nil
+        selectedDocumentID = nil; editorTitle = ""; editorMarkdown = ""; draftEvidence = []
+        UserDefaults.standard.removeObject(forKey: "draft-\(bookID)")
+        activity = "未保存修改已放弃；已保存的 Markdown 保留。"
+    }
     func discardDraft() {
         guard !isSavingDocument, let bookID else { return }
         documentGeneration += 1; documentError = nil

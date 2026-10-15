@@ -101,23 +101,48 @@ extension AppStore {
 struct LibraryTrashView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    var onClose: (() -> Void)? = nil
+    @State private var query = ""
+    private func matches(_ title: String) -> Bool { query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.localizedCaseInsensitiveContains(query.trimmingCharacters(in: .whitespacesAndNewlines)) }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("回收站").font(.system(size: 18, weight: .semibold)); Spacer(); Button("完成") { dismiss() } }
-            Text("书籍和 Markdown 保留在本机，可恢复。此版本不提供永久清空。").font(.caption).foregroundStyle(.secondary)
-            List {
-                Section("书籍") {
-                    ForEach(store.archivedBooks) { book in HStack { Label(book.title, systemImage: "book.closed"); Spacer(); Button("恢复") { Task { await store.restoreBook(book.id) } }.disabled(store.isBusy) } }
-                    if store.archivedBooks.isEmpty { Text("没有回收的书籍").foregroundStyle(.secondary) }
-                }
-                ForEach(store.books.filter { !$0.trashedDocuments.isEmpty }) { book in
-                    Section("\(book.title) · Markdown") {
-                        ForEach(book.trashedDocuments) { document in
-                            HStack { Label(document.title, systemImage: "doc.text"); Spacer(); Button("恢复") { Task { await store.restoreDocument(bookID: book.id, documentID: document.id) } }.disabled(store.isBusy) }
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("回收站").font(.system(size: 25, weight: .semibold)); Spacer()
+                Button { if let onClose { onClose() } else { dismiss() } } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction).accessibilityLabel("关闭回收站")
+            }
+            Text("恢复后，书籍回到书库，Markdown 和原来的导图节点重新显示。内容仍保留在本机。").font(.system(size: 14)).foregroundStyle(.secondary).lineSpacing(5)
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("搜索回收的书籍与笔记…", text: $query).textFieldStyle(.plain).font(.system(size: 15))
+                if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("清空回收站搜索") }
+            }.padding(.leading, 14).padding(.trailing, 4).frame(minHeight: 48).readingGlass(radius: 14)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    if !store.archivedBooks.filter({ matches($0.title) }).isEmpty {
+                        Text("书籍").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary).padding(.top, 8)
+                        ForEach(store.archivedBooks.filter { matches($0.title) }) { book in
+                            trashRow(title: book.title, detail: "书籍 · \(book.documents.count) 篇 Markdown", icon: "book.closed") { Task { await store.restoreBook(book.id) } }
                         }
                     }
+                    ForEach(store.books.filter { $0.trashedDocuments.contains(where: { matches($0.title) }) }) { book in
+                        Text("\(book.title) · Markdown").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary).padding(.top, 16)
+                        ForEach(book.trashedDocuments.filter { matches($0.title) }) { document in
+                            trashRow(title: document.title, detail: "Markdown · 恢复正文与原节点", icon: "doc.text") { Task { await store.restoreDocument(bookID: book.id, documentID: document.id) } }
+                        }
+                    }
+                    if store.archivedBooks.filter({ matches($0.title) }).isEmpty && !store.books.contains(where: { $0.trashedDocuments.contains(where: { matches($0.title) }) }) {
+                        EmptyState(title: query.isEmpty ? "回收站是空的" : "没有匹配的内容", detail: query.isEmpty ? "移入回收站的书籍与笔记会显示在这里。" : "试试另一个书名或笔记标题。", icon: "trash").frame(minHeight: 210)
+                    }
                 }
-            }.listStyle(.inset)
-        }.padding(18).controlSize(.regular).task { await store.reloadTrash() }
+            }
+            Label("此版本保留恢复入口，不提供永久清空。", systemImage: "arrow.uturn.backward.circle").font(.system(size: 13)).foregroundStyle(.secondary)
+        }.padding(24).background(Palette.canvas).controlSize(.large).task { await store.reloadTrash() }
+    }
+    private func trashRow(title: String, detail: String, icon: String, restore: @escaping () -> Void) -> some View {
+        HStack(spacing: 16) {
+            Image(systemName: icon).font(.system(size: 24)).foregroundStyle(.secondary).frame(width: 32)
+            VStack(alignment: .leading, spacing: 7) { Text(title).font(.system(size: 16, weight: .medium)).lineLimit(2); Text(detail).font(.system(size: 13)).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: restore) { Label("恢复", systemImage: "arrow.uturn.backward") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy)
+        }.padding(18).frame(maxWidth: .infinity, minHeight: 86).background(Palette.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Palette.line.opacity(0.75), lineWidth: 0.8))
     }
 }

@@ -10,13 +10,9 @@ struct ReaderWorkspaceView: View {
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     var body: some View {
         GeometryReader { geometry in
-            let inlineOutline = geometry.size.width >= 760
-            HStack(spacing: 0) {
-                if showOutline && inlineOutline {
-                    outline.frame(width: 224)
-                    Divider()
-                }
-                VStack(spacing: 0) {
+            let reserve: CGFloat = store.readingCompanionVisible && geometry.size.width >= 1050 ? 438 : 0
+            ZStack(alignment: .topLeading) {
+                Group {
                     if let unit = store.selectedUnit {
                         if store.readingSourceMode != "original" { ReadingParallelView(mode: store.readingSourceMode) }
                         else if isPDF, showPDF, let url = store.sourceFileURL {
@@ -42,37 +38,20 @@ struct ReaderWorkspaceView: View {
                                onSourceSelection: { selection in store.sourceReadingSelection = selection; if selection != nil { store.focusedReadingAnchorID = nil } })
                         } else { sourceText(unit) }
                     } else {
-                        EmptyState(title: "选择一个章节", detail: "从左上角目录选择原文内容。", icon: "book.pages")
+                        EmptyState(title: "选择一个章节", detail: "从阅读工具中的目录选择原文内容。", icon: "book.pages")
                     }
-                }.frame(maxWidth: .infinity, maxHeight: .infinity).layoutPriority(1)
-                if store.readingCompanionVisible && geometry.size.width >= 1050 {
-                    ReadingCompanionPanel(onClose: { store.readingCompanionVisible = false })
-                        .frame(width: 360, height: max(0, geometry.size.height - 98)).readingGlass(radius: 22)
-                        .padding(.top, 80).padding(.bottom, 18).padding(.trailing, 12)
+                }.padding(.trailing, reserve).padding(.top, store.readingSourceMode == "original" ? 78 : 0)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
+                ReaderFloatingPanel(title: "目录与原文", icon: "list.bullet", width: 330, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size) { outline }
+                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 560, isPresented: $store.readingCompanionVisible, viewport: geometry.size) {
+                    ReadingCompanionPanel(showsHeader: false)
                 }
-            }
-            .overlay(alignment: .trailing) {
-                if store.readingCompanionVisible && geometry.size.width < 1050 {
-                    ReadingCompanionPanel(onClose: { store.readingCompanionVisible = false })
-                        .frame(width: min(380, max(0, geometry.size.width - 24)), height: max(0, geometry.size.height - 98))
-                        .readingGlass(radius: 22).padding(.horizontal, 12).padding(.top, 80)
-                }
-            }
-            .overlay(alignment: .topLeading) {
-                if showOutline && !inlineOutline {
-                    outline.frame(width: min(310, geometry.size.width - 24), height: min(500, geometry.size.height - 98))
-                        .clipShape(RoundedRectangle(cornerRadius: 14)).shadow(color: .black.opacity(0.14), radius: 22, y: 8).padding(.horizontal, 12).padding(.top, 80)
-                }
-            }
+            }.onChange(of: showOutline) { _, value in if value && geometry.size.width < 1050 { store.readingCompanionVisible = false } }
+                .onChange(of: store.readingCompanionVisible) { _, value in if value && geometry.size.width < 1050 { showOutline = false } }
         }
     }
     private var outline: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("目录与原文").font(.subheadline.weight(.medium))
-                Spacer()
-                Button { showOutline = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("收起目录").accessibilityLabel("收起目录")
-            }.padding(14)
             TextField("搜索原文或章节", text: $store.search).textFieldStyle(.roundedBorder).padding(.horizontal, 12).padding(.bottom, 10)
             Divider().opacity(0.4)
             ScrollViewReader { proxy in
@@ -100,7 +79,7 @@ struct ReaderWorkspaceView: View {
                 }.onChange(of: store.selectedUnitID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
                     .onAppear { if let id = store.selectedUnitID { proxy.scrollTo(id, anchor: .center) } }
             }
-        }.background(Color(nsColor: .textBackgroundColor))
+        }.background(Palette.surface.opacity(0.45))
     }
     private func sourceText(_ unit: SourceUnit) -> some View {
         ScrollView {
@@ -128,7 +107,7 @@ struct ReaderWorkspaceView: View {
                         Button("保存为我的文档") { Task { await store.saveInsight(insight) } }.font(.caption).disabled(store.isBusy)
                     }.softPanel()
                 }
-            }.frame(maxWidth: 740).padding(.horizontal, 24).padding(.top, 84).padding(.bottom, 24).frame(maxWidth: .infinity)
+            }.frame(maxWidth: 740).padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 100).frame(maxWidth: .infinity)
         }.background(Palette.paper)
     }
     private func anchoredSource(_ text: String, plain: Bool) -> some View {
@@ -197,6 +176,7 @@ struct ReadingWorkflowView: View {
                                         }.font(.subheadline.weight(.medium))
                                     }
                                     if !plan.focus.isEmpty { Text("关注：" + plan.focus.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
+                                    Button { store.route = "plugins" } label: { Label("管理读书法", systemImage: "slider.horizontal.3").frame(minHeight: 44) }.buttonStyle(ReadingToolbarButtonStyle()).help("查看或编辑可执行的读书方法")
                                 }.padding(.top, 12)
                             } label: {
                                 HStack { Text("读书方案").font(.subheadline.weight(.medium)); Spacer(); Text(book.methods.filter { plan.methodIDs.contains($0.id) }.map(\.name).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
@@ -223,22 +203,22 @@ struct ReadingWorkflowView: View {
                             DisclosureGroup("全书综合", isExpanded: $showSynthesis) { MarkdownText(markdown: synthesis.markdown).padding(.top, 12) }.font(.subheadline.weight(.medium)).softPanel()
                         }
                         Text("执行进度与源质量分别核对；模型理解、复杂图表和公式仍需结合原文判断。").font(.caption).foregroundStyle(.secondary)
-                    }.padding(16).frame(maxWidth: 1000).frame(maxWidth: .infinity)
+                    }.padding(24).frame(maxWidth: 1080).frame(maxWidth: .infinity)
                 }
             }
-        }
+        }.padding(.top, 96).background(Palette.canvas)
     }
     private var cannotPause: Bool { store.isSavingDocument || store.isExportingProject || store.isImportingBookCommit || store.isCommittingLocalWrite }
-    private var preReadButton: some View { Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.disabled(store.isBusy) }
+    private var preReadButton: some View { Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy) }
     private var executionButton: some View {
         Button { store.isBusy ? store.pause() : store.startReading() } label: {
             Label(store.isBusy ? (cannotPause ? "处理中" : "暂停") : (store.book?.insights.isEmpty == false ? "继续精读" : "开始精读"), systemImage: store.isBusy ? "pause.fill" : "play.fill")
-        }.buttonStyle(.borderedProminent).disabled(cannotPause)
+        }.buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44).disabled(cannotPause)
     }
     private func overview(_ book: BookProject) -> some View {
         let analyzedIDs = Set(book.insights.filter { !$0.id.hasPrefix("deferred-") && !$0.id.hasPrefix("blank-") }.flatMap(\.unitIDs))
         let analyzed = book.units.filter { analyzedIDs.contains($0.id) }.count
-        return VStack(alignment: .leading, spacing: 9) {
+        return VStack(alignment: .leading, spacing: 16) {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 20) { metric("内容单元", value: book.units.count); metric("AI 分析", value: analyzed); metric("待核对", value: book.reviewCount); metric("逐段回执", value: book.paragraphReceipts?.count ?? 0) }
                 Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 6) {
@@ -254,15 +234,15 @@ struct ReadingWorkflowView: View {
             }
             HStack(alignment: .top, spacing: 7) {
                 if store.isBusy { ProgressView().controlSize(.mini) }
-                Text(store.activity).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                Text(store.activity).font(.system(size: 14)).foregroundStyle(.secondary).textSelection(.enabled)
             }
         }.softPanel()
     }
     private func metric(_ title: String, value: Int) -> some View {
-        HStack(spacing: 5) { Text(title).foregroundStyle(.secondary); Text(value, format: .number).fontWeight(.medium).monospacedDigit() }.font(.caption).fixedSize()
+        HStack(spacing: 7) { Text(title).foregroundStyle(.secondary); Text(value, format: .number).fontWeight(.semibold).monospacedDigit() }.font(.system(size: 15)).fixedSize()
     }
     private func flowStep(_ title: String, done: Bool) -> some View {
-        Label(title, systemImage: done ? "checkmark.circle.fill" : "circle").font(.caption).foregroundStyle(done ? Palette.accent : .secondary).fixedSize()
+        Label(title, systemImage: done ? "checkmark.circle.fill" : "circle").font(.system(size: 14)).foregroundStyle(done ? Palette.accent : .secondary).fixedSize()
     }
     @ViewBuilder private func reviewSummary(_ book: BookProject) -> some View {
         let units = book.units.filter { $0.warning != nil || book.coverage[$0.id]?.status == .needsReview || book.coverage[$0.id]?.status == .failed }
@@ -315,9 +295,14 @@ struct MarkdownText: View {
 
 struct DocumentEditorView: View {
     @EnvironmentObject var store: AppStore
-    @State private var preview = false
+    @State private var preview = true
     @State private var discardingDraft = false
-    @State private var showingDocuments = false
+    @State private var showingDocuments = true
+    @State private var listCollapsed = false
+    @State private var measuredWindow = false
+    @State private var listOrigin = CGPoint(x: 72, y: 100)
+    @State private var dragOrigin = CGPoint.zero
+    @State private var panelEpoch = 0
     @State private var documentSearch = ""
     private var hasDocument: Bool { store.selectedDocumentID != nil || store.editorDirty }
     private var currentDocument: DocumentRecord? { store.book?.activeDocuments.first { $0.id == store.selectedDocumentID } }
@@ -326,61 +311,100 @@ struct DocumentEditorView: View {
         return documentSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? all : all.filter { $0.title.localizedCaseInsensitiveContains(documentSearch.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
     var body: some View {
-        VStack(spacing: 0) {
-            ViewThatFits(in: .horizontal) { editorToolbar(compact: false); editorToolbar(compact: true) }
-                .padding(.horizontal, 14).padding(.vertical, 8).frame(minHeight: 44)
-                .background(Palette.surface).overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 0.5) }
-                .popover(isPresented: $showingDocuments, arrowEdge: .bottom) { documentPicker }
-            if store.editorDirty || store.isSavingDocument {
-                HStack(spacing: 7) {
-                    if store.isSavingDocument { ProgressView().controlSize(.mini) }
-                    else { Circle().fill(Palette.copper).frame(width: 5, height: 5) }
-                    Text(store.isSavingDocument ? "正在保存 Markdown；期间的新编辑会保留为草稿。" : "有未保存修改，切换笔记前请保存或放弃。").font(.caption).foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }.padding(.horizontal, 16).padding(.vertical, 5)
-            }
-            if let error = store.documentError, hasDocument {
-                Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(Palette.copper).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 6)
-            }
-            if hasDocument {
-                if preview {
-                    ScrollView { MarkdownText(markdown: store.editorMarkdown).padding(22).frame(maxWidth: 850).frame(maxWidth: .infinity) }.background(Palette.paper)
+        GeometryReader { geometry in
+            let wide = geometry.size.width >= 1100
+            let leftInset: CGFloat = showingDocuments && wide && !listCollapsed ? 442 : 76
+            ZStack(alignment: .topLeading) {
+                Palette.canvas.ignoresSafeArea()
+                documentPaper
+                    .padding(.leading, leftInset).padding(.trailing, 24).padding(.top, 100).padding(.bottom, 100)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if showingDocuments {
+                    documentPanel(viewport: geometry.size)
                 } else {
-                    TextEditor(text: Binding(get: { store.editorMarkdown }, set: { store.editorMarkdown = $0; store.editorDirty = true }))
-                        .font(.system(size: 16, design: .monospaced)).scrollContentBackground(.hidden).padding(16).background(Palette.paper).disabled(store.isRecognizingPDF)
+                    Button { showingDocuments = true; listCollapsed = false; listOrigin = CGPoint(x: 72, y: 100) } label: {
+                        Label("笔记", systemImage: "doc.on.doc")
+                    }.buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 16)
+                        .padding(.leading, 76).padding(.top, 104).help("恢复笔记列表")
                 }
-            } else {
-                EmptyState(title: "写下你的理解", detail: "从左上角选择笔记，或新建一篇真实的 Markdown 文档。", icon: "square.and.pencil", actionTitle: "新建笔记", action: { store.newDocument() })
+                VStack { Spacer(); editorToolbar(compact: geometry.size.width < 960).padding(8).readingGlass(radius: 22).padding(.bottom, 22) }
+                    .frame(maxWidth: .infinity)
+            }
+            .onAppear {
+                guard !measuredWindow else { return }; measuredWindow = true
+                showingDocuments = wide
+                if store.selectedDocumentID == nil && store.editorDirty { preview = false }
+            }
+            .onChange(of: geometry.size) { previous, next in
+                if previous.width >= 1100 && next.width < 1100 { showingDocuments = false }
+                listOrigin = clampedListOrigin(listOrigin, viewport: next)
+                panelEpoch += 1
             }
         }
         .confirmationDialog("放弃尚未保存的修改？", isPresented: $discardingDraft) {
             Button("放弃修改", role: .destructive) { store.discardDraft() }
         } message: { Text("清除当前草稿，恢复最近保存的内容；已保存的 Markdown 不会删除。") }
-        .onChange(of: store.bookID) { _, _ in showingDocuments = false; documentSearch = ""; preview = false }
+        .onChange(of: store.bookID) { _, _ in documentSearch = ""; preview = true; panelEpoch += 1 }
+        .onChange(of: store.selectedDocumentID) { _, next in if next == nil && store.editorDirty { preview = false } }
+        .onChange(of: store.editorDirty) { _, dirty in if dirty && store.selectedDocumentID == nil { preview = false } }
+    }
+    private var documentPaper: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Label(currentDocument?.origin == "user" || currentDocument == nil ? "用户笔记" : "已保存的 AI 摘记", systemImage: currentDocument?.origin == "user" || currentDocument == nil ? "doc.text" : "sparkles")
+                    .font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                if store.isSavingDocument { ProgressView().controlSize(.small); Text("正在保存").font(.system(size: 13)).foregroundStyle(.secondary) }
+                else if store.editorDirty { Label("未保存", systemImage: "circle.fill").font(.system(size: 13)).foregroundStyle(Palette.copper) }
+                else if let document = currentDocument { Text(document.updatedAt, style: .time).font(.system(size: 13)).foregroundStyle(.secondary) }
+            }.padding(.horizontal, 28).padding(.vertical, 18)
+            if let error = store.documentError, hasDocument {
+                Label(error, systemImage: "exclamationmark.circle").font(.system(size: 14)).foregroundStyle(Palette.copper).textSelection(.enabled).padding(.horizontal, 28).padding(.bottom, 12)
+            }
+            if hasDocument {
+                if preview {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 22) {
+                            Text(store.editorTitle.isEmpty ? "未命名笔记" : store.editorTitle).font(.system(size: 30, weight: .semibold)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                            MarkdownText(markdown: previewBody)
+                            if let document = currentDocument, !document.evidence.isEmpty {
+                                DisclosureGroup("原文依据 · \(document.evidence.count) 处") { EvidenceList(evidence: document.evidence).padding(.top, 12) }
+                                    .font(.system(size: 14)).tint(Palette.accent).padding(18).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+                            }
+                        }.padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 30)
+                    }
+                } else {
+                    TextField("文档标题", text: Binding(get: { store.editorTitle }, set: { store.editorTitle = $0; store.editorDirty = true }), axis: .vertical)
+                        .font(.system(size: 28, weight: .semibold)).textFieldStyle(.plain).lineLimit(1...3)
+                        .padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 18).disabled(store.isRecognizingPDF).accessibilityLabel("文档标题")
+                    TextEditor(text: Binding(get: { store.editorMarkdown }, set: { store.editorMarkdown = $0; store.editorDirty = true }))
+                        .font(.system(size: 16, design: .monospaced)).lineSpacing(6).scrollContentBackground(.hidden)
+                        .padding(.horizontal, 22).padding(.bottom, 22).disabled(store.isRecognizingPDF)
+                }
+            } else {
+                EmptyState(title: "写下你的理解", detail: "选择一篇笔记，或新建一篇真实的 Markdown 文档。", icon: "square.and.pencil", actionTitle: "新建笔记", action: { store.newDocument(); preview = false })
+            }
+        }.frame(maxWidth: 1050, maxHeight: .infinity).background(Palette.surface.opacity(0.94), in: RoundedRectangle(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line.opacity(0.85), lineWidth: 0.8))
+            .shadow(color: Palette.accent.opacity(0.035), radius: 18, y: 6).frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    private var previewBody: String {
+        // The paper already owns the document title. Strip only an identical first
+        // heading from the preview; the user's Markdown source is never rewritten.
+        let lines = store.editorMarkdown.components(separatedBy: "\n")
+        guard lines.first?.trimmingCharacters(in: .whitespacesAndNewlines) == "# " + store.editorTitle.trimmingCharacters(in: .whitespacesAndNewlines) else { return store.editorMarkdown }
+        return lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .newlines)
     }
     private func editorToolbar(compact: Bool) -> some View {
-        HStack(spacing: compact ? 7 : 10) {
-            Button { showingDocuments.toggle() } label: {
-                if compact { Image(systemName: "doc.on.doc") }
-                else { Label("笔记", systemImage: "doc.on.doc") }
-            }.help("选择或搜索 Markdown 笔记")
-            if hasDocument {
-                TextField("文档标题", text: Binding(get: { store.editorTitle }, set: { store.editorTitle = $0; store.editorDirty = true }))
-                    .font(.system(size: 17, weight: .medium)).textFieldStyle(.plain)
-                    .frame(minWidth: compact ? 80 : 160).layoutPriority(1).disabled(store.isRecognizingPDF)
-                    .accessibilityLabel("文档标题")
-                    .accessibilityHint("直接编辑标题，保存后即完成笔记重命名。")
-                    .help("直接编辑标题，保存或按 ⌘S 完成重命名")
-            } else { Text("我的理解").font(.system(size: 17, weight: .semibold)).lineLimit(1); Spacer(minLength: 0) }
-            if compact {
-                Button { preview.toggle() } label: { Image(systemName: preview ? "square.and.pencil" : "eye") }.help(preview ? "返回编辑" : "预览 Markdown").disabled(!hasDocument)
-            } else {
-                Picker("显示模式", selection: $preview) { Text("编辑").tag(false); Text("预览").tag(true) }.pickerStyle(.segmented).labelsHidden().frame(width: 116).disabled(!hasDocument)
-            }
-            Button(store.isSavingDocument ? "保存中" : "保存") { Task { await store.saveCurrentDocument() } }
-                .buttonStyle(.borderedProminent).disabled(!store.editorDirty || store.isBusy).help(store.editorDirty ? "保存 Markdown 与标题修改" : "当前文档已保存")
+        HStack(spacing: compact ? 5 : 10) {
+            Button { preview = false } label: { Text("编辑").frame(minWidth: 60) }.buttonStyle(ReadingToolbarButtonStyle(selected: !preview)).disabled(!hasDocument)
+            Button { preview = true } label: { Text("预览").frame(minWidth: 60) }.buttonStyle(ReadingToolbarButtonStyle(selected: preview)).disabled(!hasDocument)
+            Rectangle().fill(Palette.line).frame(width: 1, height: 26).padding(.horizontal, 4)
+            Text("Markdown").font(.system(size: 15)).padding(.horizontal, 10)
+            Button { showingDocuments.toggle(); if showingDocuments { listCollapsed = false } } label: { Image(systemName: "list.bullet.rectangle") }
+                .buttonStyle(ReadingToolbarButtonStyle(selected: showingDocuments)).help("显示或收起笔记列表")
             documentMenu
-        }.controlSize(.regular)
+        }.controlSize(.large).fixedSize(horizontal: true, vertical: false)
     }
     private var documentMenu: some View {
         Menu {
@@ -394,38 +418,61 @@ struct DocumentEditorView: View {
                 Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
             }
             Button("查看回收站") { store.showingTrash = true }
-        } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().help("草稿、导图与文档管理")
+            Button("新建笔记") { store.newDocument(); preview = false }.disabled(store.editorDirty || store.isBusy)
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("草稿、导图与文档管理")
+    }
+    private func documentPanel(viewport: CGSize) -> some View {
+        let height = listCollapsed ? CGFloat(64) : min(640, max(180, viewport.height - 124))
+        let origin = clampedListOrigin(listOrigin, viewport: viewport)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Text("我的理解").font(.system(size: 18, weight: .semibold)).frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+                    .overlay { FloatingPanelPointerInput(epoch: panelEpoch, begin: { dragOrigin = listOrigin }, drag: { delta, _ in listOrigin = clampedListOrigin(CGPoint(x: dragOrigin.x + delta.width, y: dragOrigin.y + delta.height), viewport: viewport) }, cancel: { listOrigin = clampedListOrigin(dragOrigin, viewport: viewport) }) }.help("拖动笔记列表")
+                Button { listCollapsed.toggle() } label: { Image(systemName: listCollapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(listCollapsed ? "展开列表" : "折叠列表")
+                Button { showingDocuments = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭列表")
+            }.padding(.horizontal, 12)
+            if !listCollapsed { documentPicker }
+        }.frame(width: 340, height: height).readingGlass(radius: 20).position(x: origin.x + 170, y: origin.y + height / 2)
+    }
+    private func clampedListOrigin(_ value: CGPoint, viewport: CGSize) -> CGPoint {
+        let height = listCollapsed ? CGFloat(64) : min(640, max(180, viewport.height - 124))
+        return CGPoint(x: min(max(12, value.x), max(12, viewport.width - 352)), y: min(max(96, value.y), max(96, viewport.height - height - 12)))
     }
     private var documentPicker: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Markdown 笔记").font(.subheadline.weight(.medium)); Spacer()
-                Button { showingDocuments = false; store.newDocument(); preview = false } label: { Label("新建", systemImage: "plus") }.controlSize(.regular).disabled(store.editorDirty || store.isBusy)
-            }
-            TextField("搜索笔记标题", text: $documentSearch).textFieldStyle(.roundedBorder)
-            if store.editorDirty { Text("当前有草稿，请先保存或放弃，再切换笔记。").font(.caption).foregroundStyle(Palette.copper) }
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("搜索笔记…", text: $documentSearch).textFieldStyle(.plain).font(.system(size: 15))
+                if !documentSearch.isEmpty { Button { documentSearch = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空笔记搜索").frame(width: 36, height: 44) }
+            }.padding(.horizontal, 12).frame(minHeight: 46).background(Palette.surface.opacity(0.65), in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(Palette.line.opacity(0.8)))
+            if store.editorDirty { Text("有未保存的修改，请先保存或放弃再切换。").font(.system(size: 13)).foregroundStyle(Palette.copper).fixedSize(horizontal: false, vertical: true) }
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 3) {
+                LazyVStack(alignment: .leading, spacing: 5) {
                     ForEach(documents) { document in
                         Button {
-                            showingDocuments = false
                             Task { await store.openDocument(document) }
                         } label: {
                             HStack(spacing: 9) {
-                                Image(systemName: document.origin == "user" ? "doc.text" : "sparkles").foregroundStyle(Palette.accent)
-                                Text(document.title).font(.system(size: 14)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                                Image(systemName: document.origin == "user" ? "doc.text" : "sparkles").font(.system(size: 23)).foregroundStyle(Palette.accent).frame(width: 28)
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(document.title).font(.system(size: 16, weight: .medium)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                                    Text(document.updatedAt, format: .dateTime.month().day().hour().minute()).font(.system(size: 12)).foregroundStyle(.secondary)
+                                }
                                 if store.selectedDocumentID == document.id { Image(systemName: "checkmark").foregroundStyle(Palette.accent).font(.caption.weight(.semibold)) }
-                            }.padding(.horizontal, 9).padding(.vertical, 8).contentShape(Rectangle())
-                                .background(store.selectedDocumentID == document.id ? Palette.accent.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 7))
+                            }.padding(.horizontal, 12).padding(.vertical, 14).frame(maxWidth: .infinity, minHeight: 76, alignment: .leading).contentShape(Rectangle())
+                                .background(store.selectedDocumentID == document.id ? Palette.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 12))
                         }.buttonStyle(.plain).disabled(store.isBusy || (store.editorDirty && store.selectedDocumentID != document.id))
                             .contextMenu {
                                 Button("加入导图") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
-                                Button("移入回收站…", role: .destructive) { showingDocuments = false; store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
+                                Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
                             }
                     }
                     if documents.isEmpty { Text(documentSearch.isEmpty ? "还没有笔记，从新建开始。" : "没有匹配的笔记").font(.caption).foregroundStyle(.secondary).padding(12) }
                 }
-            }.frame(maxHeight: 330)
-        }.padding(14).frame(width: 330)
+            }.frame(maxHeight: .infinity)
+            Divider().opacity(0.5)
+            Button { store.newDocument(); preview = false } label: { Label("新建笔记", systemImage: "plus.circle.fill").font(.system(size: 15, weight: .medium)).frame(maxWidth: .infinity, minHeight: 46).contentShape(Rectangle()) }
+                .buttonStyle(.plain).foregroundStyle(Palette.accent).background(Palette.surface.opacity(0.65), in: RoundedRectangle(cornerRadius: 12)).disabled(store.editorDirty || store.isBusy)
+        }.padding(.horizontal, 16).padding(.bottom, 16)
     }
 }

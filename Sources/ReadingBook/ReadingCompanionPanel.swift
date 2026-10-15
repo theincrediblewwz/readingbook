@@ -7,6 +7,7 @@ struct ReadingCompanionPanel: View {
     var section: String = "context"
     var scope: String = "current"
     var onClose: (() -> Void)?
+    var showsHeader = true
     @State private var removal: ReadingItemRemoval?
     private var items: ReadingContextItems {
         guard let book = store.book else { return ReadingContextItems() }
@@ -19,7 +20,7 @@ struct ReadingCompanionPanel: View {
     private var effectiveSection: String { section == "context" ? store.readingCompanionSection : section }
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
+            if showsHeader { HStack(spacing: 10) {
                 Label("伴读", systemImage: "text.book.closed").font(.headline)
                 Spacer()
                 if section == "context" { Menu {
@@ -34,7 +35,18 @@ struct ReadingCompanionPanel: View {
                     } label: { Image(systemName: "arrow.uturn.backward") }.menuStyle(.borderlessButton).frame(width: 40, height: 40).help("恢复已移除的伴读")
                 }
                 if let onClose { Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("收起伴读") }
-            }.padding(.horizontal, 16).padding(.top, 8)
+            }.padding(.horizontal, 16).padding(.top, 8) }
+            if !showsHeader {
+                HStack {
+                    Picker("伴读内容", selection: $store.readingCompanionSection) {
+                        Text("解释与译文").tag("layers"); Text("原文对象").tag("mentions"); Text("资料对读").tag("references"); Text("思考卡").tag("decisions")
+                    }.labelsHidden().accessibilityLabel("伴读内容").pickerStyle(.menu)
+                    Spacer(minLength: 6)
+                    if !(store.book?.readingExperience?.trash ?? []).isEmpty {
+                        Menu { ForEach(store.book?.readingExperience?.trash ?? []) { item in Button("恢复 \(item.title)") { Task { await store.restoreReadingItem(item.id) } }.disabled(store.isBusy) } } label: { Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44) }.menuStyle(.borderlessButton).help("恢复已移除的伴读")
+                    }
+                }.padding(.horizontal, 16)
+            }
             HStack(alignment: .top) {
                 Text(scope == "book" ? "全书增强内容" : store.readingContextDescription).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 Spacer(minLength: 4)
@@ -215,7 +227,9 @@ struct ReadingExperienceWorkspaceView: View {
     var definition: ViewDefinition?
     var body: some View {
         ReadingCompanionPanel(section: section, scope: definition?.scope ?? "current")
-            .frame(maxWidth: 900).frame(maxWidth: .infinity).background(Palette.paper)
+            .frame(maxWidth: 900).padding(22).readingGlass(radius: 22)
+            .padding(.horizontal, 76).padding(.top, 96).padding(.bottom, 24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.canvas)
     }
 }
 

@@ -6,6 +6,7 @@ struct ReadingBookApp: App {
     var body: some Scene {
         WindowGroup {
             WorkspaceView().environmentObject(store)
+                .background(FrostWindowAppearance())
                 .frame(minWidth: 800, minHeight: 600)
                 .task { await store.load() }
         }
@@ -30,18 +31,18 @@ struct ReadingBookApp: App {
                 Button("我的理解") { store.route = "editor" }.keyboardShortcut("4")
             }
         }
-        Settings { ProviderSettingsView().environmentObject(store).frame(width: 600, height: 560) }
+        Settings { ProviderSettingsView().environmentObject(store).frame(minWidth: 760, idealWidth: 1060, minHeight: 620, idealHeight: 760) }
     }
 }
 
 enum Palette {
-    static let ink = adaptive(0x273831, dark: 0xE1E9E2)
-    static let accent = adaptive(0x315D4D, dark: 0xA1CAB4)
-    static let copper = adaptive(0x9D6037, dark: 0xD4A57A)
-    static let paper = adaptive(0xFAFAF7, dark: 0x19211E)
-    static let surface = adaptive(0xFFFFFF, dark: 0x232D28)
-    static let line = adaptive(0xE0E7E1, dark: 0x3A4941)
-    static let canvas = adaptive(0xF4F6F2, dark: 0x1C2520)
+    static let ink = adaptive(0x26313C, dark: 0xE6EDF9)
+    static let accent = adaptive(0x3569D5, dark: 0x8BAEFF)
+    static let copper = adaptive(0x9C6827, dark: 0xE0B778)
+    static let paper = adaptive(0xFFFFFF, dark: 0x171D28)
+    static let surface = adaptive(0xF9FBFF, dark: 0x202A3B)
+    static let line = adaptive(0xDCE4F1, dark: 0x36445C)
+    static let canvas = adaptive(0xF5F8FF, dark: 0x151D2A)
     private static func adaptive(_ light: Int, dark: Int) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
             let value = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
@@ -52,8 +53,8 @@ enum Palette {
 
 struct SoftPanel: ViewModifier {
     func body(content: Content) -> some View {
-        content.padding(14).background(Palette.surface, in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.line.opacity(0.8), lineWidth: 0.75))
+        content.padding(18).background(Palette.paper, in: RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(Palette.line.opacity(0.8), lineWidth: 0.75))
     }
 }
 extension View {

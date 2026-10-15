@@ -116,6 +116,17 @@ extension AppStore {
         do { try persistServiceProfile(); connectionStatus = "配置已保存。" }
         catch { serviceProfileDraft.errorMessage = error.localizedDescription }
     }
+    func discardServiceDraftForNavigation() -> Bool {
+        guard !isBusy else { return false }
+        serviceProfileDraft.errorMessage = ""
+        if let id = selectedServiceID ?? savedServices.first?.id {
+            performServiceChange(.select(id))
+            return serviceProfileDraft.errorMessage.isEmpty
+        }
+        selectedServiceID = nil; serviceName = "新服务"; settings = ProviderSettings(); apiKey = ""
+        connectionStatus = ""; serviceProfileDraft.capture(from: self)
+        return true
+    }
 
     func chooseModel(_ model: ModelPreset) {
         guard !isBusy else { return }
