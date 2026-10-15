@@ -2,6 +2,8 @@
 
 ## 0.11 本批集中验收：按这个顺序
 
+测试包：[ReadingBook-macos-universal.zip](dist/download-38787646842/ReadingBook-macos-universal.zip) · [Actions](https://github.com/theincrediblewwz/readingbook/actions/runs/38787646842) · 0.11.0/build11，双架构，98项Core检查通过。解压后复制 ReadingBook.app 到 Mac。
+
 本节保持未勾选，等待 Mac 真机；下面旧版清单保留，不能以旧勾选代替本版。请先从 App 退出，再复制原书库作备份；本批不做破坏性格式迁移。
 
 1. [ ] 启动新 App，打开已有书和已有 Markdown，确认旧来源、回执、节点、关系、已保存模型仍在；首次无书时能导入。

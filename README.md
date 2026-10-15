@@ -8,7 +8,9 @@
 
 原生界面继续使用真实 AppStore、ReadingCore、PDFKit、MapKit、离线 Markdown/KaTeX、Keychain 与本地 Markdown；本轮未导入交互稿的示例数据/模拟 AI，也未改书项目 Codable 格式。模型/文档离页新增保存、放弃、继续编辑保护；类型和方法编辑保存新声明版本，保留原定义、引用与既有回执。
 
-当前源码待本轮 GitHub Actions 编译打包；Mac 外观、窗口和手势验收仍待用户集中测试。浏览器交互稿的 passed 只适用于浏览器，不是本版原生视觉通过的证明。旧版本的构建链接和测试数字不作为本版验证结果。
+本批最终源码 `c0a7e666afc58f6b50402d88f29fa527b616aad2`，GitHub Actions https://github.com/theincrediblewwz/readingbook/actions/runs/38787646842 成功：98 项 Core 检查、arm64/x86_64 release 编译、临时签名及包内资源检查通过，无编译警告。下载包 `dist/download-38787646842/ReadingBook-macos-universal.zip`，8,600,466 字节，SHA-256 `0bcfb0e311d820be781cffe2769a7a2d1fcfa1d14958b73857fc751cad32bb5d`；已核对外层 artifact 摘要、内层 CRC/SHA、plist 0.11/build11、双架构/0755、全部32个离线资源文件（含20个公式字体）逐字节匹配。Mac 视觉、系统窗口、手势及真实模型质量仍待集中验收。
+
+源码在 `codex/frost-native-0.11` 独立构建分支，远程 main 仍为 `473b165`。浏览器交互稿的 passed 只适用于浏览器，不是本版原生视觉通过的证明。旧版本的构建链接和测试数字不作为本版验证结果。
 
 
 **0.10.0 / build 10 已通过 [Actions 编译打包](https://github.com/theincrediblewwz/readingbook/actions/runs/38758092553)，待 Mac 集中验收。**源码 `1638ebb9e15de7a534006bd9436a76bb103455ed`，97项核心测试、arm64/x86_64编译、临时签名与资源自检通过，无编译警告。安装ZIP 7,830,185字节，SHA-256 `6043ca4ff73606042ea1d334c9d042f25d5a328a0c7470d47cde6fe04631583e`；下载后已核对源码、版本、架构、执行权限及离线资源。

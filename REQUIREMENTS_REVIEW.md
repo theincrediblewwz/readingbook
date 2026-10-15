@@ -8,7 +8,9 @@
 
 原生界面继续使用真实 AppStore、ReadingCore、PDFKit、MapKit、离线 Markdown/KaTeX、Keychain 与本地 Markdown；本轮未导入交互稿的示例数据/模拟 AI，也未改书项目 Codable 格式。模型/文档离页新增保存、放弃、继续编辑保护；类型和方法编辑保存新声明版本，保留原定义、引用与既有回执。
 
-当前源码待本轮 GitHub Actions 编译打包；Mac 外观、窗口和手势验收仍待用户集中测试。浏览器交互稿的 passed 只适用于浏览器，不是本版原生视觉通过的证明。旧版本的构建链接和测试数字不作为本版验证结果。
+本批最终源码 `c0a7e666afc58f6b50402d88f29fa527b616aad2`，GitHub Actions https://github.com/theincrediblewwz/readingbook/actions/runs/38787646842 成功：98 项 Core 检查、arm64/x86_64 release 编译、临时签名及包内资源检查通过，无编译警告。下载包 `dist/download-38787646842/ReadingBook-macos-universal.zip`，8,600,466 字节，SHA-256 `0bcfb0e311d820be781cffe2769a7a2d1fcfa1d14958b73857fc751cad32bb5d`；已核对外层 artifact 摘要、内层 CRC/SHA、plist 0.11/build11、双架构/0755、全部32个离线资源文件（含20个公式字体）逐字节匹配。Mac 视觉、系统窗口、手势及真实模型质量仍待集中验收。
+
+源码在 `codex/frost-native-0.11` 独立构建分支，远程 main 仍为 `473b165`。浏览器交互稿的 passed 只适用于浏览器，不是本版原生视觉通过的证明。旧版本的构建链接和测试数字不作为本版验证结果。
 
 
 本批先实现独通鉴参考方案，再实际研究 [24shi 阅读页](https://24shi.wiki/books/shiji/001)、[人物跨书索引](https://24shi.wiki/people/p2)、[图谱及统计口径](https://24shi.wiki/viz/network)、[全文检索](https://24shi.wiki/search)，追加第二批实现。浏览器检查了逐段/左右对照、人物详情、图谱大厅、年代热图及点击去向、跨史检索结果。没有调用网站 AI、登录或复制其数据集；不照抄不同页面更新不一的统计数。
