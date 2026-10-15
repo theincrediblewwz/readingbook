@@ -102,9 +102,9 @@ struct DocumentGraphView: View {
                     title: "思维导图", isEnabled: !store.isBusy, errorText: { operationError },
                     focusNodeID: focusRequest, focusRequestToken: focusToken,
                     selectedNodeIDChanged: { physicalSelection = $0 },
-                    interactionExclusion: showsNodes ? CGRect(x: 12, y: 12, width: 288, height: panelHeight) : CGRect(x: 12, y: 12, width: 132, height: 48),
-                    obscuredLeadingWidth: showsNodes ? 312 : 0
-                ).overlay(alignment: .topLeading) {
+                    interactionExclusion: showsNodes ? CGRect(x: max(0, geometry.size.width - ReadingLayout.nodeBrowserWidth - 12), y: 12, width: ReadingLayout.nodeBrowserWidth, height: panelHeight) : CGRect(x: max(0, geometry.size.width - 172), y: 12, width: 160, height: 56),
+                    obscuredTrailingWidth: showsNodes ? ReadingLayout.nodeBrowserWidth + 24 : 0
+                ).overlay(alignment: .topTrailing) {
                     if showsNodes {
                         GraphNodeBrowser(items: graphItems, selectedNodeID: physicalSelection ?? graphItems.first(where: { $0.targetID == store.selectedObjectID })?.id, height: panelHeight,
                                          select: { item in
@@ -113,7 +113,7 @@ struct DocumentGraphView: View {
                             .contentShape(Rectangle()).readingGlassIdentity("document-nodes", in: browserNamespace).padding(12)
                             .transition(.opacity)
                     } else {
-                        Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { showsNodes = true } } label: { Label("节点 · \(graphItems.count)", systemImage: "sidebar.left") }
+                        Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { showsNodes = true } } label: { Label("节点 · \(graphItems.count)", systemImage: "sidebar.right") }
                             .buttonStyle(ReadingToolbarButtonStyle()).padding(5).readingGlass(interactive: true)
                             .readingGlassIdentity("document-nodes", in: browserNamespace).padding(12)
                     }
@@ -169,15 +169,15 @@ struct RelationGraphView: View {
                                 open: { inspectedID = $0 }, deselect: { store.selectedObjectID = nil }, inspect: { inspectedID = $0 },
                                 title: "关系图谱", isEnabled: !store.isBusy,
                                 focusNodeID: focusRequest, focusRequestToken: focusToken, selectedNodeIDChanged: { physicalSelection = $0 },
-                                interactionExclusion: showsNodes ? CGRect(x: 12, y: 12, width: 288, height: panelHeight) : CGRect(x: 12, y: 12, width: 132, height: 48), obscuredLeadingWidth: showsNodes ? 312 : 0)
-                    .overlay(alignment: .topLeading) {
+                                interactionExclusion: showsNodes ? CGRect(x: max(0, geometry.size.width - ReadingLayout.nodeBrowserWidth - 12), y: 12, width: ReadingLayout.nodeBrowserWidth, height: panelHeight) : CGRect(x: max(0, geometry.size.width - 172), y: 12, width: 160, height: 56), obscuredTrailingWidth: showsNodes ? ReadingLayout.nodeBrowserWidth + 24 : 0)
+                    .overlay(alignment: .topTrailing) {
                         if showsNodes {
                             GraphNodeBrowser(items: items, selectedNodeID: physicalSelection ?? store.selectedObjectID, height: panelHeight,
                                              select: { item in physicalSelection = item.id; store.focus(item.targetID); focusRequest = item.id; focusToken = UUID() },
                                              open: { inspectedID = $0.targetID }, close: { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { showsNodes = false } })
                                 .contentShape(Rectangle()).readingGlassIdentity("relation-nodes", in: browserNamespace).padding(12).transition(.opacity)
                         } else {
-                            Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { showsNodes = true } } label: { Label("节点 · \(items.count)", systemImage: "sidebar.left") }
+                            Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { showsNodes = true } } label: { Label("节点 · \(items.count)", systemImage: "sidebar.right") }
                                 .buttonStyle(ReadingToolbarButtonStyle()).padding(5).readingGlass(interactive: true)
                                 .readingGlassIdentity("relation-nodes", in: browserNamespace).padding(12)
                         }
@@ -206,11 +206,13 @@ struct KnowledgeLibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             CompactWorkspaceHeader("知识库") {
-                Picker("内容", selection: $section) {
-                    Text("笔记").tag("documents"); Text("分析").tag("insights"); Text("要素").tag("entities")
-                }.pickerStyle(.segmented).frame(width: 155).disabled(!query.isEmpty)
-                TextField("搜索全部内容", text: $query).textFieldStyle(.roundedBorder).frame(minWidth: 90, maxWidth: 210)
-                Button { store.newDocument() } label: { Image(systemName: "square.and.pencil") }.help("写下理解").disabled(store.isBusy)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: ReadingLayout.groupSpacing) { categoryPicker; librarySearch; newNoteButton }
+                    VStack(alignment: .trailing, spacing: ReadingLayout.groupSpacing) {
+                        categoryPicker
+                        HStack(spacing: ReadingLayout.groupSpacing) { librarySearch; newNoteButton }
+                    }
+                }
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
@@ -286,6 +288,19 @@ struct KnowledgeLibraryView: View {
         }.onChange(of: store.bookID) { _, _ in inspectedID = nil; query = "" }
     }
     @State private var inspectedID: String?
+    private var categoryPicker: some View {
+        Picker("内容", selection: $section) {
+            Text("笔记").tag("documents"); Text("分析").tag("insights"); Text("要素").tag("entities")
+        }.pickerStyle(.segmented).labelsHidden().frame(width: 190)
+            .accessibilityLabel("知识库内容分类").disabled(!query.isEmpty)
+    }
+    private var librarySearch: some View {
+        TextField("搜索全部内容", text: $query).textFieldStyle(.roundedBorder).frame(minWidth: 110, maxWidth: 210)
+    }
+    private var newNoteButton: some View {
+        Button { store.newDocument() } label: { Image(systemName: "square.and.pencil") }
+            .help("写下理解").accessibilityLabel("写下理解").disabled(store.isBusy)
+    }
     private func sectionLabel(_ title: String, count: Int) -> some View {
         Text("\(title) · \(count)").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 6)
     }

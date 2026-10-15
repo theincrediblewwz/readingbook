@@ -10,7 +10,7 @@ struct PDFPageNavigation: View {
             Button { pdf.command(.prev) } label: { Image(systemName: "chevron.left") }
                 .buttonStyle(ReadingToolbarButtonStyle()).help("上一页").disabled(!pdf.isReady || pdf.page <= 1)
             TextField("页码", text: $entry).textFieldStyle(.plain).multilineTextAlignment(.trailing)
-                .font(.system(size: 13).monospacedDigit()).frame(width: 42, height: 34).focused($editingPage)
+                .font(.system(size: 14).monospacedDigit()).frame(width: 42, height: ReadingLayout.controlHeight).focused($editingPage)
                 .onSubmit {
                     if let page = Int(entry), (1...max(1, pdf.pageCount)).contains(page) { pdf.command(.jump(page)) }
                     else { entry = String(pdf.page) }

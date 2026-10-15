@@ -98,10 +98,12 @@ struct PDFOCRPanel: View {
 
     private var serviceFields: some View {
         CompactSettingsSection("图像服务与预算") {
+            Text("模型配置").font(.system(size: 13, weight: .medium))
             Picker("模型配置", selection: Binding(get: { store.ocrServiceID ?? "" }, set: { store.ocrServiceID = $0.isEmpty ? nil : $0; UserDefaults.standard.set(store.ocrServiceID, forKey: "ocr-service") })) {
                 Text("当前阅读服务 · \(store.serviceName)").tag("")
                 ForEach(store.savedServices) { service in Text("\(service.name) · \(service.settings.model)").tag(service.id) }
-            }.font(.system(size: 12))
+            }.labelsHidden().accessibilityLabel("OCR 模型配置").font(.system(size: 13))
+                .frame(maxWidth: .infinity).lineLimit(1).truncationMode(.middle)
             Text(configuration.model.isEmpty ? "尚未配置图像模型，请先设置服务。" : configuration.model)
                 .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(2)
             Text("每轮上限 \(configuration.maxRequestsPerRun) 次 · 输出上限 \(configuration.maxOutputTokens) token")

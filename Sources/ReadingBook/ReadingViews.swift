@@ -44,8 +44,8 @@ struct ReaderWorkspaceView: View {
             }
             .overlay(alignment: .topLeading) {
                 if showOutline && !inlineOutline {
-                    outline.frame(width: min(310, geometry.size.width - 24), height: min(500, geometry.size.height - 88))
-                        .clipShape(RoundedRectangle(cornerRadius: 14)).shadow(color: .black.opacity(0.14), radius: 22, y: 8).padding(.horizontal, 12).padding(.top, 70)
+                    outline.frame(width: min(310, geometry.size.width - 24), height: min(500, geometry.size.height - 98))
+                        .clipShape(RoundedRectangle(cornerRadius: 14)).shadow(color: .black.opacity(0.14), radius: 22, y: 8).padding(.horizontal, 12).padding(.top, 80)
                 }
             }
         }
@@ -112,7 +112,7 @@ struct ReaderWorkspaceView: View {
                         Button("保存为我的文档") { Task { await store.saveInsight(insight) } }.font(.caption).disabled(store.isBusy)
                     }.softPanel()
                 }
-            }.frame(maxWidth: 740).padding(.horizontal, 20).padding(.top, 74).padding(.bottom, 20).frame(maxWidth: .infinity)
+            }.frame(maxWidth: 740).padding(.horizontal, 24).padding(.top, 84).padding(.bottom, 24).frame(maxWidth: .infinity)
         }.background(Palette.paper)
     }
     private func sourceMarkdown(_ unit: SourceUnit) -> String {

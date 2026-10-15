@@ -239,17 +239,21 @@ struct AIServiceBar: View {
     @AppStorage("ai-service-expanded") private var expanded = false
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 12) {
                 Picker("使用", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0) })) {
                     if store.selectedServiceID == nil { Text("未保存配置").tag("") }
                     ForEach(store.savedServices) { service in Text(service.name).tag(service.id) }
-                }.labelsHidden().disabled(store.isBusy)
-                Text(store.settings.model.isEmpty ? "尚未配置模型" : store.settings.model).font(.caption2).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
-                HStack { Button("管理 / 新建") { store.showingSettings = true }; Spacer(); Button("测试") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty) }.font(.caption)
-                if !store.connectionStatus.isEmpty { Text(store.connectionStatus).font(.caption2).foregroundStyle(.secondary).lineLimit(3).help(store.connectionStatus) }
+                }.labelsHidden().lineLimit(1).frame(maxWidth: .infinity).disabled(store.isBusy)
+                Text(store.settings.model.isEmpty ? "尚未配置模型" : store.settings.model).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
+                HStack(spacing: 8) {
+                    Button("服务设置") { store.showingSettings = true }
+                    Spacer(minLength: 0)
+                    Button("测试") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty)
+                }.buttonStyle(ReadingToolbarButtonStyle())
+                if !store.connectionStatus.isEmpty { Text(store.connectionStatus).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(3).help(store.connectionStatus) }
                 ServiceProfileLocalError(draft: store.serviceProfileDraft)
-            }.padding(.top, 7).controlSize(.regular)
-        } label: { Label("AI · \(store.serviceName)", systemImage: "sparkles").font(.system(size: 12, weight: .medium)).lineLimit(1) }
-        .padding(10).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10)).padding(.horizontal, 12).padding(.bottom, 8)
+            }.padding(.top, 12).controlSize(.regular)
+        } label: { Label("AI · \(store.serviceName)", systemImage: "sparkles").font(.system(size: 13, weight: .medium)).lineLimit(1).help(store.serviceName) }
+        .padding(12).readingGlass(radius: 16).padding(.horizontal, 12).padding(.bottom, 12)
     }
 }

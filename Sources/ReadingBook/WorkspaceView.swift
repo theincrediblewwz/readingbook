@@ -17,9 +17,10 @@ struct WorkspaceView: View {
     @State private var activeSheet: WorkspaceSheet?
     @State private var lastSheet: WorkspaceSheet?
     @State private var sheetClosing = false
+    @State private var hoveredRoute: String?
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
-            sidebar.navigationSplitViewColumnWidth(min: 200, ideal: 226, max: 260)
+            sidebar.navigationSplitViewColumnWidth(min: 220, ideal: 244, max: 280)
         } detail: {
             GeometryReader { geometry in
             VStack(spacing: 0) {
@@ -79,25 +80,25 @@ struct WorkspaceView: View {
     }
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                BrandGlyph(name: "mark").frame(width: 30, height: 30).foregroundStyle(Palette.accent)
-                VStack(alignment: .leading, spacing: 3) { Text("ReadingBook").font(.system(size: 14, weight: .semibold)); Text("阅读 · 线索 · 理解").font(.system(size: 10)).foregroundStyle(.secondary) }
-            }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 12)
+            HStack(spacing: 12) {
+                BrandGlyph(name: "mark").frame(width: 32, height: 32).foregroundStyle(Palette.accent)
+                VStack(alignment: .leading, spacing: 4) { Text("ReadingBook").font(.system(size: 15, weight: .semibold)); Text("阅读 · 线索 · 理解").font(.system(size: 11)).foregroundStyle(.secondary) }
+            }.padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 18)
             ScrollView {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("书 库").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary).padding(.horizontal, 12).padding(.bottom, 5)
+                VStack(alignment: .leading, spacing: ReadingLayout.groupSpacing) {
+                    Text("书库").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.bottom, 4)
                     ForEach(store.books) { book in
                         Button { Task { await store.selectBook(book.id) } } label: {
                             HStack(spacing: 10) {
                                 RoundedRectangle(cornerRadius: 5).fill(Palette.accent.opacity(0.09)).frame(width: 28, height: 36).overlay(BrandGlyph(name: "reader").frame(width: 18, height: 18).foregroundStyle(Palette.accent))
                                 VStack(alignment: .leading, spacing: 4) { Text(book.title).lineLimit(1).font(.subheadline.weight(.medium)); ProgressView(value: book.progress).tint(Palette.accent).frame(width: 95) }
                                 Spacer(minLength: 0)
-                            }.padding(9).frame(maxWidth: .infinity, alignment: .leading).background(store.bookID == book.id ? Palette.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 10)).contentShape(Rectangle())
+                            }.padding(12).frame(maxWidth: .infinity, minHeight: 60, alignment: .leading).background(store.bookID == book.id ? Palette.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 12)).contentShape(Rectangle())
                         }.buttonStyle(.plain).disabled(store.isBusy).contextMenu {
                             Button("移入回收站", role: .destructive) { store.requestDeletion(.book, id: book.id, title: book.title) }
                         }
                     }
-                    Button { store.chooseBook() } label: { Label("导入一本书", systemImage: "plus").font(.subheadline).padding(10) }.buttonStyle(.plain).foregroundStyle(.secondary).disabled(store.isBusy)
+                    Button { store.chooseBook() } label: { Label("导入书籍", systemImage: "plus").font(.system(size: 13)).frame(maxWidth: .infinity, minHeight: 40, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(ReadingToolbarButtonStyle()).foregroundStyle(.secondary).disabled(store.isBusy)
                     if store.book != nil {
                         Divider().padding(.vertical, 11)
                         Text("阅读工作台").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary).padding(.horizontal, 12)
@@ -105,9 +106,9 @@ struct WorkspaceView: View {
                         routeButton("阅读流程", icon: ComponentKind.workflow.icon, route: "workflow")
                         routeButton("与书对话", icon: ComponentKind.query.icon, route: "query")
                         routeButton("我的理解", icon: "square.and.pencil", route: "editor")
-                        if !store.enabledViews.isEmpty {
-                            Text("AI 为这本书选择").font(.caption2).foregroundStyle(.tertiary).padding(.horizontal, 12).padding(.top, 17)
-                            ForEach(WorkspaceComponentRegistry.shared.navigationViews(store.enabledViews)) { view in
+                        if !componentViews.isEmpty {
+                            Text("这本书的组件").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.top, 16)
+                            ForEach(componentViews) { view in
                                 routeButton(view.title, icon: view.kind.icon, route: view.id)
                                     .contextMenu {
                                         let count = WorkspaceComponentRegistry.shared.removalIDs(for: view, in: store.book?.views ?? []).count
@@ -115,11 +116,15 @@ struct WorkspaceView: View {
                                     }
                             }
                         }
-                        Menu {
-                            ForEach(WorkspaceComponentRegistry.shared.components) { component in
-                                Button(store.installedComponent(for: component.kind) == nil && !component.permanent ? "添加\(component.title)" : "打开\(component.title)") { store.activate(component.kind) }
-                            }
-                        } label: { Label("添加组件", systemImage: "square.grid.2x2").font(.caption).padding(10) }.menuStyle(.borderlessButton).disabled(store.isBusy)
+                        if !addableComponents.isEmpty {
+                            Menu {
+                                ForEach(addableComponents) { component in
+                                    Button { store.activate(component.kind) } label: { Label(component.title, systemImage: component.icon) }
+                                }
+                            } label: {
+                                Label("添加组件", systemImage: "plus.square.on.square").font(.system(size: 13)).frame(maxWidth: .infinity, minHeight: 40, alignment: .leading).contentShape(Rectangle())
+                            }.menuStyle(.borderlessButton).padding(.horizontal, 14).disabled(store.isBusy)
+                        }
                     }
                 }.padding(.horizontal, 12)
             }
@@ -128,27 +133,38 @@ struct WorkspaceView: View {
             HStack {
                 Button { store.showingPlugins = true } label: { Image(systemName: "puzzlepiece.extension") }.help("插件与读书法")
                 Spacer()
-                Menu { Button("导入书项目…") { store.importProject() }; Button("导出完整书项目…") { store.exportProject() }; Button("回收站") { store.showingTrash = true } } label: { Image(systemName: "square.and.arrow.up") }.menuStyle(.borderlessButton).frame(width: 36, height: 36).contentShape(Rectangle()).accessibilityLabel("书库操作")
+                Menu { Button("导入书项目…") { store.importProject() }; Button("导出完整书项目…") { store.exportProject() }; Button("回收站") { store.showingTrash = true } } label: { Image(systemName: "square.and.arrow.up") }.menuStyle(.borderlessButton).frame(width: 40, height: 40).contentShape(Rectangle()).accessibilityLabel("书库操作")
             }.buttonStyle(ReadingToolbarButtonStyle()).foregroundStyle(.secondary).padding(10)
         }.background(.ultraThinMaterial)
     }
+    private var componentViews: [ViewDefinition] { WorkspaceComponentRegistry.shared.navigationViews(store.enabledViews) }
+    private var addableComponents: [WorkspaceComponentDescriptor] {
+        guard let book = store.book else { return [] }
+        let registry = WorkspaceComponentRegistry.shared
+        return registry.components.filter { component in
+            !component.permanent && !book.views.contains(where: { registry.equivalent($0.kind, component.kind) })
+        }
+    }
     private func routeButton(_ title: String, icon: String, route: String) -> some View {
         Button { store.route = route } label: {
-            HStack(spacing: 11) {
-                BrandGlyph(name: BrandNavigation.glyph(route: store.book?.views.first { $0.id == route }?.kind.rawValue ?? route)).frame(width: 18, height: 18)
-                Text(title).font(.system(size: 13, weight: store.route == route ? .semibold : .regular))
+            HStack(spacing: 12) {
+                BrandGlyph(name: BrandNavigation.glyph(route: store.book?.views.first { $0.id == route }?.kind.rawValue ?? route)).frame(width: 20, height: 20)
+                Text(title).font(.system(size: 14, weight: store.route == route ? .semibold : .regular))
                 Spacer(minLength: 0)
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 8)
+            }.padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: ReadingLayout.navigationRowHeight, alignment: .leading)
+                .background(hoveredRoute == route ? Palette.accent.opacity(0.045) : .clear, in: RoundedRectangle(cornerRadius: 12))
                 .background {
                     if store.route == route {
-                        RoundedRectangle(cornerRadius: 11).fill(Palette.accent.opacity(0.12))
+                        RoundedRectangle(cornerRadius: 12).fill(Palette.accent.opacity(0.12))
                             .matchedGeometryEffect(id: "workspace-selection", in: navigationSelection)
                     }
                 }
                 .contentShape(Rectangle())
                 .overlay(alignment: .leading) { if store.route == route { Capsule().fill(Palette.accent).frame(width: 2, height: 15).padding(.leading, 3) } }
         }.buttonStyle(.plain).foregroundStyle(store.route == route ? Palette.accent : .primary)
+            .onHover { hoveredRoute = $0 ? route : nil }
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.route)
+            .animation(ReadingMotion.animation(reduce: reduceMotion), value: hoveredRoute)
     }
     private var viewingPDF: Bool { store.route == "reader" && readerShowsPDF && store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     private var viewingWorkflow: Bool { store.route == "workflow" || store.book?.views.first(where: { $0.id == store.route })?.kind == .workflow }
@@ -179,11 +195,13 @@ struct WorkspaceView: View {
                     }
             }
             Button { servicePopover.toggle() } label: { Label("AI 服务", systemImage: "sparkles") }.help("AI 服务：\(store.serviceName)")
+                .controlSize(.large)
                 .popover(isPresented: $servicePopover) { servicePicker }
             if let book = store.book, !viewingWorkflow {
                 Button { store.isBusy ? store.pause() : store.startReading() } label: {
                     Label(store.isBusy ? "暂停任务" : (book.insights.isEmpty ? "开始精读" : "继续精读"), systemImage: store.isBusy ? "pause.fill" : "play.fill")
-                }.help(store.isBusy ? (store.isImportingBookCommit || store.isCommittingLocalWrite ? "正在保存" : store.isExportingProject ? "正在导出" : "暂停任务") : (book.insights.isEmpty ? "开始精读" : "继续精读")).disabled(store.isSavingDocument || store.isExportingProject || store.isImportingBookCommit || store.isCommittingLocalWrite)
+                }.buttonStyle(.borderedProminent).controlSize(.large)
+                    .help(store.isBusy ? (store.isImportingBookCommit || store.isCommittingLocalWrite ? "正在保存" : store.isExportingProject ? "正在导出" : "暂停任务") : (book.insights.isEmpty ? "开始精读" : "继续精读")).disabled(store.isSavingDocument || store.isExportingProject || store.isImportingBookCommit || store.isCommittingLocalWrite)
             }
             Menu {
                 Button("导入书籍…") { store.chooseBook() }
@@ -198,8 +216,9 @@ struct WorkspaceView: View {
             } label: { Image(systemName: "ellipsis") }.help("导入、导出与设置").accessibilityLabel("更多操作")
         }
     }
+    private var compactReaderControls: Bool { detailWidth - (readerOutline && detailWidth >= 760 ? 224 : 0) < 650 }
     private var readerControls: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: ReadingLayout.groupSpacing) {
             Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { readerOutline.toggle() } } label: { Image(systemName: "list.bullet") }
                 .buttonStyle(ReadingToolbarButtonStyle(selected: readerOutline)).help("展开或收起原文目录").accessibilityLabel("原文目录")
             if viewingPDF { PDFPageNavigation().environmentObject(pdfController) }
@@ -210,14 +229,21 @@ struct WorkspaceView: View {
             }
             Divider().frame(height: 22).padding(.horizontal, 2)
             if store.route == "reader", let unit = store.selectedUnit {
-                if viewingPDF {
+                if viewingPDF, !compactReaderControls {
                     Menu {
                         Button("高亮选中文字…") { pdfController.command(.createHighlight) }.disabled(!pdfController.hasSelection)
                         Button("框选页面区域…") { pdfController.command(.createRegion) }
-                    } label: { Image(systemName: "highlighter").frame(minWidth: 36, minHeight: 36) }.help("文字高亮或扫描页区域批注").accessibilityLabel("添加批注").disabled(!pdfController.isReady || store.isBusy)
-                    Button { pdfController.command(.showAnnotations) } label: { Image(systemName: "text.bubble") }.help("查看、编辑与恢复批注")
+                        Divider()
+                        Button("批注列表与恢复…") { pdfController.command(.showAnnotations) }
+                    } label: { Label("批注", systemImage: "highlighter").frame(minHeight: ReadingLayout.controlHeight) }.help("高亮、区域批注与批注列表").accessibilityLabel("批注选项").disabled(!pdfController.isReady || store.isBusy)
                 }
                 Menu {
+                    if viewingPDF, compactReaderControls {
+                        Button("高亮选中文字…") { pdfController.command(.createHighlight) }.disabled(!pdfController.hasSelection || store.isBusy)
+                        Button("框选页面区域…") { pdfController.command(.createRegion) }.disabled(store.isBusy)
+                        Button("批注列表与恢复…") { pdfController.command(.showAnnotations) }
+                        Divider()
+                    }
                     if store.sourceFileURL?.pathExtension.lowercased() == "pdf" {
                         Button("原始 PDF") { readerShowsPDF = true }
                         Button("文本 / OCR 识别稿") { readerShowsPDF = false }
@@ -237,7 +263,7 @@ struct WorkspaceView: View {
                     Button("对这一段记一笔") { store.newNote(for: unit) }.disabled(store.isRecognizingPDF)
                     if let message = unit.warning { Text(String(message.prefix(70))) }
                 } label: {
-                    HStack(spacing: 5) { Image(systemName: "textformat.size"); if viewingPDF { Text("\(pdfController.zoomPercent)%").font(.system(size: 12).monospacedDigit()) } }.frame(minWidth: 36, minHeight: 36)
+                    HStack(spacing: 6) { Image(systemName: "textformat.size"); if viewingPDF { Text("\(pdfController.zoomPercent)%").font(.system(size: 13).monospacedDigit()) } }.frame(minWidth: 40, minHeight: ReadingLayout.controlHeight)
                 }.help("阅读模式、缩放、目录与书签").accessibilityLabel("阅读模式与缩放")
                 if viewingPDF {
                     Button { pdfController.command(.showSearch) } label: { Image(systemName: "magnifyingglass") }
@@ -247,18 +273,20 @@ struct WorkspaceView: View {
             }
 
         }.buttonStyle(ReadingToolbarButtonStyle()).menuStyle(.borderlessButton).controlSize(.regular)
-            .padding(6).readingGlass(radius: 20, interactive: true)
-            .fixedSize(horizontal: false, vertical: true)
+            .padding(8).readingGlass(radius: 22, interactive: true)
+            .fixedSize(horizontal: true, vertical: true)
             .accessibilityElement(children: .contain).accessibilityLabel("阅读工具")
     }
     private var servicePicker: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("自己的 AI", systemImage: "sparkles").font(.headline)
+            Text("已保存的服务").font(.system(size: 13, weight: .medium))
             Picker("已保存的服务", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0); if store.serviceProfileDraft.pendingChange != nil { servicePopover = false } })) {
                 if store.selectedServiceID == nil { Text("未保存配置").tag("") }
                 ForEach(store.savedServices) { service in Text(service.name).tag(service.id) }
-            }.disabled(store.isBusy)
-            Text(store.settings.model.isEmpty ? "尚未配置模型" : store.settings.model).font(.caption).foregroundStyle(.secondary)
+            }.labelsHidden().accessibilityLabel("已保存的服务").lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: .infinity).disabled(store.isBusy)
+            Text(store.settings.model.isEmpty ? "尚未配置模型" : store.settings.model).font(.caption).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
             HStack { Button("管理 / 新建") { servicePopover = false; store.showingSettings = true }; Spacer(); Button("测试") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty) }
             if !store.connectionStatus.isEmpty { Text(store.connectionStatus).font(.caption).foregroundStyle(.secondary) }
             ServiceProfileLocalError(draft: store.serviceProfileDraft)

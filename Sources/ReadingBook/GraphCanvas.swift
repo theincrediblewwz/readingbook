@@ -37,6 +37,7 @@ struct GraphSurface: View {
     var selectedNodeIDChanged: ((String?) -> Void)? = nil
     var interactionExclusion: CGRect? = nil
     var obscuredLeadingWidth: CGFloat = 0
+    var obscuredTrailingWidth: CGFloat = 0
 
     private struct NodeDrag {
         var id: String
@@ -47,6 +48,7 @@ struct GraphSurface: View {
     @State private var nodeDragState: NodeDrag?
     @State private var camera = GraphCamera()
     @State private var viewportSize = CGSize.zero
+    @State private var controlsRect = CGRect.zero
     @State private var cameraInitialized = false
     @State private var panOrigin: GraphCamera?
     @State private var connectionDragScale: CGFloat?
@@ -107,7 +109,7 @@ struct GraphSurface: View {
                                    click: { _ in backgroundTapped() }, drag: { updatePan(delta: $0, ended: $1) },
                                    cancel: { cancelPan() })
                     .contextMenu { if let createDocument { Button("新建笔记") { createDocument() } } }
-                GraphViewportInput(enabled: canNavigate, exclusion: interactionExclusion,
+                GraphViewportInput(enabled: canNavigate, exclusions: [interactionExclusion, controlsRect.isEmpty ? nil : controlsRect].compactMap { $0 },
                                    scroll: { panViewport(by: $0) }, zoom: { zoomViewport(by: $0, at: $1) })
                 Canvas { context, _ in
                     context.translateBy(x: geometry.size.width / 2 - camera.center.x * camera.scale,
@@ -134,9 +136,19 @@ struct GraphSurface: View {
             .frame(width: geometry.size.width, height: geometry.size.height).clipped()
             .transaction { $0.animation = nil }
             .overlay(alignment: .topLeading) {
-                statusOverlay.padding(.leading, obscuredLeadingWidth + 12).padding(.top, 12).allowsHitTesting(false)
+                statusOverlay.lineLimit(2).multilineTextAlignment(.leading)
+                    .frame(maxWidth: statusWidth(in: geometry.size), alignment: .leading)
+                    .padding(.leading, obscuredLeadingWidth + 12).padding(.top, 12).allowsHitTesting(false)
             }
-            .overlay(alignment: .bottomTrailing) { cameraControls.padding(12) }
+            .overlay(alignment: .bottomTrailing) {
+                cameraControls.background {
+                    GeometryReader { controls in
+                        Color.clear.preference(key: GraphControlsFrameKey.self, value: controls.frame(in: .named("graph-viewport")))
+                    }
+                }.padding(12)
+            }
+            .coordinateSpace(name: "graph-viewport")
+            .onPreferenceChange(GraphControlsFrameKey.self) { controlsRect = $0 }
             .onContinuousHover { phase in
                 guard connectionFromID != nil, !draggingConnection, !savingConnection else { return }
                 switch phase {
@@ -162,6 +174,8 @@ struct GraphSurface: View {
             else { cancelTransientInteractions() }
         }
         .onChange(of: isEnabled) { _, enabled in if !enabled { cancelTransientInteractions() } }
+        .onChange(of: obscuredLeadingWidth) { old, _ in reframeCamera(previousLeadingWidth: old, previousTrailingWidth: obscuredTrailingWidth) }
+        .onChange(of: obscuredTrailingWidth) { old, _ in reframeCamera(previousLeadingWidth: obscuredLeadingWidth, previousTrailingWidth: old) }
         .onChange(of: focusNodeID) { _, _ in focusRequestedNode() }
         .onChange(of: focusRequestToken) { _, _ in focusRequestedNode() }
         .onChange(of: items.map(\.id)) { _, ids in
@@ -200,40 +214,59 @@ struct GraphSurface: View {
             .allowsHitTesting(false).accessibilityHidden(true)
     }
     private var cameraControls: some View {
-        HStack(spacing: 2) {
-            Button { fitAll() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 34, height: 34) }
+        HStack(spacing: ReadingLayout.groupSpacing) {
+            Button { fitAll() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
                 .help("显示全部节点").accessibilityLabel("显示全部节点")
             Divider().frame(height: 18).padding(.horizontal, 2)
-            Button { zoomViewport(by: 1 / 1.25, at: usableCenter) } label: { Image(systemName: "minus").frame(width: 34, height: 34) }
+            Button { zoomViewport(by: 1 / 1.25, at: usableCenter) } label: { Image(systemName: "minus") }
                 .help("缩小画布").accessibilityLabel("缩小画布")
             Button { zoomViewport(by: 1 / camera.scale, at: usableCenter) } label: {
                 Text(Double(camera.scale).formatted(.percent.precision(.fractionLength(camera.scale < 0.01 ? 2 : 0))))
-                    .monospacedDigit().font(.system(size: 12, weight: .medium)).frame(minWidth: 48, minHeight: 34)
+                    .monospacedDigit().font(.system(size: 13, weight: .medium)).frame(minWidth: 50)
             }.help("恢复 100% 缩放")
-            Button { zoomViewport(by: 1.25, at: usableCenter) } label: { Image(systemName: "plus").frame(width: 34, height: 34) }
+            Button { zoomViewport(by: 1.25, at: usableCenter) } label: { Image(systemName: "plus") }
                 .help("放大画布").accessibilityLabel("放大画布")
             Divider().frame(height: 18).padding(.horizontal, 2)
-            Button { centerSelection() } label: { Image(systemName: "scope").frame(width: 34, height: 34) }
+            Button { centerSelection() } label: { Image(systemName: "scope") }
                 .disabled(selectedPhysicalID == nil).help("定位选中节点").accessibilityLabel("定位选中节点")
         }
         .buttonStyle(ReadingToolbarButtonStyle()).padding(4).readingGlass()
         .disabled(!canNavigate).help("拖动空白或双指平移 · 捏合或 ⌘ 滚轮缩放")
     }
-    private var usableCenter: CGPoint { CGPoint(x: (viewportSize.width + min(obscuredLeadingWidth, max(0, viewportSize.width - 80))) / 2, y: viewportSize.height / 2) }
+    private var usableCenter: CGPoint {
+        let usable = GraphCamera.usableRect(in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
+        return CGPoint(x: usable.midX, y: usable.midY)
+    }
+    private func statusWidth(in size: CGSize) -> CGFloat {
+        // The collapsed browser still owns its top-right button. Long status
+        // messages must wrap before that button even when it no longer narrows
+        // the camera's usable area.
+        let trailing = max(obscuredTrailingWidth, interactionExclusion.map { size.width - $0.minX } ?? 0)
+        return max(80, GraphCamera.usableRect(in: size, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: trailing).width - 24)
+    }
+    private func reframeCamera(previousLeadingWidth: CGFloat, previousTrailingWidth: CGFloat) {
+        guard cameraInitialized, viewportSize.width > 0 else { return }
+        cancelTransientInteractions()
+        let previous = GraphCamera.usableRect(in: viewportSize, obscuredLeadingWidth: previousLeadingWidth, obscuredTrailingWidth: previousTrailingWidth)
+        let visibleCenter = camera.world(CGPoint(x: previous.midX, y: previous.midY), in: viewportSize)
+        // Opening or closing the browser keeps the same world point in the
+        // usable center and retains the user's zoom, rather than refitting.
+        camera.focus(visibleCenter, in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
+    }
     private func fitAll() {
         guard canNavigate, viewportSize.width > 0 else { return }
         let bounds = items.map(rect).reduce(CGRect.null) { $0.union($1) }
-        camera.fit(bounds.isNull ? CGRect(x: 0, y: 0, width: 220, height: 90) : bounds, in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth)
+        camera.fit(bounds.isNull ? CGRect(x: 0, y: 0, width: 220, height: 90) : bounds, in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
         connectionPoint = nil; connectionTargetID = nil
     }
     private func centerSelection() {
         guard canNavigate, let item = items.first(where: { $0.id == selectedPhysicalID }) else { return }
-        camera.focus(point(item), in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth)
+        camera.focus(point(item), in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
     }
     private func focusRequestedNode() {
         guard let id = focusNodeID, let item = items.first(where: { $0.id == id }), !savingPosition, !savingConnection, !savingLine else { return }
         cancelTransientInteractions(); setPhysicalSelection(id)
-        camera.focus(point(item), in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth)
+        camera.focus(point(item), in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
     }
     private func updatePan(delta: CGSize, ended: Bool) {
         guard canNavigate else { return }
@@ -491,6 +524,11 @@ struct GraphSurface: View {
         }
         return GraphAnchor(point: CGPoint(x: rect.midX, y: dy >= 0 ? rect.maxY : rect.minY), normal: CGVector(dx: 0, dy: dy >= 0 ? 1 : -1))
     }
+}
+
+private struct GraphControlsFrameKey: PreferenceKey {
+    static var defaultValue = CGRect.zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
 }
 
 private enum GraphGridTile {

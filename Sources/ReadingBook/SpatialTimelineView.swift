@@ -25,6 +25,11 @@ struct SpatialTimelineView: View {
     @State private var rangeError = ""
     @State private var eventQuery = ""
     @State private var viewport = CGSize(width: 900, height: 650)
+    @AppStorage("readingbook.timelinePanelDock") private var dockRaw = FloatingPanelDock.bottomCenter.rawValue
+    @State private var measuredPanelSize = CGSize(width: 560, height: 214)
+    @State private var dragOrigin: CGPoint?
+    @State private var dragCenter: CGPoint?
+    @State private var pointerEpoch = 0
 
     private var filteredEvents: [KnowledgeEvent] {
         store.visibleEvents.filter { eventQuery.isEmpty || $0.name.localizedCaseInsensitiveContains(eventQuery) || $0.dateText.localizedCaseInsensitiveContains(eventQuery) || $0.participantIDs.contains(where: { store.objectTitle($0).localizedCaseInsensitiveContains(eventQuery) }) }
@@ -58,27 +63,55 @@ struct SpatialTimelineView: View {
         guard let first = years.min(), let last = years.max() else { return -5000...3000 }
         return (Double(first) - 5)...(Double(last) + 5)
     }
-    private var panelWidth: CGFloat { min(560, max(0, viewport.width - 88)) }
-    private var detailHeight: CGFloat { min(260, max(120, viewport.height * 0.35)) }
+    // Keep distinct upper-corner targets even while reserving MapKit's controls.
+    private var panelWidth: CGFloat { min(560, max(0, viewport.width - 144)) }
+    private var detailHeight: CGFloat { min(260, max(80, min(viewport.height * 0.35, viewport.height - 252))) }
+    private var dock: FloatingPanelDock { FloatingPanelDock(rawValue: dockRaw) ?? .bottomCenter }
+    private var panelSize: CGSize { CGSize(width: panelWidth, height: min(measuredPanelSize.height, max(0, viewport.height - 32))) }
+    private var panelFrame: CGRect {
+        if let dragCenter {
+            let center = FloatingPanelGeometry.clampedCenter(dragCenter, viewport: viewport, panel: panelSize)
+            return CGRect(x: center.x - panelSize.width / 2, y: center.y - panelSize.height / 2, width: panelSize.width, height: panelSize.height)
+        }
+        return FloatingPanelGeometry.frame(at: dock, viewport: viewport, panel: panelSize)
+    }
 
     var body: some View {
         GeometryReader { geometry in
-            Map(position: $camera) {
-                ForEach(points) { point in
-                    Annotation("", coordinate: point.coordinate) { mapMarker(point) }
+            ZStack(alignment: .topLeading) {
+                Map(position: $camera) {
+                    ForEach(points) { point in
+                        Annotation("", coordinate: point.coordinate) { mapMarker(point) }
+                    }
                 }
-            }
-            .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
-            .overlay(alignment: .topLeading) {
-                timelineCard.frame(width: min(560, max(0, geometry.size.width - 88))).padding(16)
+                .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
+                timelineCard.frame(width: panelWidth).fixedSize(horizontal: false, vertical: true)
+                    .background {
+                        GeometryReader { panel in Color.clear.preference(key: TimelinePanelSizeKey.self, value: panel.size) }
+                    }
+                    .frame(height: panelSize.height, alignment: .top).clipped()
+                    .readingGlass(radius: 24)
+                    .position(x: panelFrame.midX, y: panelFrame.midY)
+                    .onPreferenceChange(TimelinePanelSizeKey.self) { next in
+                        guard next.width > 0, next.height > 0,
+                              abs(next.height - measuredPanelSize.height) > 0.5 || abs(next.width - measuredPanelSize.width) > 0.5 else { return }
+                        cancelPanelDrag()
+                        measuredPanelSize = next
+                    }
             }
             .onAppear { viewport = geometry.size }
-            .onChange(of: geometry.size) { _, next in viewport = next }
+            .onChange(of: geometry.size) { _, next in cancelPanelDrag(); viewport = next }
         }
         .onAppear {
+            if FloatingPanelDock(rawValue: dockRaw) == nil { dockRaw = FloatingPanelDock.bottomCenter.rawValue }
             normalizeRange()
             if let id = store.selectedObjectID, store.book?.events.contains(where: { $0.id == id }) == true { expandedEventID = id }
         }
+        .onDisappear { cancelPanelDrag() }
+        .onExitCommand { cancelPanelDrag() }
+        .onChange(of: measuredPanelSize) { _, _ in if let id = store.selectedObjectID { locate(id) } }
+        .onChange(of: viewport) { _, _ in if let id = store.selectedObjectID { locate(id) } }
+        .onChange(of: dockRaw) { _, _ in if let id = store.selectedObjectID { locate(id) } }
         .popover(isPresented: Binding(get: { inspectedObjectID != nil }, set: { if !$0 { inspectedObjectID = nil } })) {
             if let id = inspectedObjectID { ObjectInspector(id: id, onClose: { inspectedObjectID = nil }).environmentObject(store).frame(width: 330, height: 500) }
         }
@@ -88,6 +121,7 @@ struct SpatialTimelineView: View {
             locate(id)
         }
         .onChange(of: store.bookID) { _, _ in
+            cancelPanelDrag()
             normalizeRange(); showingEvents = false; editingRange = false; eventQuery = ""; expandedEventID = nil; inspectedObjectID = nil; camera = .automatic
         }
         .onChange(of: store.book?.events.map(\.id) ?? []) { _, ids in
@@ -101,9 +135,17 @@ struct SpatialTimelineView: View {
 
     private var timelineCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Label("时间与地图", systemImage: "map").font(.system(size: 14, weight: .semibold)).lineLimit(1)
-                Spacer(minLength: 4)
+            HStack(spacing: 8) {
+                HStack(spacing: 7) {
+                    Image(systemName: "circle.grid.2x3.fill").font(.system(size: 11)).foregroundStyle(.tertiary)
+                    Text("时间与地图").font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                }.frame(maxWidth: .infinity, minHeight: 40, alignment: .leading).contentShape(Rectangle())
+                    .overlay {
+                        FloatingPanelPointerInput(epoch: pointerEpoch, begin: beginPanelDrag, drag: dragPanel, cancel: cancelPanelDrag)
+                            .accessibilityHidden(true)
+                    }
+                    .help("拖动此处移动时间卡片；松手后吸附到最近的角或下方中央，Esc 取消")
+                    .accessibilityLabel("时间与地图，可在选项菜单更改停靠位置")
                 Button { showingEvents.toggle() } label: {
                     Label("事件 \(store.visibleEvents.count)", systemImage: "list.bullet")
                 }.buttonStyle(ReadingToolbarButtonStyle(selected: showingEvents))
@@ -112,8 +154,17 @@ struct SpatialTimelineView: View {
                     Toggle("保留时间待考事件", isOn: $store.showUndated)
                     Button("地图适合全部标记") { camera = .automatic }
                     Button("显示全部时间") { fitTime() }
+                    Divider()
+                    Menu("面板停靠位置") {
+                        ForEach(FloatingPanelDock.allCases, id: \.self) { position in
+                            Button { movePanel(to: position) } label: {
+                                if dock == position { Label(dockTitle(position), systemImage: "checkmark") }
+                                else { Text(dockTitle(position)) }
+                            }
+                        }
+                    }
                 } label: {
-                    Image(systemName: "line.3.horizontal.decrease").frame(width: 36, height: 36).contentShape(Rectangle())
+                    Image(systemName: "line.3.horizontal.decrease").frame(width: 40, height: 40).contentShape(Rectangle())
                 }.menuStyle(.borderlessButton).fixedSize().help("时间与地图选项").accessibilityLabel("时间与地图选项")
             }
             HStack(spacing: 6) {
@@ -145,7 +196,7 @@ struct SpatialTimelineView: View {
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).frame(height: 18, alignment: .leading)
                     .padding(.horizontal, 7).padding(.bottom, 3)
             }
-        }.padding(12).readingGlass(radius: 22)
+        }.padding(16)
     }
 
     private func eventDetails(_ event: KnowledgeEvent) -> some View {
@@ -292,20 +343,61 @@ struct SpatialTimelineView: View {
     }
     private func locate(_ id: String) {
         guard let point = points.first(where: { $0.targetID == id }) else { return }
-        // Leave the point in the open map area rather than underneath the card.
+        // Use the actual dock/size, including expanded details. A bottom card
+        // leaves the point above it; a top card or side card chooses its free area.
         let span = MKCoordinateSpan(latitudeDelta: 4, longitudeDelta: 4)
+        let free = FloatingPanelGeometry.unobscuredMapRect(viewport: viewport, panel: panelFrame)
         var center = point.coordinate
-        if viewport.width - panelWidth - 32 >= 240 {
-            center.longitude -= min(1.45, Double((panelWidth + 32) / max(1, viewport.width)) * span.longitudeDelta / 2)
-        } else {
-            let panelHeight: CGFloat = 178 + (expandedEvent == nil ? 0 : detailHeight + 9)
-            center.latitude += min(1.6, Double(panelHeight / max(1, viewport.height)) * span.latitudeDelta / 2)
-        }
+        center.longitude -= Double(free.midX / max(1, viewport.width) - 0.5) * span.longitudeDelta
+        center.latitude += Double(free.midY / max(1, viewport.height) - 0.5) * span.latitudeDelta
         center.latitude = min(85, max(-85, center.latitude))
         if center.longitude < -180 { center.longitude += 360 }
+        if center.longitude > 180 { center.longitude -= 360 }
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) {
             camera = .region(MKCoordinateRegion(center: center, span: span))
         }
     }
+    private func beginPanelDrag() {
+        let frame = panelFrame
+        dragOrigin = CGPoint(x: frame.midX, y: frame.midY)
+        dragCenter = nil
+    }
+    private func dragPanel(by delta: CGSize, ended: Bool) {
+        guard let dragOrigin else { return }
+        let center = FloatingPanelGeometry.clampedCenter(CGPoint(x: dragOrigin.x + delta.width, y: dragOrigin.y + delta.height), viewport: viewport, panel: panelSize)
+        if ended {
+            let previousDock = dock
+            let target = FloatingPanelGeometry.nearest(to: center, viewport: viewport, panel: panelSize, preferred: dock)
+            withAnimation(ReadingMotion.animation(reduce: reduceMotion)) {
+                self.dragOrigin = nil; dragCenter = nil; dockRaw = target.rawValue
+            }
+            if target == previousDock, let id = store.selectedObjectID { locate(id) }
+        } else {
+            var transaction = Transaction(); transaction.animation = nil
+            withTransaction(transaction) { dragCenter = center }
+        }
+    }
+    private func cancelPanelDrag() {
+        var transaction = Transaction(); transaction.animation = nil
+        withTransaction(transaction) { dragOrigin = nil; dragCenter = nil; pointerEpoch += 1 }
+    }
+    private func movePanel(to target: FloatingPanelDock) {
+        cancelPanelDrag()
+        withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { dockRaw = target.rawValue }
+    }
+    private func dockTitle(_ position: FloatingPanelDock) -> String {
+        switch position {
+        case .topLeading: return "左上角"
+        case .topTrailing: return "右上角"
+        case .bottomLeading: return "左下角"
+        case .bottomCenter: return "下方居中（默认）"
+        case .bottomTrailing: return "右下角"
+        }
+    }
     private func fitTime() { store.timeFrom = bounds.lowerBound; store.timeTo = bounds.upperBound }
+}
+
+private struct TimelinePanelSizeKey: PreferenceKey {
+    static var defaultValue = CGSize.zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }

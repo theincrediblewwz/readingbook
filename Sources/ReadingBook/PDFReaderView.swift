@@ -159,7 +159,7 @@ struct PDFReaderView: NSViewRepresentable {
         searchField.controlSize = .regular
         searchField.font = .systemFont(ofSize: 13)
         searchField.setAccessibilityLabel("搜索 PDF 文字")
-        searchField.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        searchField.heightAnchor.constraint(equalToConstant: 40).isActive = true
         // One visible close affordance closes the entire find panel. Keeping the
         // search field's native clear cross beside it gave two identical crosses
         // different meanings, while the original outer cross only cleared text.
@@ -206,7 +206,7 @@ struct PDFReaderView: NSViewRepresentable {
             contentStack.topAnchor.constraint(equalTo: topAnchor), contentStack.bottomAnchor.constraint(equalTo: bottomAnchor),
             header.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 12),
             header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 64),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 82),
             header.widthAnchor.constraint(lessThanOrEqualToConstant: 500)
         ])
         let preferredSearchWidth = header.widthAnchor.constraint(equalToConstant: 500)
@@ -646,7 +646,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     private func setStatus(_ text: String) { statusLabel.stringValue = text; statusLabel.toolTip = text; statusLabel.isHidden = text.isEmpty; header.isHidden = searchRow.isHidden && statusLabel.isHidden }
     private func row(_ views: [NSView]) -> NSStackView {
-        let stack = NSStackView(views: views); stack.orientation = .horizontal; stack.alignment = .centerY; stack.spacing = 6
+        let stack = NSStackView(views: views); stack.orientation = .horizontal; stack.alignment = .centerY; stack.spacing = 8
         return stack
     }
     private func flexibleSpace() -> NSView { let view = NSView(); view.setContentHuggingPriority(.defaultLow, for: .horizontal); return view }
@@ -656,8 +656,8 @@ struct PDFReaderView: NSViewRepresentable {
         button.bezelStyle = .circular; button.controlSize = .regular; button.isBordered = false
         button.imageScaling = .scaleProportionallyDown
         button.toolTip = title; button.setAccessibilityLabel(title)
-        button.widthAnchor.constraint(equalToConstant: 32).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        button.widthAnchor.constraint(equalToConstant: 40).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 40).isActive = true
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
         return button
     }
@@ -893,7 +893,8 @@ private struct PDFAnnotationEditor: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(records.count > 1 ? "跨页/多段选择 · \(records.count) 处，一次保存" : "第 \(records.first?.page ?? 1) 页").font(.headline)
             ScrollView { VStack(alignment: .leading, spacing: 10) { ForEach(records) { record in Text(record.effectiveKind == .region ? "已框选原页区域，未自动识别其中的文字。" : record.text).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) } } }.frame(maxHeight: 160)
-            Picker("高亮颜色", selection: $color) { ForEach(ReaderAnnotationColor.allCases, id: \.self) { Text($0.title).tag($0) } }.pickerStyle(.segmented)
+            Picker("高亮颜色", selection: $color) { ForEach(ReaderAnnotationColor.allCases, id: \.self) { Text($0.title).tag($0) } }
+                .pickerStyle(.segmented).labelsHidden().accessibilityLabel("高亮颜色").frame(maxWidth: .infinity)
             Text("批注").font(.subheadline)
             TextEditor(text: $comment).font(.body).frame(minHeight: 100).border(Color.secondary.opacity(0.2))
             if comment.count > 16_000 { Text("批注最多16000字。").font(.caption).foregroundStyle(.red) }

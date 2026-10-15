@@ -1,5 +1,15 @@
 import SwiftUI
 
+/// A small, shared spacing scale keeps controls calm and easy to acquire without
+/// turning a reading workspace into a wall of oversized buttons.
+enum ReadingLayout {
+    static let controlHeight: CGFloat = 40
+    static let groupSpacing: CGFloat = 8
+    static let panelPadding: CGFloat = 16
+    static let nodeBrowserWidth: CGFloat = 300
+    static let navigationRowHeight: CGFloat = 48
+}
+
 enum ReadingMotion {
     static func animation(reduce: Bool) -> Animation? {
         reduce ? nil : .snappy(duration: 0.24, extraBounce: 0.04)
@@ -9,7 +19,7 @@ enum ReadingMotion {
 /// Floating chrome has one material surface; child controls keep generous hit
 /// areas without adding another layer of glass over every icon.
 struct ReadingGlassSurface: ViewModifier {
-    var radius: CGFloat = 18
+    var radius: CGFloat = 20
     var interactive = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var scheme
@@ -18,10 +28,10 @@ struct ReadingGlassSurface: ViewModifier {
         surface(content)
             .overlay {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.19 : 0.78), Palette.line.opacity(0.28)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.7)
+                    .strokeBorder(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.16 : 0.64), Palette.line.opacity(0.24)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.6)
                     .allowsHitTesting(false)
             }
-            .shadow(color: .black.opacity(scheme == .dark ? 0.22 : 0.10), radius: 18, x: 0, y: 7)
+            .shadow(color: .black.opacity(scheme == .dark ? 0.20 : 0.085), radius: 20, x: 0, y: 8)
             .shadow(color: Palette.accent.opacity(0.035), radius: 3, x: 0, y: 1)
     }
     @ViewBuilder private func surface(_ content: Content) -> some View {
@@ -43,13 +53,13 @@ struct ReadingToolbarButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .medium))
-            .padding(.horizontal, 9).frame(minWidth: 36, minHeight: 36)
-            .background(Palette.accent.opacity(selected ? 0.14 : configuration.isPressed ? 0.15 : hovered ? 0.075 : 0), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .font(.system(size: 15, weight: .medium))
+            .padding(.horizontal, 10).frame(minWidth: ReadingLayout.controlHeight, minHeight: ReadingLayout.controlHeight)
+            .background(Palette.accent.opacity(selected ? 0.14 : configuration.isPressed ? 0.15 : hovered ? 0.075 : 0), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .foregroundStyle(selected ? Palette.accent : .primary)
             .opacity(enabled ? 1 : 0.42)
-            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: configuration.isPressed)
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: hovered)
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: selected)
@@ -58,7 +68,7 @@ struct ReadingToolbarButtonStyle: ButtonStyle {
 }
 
 extension View {
-    func readingGlass(radius: CGFloat = 18, interactive: Bool = false) -> some View {
+    func readingGlass(radius: CGFloat = 20, interactive: Bool = false) -> some View {
         modifier(ReadingGlassSurface(radius: radius, interactive: interactive))
     }
     @ViewBuilder func readingGlassGroup() -> some View {

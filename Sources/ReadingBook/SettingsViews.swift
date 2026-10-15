@@ -9,14 +9,14 @@ struct ProviderSettingsView: View {
     @State private var showNotes = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("自己的模型工作台").font(.system(size: 18, weight: .semibold)).lineLimit(1)
                 Text("多套服务随时切换 · 密钥保存在本机钥匙串").font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             profilePicker
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
                     ServiceProfileLocalError(draft: store.serviceProfileDraft)
                     connectionFields
                     budgetFields
@@ -28,14 +28,14 @@ struct ProviderSettingsView: View {
                 }.padding(.vertical, 2)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            HStack {
+            HStack(spacing: 12) {
                 Button("关闭") { dismiss() }
                 if store.serviceProfileDraft.isDirty(in: store) { Text("有未保存更改").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
                 Button("测试连接") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty)
                 Button("保存配置") { store.saveServiceProfileForUI() }.buttonStyle(.borderedProminent).disabled(store.isBusy)
-            }
-        }.padding(18).controlSize(.regular)
+            }.controlSize(.large).frame(minHeight: ReadingLayout.controlHeight)
+        }.padding(ReadingLayout.panelPadding).controlSize(.regular)
         .confirmationDialog("删除已保存的服务配置与其密钥？", isPresented: $deletingService) {
             Button("删除配置", role: .destructive) { if let id = store.selectedServiceID { store.removeService(id) } }
         } message: { Text("书籍、文档与已生成内容会保留。") }
@@ -49,20 +49,22 @@ struct ProviderSettingsView: View {
             Picker("已保存", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0) })) {
                 if store.selectedServiceID == nil { Text("新的未保存配置").tag("") }
                 ForEach(store.savedServices) { service in Text(service.name).tag(service.id) }
-            }
+            }.labelsHidden().lineLimit(1).frame(maxWidth: .infinity).layoutPriority(1)
+                .accessibilityLabel("已保存的服务")
             Menu("新建") {
                 Button("自定义兼容服务") { store.newService() }
                 Divider()
                 ForEach(ProviderCatalog.current.providers) { provider in Button(provider.name) { store.newService(provider) } }
             }.fixedSize()
             Button(role: .destructive) { deletingService = true } label: { Image(systemName: "trash") }
+                .buttonStyle(ReadingToolbarButtonStyle())
                 .help("删除当前服务配置及密钥").disabled(store.selectedServiceID == nil)
-        }.disabled(store.isBusy)
+        }.frame(minHeight: ReadingLayout.controlHeight).disabled(store.isBusy)
     }
 
     private var connectionFields: some View {
         CompactSettingsSection("连接") {
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
                 GridRow { Text("配置名称"); TextField("服务名称", text: $store.serviceName) }
                 GridRow { Text("服务地址"); TextField("HTTPS 或本机服务 URL", text: $store.settings.baseURL) }
                 GridRow {
@@ -75,14 +77,14 @@ struct ProviderSettingsView: View {
                     }
                 }
                 GridRow { Text("API Key"); SecureField("API Key", text: $store.apiKey) }
-            }.font(.system(size: 12)).textFieldStyle(.roundedBorder)
+            }.font(.system(size: 13)).textFieldStyle(.roundedBorder)
         }.disabled(store.isBusy)
     }
 
     private var budgetFields: some View {
         CompactSettingsSection("能力与预算") {
             if let model = store.matchingModel {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     Label(model.vision ? "图像输入" : "文本模型", systemImage: model.vision ? "photo" : "text.alignleft")
                     Text(model.tools ? "支持工具调用" : "未确认工具调用").foregroundStyle(.secondary)
                     Spacer(minLength: 0)
@@ -97,8 +99,8 @@ struct ProviderSettingsView: View {
                     if let preset = store.matchingPreset, let url = URL(string: preset.documentationURL) { Link("服务文档", destination: url) }
                 }.font(.caption)
             }
-            HStack(spacing: 10) {
-                Text("最大输出 token").font(.system(size: 12))
+            HStack(spacing: 12) {
+                Text("最大输出 token").font(.system(size: 13))
                 TextField("输出上限", value: $store.settings.maxOutputTokens, format: .number)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 140)
                 Button("Max") { store.useMaximumOutput() }.disabled(store.matchingModel?.maxOutputTokens == nil)
@@ -106,11 +108,11 @@ struct ProviderSettingsView: View {
                 Spacer(minLength: 0)
             }
             Stepper("每轮最多 \(store.settings.maxRequestsPerRun) 次请求", value: $store.settings.maxRequestsPerRun, in: 1...2000)
-                .font(.system(size: 12))
+                .font(.system(size: 13))
             Text("Max 设置上限，不保证写满；实际请求还受上下文余量和账户限制。")
                 .font(.caption).foregroundStyle(.secondary)
             DisclosureGroup("高级参数与说明", isExpanded: $showAdvanced) {
-                VStack(alignment: .leading, spacing: 9) {
+                VStack(alignment: .leading, spacing: 12) {
                     LabeledContent("上下文 token") {
                         TextField("未知可留空", text: Binding(get: { store.settings.contextWindowTokens.map { String($0) } ?? "" }, set: { store.settings.contextWindowTokens = Int($0.replacingOccurrences(of: ",", with: "")) }))
                             .textFieldStyle(.roundedBorder).frame(maxWidth: 180)
@@ -124,21 +126,22 @@ struct ProviderSettingsView: View {
                     if !ProviderCatalog.current.verifiedAt.isEmpty {
                         Text("模型目录核查于 \(ProviderCatalog.current.verifiedAt)").foregroundStyle(.secondary)
                     }
-                }.font(.caption).padding(.top, 7)
-            }.font(.system(size: 12))
+                }.font(.system(size: 13)).padding(.top, 8)
+            }.font(.system(size: 13))
         }.disabled(store.isBusy)
     }
 
     private var ocrFields: some View {
         CompactSettingsSection("PDF OCR") {
+            Text("图像模型配置").font(.system(size: 13))
             Picker("图像模型配置", selection: Binding(get: { store.ocrServiceID ?? "" }, set: { store.ocrServiceID = $0.isEmpty ? nil : $0; UserDefaults.standard.set(store.ocrServiceID, forKey: "ocr-service") })) {
                 Text("当前阅读服务").tag("")
                 ForEach(store.savedServices) { service in Text("\(service.name) · \(service.settings.model)").tag(service.id) }
-            }.font(.system(size: 12))
+            }.labelsHidden().lineLimit(1).font(.system(size: 13)).frame(maxWidth: .infinity)
             DisclosureGroup("发送范围与测试说明", isExpanded: $showNotes) {
                 Text("文本分析发送所需原文，OCR 发送所选 PDF 页图。OCR 需支持图像输入，可与文本阅读使用不同服务；逐页请求与保存，可暂停续跑。测试连接会发送一条短文本请求。")
                     .font(.caption).foregroundStyle(.secondary).padding(.top, 6)
-            }.font(.system(size: 12))
+            }.font(.system(size: 13))
         }.disabled(store.isBusy)
     }
 }
@@ -156,7 +159,7 @@ struct PluginLibraryView: View {
     @State private var pendingAddition: ComponentKind?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("插件与读书法").font(.system(size: 18, weight: .semibold)).lineLimit(1)
@@ -166,10 +169,10 @@ struct PluginLibraryView: View {
                 Button("导入插件…") {
                     importError = ""
                     store.importPlugin(onError: { importError = $0 })
-                }.disabled(store.book == nil || store.isBusy)
+                }.controlSize(.large).disabled(store.book == nil || store.isBusy)
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
                     if !importError.isEmpty {
                         Label(importError, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red).textSelection(.enabled)
                     }
@@ -195,14 +198,14 @@ struct PluginLibraryView: View {
                                     }
                                 }
                             }.padding(.top, 6)
-                        }.font(.system(size: 12))
+                        }.font(.system(size: 13))
                         DisclosureGroup("内置组件 · \(WorkspaceComponentRegistry.shared.components.count)", isExpanded: $showCapabilities) {
                             VStack(spacing: 0) {
                                 ForEach(WorkspaceComponentRegistry.shared.components, id: \.kind) { component in
                                     capabilityRow(component.kind, title: component.title)
                                 }
                             }.padding(.top, 5)
-                        }.font(.system(size: 12))
+                        }.font(.system(size: 13))
                         if !componentNotice.isEmpty {
                             Text(componentNotice).font(.caption).foregroundStyle(.secondary).accessibilityLabel(componentNotice)
                         }
@@ -213,17 +216,17 @@ struct PluginLibraryView: View {
                     if let book = store.book {
                         CompactSettingsSection("本书类型与方法") {
                             DisclosureGroup("卡片类型 · \(book.types.count)", isExpanded: $showTypes) {
-                                VStack(alignment: .leading, spacing: 7) {
+                                VStack(alignment: .leading, spacing: 12) {
                                     ForEach(book.types) { type in CompactTypeRow(type: type) }
                                 }.padding(.top, 7)
-                            }.font(.system(size: 12))
+                            }.font(.system(size: 13))
                             DisclosureGroup("读书法 · \(book.methods.count)", isExpanded: $showMethods) {
-                                VStack(alignment: .leading, spacing: 7) {
+                                VStack(alignment: .leading, spacing: 12) {
                                     ForEach(book.methods) { method in
                                         CompactMethodRow(method: method, isSelected: book.plan?.methodIDs.contains(method.id) == true)
                                     }
                                 }.padding(.top, 7)
-                            }.font(.system(size: 12))
+                            }.font(.system(size: 13))
                         }
                     }
                 }.padding(.vertical, 2)
@@ -233,8 +236,8 @@ struct PluginLibraryView: View {
                 Text("停用保留已有知识与用户文档。").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("完成") { dismiss() }.keyboardShortcut(.defaultAction)
-            }
-        }.padding(18).controlSize(.regular)
+            }.controlSize(.large).frame(minHeight: ReadingLayout.controlHeight)
+        }.padding(ReadingLayout.panelPadding).controlSize(.regular)
         .onChange(of: store.isBusy) { _, busy in
             guard !busy, let kind = pendingAddition else { return }
             if store.installedComponent(for: kind) != nil {
@@ -247,10 +250,10 @@ struct PluginLibraryView: View {
 
     private func capabilityRow(_ kind: ComponentKind, title: String) -> some View {
         let installed = store.installedComponent(for: kind) != nil
-        return HStack(spacing: 10) {
-            BrandGlyph(name: BrandNavigation.glyph(route: kind.rawValue)).frame(width: 17, height: 17).foregroundStyle(Palette.accent)
+        return HStack(spacing: 12) {
+            BrandGlyph(name: BrandNavigation.glyph(route: kind.rawValue)).frame(width: 20, height: 20).foregroundStyle(Palette.accent)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
                 Text(capabilityDescription(kind)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Spacer(minLength: 0)
@@ -264,7 +267,7 @@ struct PluginLibraryView: View {
                     store.activate(kind, open: false, onError: { message in componentError = message; componentNotice = ""; pendingAddition = nil })
                 }
             }.disabled(store.book == nil || store.isBusy).fixedSize()
-        }.padding(.vertical, 6)
+        }.padding(.vertical, 8)
     }
 
     private func capabilityDescription(_ kind: ComponentKind) -> String {
@@ -313,7 +316,7 @@ private struct CompactPluginRow: View {
                 .toggleStyle(.switch).controlSize(.regular).fixedSize().disabled(store.isBusy)
           }
           if !operationError.isEmpty { Text(operationError).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
-        }.padding(.vertical, 4)
+        }.padding(.vertical, 8)
     }
 }
 
@@ -333,7 +336,7 @@ private struct CompactTypeRow: View {
                 Image(systemName: type.icon).frame(width: 16).foregroundStyle(Palette.accent)
                 Text(type.name).lineLimit(1)
                 Text("\(type.fields.count) 字段").font(.caption2).foregroundStyle(.secondary)
-            }.font(.system(size: 12))
+            }.font(.system(size: 13))
         }
     }
 }
@@ -361,7 +364,7 @@ private struct CompactMethodRow: View {
                 Text(method.name).lineLimit(1)
                 Text("\(method.steps.count) 步").font(.caption2).foregroundStyle(.secondary)
                 if isSelected { Text("本次方案").font(.caption2).foregroundStyle(Palette.accent) }
-            }.font(.system(size: 12))
+            }.font(.system(size: 13))
         }
     }
 }
@@ -372,11 +375,11 @@ struct CompactSettingsSection<Content: View>: View {
     let content: Content
     init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
             content
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.accent.opacity(0.08), lineWidth: 1))
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(ReadingLayout.panelPadding)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.4), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Palette.line.opacity(0.7), lineWidth: 0.7))
     }
 }

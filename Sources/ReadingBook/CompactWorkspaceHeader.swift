@@ -11,14 +11,14 @@ struct CompactWorkspaceHeader<Actions: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text(title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+        HStack(spacing: 12) {
+            Text(title).font(.system(size: 18, weight: .semibold)).lineLimit(1)
                 .layoutPriority(1)
-            if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-            Spacer(minLength: 8)
-            actions.controlSize(.regular).font(.subheadline)
+            if let subtitle { Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1) }
+            Spacer(minLength: ReadingLayout.groupSpacing)
+            actions.controlSize(.regular).font(.system(size: 13)).frame(minHeight: ReadingLayout.controlHeight)
         }
-        .padding(.horizontal, 16).padding(.vertical, 10).frame(minHeight: 48)
+        .padding(.horizontal, ReadingLayout.panelPadding).padding(.vertical, 8).frame(minHeight: 56)
         .background(Palette.surface)
         .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 0.5) }
     }

@@ -5,16 +5,16 @@ import AppKit
 /// this viewport and exclude floating panels so their lists retain scrolling.
 struct GraphViewportInput: NSViewRepresentable {
     var enabled: Bool
-    var exclusion: CGRect?
+    var exclusions: [CGRect]
     var scroll: (CGSize) -> Void
     var zoom: (CGFloat, CGPoint) -> Void
     func makeNSView(context: Context) -> ViewportView { ViewportView() }
     func updateNSView(_ view: ViewportView, context: Context) {
-        view.enabled = enabled; view.exclusion = exclusion; view.scroll = scroll; view.zoom = zoom
+        view.enabled = enabled; view.exclusions = exclusions; view.scroll = scroll; view.zoom = zoom
     }
     final class ViewportView: NSView {
         var enabled = true
-        var exclusion: CGRect?
+        var exclusions: [CGRect] = []
         var scroll: ((CGSize) -> Void)?
         var zoom: ((CGFloat, CGPoint) -> Void)?
         private var monitor: Any?
@@ -28,11 +28,7 @@ struct GraphViewportInput: NSViewRepresentable {
                       event.window === self.window, self.window?.attachedSheet == nil,
                       NSApp.modalWindow == nil || NSApp.modalWindow === self.window else { return event }
                 let point = self.convert(event.locationInWindow, from: nil)
-                guard self.bounds.contains(point), self.exclusion?.contains(point) != true else { return event }
-                // Camera controls occupy this corner. Let native controls own
-                // their own input rather than moving content behind them.
-                let controls = CGRect(x: max(0, self.bounds.width - 360), y: max(0, self.bounds.height - 64), width: 360, height: 64)
-                guard !controls.contains(point) else { return event }
+                guard self.bounds.contains(point), !self.exclusions.contains(where: { $0.contains(point) }) else { return event }
                 if event.type == .magnify {
                     self.zoom?(max(0.01, 1 + event.magnification), point)
                 } else if event.modifierFlags.contains(.command) {
