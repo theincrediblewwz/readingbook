@@ -12,7 +12,6 @@ struct GraphNodeBrowser: View {
     var close: () -> Void
     @State private var query = ""
     @State private var clickedInList: String?
-    @FocusState private var focusedNodeID: String?
     private var filtered: [GraphItem] { items.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.subtitle.localizedCaseInsensitiveContains(query) } }
     private var selected: GraphItem? { items.first { $0.id == selectedNodeID } }
 
@@ -29,25 +28,9 @@ struct GraphNodeBrowser: View {
                 ScrollView {
                     LazyVStack(spacing: 3) {
                         ForEach(filtered) { item in
-                            HStack(spacing: 9) {
-                                Image(systemName: item.subtitle == "Markdown" ? "doc.text" : "circle.hexagongrid").foregroundStyle(Palette.accent).frame(width: 20)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(item.title).font(.system(size: 13, weight: item.id == selectedNodeID ? .semibold : .regular)).lineLimit(2)
-                                    Text(item.subtitle).font(.caption2).foregroundStyle(.secondary)
-                                }
-                                Spacer(minLength: 0)
-                            }.padding(.horizontal, 10).padding(.vertical, 9).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-                                .background(item.id == selectedNodeID ? Palette.accent.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 10))
-                                .contentShape(Rectangle())
-                                .overlay { GraphPointerBridge(enabled: true, movable: false, click: { twice in clickedInList = item.id; focusedNodeID = item.id; select(item); if twice { open(item) } }, drag: { _, _ in }, cancel: {}) }
-                                .focusable().focusEffectDisabled().focused($focusedNodeID, equals: item.id)
-                                .onKeyPress(.space) { select(item); return .handled }
-                                .onKeyPress(.return) { select(item); open(item); return .handled }
-                                .contextMenu { Button("打开内容") { open(item) } }
-                                .accessibilityElement(children: .combine).accessibilityLabel("\(item.title)，\(item.subtitle)")
-                                .accessibilityHint("单击预览详情，双击打开内容。")
-                                .accessibilityAction { select(item) }
-                                .id(item.id)
+                            GraphNodeBrowserRow(item: item, selected: item.id == selectedNodeID) { twice in
+                                clickedInList = item.id; select(item); if twice { open(item) }
+                            }.id(item.id)
                         }
                         if filtered.isEmpty { Text("没有匹配的节点").font(.subheadline).foregroundStyle(.secondary).padding(18) }
                     }.padding(.horizontal, 7).padding(.bottom, 7)
@@ -65,6 +48,41 @@ struct GraphNodeBrowser: View {
                     .font(.caption).foregroundStyle(.secondary).padding(14).frame(maxHeight: .infinity, alignment: .topLeading)
             }
         }.frame(width: 288, height: height).contentShape(Rectangle()).onTapGesture { }.readingGlass(radius: 20)
+    }
+}
+
+private struct GraphNodeBrowserRow: View {
+    let item: GraphItem
+    let selected: Bool
+    var activate: (Bool) -> Void
+    @FocusState private var focused: Bool
+
+    private var label: some View {
+        HStack(spacing: 9) {
+            Image(systemName: item.subtitle == "Markdown" ? "doc.text" : "circle.hexagongrid")
+                .foregroundStyle(Palette.accent).frame(width: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.title).font(.system(size: 13, weight: selected ? .semibold : .regular)).lineLimit(2)
+                Text(item.subtitle).font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }.padding(.horizontal, 10).padding(.vertical, 9)
+            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+            .background(Palette.accent.opacity(selected ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 10))
+            .contentShape(Rectangle())
+    }
+    var body: some View {
+        label.overlay {
+            GraphPointerBridge(enabled: true, movable: false,
+                               click: { twice in focused = true; activate(twice) }, drag: { _, _ in }, cancel: {})
+        }
+        .focusable().focusEffectDisabled().focused($focused)
+        .onKeyPress(.space) { activate(false); return .handled }
+        .onKeyPress(.return) { activate(true); return .handled }
+        .contextMenu { Button("打开内容") { activate(true) } }
+        .accessibilityElement(children: .combine).accessibilityLabel("\(item.title)，\(item.subtitle)")
+        .accessibilityHint("单击预览详情，双击打开内容。")
+        .accessibilityAction { activate(false) }
     }
 }
 

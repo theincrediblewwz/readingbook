@@ -207,7 +207,7 @@ struct GraphSurface: View {
             Button { zoomViewport(by: 1 / 1.25, at: usableCenter) } label: { Image(systemName: "minus").frame(width: 34, height: 34) }
                 .help("缩小画布").accessibilityLabel("缩小画布")
             Button { zoomViewport(by: 1 / camera.scale, at: usableCenter) } label: {
-                Text(camera.scale.formatted(.percent.precision(.fractionLength(camera.scale < 0.01 ? 2 : 0))))
+                Text(Double(camera.scale).formatted(.percent.precision(.fractionLength(camera.scale < 0.01 ? 2 : 0))))
                     .monospacedDigit().font(.system(size: 12, weight: .medium)).frame(minWidth: 48, minHeight: 34)
             }.help("恢复 100% 缩放")
             Button { zoomViewport(by: 1.25, at: usableCenter) } label: { Image(systemName: "plus").frame(width: 34, height: 34) }
