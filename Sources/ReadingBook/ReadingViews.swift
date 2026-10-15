@@ -7,10 +7,11 @@ struct ReaderWorkspaceView: View {
     @Binding var showPDF: Bool
     @Binding var showOutline: Bool
     @EnvironmentObject var pdfController: PDFReaderController
+    @State private var companionExpanded = true
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     var body: some View {
         GeometryReader { geometry in
-            let reserve: CGFloat = store.readingCompanionVisible && geometry.size.width >= 1050 ? 438 : 0
+            let reserve: CGFloat = store.readingCompanionVisible && companionExpanded && geometry.size.width >= 1050 ? 438 : 0
             ZStack(alignment: .topLeading) {
                 Group {
                     if let unit = store.selectedUnit {
@@ -43,7 +44,7 @@ struct ReaderWorkspaceView: View {
                 }.padding(.trailing, reserve).padding(.top, store.readingSourceMode == "original" ? 78 : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
                 ReaderFloatingPanel(title: "目录与原文", icon: "list.bullet", width: 330, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size) { outline }
-                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 560, isPresented: $store.readingCompanionVisible, viewport: geometry.size) {
+                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 560, isPresented: $store.readingCompanionVisible, viewport: geometry.size, onExpansionChange: { companionExpanded = $0 }) {
                     ReadingCompanionPanel(showsHeader: false)
                 }
             }.onChange(of: showOutline) { _, value in if value && geometry.size.width < 1050 { store.readingCompanionVisible = false } }

@@ -39,6 +39,7 @@ struct ReadingCompanionPanel: View {
             if !showsHeader {
                 HStack {
                     Picker("伴读内容", selection: $store.readingCompanionSection) {
+                        Text("此处伴读").tag("context")
                         Text("解释与译文").tag("layers"); Text("原文对象").tag("mentions"); Text("资料对读").tag("references"); Text("思考卡").tag("decisions")
                     }.labelsHidden().accessibilityLabel("伴读内容").pickerStyle(.menu)
                     Spacer(minLength: 6)

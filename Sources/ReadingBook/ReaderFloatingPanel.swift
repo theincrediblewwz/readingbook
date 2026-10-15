@@ -9,6 +9,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     var trailing = true
     @Binding var isPresented: Bool
     var viewport: CGSize
+    var onExpansionChange: (Bool) -> Void = { _ in }
     @ViewBuilder var content: () -> Content
     @State private var collapsed = false
     @State private var hasOpened = false
@@ -49,7 +50,8 @@ struct ReaderFloatingPanel<Content: View>: View {
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .onAppear { hasOpened = isPresented; if viewport.width < 1050 && trailing { isPresented = false } }
-            .onChange(of: isPresented) { _, value in if value { hasOpened = true } }
+            .onChange(of: collapsed) { _, value in onExpansionChange(!value && isPresented) }
+            .onChange(of: isPresented) { _, value in if value { hasOpened = true }; onExpansionChange(value && !collapsed) }
             .onChange(of: viewport) { old, value in
                 epoch += 1; dragStart = nil; savedOrigin = clamp(savedOrigin ?? origin)
                 if old.width >= 1050, value.width < 1050, trailing { isPresented = false }

@@ -18,3 +18,13 @@ struct FrostWindowAppearance: NSViewRepresentable {
         }
     }
 }
+
+/// Empty space between command islands remains a native window drag handle.
+struct FrostWindowDragRegion: NSViewRepresentable {
+    func makeNSView(context: Context) -> Handle { Handle() }
+    func updateNSView(_ view: Handle, context: Context) {}
+    final class Handle: NSView {
+        override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    }
+}

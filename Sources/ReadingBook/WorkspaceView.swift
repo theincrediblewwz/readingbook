@@ -163,13 +163,7 @@ struct WorkspaceView: View {
     private func routeButton(_ title: String, icon: String, route: String) -> some View {
         Button { navigate(route) } label: {
             HStack(spacing: 12) {
-                Group {
-                    if let view = store.book?.views.first(where: { $0.id == route }), view.rendererID != nil {
-                        Image(systemName: icon).font(.system(size: 17, weight: .medium))
-                    } else {
-                        BrandGlyph(name: BrandNavigation.glyph(route: store.book?.views.first { $0.id == route }?.kind.rawValue ?? route))
-                    }
-                }.frame(width: 20, height: 20)
+                Image(systemName: icon).font(.system(size: 17, weight: .medium)).frame(width: 20, height: 20)
                 Text(title).font(.system(size: 14, weight: store.route == route ? .semibold : .regular))
                 Spacer(minLength: 0)
             }.padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: ReadingLayout.navigationRowHeight, alignment: .leading)
@@ -214,7 +208,7 @@ struct WorkspaceView: View {
                     Text(workspaceTitle).font(.system(size: 15, weight: .semibold)).lineLimit(1).truncationMode(.middle)
                 }.padding(.horizontal, 16).frame(minHeight: 46)
             }.menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true).frame(maxWidth: width < 1050 ? 290 : 430, alignment: .leading).readingGlass(radius: 24, interactive: true)
-            Spacer(minLength: 12)
+            FrostWindowDragRegion().frame(minWidth: 12, maxWidth: .infinity).frame(height: 46)
             if store.selectedObjectID != nil, !viewingGraph, !viewingSpatial, store.route != "editor" {
                 Button { compactInspector.toggle() } label: { Image(systemName: "info.circle") }.buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 22)
                     .help("所选对象详情").popover(isPresented: $compactInspector) {
@@ -247,6 +241,7 @@ struct WorkspaceView: View {
         }
     }
     private func navigate(_ route: String) {
+        guard !store.isSavingDocument else { return }
         navigationExpanded = false; servicePopover = false
         if store.serviceProfileDraft.isDirty(in: store) && store.route == "models" && route != "models" { pendingModelRoute = route }
         else if store.editorDirty && store.route == "editor" && route != "editor" { pendingRoute = route }

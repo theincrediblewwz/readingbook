@@ -19,7 +19,7 @@ struct ReadingParallelView: View {
                     ForEach(store.visibleSourceUnits) { unit in
                         ReadingParallelUnit(unit: unit, mode: mode, sideBySide: mode == "parallel" && geometry.size.width >= 820)
                     }
-                }.padding(.horizontal, 28).padding(.top, 100).padding(.bottom, 32).frame(maxWidth: mode == "parallel" ? 1320 : 890).frame(maxWidth: .infinity)
+                }.padding(.horizontal, 28).padding(.top, 100).padding(.bottom, 100).frame(maxWidth: mode == "parallel" ? 1320 : 890).frame(maxWidth: .infinity)
             }.background(Palette.canvas)
         }
     }
