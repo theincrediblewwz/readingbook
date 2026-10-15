@@ -1,5 +1,9 @@
 # ReadingBook
 
+**0.10.0 / build 10 已通过 [Actions 编译打包](https://github.com/theincrediblewwz/readingbook/actions/runs/38758092553)，待 Mac 集中验收。**源码 `1638ebb9e15de7a534006bd9436a76bb103455ed`，97项核心测试、arm64/x86_64编译、临时签名与资源自检通过，无编译警告。安装ZIP 7,830,185字节，SHA-256 `6043ca4ff73606042ea1d334c9d042f25d5a328a0c7470d47cde6fe04631583e`；下载后已核对源码、版本、架构、执行权限及离线资源。
+
+参考独通鉴与24shi，本版增加原文锚点与词句提及、多层译注、资料对读、思考卡、上下文问答和伴读删除恢复；支持原文/译注对照、离线跨书检索及全书总览。原始PDF仍为默认入口，用户Markdown与真实逐段回执保留。最新步骤见[集中测试清单](MAC_TEST_CHECKLIST.md)，参考效果自评见[需求核对](REQUIREMENTS_REVIEW.md)。18项Chrome渲染器检查通过；真实模型质量、Mac视觉和手势未据此验收。
+
 让自己的 AI 读书、创建知识要素、调用插件，并把阅读连接到自己写下的理解。
 
 原生 macOS 应用，SwiftUI，macOS 15+；macOS 26 使用系统 Liquid Glass。**历史版本 0.9.0 / build 9 已通过 [Actions 编译打包](https://github.com/theincrediblewwz/readingbook/actions/runs/38680040475)，待 Mac 集中验收**，构建源码 `6345ac7fd9858325c810ad889c58c80e5ad05d8e`。62 项核心测试、arm64/x86_64 编译、临时签名与资源自检通过，无编译警告。开发未调用真实模型；操作顺序见 [Mac 测试清单](MAC_TEST_CHECKLIST.md)，边界见 [需求核对](REQUIREMENTS_REVIEW.md)。
