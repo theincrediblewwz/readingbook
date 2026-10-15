@@ -309,4 +309,3 @@ struct SpatialTimelineView: View {
     }
     private func fitTime() { store.timeFrom = bounds.lowerBound; store.timeTo = bounds.upperBound }
 }
-
