@@ -44,8 +44,8 @@ struct ReaderWorkspaceView: View {
             }
             .overlay(alignment: .topLeading) {
                 if showOutline && !inlineOutline {
-                    outline.frame(width: min(310, geometry.size.width - 24), height: min(500, geometry.size.height - 24))
-                        .clipShape(RoundedRectangle(cornerRadius: 14)).shadow(color: .black.opacity(0.14), radius: 22, y: 8).padding(12)
+                    outline.frame(width: min(310, geometry.size.width - 24), height: min(500, geometry.size.height - 88))
+                        .clipShape(RoundedRectangle(cornerRadius: 14)).shadow(color: .black.opacity(0.14), radius: 22, y: 8).padding(.horizontal, 12).padding(.top, 70)
                 }
             }
         }
@@ -55,7 +55,7 @@ struct ReaderWorkspaceView: View {
             HStack {
                 Text("目录与原文").font(.subheadline.weight(.medium))
                 Spacer()
-                Button { showOutline = false } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("收起目录")
+                Button { showOutline = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("收起目录").accessibilityLabel("收起目录")
             }.padding(14)
             TextField("搜索原文或章节", text: $store.search).textFieldStyle(.roundedBorder).padding(.horizontal, 12).padding(.bottom, 10)
             Divider().opacity(0.4)
@@ -112,7 +112,7 @@ struct ReaderWorkspaceView: View {
                         Button("保存为我的文档") { Task { await store.saveInsight(insight) } }.font(.caption).disabled(store.isBusy)
                     }.softPanel()
                 }
-            }.frame(maxWidth: 740).padding(.horizontal, 20).padding(.vertical, 18).frame(maxWidth: .infinity)
+            }.frame(maxWidth: 740).padding(.horizontal, 20).padding(.top, 74).padding(.bottom, 20).frame(maxWidth: .infinity)
         }.background(Palette.paper)
     }
     private func sourceMarkdown(_ unit: SourceUnit) -> String {
@@ -251,7 +251,7 @@ struct ReadingWorkflowView: View {
                             HStack(alignment: .top, spacing: 8) {
                                 VStack(alignment: .leading, spacing: 4) { Text(unit.locator).font(.caption.weight(.medium)); Text(reviewMessage(unit, in: book)).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
                                 Spacer(minLength: 0); Image(systemName: "arrow.up.right").font(.caption)
-                            }.frame(maxWidth: .infinity, alignment: .leading)
+                            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     }
                 }.padding(.top, 10)

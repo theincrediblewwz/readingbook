@@ -10,7 +10,7 @@ struct ReadingBookApp: App {
                 .task { await store.load() }
         }
         .windowStyle(.hiddenTitleBar)
-        .windowToolbarStyle(.unifiedCompact)
+        .windowToolbarStyle(.unified)
         .defaultSize(width: 1480, height: 940)
         .commands {
             CommandGroup(after: .newItem) {
@@ -58,8 +58,4 @@ struct SoftPanel: ViewModifier {
 }
 extension View {
     func softPanel() -> some View { modifier(SoftPanel()) }
-    @ViewBuilder func readingGlass() -> some View {
-        if #available(macOS 26.0, *) { self.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16)) }
-        else { self.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) }
-    }
 }

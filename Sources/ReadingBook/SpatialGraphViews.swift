@@ -1,197 +1,5 @@
 import SwiftUI
-import MapKit
 import ReadingCore
-
-private struct ReadingMapPoint: Identifiable {
-    var id: String
-    var targetID: String
-    var title: String
-    var subtitle: String
-    var coordinate: CLLocationCoordinate2D
-}
-
-struct SpatialTimelineView: View {
-    @EnvironmentObject var store: AppStore
-    @State private var camera: MapCameraPosition = .automatic
-    @State private var showingEvents = false
-    @State private var editingRange = false
-    @State private var fromText = ""
-    @State private var toText = ""
-    @State private var rangeError = ""
-    @State private var eventQuery = ""
-    private var filteredEvents: [KnowledgeEvent] {
-        store.visibleEvents.filter { eventQuery.isEmpty || $0.name.localizedCaseInsensitiveContains(eventQuery) || $0.dateText.localizedCaseInsensitiveContains(eventQuery) || $0.participantIDs.contains(where: { store.objectTitle($0).localizedCaseInsensitiveContains(eventQuery) }) }
-    }
-    private var points: [ReadingMapPoint] {
-        guard let book = store.book else { return [] }
-        let places = Dictionary(uniqueKeysWithValues: book.entities.map { ($0.id, $0) })
-        var result: [ReadingMapPoint] = []
-        for event in store.visibleEvents {
-            for id in event.placeIDs {
-                if let place = places[id], let lat = place.latitude, let lon = place.longitude {
-                    result.append(ReadingMapPoint(id: "\(event.id)|\(place.id)", targetID: event.id, title: event.name, subtitle: "\(event.dateText) · \(place.name)", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
-                }
-            }
-        }
-        if book.events.isEmpty {
-            result = book.entities.compactMap { place in
-                guard let lat = place.latitude, let lon = place.longitude else { return nil }
-                return ReadingMapPoint(id: place.id, targetID: place.id, title: place.name, subtitle: place.locationNote ?? "书中地点", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon))
-            }
-        }
-        return result
-    }
-    private var bounds: ClosedRange<Double> {
-        let years = store.book?.events.flatMap { [$0.startYear, $0.endYear].compactMap { $0 } } ?? []
-        guard let first = years.min(), let last = years.max() else { return -5000...3000 }
-        // Focus may expand a selected event by two years. Keep that within the
-        // axis so the labels, handles and accessibility value always agree.
-        return (Double(first) - 5)...(Double(last) + 5)
-    }
-    var body: some View {
-        VStack(spacing: 0) {
-            CompactWorkspaceHeader("时空", subtitle: "\(store.visibleEvents.count) 个事件 · \(points.count) 个标记") {
-                Button { showingEvents.toggle() } label: { Label("事件", systemImage: "list.bullet") }
-                    .popover(isPresented: $showingEvents) { eventList }
-                Menu {
-                    Toggle("保留时间待考事件", isOn: $store.showUndated)
-                    Button("地图适合全部标记") { camera = .automatic }
-                } label: { Image(systemName: "line.3.horizontal.decrease") }.help("时间与地图选项")
-            }
-            Map(position: $camera) {
-                ForEach(points) { point in
-                    Annotation("", coordinate: point.coordinate) {
-                        mapMarker(point)
-                    }
-                }
-            }.mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
-                .overlay(alignment: .topLeading) {
-                    if points.isEmpty {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("暂无可定位的地点").font(.subheadline.weight(.medium))
-                            Text(store.visibleEvents.isEmpty ? "当前时间范围没有事件，可调整端点或查看全部时间。" : "事件仍保留在清单中；有依据的坐标补齐后显示在地图。")
-                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        }.padding(12).frame(maxWidth: 280, alignment: .leading).readingGlass().padding(12)
-                    }
-                }
-                .onChange(of: store.selectedObjectID) { _, id in
-                    if let point = points.first(where: { $0.targetID == id }) {
-                        withAnimation { camera = .region(MKCoordinateRegion(center: point.coordinate, span: MKCoordinateSpan(latitudeDelta: 4, longitudeDelta: 4))) }
-                    }
-                }
-            timeRange
-        }.onAppear { normalizeRange() }
-            .onChange(of: store.bookID) { _, _ in normalizeRange(); showingEvents = false; editingRange = false; eventQuery = "" }
-            .onChange(of: bounds) { previous, _ in
-                // An explicit "all" window follows newly discovered dates;
-                // a manually narrowed window keeps the reader's selection.
-                if store.timeFrom == previous.lowerBound, store.timeTo == previous.upperBound { fitTime() }
-                else { normalizeRange() }
-            }
-    }
-    private func mapMarker(_ point: ReadingMapPoint) -> some View {
-        let selected = store.selectedObjectID == point.targetID
-        return Button { selectEvent(point.targetID) } label: {
-            VStack(spacing: 4) {
-                Image(systemName: selected ? "flag.fill" : "circle.fill").font(.system(size: selected ? 13 : 8))
-                    .foregroundStyle(selected ? Palette.surface : Palette.accent)
-                    .frame(width: selected ? 29 : 17, height: selected ? 29 : 17)
-                    .background(selected ? Palette.accent : Palette.surface, in: Circle())
-                    .overlay(Circle().stroke(Palette.accent.opacity(0.5), lineWidth: 1))
-                if selected {
-                    Text(point.title).font(.caption.weight(.semibold)).lineLimit(1)
-                    Text(point.subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }.padding(selected ? 7 : 3)
-                .background(selected ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(Color.clear), in: RoundedRectangle(cornerRadius: 9))
-        }.buttonStyle(.plain).help("\(point.title) · \(point.subtitle)").accessibilityLabel("\(point.title)，\(point.subtitle)")
-    }
-    private var timeRange: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Button {
-                    fromText = String(Int(store.timeFrom)); toText = String(Int(store.timeTo)); rangeError = ""; editingRange = true
-                } label: {
-                    HStack(spacing: 5) {
-                        Text("\(TimelineRangeControl.yearLabel(Int(store.timeFrom))) — \(TimelineRangeControl.yearLabel(Int(store.timeTo)))").monospacedDigit()
-                        Image(systemName: "chevron.down").font(.system(size: 9))
-                    }
-                }.buttonStyle(.plain).font(.caption).help("输入精确起止年份")
-                    .popover(isPresented: $editingRange) { rangeEditor }
-                Spacer(minLength: 4)
-                if store.showUndated, store.book?.events.contains(where: { $0.startYear == nil }) == true {
-                    Text("含时间待考").font(.caption2).foregroundStyle(.secondary)
-                }
-                Button("全部") { fitTime() }.font(.caption).controlSize(.mini)
-            }
-            TimelineRangeControl(lower: $store.timeFrom, upper: $store.timeTo, bounds: bounds, events: store.book?.events ?? [], selectedID: store.selectedObjectID, select: selectEvent).id(store.bookID)
-        }.padding(.horizontal, 18).padding(.top, 9).padding(.bottom, 6).background(Palette.surface)
-            .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 0.5) }
-    }
-    private var rangeEditor: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("精确时间范围").font(.headline)
-            Text("公元前年份输入负数。两个端点也可在轴上拖动或用方向键调整。").font(.caption).foregroundStyle(.secondary)
-            HStack {
-                TextField("起点", text: $fromText).textFieldStyle(.roundedBorder)
-                Text("至").foregroundStyle(.secondary)
-                TextField("终点", text: $toText).textFieldStyle(.roundedBorder)
-            }
-            if !rangeError.isEmpty { Text(rangeError).font(.caption).foregroundStyle(.red) }
-            HStack {
-                Button("取消") { editingRange = false }.keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("应用") {
-                    guard let from = Int(fromText.trimmingCharacters(in: .whitespaces)), let to = Int(toText.trimmingCharacters(in: .whitespaces)),
-                          from <= to, bounds.contains(Double(from)), bounds.contains(Double(to)) else {
-                        rangeError = "请输入轴内年份，并让起点不晚于终点。"; return
-                    }
-                    store.timeFrom = Double(from); store.timeTo = Double(to); editingRange = false
-                }.keyboardShortcut(.defaultAction)
-            }
-        }.padding(16).frame(width: 310)
-    }
-    private var eventList: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack { Text("当前范围的事件").font(.headline); Spacer(); Button { showingEvents = false } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("关闭事件清单") }
-            TextField("查找事件、时间或参与者", text: $eventQuery).textFieldStyle(.roundedBorder)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 3) {
-                        ForEach(filteredEvents) { event in
-                            Button { selectEvent(event.id) } label: {
-                                HStack(alignment: .top, spacing: 10) {
-                                    Circle().fill(store.selectedObjectID == event.id ? Palette.copper : Palette.accent.opacity(0.4)).frame(width: 6, height: 6).padding(.top, 5)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(event.name).font(.subheadline.weight(.medium))
-                                        Text(event.dateText).font(.caption).foregroundStyle(.secondary)
-                                        if !event.participantIDs.isEmpty { Text(event.participantIDs.map { store.objectTitle($0) }.joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
-                                    }
-                                    Spacer(minLength: 0)
-                                }.padding(9).frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(store.selectedObjectID == event.id ? Palette.accent.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 8)).contentShape(Rectangle())
-                            }.buttonStyle(.plain).id(event.id)
-                        }
-                        if store.visibleEvents.isEmpty { Text("当前范围没有事件。调整端点或显示全部时间。").font(.caption).foregroundStyle(.secondary).padding(16) }
-                        else if filteredEvents.isEmpty { Text("没有匹配的事件。请调整搜索词。").font(.caption).foregroundStyle(.secondary).padding(16) }
-                    }
-                }.onAppear { if let id = store.selectedObjectID { proxy.scrollTo(id, anchor: .center) } }
-                    .onChange(of: store.selectedObjectID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
-            }
-        }.padding(14).frame(width: 330, height: 380)
-    }
-    private func normalizeRange() {
-        store.timeFrom = min(bounds.upperBound, max(bounds.lowerBound, store.timeFrom))
-        store.timeTo = max(store.timeFrom, min(bounds.upperBound, max(bounds.lowerBound, store.timeTo)))
-    }
-    private func selectEvent(_ id: String) {
-        store.focus(id)
-        if let point = points.first(where: { $0.targetID == id }) {
-            withAnimation { camera = .region(MKCoordinateRegion(center: point.coordinate, span: MKCoordinateSpan(latitudeDelta: 4, longitudeDelta: 4))) }
-        }
-    }
-    private func fitTime() { store.timeFrom = bounds.lowerBound; store.timeTo = bounds.upperBound }
-}
 
 struct EntityCardsView: View {
     @EnvironmentObject var store: AppStore
@@ -227,7 +35,7 @@ struct EntityCardsView: View {
                                     Text(entity.name).font(.system(size: 20, design: .serif))
                                     Text(entity.summary).font(.subheadline).foregroundStyle(.secondary).lineLimit(3).frame(maxWidth: .infinity, minHeight: 44, alignment: .topLeading)
                                     HStack { Text("\(entity.evidence.count) 处原文依据").font(.caption2).foregroundStyle(.tertiary); Spacer(); Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(Palette.accent) }
-                                }.softPanel().overlay(RoundedRectangle(cornerRadius: 14).stroke(store.selectedObjectID == entity.id ? Palette.accent.opacity(0.5) : .clear, lineWidth: 1))
+                                }.softPanel().overlay(RoundedRectangle(cornerRadius: 14).stroke(store.selectedObjectID == entity.id ? Palette.accent.opacity(0.5) : .clear, lineWidth: 1)).contentShape(Rectangle())
                             }.buttonStyle(.plain)
                         }
                     }.padding(16)
@@ -244,6 +52,12 @@ struct DocumentGraphView: View {
     @EnvironmentObject var store: AppStore
     @State private var inspectedID: String?
     @State private var operationError: String?
+    @State private var physicalSelection: String?
+    @State private var focusRequest: String?
+    @State private var focusToken: UUID?
+    @State private var showsNodes = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var browserNamespace
     private var nodes: [CanvasNode] {
         guard let book = store.book else { return [] }
         let hidden = Set(book.trashedDocuments.map(\.id))
@@ -254,8 +68,11 @@ struct DocumentGraphView: View {
             if let book = store.book, !nodes.isEmpty {
                 let sourceBookID = book.id
                 let nodeIDs = Set(nodes.map(\.id))
+                let graphItems = nodes.map { node in GraphItem(id: node.id, targetID: node.targetID, title: store.objectTitle(node.targetID), subtitle: book.activeDocuments.contains { $0.id == node.targetID } ? "Markdown" : "知识节点", x: node.x, y: node.y) }
+                GeometryReader { geometry in
+                let panelHeight = min(620, max(260, geometry.size.height - 96))
                 GraphSurface(
-                    items: nodes.map { node in GraphItem(id: node.id, targetID: node.targetID, title: store.objectTitle(node.targetID), subtitle: book.activeDocuments.contains { $0.id == node.targetID } ? "Markdown" : "知识节点", x: node.x, y: node.y) },
+                    items: graphItems,
                     lines: book.edges.filter { nodeIDs.contains($0.fromID) && nodeIDs.contains($0.toID) }.map { GraphLine(id: $0.id, from: $0.fromID, to: $0.toID, label: $0.label) },
                     selectedID: store.selectedObjectID, select: store.focus,
                     open: { id in
@@ -282,27 +99,56 @@ struct DocumentGraphView: View {
                     deselect: { store.selectedObjectID = nil },
                     inspect: { id in inspectedID = id },
                     createDocument: { store.newDocument() },
-                    title: "思维导图", isEnabled: !store.isBusy, errorText: { operationError }
-                ).id(sourceBookID)
+                    title: "思维导图", isEnabled: !store.isBusy, errorText: { operationError },
+                    focusNodeID: focusRequest, focusRequestToken: focusToken,
+                    selectedNodeIDChanged: { physicalSelection = $0 },
+                    interactionExclusion: showsNodes ? CGRect(x: 12, y: 12, width: 288, height: panelHeight) : CGRect(x: 12, y: 12, width: 132, height: 48),
+                    obscuredLeadingWidth: showsNodes ? 312 : 0
+                ).overlay(alignment: .topLeading) {
+                    if showsNodes {
+                        GraphNodeBrowser(items: graphItems, selectedNodeID: physicalSelection ?? graphItems.first(where: { $0.targetID == store.selectedObjectID })?.id, height: panelHeight,
+                                         select: { item in
+                                             guard !store.isBusy else { return }; physicalSelection = item.id; store.focus(item.targetID); focusRequest = item.id; focusToken = UUID()
+                                         }, open: { item in openNode(item.targetID) }, close: { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { showsNodes = false } })
+                            .contentShape(Rectangle()).readingGlassIdentity("document-nodes", in: browserNamespace).padding(12)
+                            .transition(.opacity)
+                    } else {
+                        Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { showsNodes = true } } label: { Label("节点 · \(graphItems.count)", systemImage: "sidebar.left") }
+                            .buttonStyle(ReadingToolbarButtonStyle()).padding(5).readingGlass(interactive: true)
+                            .readingGlassIdentity("document-nodes", in: browserNamespace).padding(12)
+                    }
+                }.readingGlassGroup()
+                }.id(sourceBookID)
             } else {
                 EmptyState(title: "从第一篇理解开始", detail: "在“我的理解”写一篇笔记，或主动保存 AI 回答。双击节点打开文档，从节点边缘的圆点拖出连线。", icon: "point.3.connected.trianglepath.dotted")
             }
         }.popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
             if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 330, height: 500) }
-        }.onChange(of: store.bookID) { _, _ in inspectedID = nil }
+        }.onChange(of: store.bookID) { _, _ in inspectedID = nil; physicalSelection = nil; focusRequest = nil; focusToken = nil; showsNodes = true }
+    }
+    private func openNode(_ id: String) {
+        guard let book = store.book else { return }
+        if book.activeDocuments.contains(where: { $0.id == id }) || book.units.contains(where: { $0.id == id }) { store.openObject(id) }
+        else { inspectedID = id }
     }
 }
 
 struct RelationGraphView: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var inspectedID: String?
+    @State private var physicalSelection: String?
+    @State private var focusRequest: String?
+    @State private var focusToken: UUID?
+    @State private var showsNodes = true
+    @Namespace private var browserNamespace
     private var items: [GraphItem] {
         guard let book = store.book else { return [] }
         let objects = book.entities.map { entity in (entity.id, entity.name, book.types.first(where: { $0.id == entity.typeID })?.name ?? "要素") } + book.events.map { ($0.id, $0.name, "事件") }
-        return objects.prefix(160).enumerated().map { index, item in
-            let angle = Double(index) * 2 * .pi / Double(max(1, min(160, objects.count)))
-            let radius = max(200, Double(min(objects.count, 160)) * 21)
-            return GraphItem(id: item.0, targetID: item.0, title: item.1, subtitle: item.2, x: radius + 70 + cos(angle) * radius, y: radius + 70 + sin(angle) * radius)
+        return objects.enumerated().map { index, item in
+            let angle = Double(index) * 2.399963229728653
+            let radius = max(190, sqrt(Double(index + 1)) * 125)
+            return GraphItem(id: item.0, targetID: item.0, title: item.1, subtitle: item.2, x: cos(angle) * radius, y: sin(angle) * radius)
         }
     }
     private var lines: [GraphLine] {
@@ -317,12 +163,29 @@ struct RelationGraphView: View {
     var body: some View {
         Group {
             if items.isEmpty { EmptyState(title: "关系来自阅读", detail: "AI 发现的依赖、参与、发生于等关系会在这里连接。双击节点查看卡片与原文。", icon: "point.3.filled.connected.trianglepath.dotted") }
-            else { GraphSurface(items: items, lines: lines, selectedID: store.selectedObjectID, select: store.focus,
+            else { GeometryReader { geometry in
+                let panelHeight = min(620, max(260, geometry.size.height - 96))
+                GraphSurface(items: items, lines: lines, selectedID: store.selectedObjectID, select: store.focus,
                                 open: { inspectedID = $0 }, deselect: { store.selectedObjectID = nil }, inspect: { inspectedID = $0 },
-                                title: "关系图谱", isEnabled: !store.isBusy).id(store.bookID) }
+                                title: "关系图谱", isEnabled: !store.isBusy,
+                                focusNodeID: focusRequest, focusRequestToken: focusToken, selectedNodeIDChanged: { physicalSelection = $0 },
+                                interactionExclusion: showsNodes ? CGRect(x: 12, y: 12, width: 288, height: panelHeight) : CGRect(x: 12, y: 12, width: 132, height: 48), obscuredLeadingWidth: showsNodes ? 312 : 0)
+                    .overlay(alignment: .topLeading) {
+                        if showsNodes {
+                            GraphNodeBrowser(items: items, selectedNodeID: physicalSelection ?? store.selectedObjectID, height: panelHeight,
+                                             select: { item in physicalSelection = item.id; store.focus(item.targetID); focusRequest = item.id; focusToken = UUID() },
+                                             open: { inspectedID = $0.targetID }, close: { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { showsNodes = false } })
+                                .contentShape(Rectangle()).readingGlassIdentity("relation-nodes", in: browserNamespace).padding(12).transition(.opacity)
+                        } else {
+                            Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { showsNodes = true } } label: { Label("节点 · \(items.count)", systemImage: "sidebar.left") }
+                                .buttonStyle(ReadingToolbarButtonStyle()).padding(5).readingGlass(interactive: true)
+                                .readingGlassIdentity("relation-nodes", in: browserNamespace).padding(12)
+                        }
+                    }.readingGlassGroup()
+                }.id(store.bookID) }
         }.popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
             if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 330, height: 500) }
-        }.onChange(of: store.bookID) { _, _ in inspectedID = nil }
+        }.onChange(of: store.bookID) { _, _ in inspectedID = nil; physicalSelection = nil; focusRequest = nil; focusToken = nil; showsNodes = true }
     }
 }
 

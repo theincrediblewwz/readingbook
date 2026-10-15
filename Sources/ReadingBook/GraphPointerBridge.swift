@@ -7,22 +7,26 @@ struct GraphPointerBridge: NSViewRepresentable {
     var enabled: Bool
     var movable: Bool
     var reservePorts = false
+    var resetID = 0
+    var exclusion: CGRect? = nil
     var click: (Bool) -> Void
     var drag: (CGSize, Bool) -> Void
     var cancel: () -> Void
     func makeNSView(context: Context) -> PointerView { PointerView() }
     func updateNSView(_ view: PointerView, context: Context) {
-        view.configure(enabled: enabled, movable: movable, reservePorts: reservePorts)
+        view.configure(enabled: enabled, movable: movable, reservePorts: reservePorts, resetID: resetID, exclusion: exclusion)
         view.click = click; view.drag = drag; view.cancel = cancel
     }
     final class PointerView: NSView {
         var enabled = true
         var movable = false
         var reservePorts = false
+        var exclusion: CGRect?
         var click: ((Bool) -> Void)?
         var drag: ((CGSize, Bool) -> Void)?
         var cancel: (() -> Void)?
         private var origin: CGPoint?
+        private var resetID = 0
         private var didDrag = false
         private var escapeMonitor: Any?
         private var focusObservers: [NSObjectProtocol] = []
@@ -31,6 +35,7 @@ struct GraphPointerBridge: NSViewRepresentable {
         override func hitTest(_ point: NSPoint) -> NSView? {
             guard enabled else { return nil }
             let local = convert(point, from: superview)
+            guard exclusion?.contains(local) != true else { return nil }
             if reservePorts, abs(local.y - bounds.midY) <= 14, local.x <= 14 || local.x >= bounds.width - 14 { return nil }
             return super.hitTest(point)
         }
@@ -70,8 +75,9 @@ struct GraphPointerBridge: NSViewRepresentable {
             if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor); self.escapeMonitor = nil }
             for observer in focusObservers { NotificationCenter.default.removeObserver(observer) }; focusObservers = []
         }
-        func configure(enabled: Bool, movable: Bool, reservePorts: Bool) {
-            if (self.enabled && !enabled) || (self.movable && !movable) { stopTracking() }
+        func configure(enabled: Bool, movable: Bool, reservePorts: Bool, resetID: Int, exclusion: CGRect?) {
+            if self.resetID != resetID || (self.enabled && !enabled) || (self.movable && !movable) { stopTracking() }
+            self.resetID = resetID; self.exclusion = exclusion
             self.enabled = enabled; self.movable = movable; self.reservePorts = reservePorts
         }
         override func cancelOperation(_ sender: Any?) { stopTracking(); cancel?() }

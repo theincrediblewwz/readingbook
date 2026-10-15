@@ -35,7 +35,7 @@ struct ProviderSettingsView: View {
                 Button("测试连接") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty)
                 Button("保存配置") { store.saveServiceProfileForUI() }.buttonStyle(.borderedProminent).disabled(store.isBusy)
             }
-        }.padding(18).controlSize(.small)
+        }.padding(18).controlSize(.regular)
         .confirmationDialog("删除已保存的服务配置与其密钥？", isPresented: $deletingService) {
             Button("删除配置", role: .destructive) { if let id = store.selectedServiceID { store.removeService(id) } }
         } message: { Text("书籍、文档与已生成内容会保留。") }
@@ -234,7 +234,7 @@ struct PluginLibraryView: View {
                 Spacer()
                 Button("完成") { dismiss() }.keyboardShortcut(.defaultAction)
             }
-        }.padding(18).controlSize(.small)
+        }.padding(18).controlSize(.regular)
         .onChange(of: store.isBusy) { _, busy in
             guard !busy, let kind = pendingAddition else { return }
             if store.installedComponent(for: kind) != nil {
@@ -310,7 +310,7 @@ private struct CompactPluginRow: View {
                 operationError = ""
                 Task { _ = await store.setPluginEnabled(enabled, id: plugin.id, onError: { operationError = $0 }) }
             }))
-                .toggleStyle(.switch).controlSize(.mini).fixedSize().disabled(store.isBusy)
+                .toggleStyle(.switch).controlSize(.regular).fixedSize().disabled(store.isBusy)
           }
           if !operationError.isEmpty { Text(operationError).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
         }.padding(.vertical, 4)

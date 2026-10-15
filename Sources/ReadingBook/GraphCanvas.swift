@@ -31,13 +31,26 @@ struct GraphSurface: View {
     var title: String? = nil
     var isEnabled = true
     var errorText: (() -> String?)? = nil
+    /// Focus requests use the physical node ID, which may differ from its document.
+    var focusNodeID: String? = nil
+    var focusRequestToken: UUID? = nil
+    var selectedNodeIDChanged: ((String?) -> Void)? = nil
+    var interactionExclusion: CGRect? = nil
+    var obscuredLeadingWidth: CGFloat = 0
 
     private struct NodeDrag {
         var id: String
         var origin: CGPoint
         var position: CGPoint
+        var scale: CGFloat
     }
     @State private var nodeDragState: NodeDrag?
+    @State private var camera = GraphCamera()
+    @State private var viewportSize = CGSize.zero
+    @State private var cameraInitialized = false
+    @State private var panOrigin: GraphCamera?
+    @State private var connectionDragScale: CGFloat?
+    @State private var gestureEpoch = 0
     @State private var selectedNodeID: String?
     @State private var connectionFromID: String?
     @State private var connectionSide: PortSide = .trailing
@@ -51,11 +64,11 @@ struct GraphSurface: View {
     @State private var savingLine = false
     @State private var message = ""
     @FocusState private var focus: FocusTarget?
-    @Namespace private var canvasSpace
     private enum FocusTarget: Hashable { case node(String), port(String, PortSide), line(String) }
     private enum PortSide: Hashable { case leading, trailing }
-    private var canvasWidth: Double { max(1000, (items.map(\.x).max() ?? 600) + 340) }
-    private var canvasHeight: Double { max(650, (items.map(\.y).max() ?? 400) + 260) }
+    private var canNavigate: Bool {
+        isEnabled && nodeDragState == nil && !draggingConnection && !savingPosition && !savingConnection && !savingLine && editingLineID == nil
+    }
     private func point(_ item: GraphItem) -> CGPoint {
         let location = nodeDragState?.id == item.id ? nodeDragState!.position : CGPoint(x: item.x, y: item.y)
         return CGPoint(x: location.x + 110, y: location.y + 45)
@@ -85,13 +98,21 @@ struct GraphSurface: View {
         }
     }
     var body: some View {
-        let rendered = renderedLines
-        ScrollView([.horizontal, .vertical]) {
+        GeometryReader { geometry in
+            let rendered = renderedLines
             ZStack(alignment: .topLeading) {
-                Palette.canvas.contentShape(Rectangle()).onTapGesture { backgroundTapped() }
+                Palette.canvas
+                grid(in: geometry.size)
+                GraphPointerBridge(enabled: canNavigate, movable: true, resetID: gestureEpoch, exclusion: interactionExclusion,
+                                   click: { _ in backgroundTapped() }, drag: { updatePan(delta: $0, ended: $1) },
+                                   cancel: { cancelPan() })
                     .contextMenu { if let createDocument { Button("新建笔记") { createDocument() } } }
-                Rectangle().fill(ImagePaint(image: Image(nsImage: GraphGridTile.image), scale: 1)).opacity(0.18).allowsHitTesting(false).accessibilityHidden(true)
-                Canvas { context, size in
+                GraphViewportInput(enabled: canNavigate, exclusion: interactionExclusion,
+                                   scroll: { panViewport(by: $0) }, zoom: { zoomViewport(by: $0, at: $1) })
+                Canvas { context, _ in
+                    context.translateBy(x: geometry.size.width / 2 - camera.center.x * camera.scale,
+                                        y: geometry.size.height / 2 - camera.center.y * camera.scale)
+                    context.scaleBy(x: camera.scale, y: camera.scale)
                     for edge in rendered {
                         context.stroke(edge.curve.path, with: .color(Palette.accent.opacity(0.55)), lineWidth: 1.5)
                         context.fill(edge.curve.arrow, with: .color(Palette.accent.opacity(0.65)))
@@ -101,39 +122,142 @@ struct GraphSurface: View {
                         context.fill(curve.arrow, with: .color(Palette.copper))
                     }
                 }.allowsHitTesting(false).accessibilityHidden(true)
-                ForEach(rendered) { edge in edgeLabel(edge).position(x: edge.curve.middle.x, y: edge.curve.middle.y - 11) }
-                ForEach(items) { item in
-                    nodeShell(item).position(point(item)).zIndex(item.id == selectedPhysicalID ? 2 : 1)
+                ForEach(rendered.filter { labelVisible($0, in: geometry.size) }) { edge in
+                    edgeLabel(edge).scaleEffect(camera.scale)
+                        .position(camera.screen(CGPoint(x: edge.curve.middle.x, y: edge.curve.middle.y - 11), in: geometry.size))
                 }
-            }.frame(width: canvasWidth, height: canvasHeight)
-                .transaction { $0.animation = nil }
-                .coordinateSpace(name: canvasSpace)
-                .onContinuousHover { phase in
-                    guard connectionFromID != nil, !draggingConnection, !savingConnection else { return }
-                    switch phase {
-                    case .active(let location): updateConnection(at: location)
-                    case .ended: connectionPoint = nil; connectionTargetID = nil
-                    }
+                ForEach(visibleItems(in: geometry.size)) { item in
+                    nodeShell(item).scaleEffect(camera.scale)
+                        .position(camera.screen(point(item), in: geometry.size)).zIndex(item.id == selectedPhysicalID ? 2 : 1)
                 }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+            .transaction { $0.animation = nil }
+            .overlay(alignment: .topLeading) {
+                statusOverlay.padding(.leading, obscuredLeadingWidth + 12).padding(.top, 12).allowsHitTesting(false)
+            }
+            .overlay(alignment: .bottomTrailing) { cameraControls.padding(12) }
+            .onContinuousHover { phase in
+                guard connectionFromID != nil, !draggingConnection, !savingConnection else { return }
+                switch phase {
+                case .active(let location):
+                    if interactionExclusion?.contains(location) == true { connectionPoint = nil; connectionTargetID = nil }
+                    else { updateConnection(at: camera.world(location, in: geometry.size)) }
+                case .ended: connectionPoint = nil; connectionTargetID = nil
+                }
+            }
+            .onAppear {
+                viewportSize = geometry.size
+                if !cameraInitialized { fitAll(); cameraInitialized = true; focusRequestedNode() }
+            }
+            .onChange(of: geometry.size) { _, size in
+                cancelTransientInteractions(); viewportSize = size
+                // Center remains a world point when the window resizes. Never
+                // refit automatically and move a user's carefully arranged view.
+            }
         }
-        .overlay(alignment: .topLeading) { statusOverlay.padding(12).allowsHitTesting(false) }
-        .allowsHitTesting(isEnabled)
         .onExitCommand {
             guard !savingLine, !savingConnection else { return }
             if editingLineID != nil { editingLineID = nil; focus = nil; message = "" }
-            else { cancelConnection() }
+            else { cancelTransientInteractions() }
         }
-        .onChange(of: isEnabled) { _, enabled in
-            if !enabled && !savingConnection { cancelConnection() }
-            if !enabled && !savingPosition { nodeDragState = nil }
-        }
+        .onChange(of: isEnabled) { _, enabled in if !enabled { cancelTransientInteractions() } }
+        .onChange(of: focusNodeID) { _, _ in focusRequestedNode() }
+        .onChange(of: focusRequestToken) { _, _ in focusRequestedNode() }
         .onChange(of: items.map(\.id)) { _, ids in
             if let id = connectionFromID, !ids.contains(id) { cancelConnection() }
-            if let id = selectedNodeID, !ids.contains(id) { selectedNodeID = nil }
-            if let drag = nodeDragState, !ids.contains(drag.id) { nodeDragState = nil }
+            if let id = selectedNodeID, !ids.contains(id) { setPhysicalSelection(nil) }
+            if let drag = nodeDragState, !ids.contains(drag.id) { nodeDragState = nil; gestureEpoch += 1 }
         }
         .onChange(of: lines.map(\.id)) { _, ids in if let id = editingLineID, !ids.contains(id) { editingLineID = nil } }
-        .onDisappear { cancelConnection(); nodeDragState = nil; editingLineID = nil }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in cancelTransientInteractions() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in cancelTransientInteractions() }
+        .onDisappear { cancelTransientInteractions(); editingLineID = nil }
+    }
+    private func visibleItems(in size: CGSize) -> [GraphItem] {
+        let viewport = CGRect(origin: .zero, size: size).insetBy(dx: -max(240, 110 * camera.scale + 24), dy: -max(100, 45 * camera.scale + 24))
+        return items.filter { item in
+            if nodeDragState?.id == item.id { return true } // Keep the native drag receiver alive offscreen.
+            let position = camera.screen(point(item), in: size)
+            return viewport.contains(position)
+        }
+    }
+    private func labelVisible(_ edge: RenderedGraphLine, in size: CGSize) -> Bool {
+        if editingLineID == edge.id { return true }
+        let viewport = CGRect(origin: .zero, size: size).insetBy(dx: -max(180, 90 * camera.scale), dy: -max(60, 25 * camera.scale))
+        return viewport.contains(camera.screen(edge.curve.middle, in: size))
+    }
+    private func grid(in size: CGSize) -> some View {
+        // One small cached image repeats only across the viewport. Its phase
+        // follows the camera, with adaptive spacing at distant zoom levels.
+        let scaled = 24 * camera.scale
+        let period = scaled * pow(2, ceil(log2(18 / max(0.000001, scaled))))
+        let origin = camera.screen(.zero, in: size)
+        let x = origin.x.truncatingRemainder(dividingBy: period), y = origin.y.truncatingRemainder(dividingBy: period)
+        return Rectangle().fill(ImagePaint(image: Image(nsImage: GraphGridTile.image), scale: period / 24))
+            .frame(width: size.width + period * 4, height: size.height + period * 4)
+            .offset(x: x - period * 2, y: y - period * 2).opacity(0.18)
+            .allowsHitTesting(false).accessibilityHidden(true)
+    }
+    private var cameraControls: some View {
+        HStack(spacing: 2) {
+            Button { fitAll() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 34, height: 34) }
+                .help("显示全部节点").accessibilityLabel("显示全部节点")
+            Divider().frame(height: 18).padding(.horizontal, 2)
+            Button { zoomViewport(by: 1 / 1.25, at: usableCenter) } label: { Image(systemName: "minus").frame(width: 34, height: 34) }
+                .help("缩小画布").accessibilityLabel("缩小画布")
+            Button { zoomViewport(by: 1 / camera.scale, at: usableCenter) } label: {
+                Text(camera.scale.formatted(.percent.precision(.fractionLength(camera.scale < 0.01 ? 2 : 0))))
+                    .monospacedDigit().font(.system(size: 12, weight: .medium)).frame(minWidth: 48, minHeight: 34)
+            }.help("恢复 100% 缩放")
+            Button { zoomViewport(by: 1.25, at: usableCenter) } label: { Image(systemName: "plus").frame(width: 34, height: 34) }
+                .help("放大画布").accessibilityLabel("放大画布")
+            Divider().frame(height: 18).padding(.horizontal, 2)
+            Button { centerSelection() } label: { Image(systemName: "scope").frame(width: 34, height: 34) }
+                .disabled(selectedPhysicalID == nil).help("定位选中节点").accessibilityLabel("定位选中节点")
+        }
+        .buttonStyle(ReadingToolbarButtonStyle()).padding(4).readingGlass()
+        .disabled(!canNavigate).help("拖动空白或双指平移 · 捏合或 ⌘ 滚轮缩放")
+    }
+    private var usableCenter: CGPoint { CGPoint(x: (viewportSize.width + min(obscuredLeadingWidth, max(0, viewportSize.width - 80))) / 2, y: viewportSize.height / 2) }
+    private func fitAll() {
+        guard canNavigate, viewportSize.width > 0 else { return }
+        let bounds = items.map(rect).reduce(CGRect.null) { $0.union($1) }
+        camera.fit(bounds.isNull ? CGRect(x: 0, y: 0, width: 220, height: 90) : bounds, in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth)
+        connectionPoint = nil; connectionTargetID = nil
+    }
+    private func centerSelection() {
+        guard canNavigate, let item = items.first(where: { $0.id == selectedPhysicalID }) else { return }
+        camera.focus(point(item), in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth)
+    }
+    private func focusRequestedNode() {
+        guard let id = focusNodeID, let item = items.first(where: { $0.id == id }), !savingPosition, !savingConnection, !savingLine else { return }
+        cancelTransientInteractions(); setPhysicalSelection(id)
+        camera.focus(point(item), in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth)
+    }
+    private func updatePan(delta: CGSize, ended: Bool) {
+        guard canNavigate else { return }
+        if panOrigin == nil { panOrigin = camera; cancelConnection() }
+        guard var next = panOrigin else { return }
+        next.pan(by: delta); camera = next
+        if ended { panOrigin = nil }
+    }
+    private func cancelPan() { if let panOrigin { camera = panOrigin }; panOrigin = nil }
+    private func panViewport(by delta: CGSize) {
+        guard canNavigate, panOrigin == nil else { return }
+        camera.pan(by: delta); connectionPoint = nil; connectionTargetID = nil
+    }
+    private func zoomViewport(by factor: CGFloat, at point: CGPoint) {
+        guard canNavigate, panOrigin == nil else { return }
+        camera.zoom(by: factor, at: point, in: viewportSize); connectionPoint = nil; connectionTargetID = nil
+    }
+    private func cancelTransientInteractions() {
+        gestureEpoch += 1; cancelPan()
+        if !savingPosition { nodeDragState = nil }
+        if !savingConnection { cancelConnection() }
+    }
+    private func setPhysicalSelection(_ id: String?) {
+        selectedNodeID = id; selectedNodeIDChanged?(id)
     }
     @ViewBuilder private var statusOverlay: some View {
         if savingConnection || savingLine { Text("正在保存连线…").font(.caption).padding(9).readingGlass() }
@@ -152,7 +276,7 @@ struct GraphSurface: View {
             nodeBody(item).overlay {
                 GraphPointerBridge(enabled: isEnabled && !savingPosition && !savingConnection && !savingLine,
                                    movable: move != nil && connectionFromID == nil && editingLineID == nil,
-                                   reservePorts: connect != nil,
+                                   reservePorts: connect != nil, resetID: gestureEpoch,
                                    click: { activate(item, opening: $0) },
                                    drag: { updateNodeDrag(item, delta: $0, ended: $1) },
                                    cancel: { if !savingPosition { nodeDragState = nil } })
@@ -187,7 +311,7 @@ struct GraphSurface: View {
             .frame(width: 8, height: 8).padding(8).contentShape(Circle())
             .overlay {
                 GraphPointerBridge(enabled: isEnabled && !savingPosition && !savingConnection && !savingLine && editingLineID == nil,
-                                   movable: true, click: { _ in portActivated(item, side: side) },
+                                   movable: true, resetID: gestureEpoch, click: { _ in portActivated(item, side: side) },
                                    drag: { updatePortDrag(item, side: side, delta: $0, ended: $1) }, cancel: { cancelConnection() })
             }
             .focusable().focusEffectDisabled().focused($focus, equals: .port(item.id, side))
@@ -231,11 +355,12 @@ struct GraphSurface: View {
         guard isEnabled, !savingPosition, editingLineID == nil, connectionFromID == nil, let move else { return }
         if nodeDragState == nil {
             let origin = CGPoint(x: item.x, y: item.y)
-            nodeDragState = NodeDrag(id: item.id, origin: origin, position: origin)
-            selectedNodeID = item.id; select(item.targetID); message = ""
+            nodeDragState = NodeDrag(id: item.id, origin: origin, position: origin, scale: camera.scale)
+            setPhysicalSelection(item.id); select(item.targetID); message = ""
         }
         guard var drag = nodeDragState, drag.id == item.id else { return }
-        drag.position = CGPoint(x: max(10, drag.origin.x + delta.width), y: max(10, drag.origin.y + delta.height))
+        drag.position = CGPoint(x: min(10_000_000, max(-10_000_000, drag.origin.x + delta.width / drag.scale)),
+                                y: min(10_000_000, max(-10_000_000, drag.origin.y + delta.height / drag.scale)))
         nodeDragState = drag
         guard ended else { return }
         savingPosition = true
@@ -253,10 +378,10 @@ struct GraphSurface: View {
         if !draggingConnection {
             beginConnection(item, side: side)
             guard connectionFromID == item.id else { return }
-            draggingConnection = true
+            draggingConnection = true; connectionDragScale = camera.scale
         }
-        let origin = rect(item)
-        let cursor = CGPoint(x: (side == .leading ? origin.minX : origin.maxX) + delta.width, y: origin.midY + delta.height)
+        let origin = rect(item), scale = connectionDragScale ?? camera.scale
+        let cursor = CGPoint(x: (side == .leading ? origin.minX : origin.maxX) + delta.width / scale, y: origin.midY + delta.height / scale)
         updateConnection(at: cursor)
         guard ended else { return }
         draggingConnection = false
@@ -270,7 +395,7 @@ struct GraphSurface: View {
             if source != item.id { commitConnection(from: source, to: item.id) }
             return
         }
-        selectedNodeID = item.id; select(item.targetID); focus = .node(item.id); message = ""
+        setPhysicalSelection(item.id); select(item.targetID); focus = .node(item.id); message = ""
         if opening { open?(item.targetID) }
     }
     private func portActivated(_ item: GraphItem, side: PortSide) {
@@ -282,7 +407,7 @@ struct GraphSurface: View {
     private func beginConnection(_ item: GraphItem, side: PortSide) {
         guard isEnabled, nodeDragState == nil, connect != nil, !savingPosition, !savingConnection, !savingLine else { return }
         guard editingLineID == nil else { if let id = editingLineID { focus = .line(id) }; return }
-        selectedNodeID = item.id; select(item.targetID); connectionFromID = item.id; connectionSide = side
+        setPhysicalSelection(item.id); select(item.targetID); connectionFromID = item.id; connectionSide = side
         connectionPoint = nil; connectionTargetID = nil; message = ""; focus = .node(item.id)
     }
     private func updateConnection(at point: CGPoint) {
@@ -306,12 +431,12 @@ struct GraphSurface: View {
         }
     }
     private func cancelConnection() {
-        connectionFromID = nil; connectionPoint = nil; connectionTargetID = nil; draggingConnection = false
+        connectionFromID = nil; connectionPoint = nil; connectionTargetID = nil; draggingConnection = false; connectionDragScale = nil
     }
     private func backgroundTapped() {
         guard isEnabled, !savingConnection, !savingLine else { return }
         cancelConnection(); message = ""
-        if editingLineID == nil { selectedNodeID = nil; focus = nil; deselect?() }
+        if editingLineID == nil { setPhysicalSelection(nil); focus = nil; deselect?() }
     }
     @ViewBuilder private func edgeLabel(_ edge: RenderedGraphLine) -> some View {
         if editingLineID == edge.id {

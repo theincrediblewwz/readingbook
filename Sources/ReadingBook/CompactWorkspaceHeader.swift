@@ -16,9 +16,9 @@ struct CompactWorkspaceHeader<Actions: View>: View {
                 .layoutPriority(1)
             if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
             Spacer(minLength: 8)
-            actions.controlSize(.small).font(.subheadline)
+            actions.controlSize(.regular).font(.subheadline)
         }
-        .padding(.horizontal, 16).padding(.vertical, 9).frame(minHeight: 44)
+        .padding(.horizontal, 16).padding(.vertical, 10).frame(minHeight: 48)
         .background(Palette.surface)
         .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 0.5) }
     }
