@@ -250,14 +250,15 @@ struct PluginLibraryView: View {
 
     private func capabilityRow(_ kind: ComponentKind, title: String) -> some View {
         let installed = store.installedComponent(for: kind) != nil
+        let retainedByDisabledPack = !installed && store.savedComponent(for: kind) != nil
         return HStack(spacing: 12) {
             BrandGlyph(name: BrandNavigation.glyph(route: kind.rawValue)).frame(width: 20, height: 20).foregroundStyle(Palette.accent)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                Text(capabilityDescription(kind)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(retainedByDisabledPack ? "已保存，请在上方启用所属声明包。" : capabilityDescription(kind)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Spacer(minLength: 0)
-            Button(installed ? "打开" : "添加") {
+            Button(installed ? "打开" : retainedByDisabledPack ? "已停用" : "添加") {
                 componentError = ""; componentNotice = ""
                 if installed {
                     store.activate(kind, open: true, onError: { componentError = $0 })
@@ -266,7 +267,7 @@ struct PluginLibraryView: View {
                     pendingAddition = kind; componentNotice = "正在添加\(title)…"
                     store.activate(kind, open: false, onError: { message in componentError = message; componentNotice = ""; pendingAddition = nil })
                 }
-            }.disabled(store.book == nil || store.isBusy).fixedSize()
+            }.disabled(store.book == nil || store.isBusy || retainedByDisabledPack).fixedSize()
         }.padding(.vertical, 8)
     }
 

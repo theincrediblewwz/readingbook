@@ -139,10 +139,10 @@ struct WorkspaceView: View {
     }
     private var componentViews: [ViewDefinition] { WorkspaceComponentRegistry.shared.navigationViews(store.enabledViews) }
     private var addableComponents: [WorkspaceComponentDescriptor] {
-        guard let book = store.book else { return [] }
+        guard store.book != nil else { return [] }
         let registry = WorkspaceComponentRegistry.shared
         return registry.components.filter { component in
-            !component.permanent && !book.views.contains(where: { registry.equivalent($0.kind, component.kind) })
+            !component.permanent && store.savedComponent(for: component.kind) == nil
         }
     }
     private func routeButton(_ title: String, icon: String, route: String) -> some View {

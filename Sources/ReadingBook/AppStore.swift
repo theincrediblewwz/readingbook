@@ -347,9 +347,18 @@ import ReadingCore
         }
         return enabledViews.first { WorkspaceComponentRegistry.shared.equivalent($0.kind, kind) }
     }
+    func savedComponent(for kind: ComponentKind) -> ViewDefinition? {
+        book?.views.first { WorkspaceComponentRegistry.shared.equivalent($0.kind, kind) }
+    }
     func activate(_ kind: ComponentKind, open: Bool = true, onError: ((String) -> Void)? = nil) {
         guard var current = book, !isBusy, let component = WorkspaceComponentRegistry.shared.component(for: kind) else { return }
         if let existing = installedComponent(for: kind) { if open { route = existing.id }; return }
+        // Disabled packs retain their entries. Every entry point must refuse a
+        // second equivalent view, even when the saved ID is not "manual-*".
+        if savedComponent(for: kind) != nil {
+            let message = "此组件已由停用的声明包保存，请在插件页启用该包。"
+            if let onError { onError(message) } else { errorMessage = message }; return
+        }
         let view = ViewDefinition(id: "manual-\(component.kind.rawValue)", title: component.title, kind: component.kind)
         guard !current.views.contains(where: { $0.id == view.id }) else {
             let message = "同名组件入口由已停用声明包保留，请先启用该包。"
