@@ -18,7 +18,8 @@ struct ReaderWorkspaceView: View {
                 }
                 VStack(spacing: 0) {
                     if let unit = store.selectedUnit {
-                        if isPDF, showPDF, let url = store.sourceFileURL {
+                        if store.readingSourceMode != "original" { ReadingParallelView(mode: store.readingSourceMode) }
+                        else if isPDF, showPDF, let url = store.sourceFileURL {
                             let requestToken = store.pdfNavigationToken
                             let sourceBookID = store.bookID
                             PDFReaderView(controller: pdfController, url: url, sourceHash: store.book?.sourceHash ?? "", page: unit.page, navigationToken: requestToken, password: store.pdfPassword(for: store.bookID), annotations: store.book?.readerAnnotations ?? [], canEditAnnotations: !store.isBusy, onPageChange: { page in
@@ -35,12 +36,27 @@ struct ReaderWorkspaceView: View {
                             }, onTrashAnnotation: { id, trashed in
                                 guard store.bookID == sourceBookID else { return false }
                                 return await store.setReaderAnnotationTrashed(id, trashed: trashed)
-                            })
+                            }, sourceDecorations: store.sourceReadingDecorations,
+                               focusedDecorationID: store.focusedReadingAnchorID,
+                               onSourceDecorationTap: store.sourceDecorationTapped,
+                               onSourceSelection: { selection in store.sourceReadingSelection = selection; if selection != nil { store.focusedReadingAnchorID = nil } })
                         } else { sourceText(unit) }
                     } else {
                         EmptyState(title: "选择一个章节", detail: "从左上角目录选择原文内容。", icon: "book.pages")
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity).layoutPriority(1)
+                if store.readingCompanionVisible && geometry.size.width >= 1050 {
+                    ReadingCompanionPanel(onClose: { store.readingCompanionVisible = false })
+                        .frame(width: 360, height: max(0, geometry.size.height - 98)).readingGlass(radius: 22)
+                        .padding(.top, 80).padding(.bottom, 18).padding(.trailing, 12)
+                }
+            }
+            .overlay(alignment: .trailing) {
+                if store.readingCompanionVisible && geometry.size.width < 1050 {
+                    ReadingCompanionPanel(onClose: { store.readingCompanionVisible = false })
+                        .frame(width: min(380, max(0, geometry.size.width - 24)), height: max(0, geometry.size.height - 98))
+                        .readingGlass(radius: 22).padding(.horizontal, 12).padding(.top, 80)
+                }
             }
             .overlay(alignment: .topLeading) {
                 if showOutline && !inlineOutline {
@@ -99,10 +115,10 @@ struct ReaderWorkspaceView: View {
                     }.padding(14).background(Palette.copper.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                 }
                 if ["md", "markdown"].contains(store.sourceFileURL?.pathExtension.lowercased() ?? "") || store.book?.ocrPages?.contains(where: { $0.page == unit.page }) == true {
-                    MarkdownText(markdown: sourceMarkdown(unit))
+                    anchoredSource(sourceMarkdown(unit), plain: false)
                 } else {
-                    Text(unit.text.isEmpty ? "此单元尚未获得可读文本，请对照原始文件核查。" : unit.text)
-                        .font(.system(size: 17, weight: .regular, design: .serif)).lineSpacing(10).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    let text = isPDF ? store.visibleSourceUnits.map(\.text).joined() : unit.text
+                    anchoredSource(text.isEmpty ? "此单元尚未获得可读文本，请对照原始文件核查。" : text, plain: true)
                 }
                 let insights = store.book?.insights.filter { $0.unitIDs.contains(unit.id) } ?? []
                 ForEach(insights) { insight in
@@ -114,6 +130,13 @@ struct ReaderWorkspaceView: View {
                 }
             }.frame(maxWidth: 740).padding(.horizontal, 24).padding(.top, 84).padding(.bottom, 24).frame(maxWidth: .infinity)
         }.background(Palette.paper)
+    }
+    private func anchoredSource(_ text: String, plain: Bool) -> some View {
+        RichMarkdownView(markdown: text, sourceText: text, plainText: plain,
+                         sourceDecorations: store.sourceReadingDecorations,
+                         focusedDecorationID: store.focusedReadingAnchorID,
+                         onSourceDecorationTap: store.sourceDecorationTapped,
+                         onSourceSelection: { selection in store.sourceReadingSelection = selection; if selection != nil { store.focusedReadingAnchorID = nil } })
     }
     private func sourceMarkdown(_ unit: SourceUnit) -> String {
         if let page = unit.page, store.book?.ocrPages?.contains(where: { $0.page == page }) == true {

@@ -144,7 +144,9 @@ struct RelationGraphView: View {
     @Namespace private var browserNamespace
     private var items: [GraphItem] {
         guard let book = store.book else { return [] }
-        let objects = book.entities.map { entity in (entity.id, entity.name, book.types.first(where: { $0.id == entity.typeID })?.name ?? "要素") } + book.events.map { ($0.id, $0.name, "事件") }
+        let entities = store.readingScopeCurrent ? store.readingContextItems.entities : book.entities
+        let events = store.readingScopeCurrent ? store.readingContextItems.events : book.events
+        let objects = entities.map { entity in (entity.id, entity.name, book.types.first(where: { $0.id == entity.typeID })?.name ?? "要素") } + events.map { ($0.id, $0.name, "事件") }
         return objects.enumerated().map { index, item in
             let angle = Double(index) * 2.399963229728653
             let radius = max(190, sqrt(Double(index + 1)) * 125)
@@ -158,9 +160,14 @@ struct RelationGraphView: View {
             lines += event.placeIDs.map { GraphLine(id: "event-place|\(event.id)|\($0)", from: event.id, to: $0, label: "发生于") }
             lines += event.participantIDs.map { GraphLine(id: "event-person|\(event.id)|\($0)", from: $0, to: event.id, label: "参与") }
         }
-        return lines
+        let ids = Set(items.map(\.id))
+        return lines.filter { ids.contains($0.from) && ids.contains($0.to) }
     }
     var body: some View {
+        VStack(spacing: 0) {
+            CompactWorkspaceHeader("关系图谱", subtitle: store.readingScopeCurrent ? "当前原文" : "全书") {
+                Toggle("当前原文", isOn: $store.readingScopeCurrent).toggleStyle(.switch).controlSize(.small)
+            }
         Group {
             if items.isEmpty { EmptyState(title: "关系来自阅读", detail: "AI 发现的依赖、参与、发生于等关系会在这里连接。双击节点查看卡片与原文。", icon: "point.3.filled.connected.trianglepath.dotted") }
             else { GeometryReader { geometry in
@@ -186,6 +193,7 @@ struct RelationGraphView: View {
         }.popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
             if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 330, height: 500) }
         }.onChange(of: store.bookID) { _, _ in inspectedID = nil; physicalSelection = nil; focusRequest = nil; focusToken = nil; showsNodes = true }
+        }
     }
 }
 

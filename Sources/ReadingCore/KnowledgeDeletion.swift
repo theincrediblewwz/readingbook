@@ -34,6 +34,9 @@ public enum KnowledgeDeletion {
         let removedNodes = Set(project.nodes.filter { $0.targetID == id }.map(\.id))
         project.nodes.removeAll { removedNodes.contains($0.id) }
         project.edges.removeAll { removedNodes.contains($0.fromID) || removedNodes.contains($0.toID) }
+        if let experience = project.readingExperience {
+            project.readingExperience = ReadingExperienceRuntime.removeTarget(id, from: experience)
+        }
     }
 
     private static func checkIdentity(_ id: String, in project: BookProject) throws {

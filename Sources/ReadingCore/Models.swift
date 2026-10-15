@@ -105,7 +105,27 @@ public struct ViewDefinition: Codable, Identifiable, Hashable, Sendable {
     public var title: String
     public var kind: ComponentKind
     public var typeIDs: [String]
-    public init(id: String, title: String, kind: ComponentKind, typeIDs: [String] = []) { self.id = id; self.title = title; self.kind = kind; self.typeIDs = typeIDs }
+    /// Namespaced renderer capabilities can extend the legacy component list.
+    /// Unknown IDs remain in the archive and receive a readable fallback.
+    public var rendererID: String? = nil
+    public var scope: String? = nil
+    public var configuration: [String: String]? = nil
+    public init(id: String, title: String, kind: ComponentKind, typeIDs: [String] = [], rendererID: String? = nil, scope: String? = nil, configuration: [String: String]? = nil) {
+        self.id = id; self.title = title; self.kind = kind; self.typeIDs = typeIDs
+        self.rendererID = rendererID; self.scope = scope; self.configuration = configuration
+    }
+    private enum CodingKeys: String, CodingKey { case id, title, kind, typeIDs, rendererID, scope, configuration }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id); title = try values.decode(String.self, forKey: .title)
+        let rawKind = try values.decode(String.self, forKey: .kind)
+        kind = ComponentKind(rawValue: rawKind) ?? .knowledge
+        typeIDs = try values.decodeIfPresent([String].self, forKey: .typeIDs) ?? []
+        rendererID = try values.decodeIfPresent(String.self, forKey: .rendererID)
+        if ComponentKind(rawValue: rawKind) == nil, rendererID == nil { rendererID = rawKind }
+        scope = try values.decodeIfPresent(String.self, forKey: .scope)
+        configuration = try values.decodeIfPresent([String: String].self, forKey: .configuration)
+    }
 }
 public struct ReadingMethod: Codable, Identifiable, Hashable, Sendable {
     public var id: String
@@ -235,6 +255,8 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var workflowRuns: [ReadingWorkflowStepRun]? = nil
     public var receiptBatch: ReadingReceiptBatch? = nil
     public var readerAnnotations: [ReaderAnnotation]? = nil
+    /// Optional additive metadata; older books are not rewritten or backfilled.
+    public var readingExperience: ReadingExperienceState? = nil
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units
     }

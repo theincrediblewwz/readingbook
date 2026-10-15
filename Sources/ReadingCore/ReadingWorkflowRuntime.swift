@@ -121,10 +121,11 @@ public struct ReadingWorkflowActionRegistry: Sendable {
     public static var builtIn: ReadingWorkflowActionRegistry {
         var registry = ReadingWorkflowActionRegistry()
         let common = ["knowledge_search", "methods_define", "reading_plan", "workflow_step_complete"]
-        let knowledge = ["types_define", "cards_upsert", "events_upsert", "relations_link", "views_configure", "map_attach", "timeline_attach"]
+        let knowledge = ["types_define", "cards_upsert", "events_upsert", "relations_link", "views_configure", "map_attach", "timeline_attach", "reading_enrich"]
         let descriptors = [
             ReadingWorkflowActionDescriptor(id: "ai.analyze", title: "原文分析", detail: "依据当前原文执行这一条阅读步骤，提交可核对的分析与引用；需要时实际调用知识工具保存适用对象。旧自然语言方法通过此受控动作执行。", allowedTools: common + knowledge),
             ReadingWorkflowActionDescriptor(id: "facts.extract", title: "知识抽取", detail: "实际调用知识工具创建或补充适用对象和关联，再提交抽取结果；没有适用对象须明确解释，不强造人物或事件。", allowedTools: common + knowledge),
+            ReadingWorkflowActionDescriptor(id: "reading.enrich", title: "多层伴读", detail: "把已读原文锚定到适用词语提及、白话或概念解释、资料对齐和思考卡，实际调用 reading_enrich 保存可点击产物；不适用的类型不强行生成。已有实体须按名称、别名和称谓复用。外部资料只允许已导入且有可核对原文的材料；不得捏造来源。", allowedTools: common + knowledge),
             ReadingWorkflowActionDescriptor(id: "reading.review", title: "复盘核对", detail: "对照已执行步骤与原文核对条件、矛盾、遗漏和不确定处，提交复盘结果；不能以先前分析代替原文。", allowedTools: common)
         ]
         for descriptor in descriptors {
@@ -241,7 +242,7 @@ public enum ReadingWorkflowRuntime {
     public static func recordTool(_ name: String, in project: inout BookProject, previous: BookProject? = nil) {
         guard let index = project.workflowRuns?.firstIndex(where: { $0.status == .running }) else { return }
         if !(project.workflowRuns?[index].toolNames.contains(name) ?? true) { project.workflowRuns?[index].toolNames.append(name) }
-        if let previous, previous.entities != project.entities || previous.events != project.events || previous.relations != project.relations {
+        if let previous, previous.entities != project.entities || previous.events != project.events || previous.relations != project.relations || previous.readingExperience != project.readingExperience {
             var writes = project.workflowRuns?[index].knowledgeWriteTools ?? []
             if !writes.contains(name) { writes.append(name) }
             project.workflowRuns?[index].knowledgeWriteTools = writes
@@ -368,6 +369,10 @@ public enum ReadingWorkflowRuntime {
         guard let unit = project.units.first(where: { $0.id == task.requirement.unitID }) else { throw ReadingError.invalid("核验原文不存在。") }
         let ids = Set(project.entities.map(\.id) + project.events.map(\.id) + project.documents.map(\.id))
         var evidence = project.entities.flatMap(\.evidence) + project.events.flatMap(\.evidence) + project.relations.flatMap(\.evidence)
+        if let experience = project.readingExperience {
+            try ReadingExperienceRuntime.validate(experience, in: project)
+            evidence += experience.anchors.map { Evidence(unitID: $0.unitID, quote: $0.quote) }
+        }
         evidence += (project.workflowRuns ?? []).filter { $0.unitID == unit.id && $0.status == .completed }.flatMap { $0.output?.evidence ?? [] }
         let local = evidence.filter { $0.unitID == unit.id }
         guard local.allSatisfy({ !$0.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && unit.text.contains($0.quote) }),
@@ -397,8 +402,11 @@ public enum ReadingWorkflowRuntime {
     }
 
     private static func validateActionOutput(_ output: ReadingWorkflowOutput, run: ReadingWorkflowStepRun) throws {
-        if run.actionID == "facts.extract", (run.knowledgeWriteTools ?? []).isEmpty, output.noChangesReason == nil {
+        if ["facts.extract", "reading.enrich"].contains(run.actionID), (run.knowledgeWriteTools ?? []).isEmpty, output.noChangesReason == nil {
             throw ReadingError.invalid("知识抽取没有实际知识写入凭据；请调用知识工具，或用noChangesReason明确说明无适用对象。")
+        }
+        if run.actionID == "reading.enrich", !(run.knowledgeWriteTools ?? []).contains("reading_enrich"), output.noChangesReason == nil {
+            throw ReadingError.invalid("多层伴读没有 reading_enrich 实际产物凭据；请保存锚点和阅读层，或明确说明本步无新增适用内容。")
         }
     }
 

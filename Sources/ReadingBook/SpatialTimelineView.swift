@@ -51,7 +51,7 @@ struct SpatialTimelineView: View {
             }
         }
         if book.events.isEmpty {
-            result = book.entities.compactMap { place in
+            result = (store.readingScopeCurrent ? store.readingContextItems.entities : book.entities).compactMap { place in
                 guard let lat = place.latitude, let lon = place.longitude else { return nil }
                 return ReadingMapPoint(id: place.id, targetID: place.id, title: place.name, subtitle: place.locationNote ?? "书中地点", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon))
             }
@@ -151,6 +151,7 @@ struct SpatialTimelineView: View {
                 }.buttonStyle(ReadingToolbarButtonStyle(selected: showingEvents))
                     .help("浏览当前时间范围的事件").popover(isPresented: $showingEvents) { eventList }
                 Menu {
+                    Toggle("只看当前原文相关事件", isOn: $store.readingScopeCurrent)
                     Toggle("保留时间待考事件", isOn: $store.showUndated)
                     Button("地图适合全部标记") { camera = .automatic }
                     Button("显示全部时间") { fitTime() }
@@ -182,7 +183,7 @@ struct SpatialTimelineView: View {
                 Button("全部") { fitTime() }.buttonStyle(ReadingToolbarButtonStyle()).help("显示全部时间")
             }
             TimelineRangeControl(lower: $store.timeFrom, upper: $store.timeTo, bounds: bounds,
-                                 events: store.book?.events ?? [], selectedID: store.selectedObjectID, select: selectEvent)
+                                   events: store.readingScopeCurrent ? store.readingContextItems.events : (store.book?.events ?? []), selectedID: store.selectedObjectID, select: selectEvent)
                 .id(store.bookID)
             if let event = expandedEvent {
                 Divider().opacity(0.5)

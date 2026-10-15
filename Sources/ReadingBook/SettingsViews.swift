@@ -156,7 +156,7 @@ struct PluginLibraryView: View {
     @State private var importError = ""
     @State private var componentError = ""
     @State private var componentNotice = ""
-    @State private var pendingAddition: ComponentKind?
+    @State private var pendingAddition: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -201,8 +201,8 @@ struct PluginLibraryView: View {
                         }.font(.system(size: 13))
                         DisclosureGroup("内置组件 · \(WorkspaceComponentRegistry.shared.components.count)", isExpanded: $showCapabilities) {
                             VStack(spacing: 0) {
-                                ForEach(WorkspaceComponentRegistry.shared.components, id: \.kind) { component in
-                                    capabilityRow(component.kind, title: component.title)
+                                ForEach(WorkspaceComponentRegistry.shared.components) { component in
+                                    capabilityRow(component)
                                 }
                             }.padding(.top, 5)
                         }.font(.system(size: 13))
@@ -239,40 +239,49 @@ struct PluginLibraryView: View {
             }.controlSize(.large).frame(minHeight: ReadingLayout.controlHeight)
         }.padding(ReadingLayout.panelPadding).controlSize(.regular)
         .onChange(of: store.isBusy) { _, busy in
-            guard !busy, let kind = pendingAddition else { return }
-            if store.installedComponent(for: kind) != nil {
-                let title = WorkspaceComponentRegistry.shared.component(for: kind)?.title ?? kind.title
-                componentNotice = "已添加\(title)，可在此点击“打开”或从侧栏进入。"
+            guard !busy, let componentID = pendingAddition else { return }
+            if let component = WorkspaceComponentRegistry.shared.component(id: componentID), store.installedComponent(for: component) != nil {
+                componentNotice = "已添加\(component.title)，可在此点击“打开”或从侧栏进入。"
             }
             pendingAddition = nil
         }
     }
 
-    private func capabilityRow(_ kind: ComponentKind, title: String) -> some View {
-        let installed = store.installedComponent(for: kind) != nil
-        let retainedByDisabledPack = !installed && store.savedComponent(for: kind) != nil
+    private func capabilityRow(_ component: WorkspaceComponentDescriptor) -> some View {
+        let installed = store.installedComponent(for: component) != nil
+        let retainedByDisabledPack = !installed && store.savedComponent(for: component) != nil
         return HStack(spacing: 12) {
-            BrandGlyph(name: BrandNavigation.glyph(route: kind.rawValue)).frame(width: 20, height: 20).foregroundStyle(Palette.accent)
+            Group {
+                if component.rendererID != nil { Image(systemName: component.icon).font(.system(size: 17, weight: .medium)) }
+                else { BrandGlyph(name: BrandNavigation.glyph(route: component.kind.rawValue)) }
+            }.frame(width: 20, height: 20).foregroundStyle(Palette.accent)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                Text(retainedByDisabledPack ? "已保存，请在上方启用所属声明包。" : capabilityDescription(kind)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(component.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                Text(retainedByDisabledPack ? "已保存，请在上方启用所属声明包。" : capabilityDescription(component)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Spacer(minLength: 0)
             Button(installed ? "打开" : retainedByDisabledPack ? "已停用" : "添加") {
                 componentError = ""; componentNotice = ""
                 if installed {
-                    store.activate(kind, open: true, onError: { componentError = $0 })
+                    store.activate(component, open: true, onError: { componentError = $0 })
                     dismiss()
                 } else {
-                    pendingAddition = kind; componentNotice = "正在添加\(title)…"
-                    store.activate(kind, open: false, onError: { message in componentError = message; componentNotice = ""; pendingAddition = nil })
+                    pendingAddition = component.id; componentNotice = "正在添加\(component.title)…"
+                    store.activate(component, open: false, onError: { message in componentError = message; componentNotice = ""; pendingAddition = nil })
                 }
             }.disabled(store.book == nil || store.isBusy || retainedByDisabledPack).fixedSize()
         }.padding(.vertical, 8)
     }
 
-    private func capabilityDescription(_ kind: ComponentKind) -> String {
-        switch kind {
+    private func capabilityDescription(_ component: WorkspaceComponentDescriptor) -> String {
+        switch component.rendererID ?? "" {
+        case "reading.layers": return "随当前原文查看译文、释义、评注与资料对齐"
+        case "reading.mentions": return "按原文词句追踪对象、别名及出现位置"
+        case "reading.decisions": return "查看带原文依据的问题、选项与分析路径"
+        case "reading.atlas": return "按来源查看章节覆盖、内容类型、事件密度与原文共现"
+        default: break
+        }
+        switch component.kind {
         case .cards: return "按书定义类型，查看带来源的要素"
         case .timeline: return "按事件时间筛选"
         case .map: return "地图、时间轴与事件共用同一时间窗"

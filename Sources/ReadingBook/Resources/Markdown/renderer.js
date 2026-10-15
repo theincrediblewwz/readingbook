@@ -7,6 +7,8 @@
   const beginEnvironment = new RegExp('^\\\\begin\\{(' + environments + ')\\}');
   let currentRevision = 0;
   let selectionEnabled = false;
+  let currentSource = '';
+  let sourceDecorations = [];
 
   function escapedAt(source, position) {
     let backslashes = 0;
@@ -59,7 +61,10 @@
     state.pos = end + delimiter.right.length;
     return true;
   });
-  md.renderer.rules.readingbook_math = (tokens, index) => mathHTML(tokens[index].content, tokens[index].meta.display, tokens[index].meta.original);
+  md.renderer.rules.readingbook_math = (tokens, index) => {
+    const token = tokens[index], html = mathHTML(token.content, token.meta.display, token.meta.original);
+    return sourceBlockHTML(html, token.meta?.readingbookBlock);
+  };
   md.block.ruler.before('fence', 'readingbook_math_block', function (state, startLine, endLine, silent) {
     const start = state.bMarks[startLine] + state.tShift[startLine];
     if (state.sCount[startLine] - state.blkIndent >= 4) return false;
@@ -113,7 +118,7 @@
     if (!env.allowImages || !path) return '<span class="image-placeholder" role="note">图片：' + escape(description) + ' · ' + (!path ? '外部或未知图片路径，未加载' : '尚未授权本地图片目录') + '</span>';
     return '<img src="readingbook-renderer://image/' + path + '?v=' + env.revision + '" alt="' + escape(description) + '" loading="eager" decoding="async">';
   };
-  md.renderer.rules.table_open = () => '<div class="table-scroll" tabindex="0" role="region" aria-label="表格，可横向滚动"><table>\n';
+  md.renderer.rules.table_open = (tokens, index) => '<div class="table-scroll" tabindex="0" role="region" aria-label="表格，可横向滚动"' + sourceBlockAttributes(tokens[index].meta?.readingbookBlock) + '><table>\n';
   md.renderer.rules.table_close = () => '</table></div>\n';
   const defaultHeading = md.renderer.rules.heading_open || ((tokens, index, options, env, renderer) => renderer.renderToken(tokens, index, options));
   md.renderer.rules.heading_open = function (tokens, index, options, env, renderer) {
@@ -124,13 +129,147 @@
     return defaultHeading(tokens, index, options, env, renderer);
   };
 
+  // Keep a source map only when every consumed character is accounted for.
+  // Transformed escapes/entities, links, code and math never become invented
+  // word locations. Their block still has an honest paragraph-level fallback.
+  const defaultText = md.renderer.rules.text || ((tokens, index) => escape(tokens[index].content));
+  md.renderer.rules.text = function (tokens, index, options, env, renderer) {
+    const token = tokens[index], range = token.meta?.readingbookSource;
+    const html = defaultText(tokens, index, options, env, renderer);
+    if (!range || !token.content) return html;
+    return '<span data-source-start="' + range[0] + '" data-source-end="' + range[1] + '">' + html + '</span>';
+  };
+  function sourceBlockAttributes(range) {
+    return range ? ' data-source-block-start="' + range[0] + '" data-source-block-end="' + range[1] + '"' : '';
+  }
+  function sourceBlockHTML(html, range) {
+    return range ? '<div class="source-block"' + sourceBlockAttributes(range) + '>' + html + '</div>' : html;
+  }
+  for (const type of ['fence', 'code_block']) {
+    const original = md.renderer.rules[type];
+    md.renderer.rules[type] = (tokens, index, options, env, renderer) => sourceBlockHTML(original(tokens, index, options, env, renderer), tokens[index].meta?.readingbookBlock);
+  }
+  function prepareSourceMap(tokens, source, enabled) {
+    if (!enabled || /\0|\r(?!\n)/.test(source)) return;
+    const offsets = [0];
+    for (let i = 0; i < source.length; i++) if (source[i] === '\n') offsets.push(i + 1);
+    offsets.push(source.length);
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      if (token.block && token.map && ['fence', 'code_block', 'readingbook_math', 'table_open'].includes(token.type)) {
+        token.meta = Object.assign({}, token.meta, { readingbookBlock: [offsets[token.map[0]] ?? 0, offsets[token.map[1]] ?? source.length] });
+      }
+      if (token.map && token.nesting === 1 && ['paragraph_open', 'heading_open', 'blockquote_open', 'list_item_open'].includes(token.type)) {
+        token.attrSet('data-source-block-start', String(offsets[token.map[0]] ?? 0));
+        token.attrSet('data-source-block-end', String(offsets[token.map[1]] ?? source.length));
+      }
+      if (token.type !== 'inline' || !token.map || !token.children) continue;
+      const start = offsets[token.map[0]] ?? 0, end = offsets[token.map[1]] ?? source.length;
+      const block = source.slice(start, end), relative = block.indexOf(token.content);
+      if (relative < 0 || block.indexOf(token.content, relative + 1) >= 0) continue;
+      let cursor = 0, valid = true;
+      const mapped = [];
+      for (const child of token.children) {
+        let raw;
+        if (child.type === 'text') {
+          raw = child.content;
+          mapped.push([child, start + relative + cursor, start + relative + cursor + raw.length]);
+        } else if (/^(em|strong|s)_(open|close)$/.test(child.type)) raw = child.markup;
+        else if (child.type === 'softbreak') raw = '\n';
+        else if (child.type === 'code_inline') raw = child.markup + child.content + child.markup;
+        else if (child.type === 'readingbook_math') raw = child.meta.original;
+        else { valid = false; break; }
+        if (token.content.slice(cursor, cursor + raw.length) !== raw) { valid = false; break; }
+        cursor += raw.length;
+      }
+      if (valid && cursor === token.content.length) for (const [child, from, to] of mapped) {
+        child.meta = Object.assign({}, child.meta, { readingbookSource: [from, to] });
+      }
+    }
+  }
+
   function renderHTML(markdown, options) {
     const settings = options || {};
     const source = String(markdown || '');
     if (source.length > 2_000_000) return '<p class="renderer-note">此段内容过长，请按章节查看；原文未被截断保存。</p>';
-    let html = md.render(source, { allowImages: !!settings.allowImages, revision: Number(settings.revision) || 0, headings: Object.create(null) });
+    if (settings.plainText) {
+      const attributes = settings.sourceText === source && !source.includes('\0') ? ' data-source-start="0" data-source-end="' + source.length + '" data-source-block-start="0" data-source-block-end="' + source.length + '"' : '';
+      return '<div class="source-plain"' + attributes + '>' + escape(source).replace(/\r/g, '&#13;') + '</div>';
+    }
+    const env = { allowImages: !!settings.allowImages, revision: Number(settings.revision) || 0, headings: Object.create(null) };
+    const tokens = md.parse(source, env);
+    prepareSourceMap(tokens, source, typeof settings.sourceText === 'string' && settings.sourceText === source);
+    let html = md.renderer.render(tokens, md.options, env);
     if (/\\documentclass(?:\[|\{)|\\begin\{document\}/.test(source)) html = '<p class="renderer-note">此处支持 Markdown 内的数学公式与 AMS 环境；完整 LaTeX 文档的宏包和页面排版不在本阅读器范围内。未识别内容保留原文。</p>' + html;
     return html;
+  }
+
+  function validatedRange(item) {
+    if (!item || typeof item.id !== 'string' || typeof item.targetID !== 'string' || typeof item.quote !== 'string' || !item.quote || item.quote.length > 32_768) return null;
+    const start = item.rangeLocation, length = item.rangeLength;
+    if (Number.isSafeInteger(start) && Number.isSafeInteger(length) && start >= 0 && length > 0 && currentSource.slice(start, start + length) === item.quote) return [start, start + length];
+    const found = currentSource.indexOf(item.quote);
+    if (found < 0 || currentSource.indexOf(item.quote, found + 1) >= 0) return null;
+    return [found, found + item.quote.length];
+  }
+  function addSourceDecorations(root) {
+    const ranges = Array.from(root.querySelectorAll('[data-source-start]'));
+    let approximateCount = 0;
+    for (const item of sourceDecorations) {
+      const range = validatedRange(item);
+      if (!range) continue;
+      const host = ranges.find(node => Number(node.dataset.sourceStart) <= range[0] && Number(node.dataset.sourceEnd) >= range[1]);
+      // One literal source span is sufficient. Never cross a math/link/code node.
+      if (host) {
+        const from = range[0] - Number(host.dataset.sourceStart), to = range[1] - Number(host.dataset.sourceStart);
+        const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+        let textNode, passed = 0, begin = null, finish = null;
+        while ((textNode = walker.nextNode())) {
+          const next = passed + textNode.length;
+          if (!begin && from >= passed && from < next) begin = [textNode, from - passed];
+          if (to > passed && to <= next) { finish = [textNode, to - passed]; break; }
+          passed = next;
+        }
+        if (begin && finish) {
+          const domRange = document.createRange(); domRange.setStart(...begin); domRange.setEnd(...finish);
+          if (domRange.toString() === item.quote && !begin[0].parentElement.closest('.source-mention') && !finish[0].parentElement.closest('.source-mention') && !domRange.cloneContents().querySelector('.source-mention')) {
+            const marker = document.createElement('span'); marker.className = 'source-mention';
+            marker.dataset.sourceDecoration = item.id; marker.dataset.sourceTarget = item.targetID;
+            marker.tabIndex = 0; marker.setAttribute('role', 'button'); marker.setAttribute('aria-label', '查看“' + item.quote + '”的关联内容');
+            marker.title = '查看关联内容';
+            marker.appendChild(domRange.extractContents()); domRange.insertNode(marker); continue;
+          }
+        }
+      }
+      const blocks = Array.from(root.querySelectorAll('[data-source-block-start]'));
+      const block = blocks.filter(node => Number(node.dataset.sourceBlockStart) <= range[0] && Number(node.dataset.sourceBlockEnd) >= range[1]).sort((a, b) => (Number(a.dataset.sourceBlockEnd) - Number(a.dataset.sourceBlockStart)) - (Number(b.dataset.sourceBlockEnd) - Number(b.dataset.sourceBlockStart)))[0];
+      if (block) {
+        const marker = document.createElement('button'); marker.className = 'source-paragraph-link';
+        marker.dataset.sourceDecoration = item.id; marker.dataset.sourceTarget = item.targetID;
+        marker.textContent = item.quote.length > 22 ? item.quote.slice(0, 22) + '…' : item.quote;
+        marker.title = '定位到本段；此处的 Markdown 结构不支持可靠词位映射';
+        marker.setAttribute('aria-label', marker.textContent + '，段落关联，非精确词位'); block.appendChild(marker); approximateCount++;
+      }
+    }
+    if (approximateCount) {
+      const note = document.createElement('p'); note.className = 'source-location-note';
+      note.textContent = '部分关联显示在对应段落末尾；公式、链接或复杂排版保留原样，未推测词语位置。'; root.appendChild(note);
+    }
+  }
+  function focusDecoration(id) {
+    const root = document.getElementById('content');
+    root.querySelectorAll('.source-focused').forEach(node => node.classList.remove('source-focused'));
+    const node = Array.from(root.querySelectorAll('[data-source-decoration]')).find(node => node.dataset.sourceDecoration === id);
+    if (!node) return false;
+    node.classList.add('source-focused');
+    const revision = currentRevision;
+    // First allow the fitted WebView to receive its new content height.
+    global.requestAnimationFrame(() => global.requestAnimationFrame(() => {
+      if (revision !== currentRevision || !node.isConnected) return;
+      const rect = node.getBoundingClientRect(), parent = root.getBoundingClientRect();
+      global.webkit?.messageHandlers?.readingbookSourceFocus?.postMessage({ y: Math.max(0, rect.top - parent.top - 12), height: rect.height + 24, revision });
+    }));
+    return true;
   }
   let heightScheduled = false;
   function reportHeight() {
@@ -146,10 +285,13 @@
     const settings = options || {};
     currentRevision = Number(settings.revision) || 0;
     selectionEnabled = !!settings.selectionEnabled;
+    currentSource = typeof settings.sourceText === 'string' ? settings.sourceText : String(markdown || '');
+    sourceDecorations = Array.isArray(settings.sourceDecorations) ? settings.sourceDecorations.slice(0, 1_000) : [];
     global.getSelection?.()?.removeAllRanges();
     document.documentElement.dataset.theme = settings.theme === 'dark' ? 'dark' : 'light';
     const root = document.getElementById('content');
     root.innerHTML = renderHTML(markdown, settings);
+    addSourceDecorations(root);
     root.querySelectorAll('img').forEach(image => {
       image.addEventListener('load', reportHeight, { once: true });
       image.addEventListener('error', () => {
@@ -162,14 +304,20 @@
     reportHeight();
     document.fonts?.ready.then(reportHeight);
   }
-  global.ReadingBookMarkdown = Object.freeze({ render, renderHTML });
+  global.ReadingBookMarkdown = Object.freeze({ render, renderHTML, focusDecoration });
   if (global.document) {
     let selectionTimer = null;
     let lastSelectionKey = '';
+    let sourcePress = null;
+    function finishSourcePress() {
+      const press = sourcePress;
+      if (press?.node.isConnected) press.node.tabIndex = 0;
+      sourcePress = null;
+    }
     function reportSelection() {
       if (!selectionEnabled) return;
       const root = document.getElementById('content'), selection = global.getSelection();
-      let text = '', containsMath = false;
+      let text = '', containsMath = false, sourceLocation = null, sourceLength = null;
       if (root && selection && selection.rangeCount === 1 && !selection.isCollapsed &&
           root.contains(selection.anchorNode) && root.contains(selection.focusNode)) {
         const range = selection.getRangeAt(0);
@@ -177,17 +325,31 @@
         // KaTeX has an accessible MathML copy and a visual HTML copy. Preserve the
         // selected semantic text once; exact TeX belongs to the source selector.
         const fragment = range.cloneContents();
+        fragment.querySelectorAll('.source-paragraph-link, .source-location-note').forEach(node => node.remove());
         fragment.querySelectorAll('.katex-mathml').forEach(node => node.remove());
         const container = document.createElement('div'); container.appendChild(fragment);
         container.querySelectorAll('br').forEach(node => node.replaceWith(document.createTextNode('\n')));
         container.querySelectorAll('p,li,pre,tr,h1,h2,h3,h4,h5,h6,blockquote,.math-display').forEach(node => node.appendChild(document.createTextNode('\n')));
         text = container.textContent || '';
         if (text.length > 32_768) text = ''; // Never silently truncate a saved excerpt.
+        const sourcePoint = (node, offset) => {
+          const parent = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+          const host = parent?.closest?.('[data-source-start]');
+          if (!host || !root.contains(host)) return null;
+          const before = document.createRange(); before.selectNodeContents(host); before.setEnd(node, offset);
+          return Number(host.dataset.sourceStart) + before.toString().length;
+        };
+        if (!containsMath) {
+          const start = sourcePoint(range.startContainer, range.startOffset), end = sourcePoint(range.endContainer, range.endOffset);
+          if (start !== null && end !== null && end > start && currentSource.slice(start, end) === text) {
+            sourceLocation = start; sourceLength = end - start;
+          }
+        }
       }
       const key = currentRevision + ':' + containsMath + ':' + text;
       if (key === lastSelectionKey) return;
       lastSelectionKey = key;
-      global.webkit?.messageHandlers?.readingbookSelection?.postMessage({ text, containsMath, revision: currentRevision });
+      global.webkit?.messageHandlers?.readingbookSelection?.postMessage({ text, containsMath, sourceLocation, sourceLength, revision: currentRevision });
     }
     document.addEventListener('selectionchange', () => {
       clearTimeout(selectionTimer);
@@ -195,7 +357,34 @@
     });
     new ResizeObserver(reportHeight).observe(document.getElementById('content'));
     global.addEventListener('resize', reportHeight);
+    // Focusable inline spans can suppress native drag selection in Chromium /
+    // WebKit. Keep keyboard focusability between gestures, while mouse selection
+    // uses ordinary text behavior. No pointer capture or manual text offsets.
+    document.addEventListener('mousedown', event => {
+      finishSourcePress();
+      const node = event.target.closest?.('.source-mention');
+      if (!node || event.button !== 0) return;
+      sourcePress = { node, x: event.clientX, y: event.clientY, dragged: false };
+      if (document.activeElement === node) node.blur();
+      node.removeAttribute('tabindex');
+    }, true);
+    document.addEventListener('mousemove', event => {
+      if (sourcePress && Math.hypot(event.clientX - sourcePress.x, event.clientY - sourcePress.y) > 4) sourcePress.dragged = true;
+    }, true);
+    document.addEventListener('mouseup', () => {
+      const press = sourcePress;
+      setTimeout(() => { if (sourcePress === press) finishSourcePress(); }, 0);
+    }, true);
+    global.addEventListener('blur', finishSourcePress);
     document.addEventListener('click', event => {
+      const marker = event.target.closest?.('[data-source-decoration]');
+      if (marker) {
+        // A drag selection ending on a mention should remain a selection.
+        if (event.detail !== 0 && (sourcePress?.dragged || global.getSelection()?.isCollapsed === false)) return;
+        event.preventDefault();
+        global.webkit?.messageHandlers?.readingbookSourceTap?.postMessage({ id: marker.dataset.sourceDecoration, targetID: marker.dataset.sourceTarget, revision: currentRevision });
+        return;
+      }
       const link = event.target.closest?.('a');
       if (!link) return;
       event.preventDefault();
@@ -205,6 +394,12 @@
         try { document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ block: 'start' }); } catch (_) { }
       } else if (/^(readingbook:|https?:|mailto:)/i.test(href)) {
         global.webkit?.messageHandlers?.readingbookLink?.postMessage({ href, revision: currentRevision });
+      }
+    });
+    document.addEventListener('keydown', event => {
+      const marker = event.target.closest?.('[data-source-decoration]');
+      if (marker && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault(); marker.click();
       }
     });
   }

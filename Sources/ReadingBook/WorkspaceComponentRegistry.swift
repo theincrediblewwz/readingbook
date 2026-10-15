@@ -2,12 +2,17 @@ import SwiftUI
 import ReadingCore
 
 struct WorkspaceComponentDescriptor: Identifiable {
-    var id: String { kind.rawValue }
+    var id: String { rendererID ?? kind.rawValue }
     var kind: ComponentKind
     var title: String
     var icon: String
     var aliases: Set<ComponentKind>
     var permanent = false
+    var rendererID: String?
+    init(kind: ComponentKind, title: String, icon: String, aliases: Set<ComponentKind> = [], permanent: Bool = false, rendererID: String? = nil) {
+        self.kind = kind; self.title = title; self.icon = icon; self.aliases = aliases
+        self.permanent = permanent; self.rendererID = rendererID
+    }
 }
 
 /// Rendering, discovery and navigation consume the same registrations.
@@ -28,7 +33,10 @@ struct WorkspaceComponentDescriptor: Identifiable {
     private var order: [String] = []
     static let shared: WorkspaceComponentRegistry = {
         var registry = WorkspaceComponentRegistry()
-        do { try registry.install(BuiltInWorkspacePlugin()) }
+        do {
+            try registry.install(BuiltInWorkspacePlugin())
+            try registry.install(ReadingExperienceWorkspacePlugin())
+        }
         catch { preconditionFailure("内置组件注册失败：\(error)") }
         return registry
     }()
@@ -37,33 +45,60 @@ struct WorkspaceComponentDescriptor: Identifiable {
         var staged = self; try plugin.register(in: &staged); self = staged
     }
     mutating func register(_ descriptor: WorkspaceComponentDescriptor, render: @escaping (ViewDefinition?) -> AnyView) throws {
-        let keys = descriptor.aliases.union([descriptor.kind])
-        guard entries[descriptor.id] == nil, keys.allSatisfy({ aliases[$0] == nil }) else { throw ReadingError.invalid("组件或别名已注册：\(descriptor.id)") }
+        // Namespaced renderers can share a legacy fallback kind without claiming its navigation aliases.
+        let keys: Set<ComponentKind> = descriptor.rendererID == nil ? descriptor.aliases.union([descriptor.kind]) : []
+        guard !descriptor.id.isEmpty, entries[descriptor.id] == nil, keys.allSatisfy({ aliases[$0] == nil }) else { throw ReadingError.invalid("组件或别名已注册：\(descriptor.id)") }
         entries[descriptor.id] = Entry(descriptor: descriptor, render: render); order.append(descriptor.id)
         for kind in keys { aliases[kind] = descriptor.id }
     }
     func component(for kind: ComponentKind) -> WorkspaceComponentDescriptor? { aliases[kind].flatMap { entries[$0]?.descriptor } }
-    func render(_ definition: ViewDefinition?, kind: ComponentKind) -> AnyView? { aliases[kind].flatMap { entries[$0]?.render(definition) } }
+    func component(id: String) -> WorkspaceComponentDescriptor? { entries[id]?.descriptor }
+    func component(for view: ViewDefinition) -> WorkspaceComponentDescriptor? {
+        if let id = view.rendererID {
+            return entries[id]?.descriptor ?? WorkspaceComponentDescriptor(kind: view.kind, title: view.title, icon: "puzzlepiece.extension", rendererID: id)
+        }
+        return component(for: view.kind)
+    }
+    func render(_ definition: ViewDefinition?, kind: ComponentKind) -> AnyView? {
+        if let definition, let id = definition.rendererID {
+            if let entry = entries[id] { return entry.render(definition) }
+            return AnyView(ContentUnavailableView(definition.title, systemImage: "puzzlepiece.extension", description: Text("组件 \(id) 尚未安装。内容与配置已保留，安装对应插件后可继续查看。")))
+        }
+        return aliases[kind].flatMap { entries[$0]?.render(definition) }
+    }
     func equivalent(_ lhs: ComponentKind, _ rhs: ComponentKind) -> Bool {
         guard let componentID = aliases[lhs] else { return false }
         return componentID == aliases[rhs]
     }
+    func equivalent(_ lhs: ViewDefinition, _ rhs: ViewDefinition) -> Bool { rendererIdentity(lhs) == rendererIdentity(rhs) }
+    func equivalent(_ view: ViewDefinition, _ descriptor: WorkspaceComponentDescriptor) -> Bool { rendererIdentity(view) == descriptor.id }
+    private func rendererIdentity(_ view: ViewDefinition) -> String { view.rendererID ?? aliases[view.kind] ?? view.kind.rawValue }
     func removalIDs(for view: ViewDefinition, in views: [ViewDefinition]) -> Set<String> {
         // Navigation coalesces book-wide renderers. Remove the same group so an
         // old hidden alias cannot reappear immediately after removing its entry.
         // Filtered card collections remain independent entries.
-        guard view.kind != .cards else { return [view.id] }
-        return Set(views.filter { $0.id == view.id || equivalent($0.kind, view.kind) }.map(\.id))
+        guard rendererIdentity(view) != aliases[.cards] else { return [view.id] }
+        return Set(views.filter { $0.id == view.id || equivalent($0, view) }.map(\.id))
     }
     func navigationViews(_ views: [ViewDefinition]) -> [ViewDefinition] {
         var seen = Set<String>()
         return views.filter { view in
-            guard let descriptor = component(for: view.kind), !descriptor.permanent else { return false }
+            guard let descriptor = component(for: view), !descriptor.permanent else { return false }
             // Card collections may intentionally filter different types. Other
             // current renderers share book-wide state and need one navigation entry.
-            if view.kind == .cards { return true }
+            if rendererIdentity(view) == aliases[.cards] { return true }
             return seen.insert(descriptor.id).inserted
         }
+    }
+}
+
+@MainActor private struct ReadingExperienceWorkspacePlugin: WorkspaceComponentPlugin {
+    let id = "builtin.reading-experience"
+    func register(in registry: inout WorkspaceComponentRegistry) throws {
+        try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "多层伴读", icon: "text.book.closed", rendererID: "reading.layers")) { AnyView(ReadingExperienceWorkspaceView(section: "layers", definition: $0)) }
+        try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "原文索引", icon: "text.magnifyingglass", rendererID: "reading.mentions")) { AnyView(ReadingExperienceWorkspaceView(section: "mentions", definition: $0)) }
+        try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "思考卡", icon: "rectangle.on.rectangle", rendererID: "reading.decisions")) { AnyView(ReadingExperienceWorkspaceView(section: "decisions", definition: $0)) }
+        try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "全书总览", icon: "chart.bar.xaxis", rendererID: "reading.atlas")) { AnyView(ReadingAtlasView(definition: $0)) }
     }
 }
 

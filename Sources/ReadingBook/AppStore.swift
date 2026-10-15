@@ -10,8 +10,25 @@ import ReadingCore
     @Published var route = "reader"
     @Published var selectedObjectID: String?
     @Published var selectedUnitID: String? {
-        didSet { if let bookID, let selectedUnitID { UserDefaults.standard.set(selectedUnitID, forKey: "position-\(bookID)") } }
+        didSet {
+            if let bookID, let selectedUnitID { UserDefaults.standard.set(selectedUnitID, forKey: "position-\(bookID)") }
+            if oldValue != selectedUnitID { sourceReadingSelection = nil; focusedReadingAnchorID = nil; selectedObjectID = nil; readingContextDocumentID = nil; refreshReadingExperienceIndex() }
+        }
     }
+    @Published var sourceReadingSelection: SourceReadingSelection?
+    @Published var focusedReadingAnchorID: String?
+    @Published var readingCompanionVisible = false
+    @Published var readingCompanionSection = "context"
+    @Published var readingSourceMode = "original"
+    @Published var readingExperienceIndex = ReadingExperienceState()
+    @Published var readingScopeCurrent = false
+    @Published var lastQuestionContext = ""
+    @Published var readingExperienceError: String?
+    @Published var showingLibrarySearch = false
+    @Published var readingContextDocumentID: String?
+    var readingContextCacheKey: ReadingContext?
+    var readingContextCache = ReadingContextItems()
+    @Published var projectRevision = 0
     @Published var pdfNavigationToken = 0
     @Published var activeReadingUnitID: String?
     @Published var search = ""
@@ -61,7 +78,8 @@ import ReadingCore
     var book: BookProject? { books.first { $0.id == bookID } }
     var selectedUnit: SourceUnit? { book?.units.first { $0.id == selectedUnitID } }
     var visibleEvents: [KnowledgeEvent] {
-        (book?.events ?? []).filter {
+        let scoped = readingScopeCurrent ? readingContextItems.events : (book?.events ?? [])
+        return scoped.filter {
             guard let year = $0.startYear else { return showUndated }
             return Double($0.endYear ?? year) >= timeFrom && Double(year) <= timeTo
         }.sorted { ($0.startYear ?? Int.max) < ($1.startYear ?? Int.max) }
@@ -85,6 +103,7 @@ import ReadingCore
         pdfPasswordRequest = nil
         let generation = navigationGeneration
         bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil
+        sourceReadingSelection = nil; focusedReadingAnchorID = nil; readingCompanionVisible = false; readingCompanionSection = "context"; readingSourceMode = "original"; readingScopeCurrent = false; lastQuestionContext = ""; readingExperienceError = nil
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
         if book?.units.contains(where: { $0.id == selectedUnitID }) != true { selectedUnitID = book?.units.first?.id }
         if let project = book {
@@ -97,10 +116,13 @@ import ReadingCore
         let years = book?.events.flatMap { [$0.startYear, $0.endYear].compactMap { $0 } } ?? []
         timeFrom = Double((years.min() ?? -5000) - 1); timeTo = Double((years.max() ?? 3000) + 1)
         restoreDraft()
+        refreshReadingExperienceIndex()
     }
     func publish(_ project: BookProject) {
+        projectRevision += 1
         if let index = books.firstIndex(where: { $0.id == project.id }) { books[index] = project }
         else { books.insert(project, at: 0) }
+        if project.id == bookID { refreshReadingExperienceIndex() }
     }
     func chooseBook() {
         guard !isBusy else { return }
@@ -214,7 +236,7 @@ import ReadingCore
             editorMarkdown = markdown
             documentError = nil
             editorTitle = document.title; selectedDocumentID = document.id; draftEvidence = document.evidence; editorDirty = false; route = "editor"
-            selectedObjectID = document.id
+            selectedObjectID = document.id; readingContextDocumentID = document.id
         } catch { if current.id == bookID && generation == documentGeneration { errorMessage = error.localizedDescription } }
     }
     func saveCurrentDocument() async {
@@ -262,6 +284,8 @@ import ReadingCore
     func ask(_ question: String) {
         guard let current = book, !isBusy, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, providerReady else { return }
         isBusy = true; activity = "正在从原文检索依据并回答…"
+        let context = currentReadingContext
+        lastQuestionContext = readingContextDescription
         task = Task {
             do {
                 await reader.resetBudget()
@@ -273,7 +297,7 @@ import ReadingCore
                     documents[document.id] = bounded; remaining -= bounded.count
                     if remaining <= 0 { break }
                 }
-                let reply = try await reader.answer(question: question, project: current, settings: settings, apiKey: apiKey, documents: documents)
+                let reply = try await reader.answer(question: question, project: current, settings: settings, apiKey: apiKey, documents: documents, readingContext: context)
                 try Task.checkCancellation()
                 var result = current; result.chats.append(ChatMessage(role: "user", content: question)); result.chats.append(reply)
                 try await repository.save(result); publish(result); requestsUsed = await reader.requestCount
@@ -296,9 +320,11 @@ import ReadingCore
     func navigateToUnit(_ id: String) {
         guard book?.units.contains(where: { $0.id == id }) == true else { return }
         pdfNavigationToken += 1
+        sourceReadingSelection = nil; focusedReadingAnchorID = nil
+        readingContextDocumentID = nil
         selectedUnitID = id
     }
-    func follow(_ evidence: Evidence) { navigateToUnit(evidence.unitID); route = "reader" }
+    func follow(_ evidence: Evidence) { followReadingEvidence(evidence) }
     func openInternalURL(_ url: URL) async {
         guard url.scheme == "readingbook" else { return }
         let parts = url.pathComponents.filter { $0 != "/" }
@@ -310,7 +336,17 @@ import ReadingCore
             guard bookID == targetBook else { return }
             kind = parts[1]; id = parts[2]
         } else { kind = url.host ?? ""; id = parts.last ?? "" }
-        if kind == "unit", book?.units.contains(where: { $0.id == id }) == true { navigateToUnit(id); route = "reader" }
+        if kind == "anchor" { focusReadingAnchor(id) }
+        else if kind == "unit", let project = book, project.units.contains(where: { $0.id == id }) {
+            navigateToUnit(id); route = "reader"
+            let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if let quote = query.first(where: { $0.name == "quote" })?.value,
+               let anchor = try? ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash, unitID: id, quote: quote,
+                         prefix: query.first(where: { $0.name == "prefix" })?.value ?? "", suffix: query.first(where: { $0.name == "suffix" })?.value ?? "", in: project) {
+                if !readingExperienceIndex.anchors.contains(where: { $0.id == anchor.id }) { readingExperienceIndex.anchors.append(anchor) }
+                focusedReadingAnchorID = anchor.id
+            }
+        }
         else if kind == "document", let document = book?.documents.first(where: { $0.id == id }) { await openDocument(document) }
         else { errorMessage = "引用的原文或文档不存在于当前书籍。" }
     }
@@ -342,24 +378,34 @@ import ReadingCore
         do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
     }
     func installedComponent(for kind: ComponentKind) -> ViewDefinition? {
-        if let component = WorkspaceComponentRegistry.shared.component(for: kind), component.permanent {
-            return ViewDefinition(id: component.kind.rawValue, title: component.title, kind: component.kind)
-        }
-        return enabledViews.first { WorkspaceComponentRegistry.shared.equivalent($0.kind, kind) }
+        guard let component = WorkspaceComponentRegistry.shared.component(for: kind) else { return nil }
+        return installedComponent(for: component)
+    }
+    func installedComponent(for component: WorkspaceComponentDescriptor) -> ViewDefinition? {
+        if component.permanent { return ViewDefinition(id: component.id, title: component.title, kind: component.kind, rendererID: component.rendererID) }
+        return enabledViews.first { (component.rendererID != nil || $0.rendererID == nil) && WorkspaceComponentRegistry.shared.equivalent($0, component) }
     }
     func savedComponent(for kind: ComponentKind) -> ViewDefinition? {
-        book?.views.first { WorkspaceComponentRegistry.shared.equivalent($0.kind, kind) }
+        guard let component = WorkspaceComponentRegistry.shared.component(for: kind) else { return nil }
+        return savedComponent(for: component)
+    }
+    func savedComponent(for component: WorkspaceComponentDescriptor) -> ViewDefinition? {
+        book?.views.first { (component.rendererID != nil || $0.rendererID == nil) && WorkspaceComponentRegistry.shared.equivalent($0, component) }
     }
     func activate(_ kind: ComponentKind, open: Bool = true, onError: ((String) -> Void)? = nil) {
-        guard var current = book, !isBusy, let component = WorkspaceComponentRegistry.shared.component(for: kind) else { return }
-        if let existing = installedComponent(for: kind) { if open { route = existing.id }; return }
+        guard let component = WorkspaceComponentRegistry.shared.component(for: kind) else { return }
+        activate(component, open: open, onError: onError)
+    }
+    func activate(_ descriptor: WorkspaceComponentDescriptor, open: Bool = true, onError: ((String) -> Void)? = nil) {
+        guard var current = book, !isBusy, let component = WorkspaceComponentRegistry.shared.component(id: descriptor.id) else { return }
+        if let existing = installedComponent(for: component) { if open { route = existing.id }; return }
         // Disabled packs retain their entries. Every entry point must refuse a
         // second equivalent view, even when the saved ID is not "manual-*".
-        if savedComponent(for: kind) != nil {
+        if savedComponent(for: component) != nil {
             let message = "此组件已由停用的声明包保存，请在插件页启用该包。"
             if let onError { onError(message) } else { errorMessage = message }; return
         }
-        let view = ViewDefinition(id: "manual-\(component.kind.rawValue)", title: component.title, kind: component.kind)
+        let view = ViewDefinition(id: "manual-\(component.id)", title: component.title, kind: component.kind, rendererID: component.rendererID, scope: "current")
         guard !current.views.contains(where: { $0.id == view.id }) else {
             let message = "同名组件入口由已停用声明包保留，请先启用该包。"
             if let onError { onError(message) } else { errorMessage = message }; return

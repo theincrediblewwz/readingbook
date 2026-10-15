@@ -15,6 +15,8 @@ public enum OCRIntegration {
         let units = project.units.filter { $0.page == page }
         guard !units.isEmpty else { return "页码不存在。" }
         let ids = Set(units.map(\.id))
+        let protectedAnchors = (project.readingExperience?.anchors ?? []) + (project.readingExperience?.trash ?? []).flatMap(\.anchors)
+        if protectedAnchors.contains(where: { ids.contains($0.unitID) }) { return "此页已有阅读增强或原文锚点，不能覆盖引用正文。请导入为新项目后识别。" }
         if units.contains(where: { project.coverage[$0.id]?.status == .completed }) { return "此页已有完成记录，重新导入原书为新项目后可以重新识别。" }
         if ReadingLedger.hasStoredWork(unitIDs: ids, in: project) { return "此页已有段落回执或读书步骤记录，不能改写账本引用的原文。请导入为新项目后识别。" }
         if project.insights.contains(where: { !ids.isDisjoint(with: $0.unitIDs) && !isEmptyDeferredPlaceholder($0, in: project) }) || project.syntheses.contains(where: { !ids.isDisjoint(with: $0.unitIDs) }) { return "此页已有阅读分析，不能替换其引用正文。" }

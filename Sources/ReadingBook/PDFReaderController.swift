@@ -3,6 +3,8 @@ import SwiftUI
 enum PDFReaderCommand {
     case prev, next, jump(Int), zoomIn, zoomOut, fitPage, fitWidth, actualSize
     case showSearch, toggleSearch, toggleThumbnails, toggleContinuous, createHighlight, createRegion, showAnnotations
+    /// Offsets from an extracted SourceUnit must never be reused as PDF offsets.
+    case focusQuote(page: Int, quote: String)
 }
 
 /// One instance belongs to one window. A mounted PDF view owns its command binding.

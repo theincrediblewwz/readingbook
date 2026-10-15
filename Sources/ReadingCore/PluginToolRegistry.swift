@@ -95,6 +95,12 @@ public struct PluginToolRegistry: Sendable {
               try encoder.encode(candidate.chats) == encoder.encode(project.chats), candidate.bookmarks == project.bookmarks else {
             throw ReadingError.invalid("插件不能修改用户批注、会话或书签。")
         }
+        if candidate.readingExperience != project.readingExperience {
+            guard tool.requiresReceipts, phase == nil || phase == .reading || phase == .workflow,
+                  !allowedUnitIDs.isEmpty else { throw ReadingError.invalid("新增阅读层必须通过当前原文逐段回执门禁，不能在预读或回执阶段写入。") }
+            try ReadingExperienceTools.validateTransition(from: project.readingExperience, to: candidate.readingExperience,
+                                                          allowedUnitIDs: allowedUnitIDs, in: candidate)
+        }
         let hostReadingTool = tool.pluginID == "builtin.reading"
         let finish = hostReadingTool && name == "reading_finish"
         let receipt = hostReadingTool && name == "read_receipt"

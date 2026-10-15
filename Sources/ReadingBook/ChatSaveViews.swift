@@ -21,6 +21,11 @@ struct EnhancedBookChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Label(store.readingContextDescription, systemImage: "text.quote").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Spacer()
+                Button("回到原文") { store.route = "reader" }.buttonStyle(.borderless).font(.caption)
+            }.padding(.horizontal, 20).padding(.vertical, 10)
             if selectionMode { selectionBar }
             ScrollViewReader { proxy in
                 ScrollView {

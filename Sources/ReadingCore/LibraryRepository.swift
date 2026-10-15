@@ -403,6 +403,9 @@ public actor LibraryRepository {
         // Older projects may have no ledger. When present, its source hashes,
         // anchors, historical method versions and batch must survive every load/save/import.
         try ReadingLedger.validateStoredRecords(in: project)
+        if let experience = project.readingExperience {
+            try ReadingExperienceRuntime.validateStoredState(experience, in: project)
+        }
         let recognizedPages = project.ocrPages ?? []
         guard recognizedPages.count <= 20_000, Set(recognizedPages.map(\.page)).count == recognizedPages.count else { throw ReadingError.invalid("OCR 页记录重复或超过上限。") }
         for page in recognizedPages {
@@ -439,7 +442,10 @@ public actor LibraryRepository {
             guard knowledgeIDs.contains(relation.fromID), knowledgeIDs.contains(relation.toID) else { throw ReadingError.invalid("关系引用了不存在的要素、事件或文档。") }
             try validateEvidence(relation.evidence, units: sourceUnits)
         }
-        for view in project.views where !Set(view.typeIDs).isSubset(of: typeIDs) { throw ReadingError.invalid("视图引用了不存在的类型：\(view.id)") }
+        for view in project.views {
+            guard Set(view.typeIDs).isSubset(of: typeIDs) else { throw ReadingError.invalid("视图引用了不存在的类型：\(view.id)") }
+            try validateViewMetadata(view)
+        }
         if let plan = project.plan, !Set(plan.methodIDs).isSubset(of: methodIDs) { throw ReadingError.invalid("阅读计划引用了不存在的读书法。") }
         for insight in project.insights where !Set(insight.unitIDs).isSubset(of: unitIDs) { throw ReadingError.invalid("阅读分析引用了不存在的原文单元。") }
         for synthesis in project.syntheses {
@@ -462,10 +468,30 @@ public actor LibraryRepository {
             _ = try uniqueIDs(plugin.types.map(\.id), label: "插件类型")
             _ = try uniqueIDs(plugin.methods.map(\.id), label: "插件读书法")
             _ = try uniqueIDs(plugin.views.map(\.id), label: "插件视图")
+            guard plugin.views.count <= 1_000 else { throw ReadingError.invalid("插件视图数量超过安全上限。") }
+            for view in plugin.views { try validateViewMetadata(view) }
         }
         guard Set(project.appliedOperationIDs).count == project.appliedOperationIDs.count,
               project.appliedOperationIDs.count <= 200_000,
               project.appliedOperationIDs.allSatisfy(Self.isSafeID) else { throw ReadingError.invalid("操作去重 ID 不正确。") }
+    }
+
+    /// A newer plugin's renderer ID is recoverable metadata, not permission to
+    /// execute code. Validate its shape and bounds without requiring installation.
+    private func validateViewMetadata(_ view: ViewDefinition) throws {
+        if let rendererID = view.rendererID, !Self.isSafeID(rendererID) {
+            throw ReadingError.invalid("视图渲染器标识无效：\(view.id)")
+        }
+        if let scope = view.scope, !["current", "book"].contains(scope) {
+            throw ReadingError.invalid("视图上下文范围须为 current 或 book：\(view.id)")
+        }
+        if let configuration = view.configuration {
+            guard configuration.count <= 16, configuration.allSatisfy({ key, value in
+                !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && key.utf8.count <= 128 &&
+                !key.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) &&
+                value.count <= 4_000 && value.utf8.count <= 16_000 && !value.contains("\0")
+            }) else { throw ReadingError.invalid("视图声明配置的键、值或数量超出安全范围：\(view.id)") }
+        }
     }
 
     private func validateEvidence(_ evidence: [Evidence], units: [String: SourceUnit]) throws {
