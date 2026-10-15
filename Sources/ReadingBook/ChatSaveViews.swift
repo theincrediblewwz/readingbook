@@ -63,7 +63,7 @@ struct EnhancedBookChatView: View {
                 let parts = book.chats.filter { $0.role == "assistant" && selectedAnswers.contains($0.id) }.map { SavedAnswerPart(answer: $0) }
                 saveRequest = AnswerSaveRequest(bookID: book.id, sourceAnswer: nil, parts: parts)
             }.buttonStyle(.borderedProminent).disabled(store.isBusy || selectedAnswers.isEmpty)
-        }.controlSize(.small).padding(.horizontal, 18).padding(.vertical, 6)
+        }.controlSize(.regular).padding(.horizontal, 18).padding(.vertical, 6)
             .background(Palette.paper).overlay(alignment: .bottom) { Divider().opacity(0.5) }
     }
 
@@ -88,7 +88,7 @@ struct EnhancedBookChatView: View {
                         .help("保存完整回答、精确 Markdown 片段，或进入多选合并；也可右键回答")
                         .accessibilityLabel("保存回答")
                 }
-            }.controlSize(.small)
+            }.controlSize(.regular)
             ChatMarkdownBody(markdown: prepared, onSelectionChange: assistant ? { selection in
                 guard store.bookID == bookID,
                       store.book?.chats.first(where: { $0.id == message.id })?.content == message.content else { return }
@@ -156,7 +156,7 @@ struct EnhancedBookChatView: View {
             Button("保存选段…") {
                 saveRenderedSelection(message, bookID: bookID, selection: selection)
             }.keyboardShortcut("s", modifiers: [.command, .shift]).help("保存语义摘录 · ⌘⇧S；公式建议选择源文")
-        }.font(.caption).controlSize(.small).fixedSize().disabled(store.isBusy)
+        }.font(.caption).controlSize(.regular).fixedSize().disabled(store.isBusy)
     }
 
     private func request(parts: [SavedAnswerPart], bookID expectedBookID: String? = nil) {
@@ -218,7 +218,7 @@ private struct AnswerSaveSheet: View {
                 HStack(spacing: 8) {
                     Text("标题").font(.subheadline).foregroundStyle(.secondary)
                     TextField("文档标题", text: $title).textFieldStyle(.roundedBorder).disabled(saving)
-                }.controlSize(.small)
+                }.controlSize(.regular)
                 sourceNotice
                 if let answer = sourceAnswer {
                     GeometryReader { geometry in sourceWorkspace(answer, height: geometry.size.height) }
@@ -312,7 +312,7 @@ private struct AnswerSaveSheet: View {
             Button(saving ? "保存中…" : "保存摘记") { save() }
                 .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 .disabled(readyComposition == nil || saving || store.isBusy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.bookID != bookID)
-        }.controlSize(.small).padding(.horizontal, 16).padding(.vertical, 10)
+        }.controlSize(.regular).padding(.horizontal, 16).padding(.vertical, 10)
     }
 
     private func initialize() {

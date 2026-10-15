@@ -248,7 +248,7 @@ struct AIServiceBar: View {
                 HStack { Button("管理 / 新建") { store.showingSettings = true }; Spacer(); Button("测试") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty) }.font(.caption)
                 if !store.connectionStatus.isEmpty { Text(store.connectionStatus).font(.caption2).foregroundStyle(.secondary).lineLimit(3).help(store.connectionStatus) }
                 ServiceProfileLocalError(draft: store.serviceProfileDraft)
-            }.padding(.top, 7).controlSize(.small)
+            }.padding(.top, 7).controlSize(.regular)
         } label: { Label("AI · \(store.serviceName)", systemImage: "sparkles").font(.system(size: 12, weight: .medium)).lineLimit(1) }
         .padding(10).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10)).padding(.horizontal, 12).padding(.bottom, 8)
     }

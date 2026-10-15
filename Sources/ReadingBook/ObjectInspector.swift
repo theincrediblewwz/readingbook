@@ -72,7 +72,7 @@ import ReadingCore
                     Spacer(minLength: 0)
                     Button(saving ? "保存中…" : "保存") { saveDraft() }
                         .buttonStyle(.borderedProminent).disabled(saving || store.isBusy)
-                }.controlSize(.small).padding(.horizontal, 14).padding(.vertical, 10)
+                }.controlSize(.regular).padding(.horizontal, 14).padding(.vertical, 10)
             }
         }.background(.background)
             .interactiveDismissDisabled(hasChanges || saving)

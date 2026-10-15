@@ -118,6 +118,6 @@ struct LibraryTrashView: View {
                     }
                 }
             }.listStyle(.inset)
-        }.padding(18).controlSize(.small).task { await store.reloadTrash() }
+        }.padding(18).controlSize(.regular).task { await store.reloadTrash() }
     }
 }

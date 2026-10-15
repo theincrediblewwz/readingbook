@@ -357,7 +357,7 @@ struct DocumentEditorView: View {
             Button(store.isSavingDocument ? "保存中" : "保存") { Task { await store.saveCurrentDocument() } }
                 .buttonStyle(.borderedProminent).disabled(!store.editorDirty || store.isBusy).help(store.editorDirty ? "保存 Markdown 与标题修改" : "当前文档已保存")
             documentMenu
-        }.controlSize(.small)
+        }.controlSize(.regular)
     }
     private var documentMenu: some View {
         Menu {
@@ -377,7 +377,7 @@ struct DocumentEditorView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Markdown 笔记").font(.subheadline.weight(.medium)); Spacer()
-                Button { showingDocuments = false; store.newDocument(); preview = false } label: { Label("新建", systemImage: "plus") }.controlSize(.small).disabled(store.editorDirty || store.isBusy)
+                Button { showingDocuments = false; store.newDocument(); preview = false } label: { Label("新建", systemImage: "plus") }.controlSize(.regular).disabled(store.editorDirty || store.isBusy)
             }
             TextField("搜索笔记标题", text: $documentSearch).textFieldStyle(.roundedBorder)
             if store.editorDirty { Text("当前有草稿，请先保存或放弃，再切换笔记。").font(.caption).foregroundStyle(Palette.copper) }

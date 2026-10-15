@@ -47,7 +47,7 @@ struct PDFOCRPanel: View {
                 Button("识别 \(runCount) 页") { store.startOCR(pages: summary.recognizable) }
                     .buttonStyle(.borderedProminent).disabled(summary.recognizable.isEmpty || summary.validationError != nil || store.isBusy)
             }
-        }.padding(18).controlSize(.small)
+        }.padding(18).controlSize(.regular)
             .onAppear { firstPage = String(store.selectedUnit?.page ?? pages.first ?? 1); lastPage = firstPage; store.serviceProfileDraft.ocrError = "" }
     }
 

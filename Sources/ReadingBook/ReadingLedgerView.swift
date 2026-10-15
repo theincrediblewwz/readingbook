@@ -32,7 +32,7 @@ struct ReadingLedgerView: View {
                                 HStack(spacing: 5) { Text(unit.locator).lineLimit(1); Image(systemName: "chevron.down").font(.caption2) }
                             }.frame(maxWidth: .infinity, alignment: .leading).help("搜索或切换要核对的原文单元")
                             Button("定位原文") { store.navigateToUnit(unit.id); store.route = "reader" }
-                        }.font(.caption).controlSize(.small)
+                        }.font(.caption).controlSize(.regular)
                         if manifest != nil && paragraphs.isEmpty {
                             Text("没有可读文字，请先 OCR 或对照原页确认空白；空提取不算 AI 已读。").font(.caption).foregroundStyle(.secondary)
                         }

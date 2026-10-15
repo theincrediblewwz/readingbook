@@ -97,7 +97,7 @@ struct EntityEditView: View {
                 }.tint(Palette.accent)
             }
             Text("原文依据保留；未知坐标请留空。").font(.caption).foregroundStyle(.secondary)
-        }.textFieldStyle(.roundedBorder).controlSize(.small)
+        }.textFieldStyle(.roundedBorder).controlSize(.regular)
     }
 
     private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
