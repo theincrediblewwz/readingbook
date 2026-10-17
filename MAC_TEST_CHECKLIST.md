@@ -1,5 +1,7 @@
 # 0.13 工作区记忆、书本方案和数学核查：本次先测
 
+[安装 ZIP](dist/download-39015100931/ReadingBook-macos-universal.zip) · [Actions 39015100931](https://github.com/theincrediblewwz/readingbook/actions/runs/39015100931)，0.13.0/build14，源码 `2afbbb7137a5689717c9025469f07c6342e89bb7`。132 项 Core、双架构与资源核对通过。
+
 本节按操作顺序；所有勾选都等待 Mac 真机结果。本轮保留覆盖式导航与原有功能，没有新增统一“待核对”面板。
 
 1. [ ] **旧书与草稿**：先退出旧 App 并备份书库，启动 0.13.0/build14；原书、Markdown、批注、节点、模型、已读与逐段回执都在。未保存草稿优先恢复，不被上次文档覆盖。
