@@ -24,14 +24,18 @@ struct PDFReaderView: NSViewRepresentable {
     var focusedDecorationID: String?
     var onSourceDecorationTap: ((String) -> Void)?
     var onSourceSelection: ((SourceReadingSelection?) -> Void)?
+    var workspaceMemory: WorkspacePDFMemory?
+    var memoryRevision = 0
+    var onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)?
 
-    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil) {
+    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)? = nil) {
         self.controller = controller; self.url = url; self.sourceHash = sourceHash; self.password = password; self.annotations = annotations
         self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
         self.onUnlock = onUnlock; self.onSaveAnnotations = onSaveAnnotations; self.onTrashAnnotation = onTrashAnnotation
         self.canEditAnnotations = canEditAnnotations
         self.sourceDecorations = sourceDecorations; self.focusedDecorationID = focusedDecorationID
         self.onSourceDecorationTap = onSourceDecorationTap; self.onSourceSelection = onSourceSelection
+        self.workspaceMemory = workspaceMemory; self.memoryRevision = memoryRevision; self.onWorkspaceMemory = onWorkspaceMemory
     }
 
     func makeNSView(context: Context) -> PDFReaderContainerView {
@@ -70,6 +74,11 @@ struct PDFReaderView: NSViewRepresentable {
     private var onSourceSelection: ((SourceReadingSelection?) -> Void)?
     private var pendingQuote: (page: Int, quote: String, prefix: String?, suffix: String?)?
     private var isFocusingQuote = false
+    private var pendingWorkspaceMemory: WorkspacePDFMemory?
+    private var appliedMemoryRevision: Int?
+    private var memoryCallback: ((WorkspacePDFMemory) -> Void)?
+    private var memoryCaptureTask: DispatchWorkItem?
+    private weak var observedClip: NSClipView?
     private var sourceSelectionObservation = 0
     private var annotationPanel: NSPanel?
     private var editingAnnotationSheet = false
@@ -106,6 +115,7 @@ struct PDFReaderView: NSViewRepresentable {
     private var installingDocument = false
     private var pendingNavigation: (id: Int, page: Int, notifyParent: Bool)?
     private var fitMode = FitMode.width
+    private var isApplyingFit = false
     private var lastViewportSize = NSSize.zero
     private var searchGeneration = 0
     private var searchDelegate: PDFReaderSearchDelegate?
@@ -146,6 +156,7 @@ struct PDFReaderView: NSViewRepresentable {
         NotificationCenter.default.addObserver(self, selector: #selector(scaleChanged(_:)), name: .PDFViewScaleChanged, object: pdfView)
         NotificationCenter.default.addObserver(self, selector: #selector(selectionChanged(_:)), name: .PDFViewSelectionChanged, object: pdfView)
         NotificationCenter.default.addObserver(self, selector: #selector(annotationHit(_:)), name: .PDFViewAnnotationHit, object: pdfView)
+        NotificationCenter.default.addObserver(self, selector: #selector(pdfViewportScrolled(_:)), name: NSView.boundsDidChangeNotification, object: nil)
 
         thumbnails.pdfView = pdfView
         thumbnails.thumbnailSize = NSSize(width: 86, height: 112)
@@ -269,6 +280,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     func update(from input: PDFReaderView) {
         let url = input.url, requestedPage = input.page, navigationToken = input.navigationToken
+        let sourceChanged = sourceHash != input.sourceHash
         if controller !== input.controller {
             controller?.unbind(id: bindingID)
             controller = input.controller
@@ -284,7 +296,16 @@ struct PDFReaderView: NSViewRepresentable {
         let annotationsChanged = input.annotations != savedAnnotations
         savedAnnotations = input.annotations
         let canonical = url.standardizedFileURL
-        if canonical != loadedURL {
+        if canonical != loadedURL || sourceChanged || appliedMemoryRevision != input.memoryRevision {
+            // Capture against the old callback before rebinding to another book.
+            if canonical != loadedURL || sourceChanged { captureWorkspaceMemory() }
+            memoryCaptureTask?.cancel(); memoryCaptureTask = nil
+            appliedMemoryRevision = input.memoryRevision
+            pendingWorkspaceMemory = input.workspaceMemory?.isValid == true ? input.workspaceMemory : nil
+            applyWorkspaceDisplayPreferences()
+        }
+        memoryCallback = input.onWorkspaceMemory
+        if canonical != loadedURL || sourceChanged {
             sourcePage = requestedPage; lastParentPage = requestedPage; lastParentNavigationToken = navigationToken
             load(canonical)
         } else if requestedPage != lastParentPage || navigationToken != lastParentNavigationToken {
@@ -312,6 +333,7 @@ struct PDFReaderView: NSViewRepresentable {
             }
         }
         refreshControls()
+        if pendingNavigation == nil, pendingWorkspaceMemory != nil, document?.isLocked == false { restoreWorkspaceDestination() }
     }
 
     private func load(_ url: URL) {
@@ -435,6 +457,7 @@ struct PDFReaderView: NSViewRepresentable {
             return
         }
         pendingNavigation = nil; refreshControls()
+        restoreWorkspaceDestination()
         if let quote = pendingQuote, quote.page == pending.page {
             pendingQuote = nil; applyQuoteFocus(on: quote.page, quote: quote.quote, prefix: quote.prefix, suffix: quote.suffix)
         }
@@ -543,7 +566,9 @@ struct PDFReaderView: NSViewRepresentable {
         let scale: CGFloat = fitMode == .actual ? 1 : (fitMode == .width ? width : min(width, height))
         pdfView.autoScales = false
         let clamped = min(pdfView.maxScaleFactor, max(pdfView.minScaleFactor, scale))
+        isApplyingFit = true
         if abs(pdfView.scaleFactor - clamped) > 0.001 { pdfView.scaleFactor = clamped }
+        isApplyingFit = false
         refreshControls()
     }
 
@@ -576,7 +601,60 @@ struct PDFReaderView: NSViewRepresentable {
         }
     }
 
-    @objc private func scaleChanged(_ notification: Notification) { refreshControls() }
+    @objc private func scaleChanged(_ notification: Notification) {
+        if !isApplyingFit, !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil { fitMode = .custom }
+        refreshControls(); scheduleWorkspaceCapture()
+    }
+
+    @objc private func pdfViewportScrolled(_ notification: Notification) {
+        guard let clip = notification.object as? NSClipView, clip === observedClip else { return }
+        scheduleWorkspaceCapture()
+    }
+    private func observePDFViewport() {
+        func findClip(_ view: NSView) -> NSClipView? {
+            if let scroll = view as? NSScrollView { return scroll.contentView }
+            for child in view.subviews { if let clip = findClip(child) { return clip } }
+            return nil
+        }
+        observedClip = findClip(pdfView); observedClip?.postsBoundsChangedNotifications = true
+    }
+    private func applyWorkspaceDisplayPreferences() {
+        let saved = pendingWorkspaceMemory
+        switch saved?.fitMode { case "page": fitMode = .page; case "actual": fitMode = .actual; case "custom": fitMode = .custom; default: fitMode = .width }
+        pdfView.displayMode = saved?.continuous == false ? .singlePage : .singlePageContinuous
+        thumbnailScroll.isHidden = !(saved?.thumbnails ?? false)
+        if fitMode == .custom, let scale = saved?.scale { pdfView.scaleFactor = CGFloat(scale) }
+    }
+    private func restoreWorkspaceDestination() {
+        observePDFViewport()
+        guard let saved = pendingWorkspaceMemory else { scheduleWorkspaceCapture(); return }
+        pendingWorkspaceMemory = nil
+        guard let page = document?.page(at: saved.page - 1), currentPageNumber == saved.page else { return }
+        if fitMode == .custom { pdfView.scaleFactor = CGFloat(saved.scale) } else { applyFit() }
+        if let location = saved.location {
+            let box = page.bounds(for: pdfView.displayBox)
+            let point = CGPoint(x: box.minX + min(1, max(0, location.x)) * box.width, y: box.minY + min(1, max(0, location.y)) * box.height)
+            pdfView.go(to: PDFDestination(page: page, at: point))
+        }
+        scheduleWorkspaceCapture()
+    }
+    private func scheduleWorkspaceCapture() {
+        guard !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil else { return }
+        memoryCaptureTask?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.captureWorkspaceMemory() }
+        memoryCaptureTask = item; DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+    }
+    private func captureWorkspaceMemory() {
+        guard !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil,
+              let document, !document.isLocked, let destination = pdfView.currentDestination, let page = destination.page else { return }
+        let index = document.index(for: page), box = page.bounds(for: pdfView.displayBox)
+        guard index != NSNotFound, box.width > 0, box.height > 0 else { return }
+        let location = WorkspacePoint(x: Double((destination.point.x - box.minX) / box.width), y: Double((destination.point.y - box.minY) / box.height))
+        let mode: String
+        switch fitMode { case .page: mode = "page"; case .width: mode = "width"; case .actual: mode = "actual"; case .custom: mode = "custom" }
+        let memory = WorkspacePDFMemory(page: index + 1, location: location, scale: Double(pdfView.scaleFactor), fitMode: mode, continuous: pdfView.displayMode == .singlePageContinuous, thumbnails: !thumbnailScroll.isHidden)
+        if memory.isValid { memoryCallback?(memory) }
+    }
 
     private func refreshControls() {
         let ready = document != nil && document?.isLocked == false && (document?.pageCount ?? 0) > 0
@@ -700,6 +778,7 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     func shutdown() {
+        memoryCaptureTask?.cancel(); captureWorkspaceMemory(); memoryCallback = nil; observedClip = nil
         invalidateNavigation(); installingDocument = true
         removeSearchEscapeMonitor()
         searchGeneration += 1; document?.delegate = nil; document?.cancelFindString(); searchDelegate = nil
@@ -739,6 +818,7 @@ struct PDFReaderView: NSViewRepresentable {
         case .showAnnotations: showAnnotations()
         case .focusQuote(let page, let quote): focusQuote(on: page, quote: quote)
         }
+        scheduleWorkspaceCapture()
     }
 
     @objc private func selectionChanged(_ notification: Notification) {

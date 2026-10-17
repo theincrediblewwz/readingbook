@@ -1,7 +1,9 @@
 import SwiftUI
+import ReadingCore
 
 /// Only the title handle drags. The original PDF keeps its own scroll and selection.
 struct ReaderFloatingPanel<Content: View>: View {
+    @EnvironmentObject private var store: AppStore
     let title: String
     let icon: String
     var width: CGFloat = 410
@@ -16,6 +18,9 @@ struct ReaderFloatingPanel<Content: View>: View {
     @State private var savedOrigin: CGPoint?
     @State private var dragStart: CGPoint?
     @State private var epoch = 0
+    @State private var memoryScope: String?
+    @State private var initialPresented: Bool?
+    private var memoryID: String { trailing ? "reader.companion" : "reader.outline" }
 
     private var panelWidth: CGFloat { min(width, max(240, viewport.width - 100)) }
     private var panelHeight: CGFloat { collapsed ? 58 : min(height, max(120, viewport.height - 190)) }
@@ -49,12 +54,29 @@ struct ReaderFloatingPanel<Content: View>: View {
                     .position(x: trailing ? max(100, viewport.width - 90) : 90, y: trailing ? max(100, viewport.height - 108) : 128)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .onAppear { hasOpened = isPresented; if viewport.width < 1050 && trailing { isPresented = false } }
-            .onChange(of: collapsed) { _, value in onExpansionChange(!value && isPresented) }
-            .onChange(of: isPresented) { _, value in if value { hasOpened = true }; onExpansionChange(value && !collapsed) }
+            .onAppear { initialPresented = isPresented; restoreMemory(); if viewport.width < 1050 && trailing { isPresented = false } }
+            .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreMemory() }
+            .onChange(of: collapsed) { _, value in onExpansionChange(!value && isPresented); saveMemory() }
+            .onChange(of: isPresented) { _, value in if value { hasOpened = true }; onExpansionChange(value && !collapsed); saveMemory() }
+            .onChange(of: savedOrigin) { _, _ in saveMemory() }
+            .onDisappear { saveMemory() }
             .onChange(of: viewport) { old, value in
                 epoch += 1; dragStart = nil; savedOrigin = clamp(savedOrigin ?? origin)
                 if old.width >= 1050, value.width < 1050, trailing { isPresented = false }
             }
+    }
+    private func restoreMemory() {
+        memoryScope = store.workspaceMemoryKey
+        let saved = store.workspaceMemory.panels[memoryID]
+        collapsed = saved?.collapsed ?? false
+        savedOrigin = saved?.origin.map { clamp(CGPoint(x: $0.x, y: $0.y)) }
+        isPresented = saved?.isPresented ?? initialPresented ?? false
+        if isPresented || saved != nil { hasOpened = true }
+        onExpansionChange(isPresented && !collapsed)
+    }
+    private func saveMemory() {
+        guard let memoryScope else { return }
+        let memory = WorkspacePanelMemory(origin: savedOrigin.map { WorkspacePoint(x: $0.x, y: $0.y) }, isPresented: isPresented, collapsed: collapsed)
+        store.updateWorkspaceMemory({ $0.panels[memoryID] = memory }, expectedKey: memoryScope)
     }
 }

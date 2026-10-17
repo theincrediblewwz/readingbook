@@ -25,6 +25,8 @@ public enum OCRIntegration {
         evidence.append(contentsOf: project.relations.flatMap(\.evidence))
         evidence.append(contentsOf: project.documents.flatMap(\.evidence))
         evidence.append(contentsOf: project.chats.flatMap(\.evidence))
+        // Soft-deleted verification records still retain their original-source evidence.
+        evidence.append(contentsOf: (project.mathVerifications ?? []).flatMap { $0.request.evidence })
         if evidence.contains(where: { ids.contains($0.unitID) }) || project.documents.contains(where: { !ids.isDisjoint(with: $0.linkedIDs) }) || project.nodes.contains(where: { ids.contains($0.targetID) }) { return "此页已有笔记或知识引用，不能覆盖。请将原书导入为新项目再识别。" }
         if project.chats.contains(where: { message in ids.contains { message.content.contains("[unit:\($0)]") || message.content.contains("/unit/\($0)") } }) { return "对话含有此页引用，不能替换引用正文。" }
         return nil
@@ -57,6 +59,7 @@ public enum OCRIntegration {
         updated.ocrPages = (updated.ocrPages ?? []).filter { $0.page != result.page }
         updated.ocrPages?.append(OCRPageProvenance(page: result.page, model: result.model, createdAt: result.createdAt, issues: result.issues, unitIDs: replacements.map(\.id)))
         updated.plan = nil // Previews based on the old extraction must be redone.
+        updated.bookSchemes?.pending = nil
         updated.audit.append(ToolAudit(name: "pdf_ocr", summary: "第 \(result.page) 页使用 \(result.model) 逐页转录，保留原 PDF；待人工核对，阅读覆盖尚未增加。"))
         return updated
     }

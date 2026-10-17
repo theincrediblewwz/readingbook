@@ -25,7 +25,8 @@ public enum PluginEngine {
             ReadingMethod(id: "textbook", name: "教材学习", goal: "连接定义、定理、证明、例题和先修依赖。", steps: ["逐单元阅读正文、公式、图表与注释", "提取概念、条件、定理和方法", "连接先修依赖并记录证明步骤", "列出理解问题和可练习内容"]),
             ReadingMethod(id: "research", name: "研究笔记", goal: "整理研究问题、方法、材料、发现与局限。", steps: ["逐单元读取材料和方法细节", "记录可核对的发现与证据", "区分来源事实、作者解释和推断", "整理局限、争议及后续问题"]),
             ReadingMethod(id: "active-retelling", name: "主动复述", goal: "逐段用自己的话简短复述，再核对术语、条件与遗漏，提出理解问题。", steps: ["逐段简短复述正文、公式含义及注释，不补充书外信息", "核对术语、限制条件、推理连接及不确定处", "记录自己尚未理解的问题和需要回查的原文"]),
-            ReadingMethod(id: "layered-reading-v1", name: "多层伴读", goal: "把已读词句连接到适用的释义、译文、知识对象、资料对齐和思考卡，使理解可以回到精确原文。", steps: ["复用已有实体及别名，为当前原文建立适用提及、释义或译文、资料对齐和思考卡；不适用的类型不强造，所有内容锚定原文"])
+            ReadingMethod(id: "layered-reading-v1", name: "多层伴读", goal: "把已读词句连接到适用的释义、译文、知识对象、资料对齐和思考卡，使理解可以回到精确原文。", steps: ["复用已有实体及别名，为当前原文建立适用提及、释义或译文、资料对齐和思考卡；不适用的类型不强造，所有内容锚定原文"]),
+            ReadingMethod(id: "math-verification-v1", name: "数学推导核查", goal: "在有限的有理数矩阵与线性方程范围内实际验算；源文与数值对应关系仍须核对。", steps: ["从当前原文抽取适用的矩阵、方程与行变换数值，说明其原文位置和转录疑点。", "通过数学核查插件逐步核查；超出支持范围或缺少可靠数值时明确说明不适用，不声称证明正确。"])
         ]
         let actionBindings: [String: [String]] = [
             "narrative": ["ai.analyze", "facts.extract", "facts.extract", "reading.review"],
@@ -33,7 +34,8 @@ public enum PluginEngine {
             "textbook": ["ai.analyze", "facts.extract", "facts.extract", "reading.review"],
             "research": ["ai.analyze", "facts.extract", "ai.analyze", "reading.review"],
             "active-retelling": ["ai.analyze", "ai.analyze", "reading.review"],
-            "layered-reading-v1": ["reading.enrich"]
+            "layered-reading-v1": ["reading.enrich"],
+            "math-verification-v1": ["ai.analyze", "math.verify"]
         ]
         for method in methods where !project.methods.contains(where: { $0.id == method.id }) {
             var executable = method
@@ -56,7 +58,7 @@ public enum PluginEngine {
         let field = object(["key": id, "label": text, "required": ["type": "boolean"]], required: ["key", "label"])
         let type = object(["id": id, "name": text, "icon": ["type": "string", "maxLength": 128], "fields": array(field, maximum: 64)], required: ["id", "name"])
         let view = object(["id": id, "title": text, "kind": ["type": "string", "enum": ComponentKind.allCases.map(\.rawValue)], "typeIDs": array(id, maximum: 128),
-                           "rendererID": ["type": "string", "enum": ["reading.layers", "reading.mentions", "reading.decisions", "reading.atlas"], "description": "选择实际编译注册的增强阅读渲染器；不提供则使用kind对应默认组件。"],
+                           "rendererID": ["type": "string", "enum": ["reading.layers", "reading.mentions", "reading.decisions", "reading.atlas", "book.scheme", "math.verify"], "description": "选择实际编译注册的增强阅读渲染器；不提供则使用kind对应默认组件。"],
                            "scope": ["type": "string", "enum": ["current", "book"]],
                            "configuration": ["type": "object", "additionalProperties": ["type": "string", "maxLength": 4000], "maxProperties": 16]], required: ["id", "title", "kind"])
         let execution = object(["stepIndex": ["type": "integer", "minimum": 0, "maximum": 23], "actionID": ["type": "string", "enum": ReadingWorkflowRuntime.actions.map(\.id)], "configuration": ["type": "object", "additionalProperties": ["type": "string", "maxLength": 4000], "maxProperties": 16], "maxAttempts": ["type": "integer", "minimum": 1, "maximum": 8]], required: ["stepIndex", "actionID"])
@@ -129,6 +131,40 @@ public enum PluginEngine {
         candidate.plugins.append(manifest)
         candidate.audit.append(ToolAudit(name: "plugin_install", summary: "安装声明式插件 \(manifest.name) v\(manifest.version)"))
         project = candidate
+    }
+
+    /// The same declaration validators serve previews and actual installs. Existing
+    /// disabled declarations may be archived; only a new plan must use enabled methods.
+    public static func validateSchemeConfiguration(_ configuration: BookSchemeConfiguration, in project: BookProject) throws {
+        var candidate = project; configuration.assign(to: &candidate)
+        try validateDefinitionCounts(candidate)
+        try uniqueIDs(candidate.types.map(\.id)); try uniqueIDs(candidate.methods.map(\.id)); try uniqueIDs(candidate.views.map(\.id))
+        guard candidate.plugins.count <= 64 else { throw invalid("声明包数量达到上限。") }
+        try uniqueIDs(candidate.plugins.map(\.id))
+        guard Set(candidate.disabledPluginIDs).isSubset(of: Set(candidate.plugins.map(\.id))) else { throw invalid("停用列表引用了不存在的声明包。") }
+        for plugin in candidate.plugins {
+            try validateID(plugin.id); try nonempty(plugin.name, field: "插件名称", maximum: 400)
+            guard !plugin.id.hasPrefix("builtin."), (1...1_000_000).contains(plugin.version), plugin.description.count <= 8000,
+                  plugin.types.count <= 64, plugin.methods.count <= 32, plugin.views.count <= 32,
+                  try JSONEncoder().encode(plugin).count <= maximumPayloadBytes else { throw invalid("声明包内容、版本或大小不合法。") }
+        }
+        let disabled = candidate.disabledPluginIDs; candidate.disabledPluginIDs = []
+        for type in candidate.types { try validate(type) }
+        for method in candidate.methods { try validate(method) }
+        for view in candidate.views { try validate(view, project: candidate) }
+        candidate.disabledPluginIDs = disabled
+        for old in project.types {
+            guard candidate.types.contains(old) else { throw invalid("方案不能覆盖或删除已保存类型：\(old.id)") }
+        }
+        for old in project.methods {
+            guard candidate.methods.contains(old) else { throw invalid("方案不能覆盖或删除已有读书法：\(old.id)") }
+        }
+        if let plan = candidate.plan {
+            guard (1...16).contains(plan.methodIDs.count), plan.rationale.count <= 8000, plan.focus.count <= 32,
+                  plan.focus.allSatisfy({ !$0.isEmpty && $0.count <= 400 }) else { throw invalid("阅读方案内容或方法数量超过上限。") }
+            try uniqueIDs(plan.methodIDs)
+            guard plan.methodIDs.allSatisfy({ id in candidate.methods.contains { $0.id == id } && !isDisabledMethod(id, in: candidate) }) else { throw invalid("方案引用了不存在或已停用的读书法。") }
+        }
     }
 
     private static func search(_ input: [String: Any], project: BookProject) throws -> String {
@@ -206,6 +242,7 @@ public enum PluginEngine {
             try RegisteredReadingTool(pluginID: "builtin.reading", schema: ReadingWorkflowRuntime.completionTool, phases: [.workflow], requiresReceipts: true) { data, project, allowed in try ReadingWorkflowRuntime.complete(arguments: data, to: &project, allowedUnitIDs: allowed) }
         ]))
         try registry.install(ReadingExperienceToolPlugin())
+        try registry.install(MathVerificationToolPlugin())
         return registry
     }
 

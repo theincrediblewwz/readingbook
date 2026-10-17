@@ -91,6 +91,17 @@ public struct PluginToolRegistry: Sendable {
             throw ReadingError.invalid("插件不能修改原书或用户Markdown文档。")
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        guard try encoder.encode(candidate.bookSchemes) == encoder.encode(project.bookSchemes) else {
+            throw ReadingError.invalid("插件不能直接改写书本方案的预览、应用和撤销记录；请由用户在宿主界面确认。")
+        }
+        if candidate.mathVerifications != project.mathVerifications {
+            guard tool.pluginID == "builtin.math-verification", name == "math_verify", tool.requiresReceipts,
+                  phase == nil || phase == .reading || phase == .workflow, !allowedUnitIDs.isEmpty else {
+                throw ReadingError.invalid("数学核查记录只能由已通过逐段回执的宿主数学工具追加。")
+            }
+            try MathVerificationTools.validateTransition(from: project.mathVerifications, to: candidate.mathVerifications,
+                                                          allowedUnitIDs: allowedUnitIDs, in: candidate)
+        }
         guard try encoder.encode(candidate.readerAnnotations) == encoder.encode(project.readerAnnotations),
               try encoder.encode(candidate.chats) == encoder.encode(project.chats), candidate.bookmarks == project.bookmarks else {
             throw ReadingError.invalid("插件不能修改用户批注、会话或书签。")

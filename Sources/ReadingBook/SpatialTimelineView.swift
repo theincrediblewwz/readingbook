@@ -33,6 +33,7 @@ struct SpatialTimelineView: View {
     @State private var dragOrigin: CGPoint?
     @State private var dragCenter: CGPoint?
     @State private var pointerEpoch = 0
+    @State private var memoryScope: String?
 
     private var filteredEvents: [KnowledgeEvent] {
         store.visibleEvents.filter { eventQuery.isEmpty || $0.name.localizedCaseInsensitiveContains(eventQuery) || $0.dateText.localizedCaseInsensitiveContains(eventQuery) || $0.participantIDs.contains(where: { store.objectTitle($0).localizedCaseInsensitiveContains(eventQuery) }) }
@@ -132,13 +133,20 @@ struct SpatialTimelineView: View {
         .onAppear {
             if FloatingPanelDock(rawValue: dockRaw) == nil { dockRaw = FloatingPanelDock.bottomLeading.rawValue }
             normalizeRange()
+            restoreMapMemory()
             if let id = store.selectedObjectID, store.book?.events.contains(where: { $0.id == id }) == true { expandedEventID = id }
         }
-        .onDisappear { cancelPanelDrag() }
+        .onDisappear { saveMapPanelMemory(); cancelPanelDrag() }
+        .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreMapMemory() }
+        .onChange(of: showsTimeline) { _, _ in saveMapPanelMemory() }
+        .onChange(of: timelineCollapsed) { _, _ in saveMapPanelMemory() }
+        .onChange(of: store.timeFrom) { _, _ in saveMapPanelMemory() }
+        .onChange(of: store.timeTo) { _, _ in saveMapPanelMemory() }
+        .onChange(of: store.showUndated) { _, _ in saveMapPanelMemory() }
         .onExitCommand { cancelPanelDrag() }
         .onChange(of: measuredPanelSize) { _, _ in if let id = store.selectedObjectID { locate(id) } }
         .onChange(of: viewport) { _, _ in if let id = store.selectedObjectID { locate(id) } }
-        .onChange(of: dockRaw) { _, _ in if let id = store.selectedObjectID { locate(id) } }
+        .onChange(of: dockRaw) { _, _ in saveMapPanelMemory(); if let id = store.selectedObjectID { locate(id) } }
         .onChange(of: navigationDockRaw) { _, _ in if let id = store.selectedObjectID { locate(id) } }
         .popover(isPresented: Binding(get: { inspectedObjectID != nil }, set: { if !$0 { inspectedObjectID = nil } })) {
             if let id = inspectedObjectID { ObjectInspector(id: id, onClose: { inspectedObjectID = nil }).environmentObject(store).frame(width: 330, height: 500) }
@@ -162,13 +170,37 @@ struct SpatialTimelineView: View {
     }
 
     private var bookMap: some View {
-        Map(position: $camera) {
+        let expectedKey = store.workspaceMemoryKey
+        return Map(position: $camera) {
             ForEach(points) { point in
                 Annotation("", coordinate: point.coordinate) { mapMarker(point) }
             }
         }
         .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
+        .onMapCameraChange(frequency: .onEnd) { context in
+            let region = context.region
+            let saved = WorkspaceMapMemory(latitude: region.center.latitude, longitude: region.center.longitude, latitudeDelta: region.span.latitudeDelta, longitudeDelta: region.span.longitudeDelta)
+            guard memoryScope == expectedKey, saved.isValid else { return }
+            store.updateWorkspaceMemory({ $0.map = saved }, expectedKey: expectedKey)
+        }
         .safeAreaPadding(.top, topReserve).safeAreaPadding(.trailing, 16)
+    }
+    private func restoreMapMemory() {
+        memoryScope = store.workspaceMemoryKey
+        let saved = store.workspaceMemory
+        if let map = saved.map, map.isValid {
+            camera = .region(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: map.latitude, longitude: map.longitude), span: MKCoordinateSpan(latitudeDelta: map.latitudeDelta, longitudeDelta: map.longitudeDelta)))
+        } else { camera = .automatic }
+        let panel = saved.panels["map.timeline"]
+        showsTimeline = panel?.isPresented ?? true; timelineCollapsed = panel?.collapsed ?? (viewport.width < 900 || viewport.height < 700)
+        dockRaw = saved.timelineDock.flatMap { FloatingPanelDock(rawValue: $0)?.rawValue } ?? FloatingPanelDock.bottomLeading.rawValue
+    }
+    private func saveMapPanelMemory() {
+        guard let memoryScope else { return }
+        store.updateWorkspaceMemory({ memory in
+            memory.panels["map.timeline"] = WorkspacePanelMemory(isPresented: showsTimeline, collapsed: timelineCollapsed)
+            memory.timelineDock = dockRaw; memory.timeFrom = store.timeFrom; memory.timeTo = store.timeTo; memory.showUndated = store.showUndated
+        }, expectedKey: memoryScope)
     }
 
     private var timelineCard: some View {

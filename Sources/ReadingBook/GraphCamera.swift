@@ -3,7 +3,7 @@ import SwiftUI
 /// The viewport is a camera over existing world coordinates; moving it never
 /// rewrites the user's graph. A very small minimum supports fitting old, widely
 /// separated nodes without creating an enormous backing view.
-struct GraphCamera {
+struct GraphCamera: Equatable {
     static let minimumScale: CGFloat = 0.00001
     static let maximumScale: CGFloat = 4
     var center = CGPoint.zero

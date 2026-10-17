@@ -7,7 +7,11 @@ import ReadingCore
 @MainActor final class AppStore: ObservableObject {
     @Published var books: [BookProject] = []
     @Published var bookID: String?
-    @Published var route = "reader"
+    @Published var route = "reader" { didSet { rememberWorkspaceNavigation() } }
+    @Published var workspaceMemory = BookWorkspaceMemory()
+    @Published var workspaceMemoryRevision = 0
+    var restoringWorkspaceMemory = false
+    var workspaceMemorySaveTask: Task<Void, Never>?
     @Published var selectedObjectID: String?
     @Published var selectedUnitID: String? {
         didSet {
@@ -32,7 +36,7 @@ import ReadingCore
     @Published var pdfNavigationToken = 0
     @Published var activeReadingUnitID: String?
     @Published var search = ""
-    @Published var selectedDocumentID: String?
+    @Published var selectedDocumentID: String? { didSet { rememberWorkspaceNavigation() } }
     @Published var editorTitle = "" { didSet { if editorDirty { persistDraft() } } }
     @Published var editorMarkdown = "" { didSet { if editorDirty { persistDraft() } } }
     @Published var editorDirty = false { didSet { if editorDirty { persistDraft() } } }
@@ -72,7 +76,7 @@ import ReadingCore
     let reader = AIReader()
     let pdfOCRReader = PDFOCRReader()
     private var loaded = false
-    private var navigationGeneration = 0
+    var navigationGeneration = 0
     private var documentGeneration = 0
     var task: Task<Void, Never>?
     var book: BookProject? { books.first { $0.id == bookID } }
@@ -92,20 +96,28 @@ import ReadingCore
     }
     func load() async {
         guard !loaded else { return }; loaded = true
-        do { books = try await repository.loadAll(); if let first = books.first { await selectBook(first.id) } }
+        do {
+            books = try await repository.loadAll()
+            let lastID = UserDefaults.standard.string(forKey: "workspace-last-book-v1")
+            if let first = books.first(where: { $0.id == lastID }) ?? books.first { await selectBook(first.id) }
+        }
         catch { errorMessage = "书库读取失败，原文件已保留：\(error.localizedDescription)" }
     }
     func selectBook(_ id: String) async {
         guard !isBusy else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档，再切换书籍。"; return }
+        flushWorkspaceMemory()
+        restoringWorkspaceMemory = true
         navigationGeneration += 1; documentGeneration += 1
         pdfNavigationToken += 1
         pdfPasswordRequest = nil
         let generation = navigationGeneration
         bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil
+        loadWorkspaceMemory()
         sourceReadingSelection = nil; focusedReadingAnchorID = nil; readingCompanionVisible = false; readingCompanionSection = "context"; readingSourceMode = "original"; readingScopeCurrent = false; lastQuestionContext = ""; readingExperienceError = nil
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
         if book?.units.contains(where: { $0.id == selectedUnitID }) != true { selectedUnitID = book?.units.first?.id }
+        if let page = workspaceMemory.pdf?.page, let unit = book?.units.first(where: { $0.page == page }) { selectedUnitID = unit.id }
         if let project = book {
             let url = await repository.sourceURL(for: project)
             guard bookID == id && generation == navigationGeneration else { return }
@@ -116,6 +128,11 @@ import ReadingCore
         let years = book?.events.flatMap { [$0.startYear, $0.endYear].compactMap { $0 } } ?? []
         timeFrom = Double((years.min() ?? -5000) - 1); timeTo = Double((years.max() ?? 3000) + 1)
         restoreDraft()
+        await restoreWorkspaceNavigation(expectedBookID: id, generation: generation)
+        guard bookID == id && generation == navigationGeneration else { return }
+        restoringWorkspaceMemory = false
+        workspaceMemoryRevision &+= 1
+        rememberWorkspaceNavigation()
         refreshReadingExperienceIndex()
     }
     func publish(_ project: BookProject) {
@@ -140,12 +157,13 @@ import ReadingCore
                 await reader.resetBudget()
                 let result = try await reader.plan(project: project, settings: settings, apiKey: apiKey)
                 try Task.checkCancellation(); try await repository.save(result); publish(result)
-                requestsUsed = await reader.requestCount; route = "workflow"; activity = "预读计划已保存；全文覆盖尚未增加。"
+                requestsUsed = await reader.requestCount; isBusy = false; openBookScheme(); activity = "预读方案已生成，请确认后开始精读；全文覆盖尚未增加。"
             } catch { handle(error) }
             isBusy = false
         }
     }
     func startReading() {
+        if book?.bookSchemes?.pending != nil { openBookScheme(); return }
         guard book != nil, !isBusy, providerReady else { return }
         guard !requiresPDFRecognition else { showingOCR = true; activity = "扫描页尚未识别；请先 OCR，避免把空提取结果当成已读。"; return }
         isBusy = true; activity = "准备顺序精读…"
@@ -155,6 +173,10 @@ import ReadingCore
                 if let current = book, current.plan == nil {
                     let planned = try await reader.plan(project: current, settings: settings, apiKey: apiKey)
                     try Task.checkCancellation(); try await repository.save(planned); publish(planned)
+                    if planned.bookSchemes?.pending != nil {
+                        isBusy = false; openBookScheme(); requestsUsed = await reader.requestCount
+                        activity = "请确认方案后开始精读。"; return
+                    }
                 }
                 while let current = book {
                     try Task.checkCancellation()
@@ -426,20 +448,7 @@ import ReadingCore
         }
     }
     func importPlugin(onError: ((String) -> Void)? = nil) {
-        guard var current = book, !isBusy else { return }
-        let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]; panel.message = "选择声明式插件 manifest.json"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let data = try Data(contentsOf: url); guard data.count <= 1_000_000 else { throw ReadingError.invalid("插件包超过 1 MB。") }
-            let manifest = try JSONDecoder().decode(PluginManifest.self, from: data); try PluginEngine.install(manifest, into: &current)
-            guard bookID == current.id else { throw ReadingError.invalid("书籍已切换，请重新导入插件。") }
-            isBusy = true
-            Task {
-                defer { isBusy = false }
-                do { try await repository.save(current); publish(current); activity = "已安装\(manifest.name)，声明已保存。" }
-                catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription } }
-            }
-        } catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription } }
+        previewImportPlugin(onError: onError)
     }
     func exportProject() {
         guard let current = book, !isBusy else { return }

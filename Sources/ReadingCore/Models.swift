@@ -257,6 +257,10 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var readerAnnotations: [ReaderAnnotation]? = nil
     /// Optional additive metadata; older books are not rewritten or backfilled.
     public var readingExperience: ReadingExperienceState? = nil
+    /// Additive host-managed configuration proposals; old archives omit them.
+    public var bookSchemes: BookSchemeState? = nil
+    /// Deterministic calculations are kept separate from AI prose and source text.
+    public var mathVerifications: [MathVerificationRecord]? = nil
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units
     }

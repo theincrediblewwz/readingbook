@@ -19,6 +19,7 @@ struct ReaderWorkspaceView: View {
                         else if isPDF, showPDF, let url = store.sourceFileURL {
                             let requestToken = store.pdfNavigationToken
                             let sourceBookID = store.bookID
+                            let memoryKey = store.workspaceMemoryKey
                             PDFReaderView(controller: pdfController, url: url, sourceHash: store.book?.sourceHash ?? "", page: unit.page, navigationToken: requestToken, password: store.pdfPassword(for: store.bookID), annotations: store.book?.readerAnnotations ?? [], canEditAnnotations: !store.isBusy, onPageChange: { page in
                                 guard store.pdfNavigationToken == requestToken else { return }
                                 if store.selectedUnit?.page != page {
@@ -36,7 +37,9 @@ struct ReaderWorkspaceView: View {
                             }, sourceDecorations: store.sourceReadingDecorations,
                                focusedDecorationID: store.focusedReadingAnchorID,
                                onSourceDecorationTap: store.sourceDecorationTapped,
-                               onSourceSelection: { selection in store.sourceReadingSelection = selection; if selection != nil { store.focusedReadingAnchorID = nil } })
+                               onSourceSelection: { selection in store.sourceReadingSelection = selection; if selection != nil { store.focusedReadingAnchorID = nil } },
+                               workspaceMemory: store.workspaceMemory.pdf, memoryRevision: store.workspaceMemoryRevision,
+                               onWorkspaceMemory: { memory in store.updateWorkspaceMemory({ $0.pdf = memory }, expectedKey: memoryKey) })
                         } else { sourceText(unit) }
                     } else {
                         EmptyState(title: "选择一个章节", detail: "从阅读工具中的目录选择原文内容。", icon: "book.pages")
@@ -305,6 +308,7 @@ struct DocumentEditorView: View {
     @State private var dragOrigin = CGPoint.zero
     @State private var panelEpoch = 0
     @State private var documentSearch = ""
+    @State private var memoryScope: String?
     private var hasDocument: Bool { store.selectedDocumentID != nil || store.editorDirty }
     private var currentDocument: DocumentRecord? { store.book?.activeDocuments.first { $0.id == store.selectedDocumentID } }
     private var documents: [DocumentRecord] {
@@ -334,7 +338,7 @@ struct DocumentEditorView: View {
             }
             .onAppear {
                 guard !measuredWindow else { return }; measuredWindow = true
-                showingDocuments = wide
+                restoreListMemory(viewport: geometry.size, defaultShown: wide)
                 if store.selectedDocumentID == nil && store.editorDirty { preview = false }
             }
             .onChange(of: geometry.size) { previous, next in
@@ -342,6 +346,7 @@ struct DocumentEditorView: View {
                 listOrigin = clampedListOrigin(listOrigin, viewport: next)
                 panelEpoch += 1
             }
+            .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreListMemory(viewport: geometry.size, defaultShown: wide) }
         }
         .confirmationDialog("放弃尚未保存的修改？", isPresented: $discardingDraft) {
             Button("放弃修改", role: .destructive) { store.discardDraft() }
@@ -349,6 +354,21 @@ struct DocumentEditorView: View {
         .onChange(of: store.bookID) { _, _ in documentSearch = ""; preview = true; panelEpoch += 1 }
         .onChange(of: store.selectedDocumentID) { _, next in if next == nil && store.editorDirty { preview = false } }
         .onChange(of: store.editorDirty) { _, dirty in if dirty && store.selectedDocumentID == nil { preview = false } }
+        .onChange(of: showingDocuments) { _, _ in saveListMemory() }
+        .onChange(of: listCollapsed) { _, _ in saveListMemory() }
+        .onChange(of: listOrigin) { _, _ in saveListMemory() }
+        .onDisappear { saveListMemory() }
+    }
+    private func restoreListMemory(viewport: CGSize, defaultShown: Bool) {
+        memoryScope = store.workspaceMemoryKey
+        let saved = store.workspaceMemory.panels["notes.list"]
+        listCollapsed = saved?.collapsed ?? false; showingDocuments = saved?.isPresented ?? defaultShown
+        listOrigin = clampedListOrigin(saved?.origin.map { CGPoint(x: $0.x, y: $0.y) } ?? CGPoint(x: 12, y: 100), viewport: viewport)
+    }
+    private func saveListMemory() {
+        guard let memoryScope else { return }
+        let saved = WorkspacePanelMemory(origin: WorkspacePoint(x: listOrigin.x, y: listOrigin.y), isPresented: showingDocuments, collapsed: listCollapsed)
+        store.updateWorkspaceMemory({ $0.panels["notes.list"] = saved }, expectedKey: memoryScope)
     }
     private var documentPaper: some View {
         VStack(alignment: .leading, spacing: 0) {

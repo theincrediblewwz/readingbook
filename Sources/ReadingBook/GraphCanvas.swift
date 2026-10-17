@@ -16,6 +16,7 @@ struct GraphLine: Identifiable { var id: String; var from: String; var to: Strin
 /// Canvas identity is the node ID; opening content uses the separate target ID.
 /// Body dragging moves a card. Its edge ports own a separate connection gesture.
 struct GraphSurface: View {
+    @EnvironmentObject private var store: AppStore
     @AppStorage("frost-navigation-dock-v1") private var navigationDock = NavigationOrbDock.topLeading.rawValue
     var items: [GraphItem]
     var lines: [GraphLine]
@@ -56,6 +57,7 @@ struct GraphSurface: View {
     @State private var viewportSize = CGSize.zero
     @State private var controlsRect = CGRect.zero
     @State private var cameraInitialized = false
+    @State private var memoryScope: String?
     @State private var panOrigin: GraphCamera?
     @State private var connectionDragScale: CGFloat?
     @State private var gestureEpoch = 0
@@ -176,10 +178,10 @@ struct GraphSurface: View {
             .onAppear {
                 viewportSize = geometry.size
                 if !cameraInitialized {
-                    fitAll()
+                    restoreCameraMemory()
                     // Widely separated saved nodes remain untouched. Show a
                     // readable starting area; “show all” remains explicit.
-                    if camera.scale < 0.72, let first = items.first(where: { $0.targetID == selectedID }) ?? items.first {
+                    if store.workspaceMemory.graphs[title ?? store.route] == nil, camera.scale < 0.72, let first = items.first(where: { $0.targetID == selectedID }) ?? items.first {
                         camera.scale = 0.9
                         camera.focus(point(first), in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
                     }
@@ -198,6 +200,8 @@ struct GraphSurface: View {
             else { cancelTransientInteractions() }
         }
         .onChange(of: isEnabled) { _, enabled in if !enabled { cancelTransientInteractions() } }
+        .onChange(of: camera) { _, _ in saveCameraMemory() }
+        .onChange(of: store.workspaceMemoryRevision) { _, _ in cancelTransientInteractions(); restoreCameraMemory() }
         .onChange(of: workspaceCanvasBlocked) { _, blocked in if blocked { cancelTransientInteractions() } }
         .onChange(of: obscuredLeadingWidth) { old, _ in reframeCamera(previousLeadingWidth: old, previousTrailingWidth: obscuredTrailingWidth) }
         .onChange(of: obscuredTrailingWidth) { old, _ in reframeCamera(previousLeadingWidth: obscuredLeadingWidth, previousTrailingWidth: old) }
@@ -211,7 +215,21 @@ struct GraphSurface: View {
         .onChange(of: lines.map(\.id)) { _, ids in if let id = editingLineID, !ids.contains(id) { editingLineID = nil } }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in cancelTransientInteractions() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in cancelTransientInteractions() }
-        .onDisappear { cancelTransientInteractions(); editingLineID = nil }
+        .onDisappear { saveCameraMemory(); cancelTransientInteractions(); editingLineID = nil }
+    }
+    private func restoreCameraMemory() {
+        memoryScope = store.workspaceMemoryKey
+        if let saved = store.workspaceMemory.graphs[title ?? store.route], saved.isValid {
+            camera = GraphCamera(center: CGPoint(x: saved.center.x, y: saved.center.y), scale: saved.scale)
+        } else {
+            let bounds = items.map(rect).reduce(CGRect.null) { $0.union($1) }
+            camera.fit(bounds.isNull ? CGRect(origin: .zero, size: nodeSize) : bounds, in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
+        }
+    }
+    private func saveCameraMemory() {
+        guard cameraInitialized, let memoryScope else { return }
+        let saved = WorkspaceGraphCamera(center: WorkspacePoint(x: camera.center.x, y: camera.center.y), scale: camera.scale)
+        store.updateWorkspaceMemory({ $0.graphs[title ?? store.route] = saved }, expectedKey: memoryScope)
     }
     private func visibleItems(in size: CGSize) -> [GraphItem] {
         let viewport = CGRect(origin: .zero, size: size).insetBy(dx: -max(240, nodeSize.width / 2 * camera.scale + 24), dy: -max(100, nodeSize.height / 2 * camera.scale + 24))

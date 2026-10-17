@@ -318,12 +318,13 @@ struct PluginLibraryView: View {
     private var footerExplanation: some View { Label("停用保留已有内容", systemImage: "info.circle").font(.system(size: 13)).foregroundStyle(.secondary).fixedSize() }
     private var definitionButtons: some View {
         HStack(spacing: 4) {
+            Button { store.showingPlugins = false; store.openBookScheme(); if !embedded { dismiss() } } label: { Label("书本方案", systemImage: "slider.horizontal.3") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || store.isBusy)
             Button { detailTab = "types"; showDetails = true } label: { Label("类型", systemImage: "square.stack") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil)
             Button { detailTab = "methods"; showDetails = true } label: { Label("读书法", systemImage: "checklist") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil)
         }
     }
     private var importButton: some View {
-        Button { importError = ""; store.importPlugin(onError: { importError = $0 }) } label: { Label("导入插件…", systemImage: "plus") }
+        Button { importError = ""; store.importPlugin(onError: { importError = $0 }) } label: { Label("导入 / 升级…", systemImage: "plus") }
             .buttonStyle(.borderedProminent).controlSize(.large).disabled(store.book == nil || store.isBusy)
     }
     private func capabilityRow(_ component: WorkspaceComponentDescriptor, addOnly: Bool) -> some View {
@@ -348,6 +349,8 @@ struct PluginLibraryView: View {
     }
     private func capabilityDescription(_ component: WorkspaceComponentDescriptor) -> String {
         switch component.rendererID ?? "" {
+        case "book.scheme": return "预览与调整 AI 书本方案，保存模板，并安全撤销配置更新。"
+        case "math.verify": return "对支持的有理数矩阵与方程逐步验算，保留原文依据和不适用说明。"
         case "reading.layers": return "译文、释义、评注和资料对齐，随原文按需展开。"
         case "reading.mentions": return "按原文词句追踪对象、别名与出现位置。"
         case "reading.decisions": return "带原文依据的问题、选项与分析路径。"

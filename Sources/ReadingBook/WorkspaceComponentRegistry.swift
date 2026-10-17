@@ -36,6 +36,7 @@ struct WorkspaceComponentDescriptor: Identifiable {
         do {
             try registry.install(BuiltInWorkspacePlugin())
             try registry.install(ReadingExperienceWorkspacePlugin())
+            try registry.install(BookToolsWorkspacePlugin())
         }
         catch { preconditionFailure("内置组件注册失败：\(error)") }
         return registry
@@ -53,6 +54,7 @@ struct WorkspaceComponentDescriptor: Identifiable {
     }
     func component(for kind: ComponentKind) -> WorkspaceComponentDescriptor? { aliases[kind].flatMap { entries[$0]?.descriptor } }
     func component(id: String) -> WorkspaceComponentDescriptor? { entries[id]?.descriptor }
+    func render(id: String) -> AnyView? { entries[id]?.render(nil) }
     func component(for view: ViewDefinition) -> WorkspaceComponentDescriptor? {
         if let id = view.rendererID {
             return entries[id]?.descriptor ?? WorkspaceComponentDescriptor(kind: view.kind, title: view.title, icon: "puzzlepiece.extension", rendererID: id)
@@ -89,6 +91,14 @@ struct WorkspaceComponentDescriptor: Identifiable {
             if rendererIdentity(view) == aliases[.cards] { return true }
             return seen.insert(descriptor.id).inserted
         }
+    }
+}
+
+@MainActor private struct BookToolsWorkspacePlugin: WorkspaceComponentPlugin {
+    let id = "builtin.book-tools"
+    func register(in registry: inout WorkspaceComponentRegistry) throws {
+        try registry.register(WorkspaceComponentDescriptor(kind: .workflow, title: "书本方案", icon: "slider.horizontal.3", permanent: true, rendererID: "book.scheme")) { AnyView(BookSchemeWorkspaceView(definition: $0)) }
+        try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "数学核查", icon: "function", rendererID: "math.verify")) { AnyView(MathVerificationWorkspaceView(definition: $0)) }
     }
 }
 

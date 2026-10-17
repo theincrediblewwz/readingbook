@@ -127,6 +127,16 @@ struct ReadingLedgerView: View {
                                     Text("输入：本单元 \(run.input.paragraphIDs.count) 个已核对片段，\(run.input.previousStepIDs.count) 个前序步骤输出。")
                                     if !run.input.configuration.isEmpty { Text(run.input.configuration.keys.sorted().map { "\($0)：\(run.input.configuration[$0] ?? "")" }.joined(separator: "\n")) }
                                     Text(run.toolNames.isEmpty ? "尚无成功工具调用记录" : "已调用：" + run.toolNames.joined(separator: " · "))
+                                    if let ids = run.mathVerificationIDs, !ids.isEmpty {
+                                        let records = (book.mathVerifications ?? []).filter { ids.contains($0.id) }
+                                        ForEach(records) { record in
+                                            Button {
+                                                store.selectedObjectID = record.id; store.route = "math.verify"
+                                            } label: {
+                                                Label(record.summary + (record.deletedAt == nil ? "" : " · 已删除，可恢复"), systemImage: record.status == .verified ? "checkmark.seal" : "xmark.seal")
+                                            }.buttonStyle(.bordered).controlSize(.regular)
+                                        }
+                                    }
                                     if let output = run.output {
                                         Text(output.result).textSelection(.enabled)
                                         if let reason = output.noChangesReason { Text("未新增知识：" + reason).foregroundStyle(.secondary) }

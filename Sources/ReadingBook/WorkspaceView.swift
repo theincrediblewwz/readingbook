@@ -13,7 +13,7 @@ struct WorkspaceView: View {
     @State private var columns: NavigationSplitViewVisibility = .detailOnly
     @StateObject private var pdfController = PDFReaderController()
     @State private var readerShowsPDF = true
-    @AppStorage("reader-outline-v3") private var readerOutline = false
+    @State private var readerOutline = false
     @State private var activeSheet: WorkspaceSheet?
     @State private var lastSheet: WorkspaceSheet?
     @State private var sheetClosing = false
@@ -90,7 +90,12 @@ struct WorkspaceView: View {
             }
         }
         .onChange(of: modalSignature) { _, _ in reconcileSheet() }
-        .onAppear { reconcileSheet() }
+        .onAppear { reconcileSheet(); restoreReaderMemory() }
+        .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreReaderMemory() }
+        .onChange(of: readerShowsPDF) { _, value in store.updateWorkspaceMemory { $0.readerShowsPDF = value } }
+        .onChange(of: readerOutline) { _, value in store.updateWorkspaceMemory { $0.readerOutline = value } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in store.flushWorkspaceMemory() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in store.flushWorkspaceMemory() }
         .confirmationDialog("删除保存的内容？", isPresented: Binding(get: { store.deletionRequest != nil }, set: { if !$0 { store.deletionRequest = nil } }), presenting: store.deletionRequest) { request in
             Button(request.kind == .book || request.kind == .document ? "移入回收站" : "删除对象", role: .destructive) { store.confirmDeletion(request) }
         } message: { request in Text("“\(request.title)”\n" + request.detail) }
@@ -104,8 +109,12 @@ struct WorkspaceView: View {
             }
             return true
         }
-        .onChange(of: store.bookID) { _, _ in readerShowsPDF = true; showsInspector = false; compactInspector = false }
+        .onChange(of: store.bookID) { _, _ in showsInspector = false; compactInspector = false }
         .onChange(of: store.route) { _, _ in if viewingGraph || viewingSpatial { showsInspector = false; compactInspector = false } }
+    }
+    private func restoreReaderMemory() {
+        readerShowsPDF = store.workspaceMemory.readerShowsPDF
+        readerOutline = store.workspaceMemory.readerOutline
     }
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -229,6 +238,11 @@ struct WorkspaceView: View {
                     }.disabled(store.isBusy)
                 }
                 Divider()
+                if store.book != nil {
+                    Button("书本方案…") { store.openBookScheme() }.disabled(store.isBusy || store.editorDirty)
+                    Button("恢复本书默认布局") { store.resetWorkspaceLayout() }
+                    Divider()
+                }
                 Button("打开书库") { navigate("library") }
                 Button("导入一本书…") { store.chooseBook() }
             } label: {
@@ -434,6 +448,7 @@ struct WorkspaceView: View {
         else if store.route == "librarySearch" { LibrarySearchView(embedded: true, onClose: { navigate("library") }).padding(.top, 88) }
         else if store.book == nil { WelcomeView().padding(.top, 88) }
         else if store.route == "reader" { ReaderWorkspaceView(showPDF: $readerShowsPDF, showOutline: $readerOutline).id(store.bookID) }
+        else if let component = WorkspaceComponentRegistry.shared.render(id: store.route) { component }
         else {
             let kind = store.book?.views.first { $0.id == store.route }?.kind ?? ComponentKind(rawValue: store.route) ?? .workflow
             if let component = WorkspaceComponentRegistry.shared.render(store.book?.views.first { $0.id == store.route }, kind: kind) { component }
