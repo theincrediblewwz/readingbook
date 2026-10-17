@@ -1,3 +1,13 @@
+# 0.12.1：全宽内容与导航浮层
+
+final result: blocked
+
+仅Mac原生视觉/手势对照待验。已移除Workspace全局64pt左padding与detailWidth减64；地图/导图获得整个窗口。FloatingNavigationButton在position前测量48×48实际按钮，继续交给画布输入排除；不把position后的全窗口布局盒当成命中区。顶部停靠中心72，标题区96起；左侧目录恢复按钮局部下移128，底部仅相交的时间卡/状态条避让。不为此新增整页留白。
+
+浏览器在1440×1024与800×600验证原左列区域的地图拖动、导图滚轮和导航拖动开合；这不代替Mac MapKit/NSEvent验证。源码bac77d77a0c96ba33b789df75084a7d6c01b1eb8，Actions38991699118成功；102项Core、双架构和资源检查通过，无编译警告，下载包0.12.1/build13摘要/权限/资源已核对。最新包与编译证据见根README。
+
+---
+
 # 0.12 原生修订：Mac对照待验
 
 final result: blocked
