@@ -28,6 +28,7 @@ struct SpatialTimelineView: View {
     @State private var timelineCollapsed = false
     @State private var viewport = CGSize(width: 900, height: 650)
     @AppStorage("readingbook.timelinePanelDock") private var dockRaw = FloatingPanelDock.bottomLeading.rawValue
+    @AppStorage("frost-navigation-dock-v1") private var navigationDockRaw = NavigationOrbDock.topLeading.rawValue
     @State private var measuredPanelSize = CGSize(width: 740, height: 214)
     @State private var dragOrigin: CGPoint?
     @State private var dragCenter: CGPoint?
@@ -73,7 +74,12 @@ struct SpatialTimelineView: View {
     private var dock: FloatingPanelDock { FloatingPanelDock(rawValue: dockRaw) ?? .bottomLeading }
     private var panelSize: CGSize { CGSize(width: panelWidth, height: min(measuredPanelSize.height, max(0, workingViewport.height - 48))) }
     private func dockFrame(_ position: FloatingPanelDock) -> CGRect {
-        FloatingPanelGeometry.frame(at: position, viewport: workingViewport, panel: panelSize, margin: 24).offsetBy(dx: 0, dy: topReserve)
+        let frame = FloatingPanelGeometry.frame(at: position, viewport: workingViewport, panel: panelSize, margin: 24).offsetBy(dx: 0, dy: topReserve)
+        let center = NavigationOrbGeometry.center(in: viewport, dock: NavigationOrbDock(rawValue: navigationDockRaw) ?? .topLeading)
+        let navigation = CGRect(x: center.x - 24, y: center.y - 24, width: 48, height: 48)
+        // Move only an overlapping floating card. The map keeps every pixel.
+        guard frame.intersects(navigation) else { return frame }
+        return frame.offsetBy(dx: min(56, max(0, viewport.width - frame.maxX - 24)), dy: 0)
     }
     private func clampedPanelCenter(_ center: CGPoint) -> CGPoint {
         let local = FloatingPanelGeometry.clampedCenter(CGPoint(x: center.x, y: center.y - topReserve), viewport: workingViewport, panel: panelSize, margin: 24)
@@ -133,6 +139,7 @@ struct SpatialTimelineView: View {
         .onChange(of: measuredPanelSize) { _, _ in if let id = store.selectedObjectID { locate(id) } }
         .onChange(of: viewport) { _, _ in if let id = store.selectedObjectID { locate(id) } }
         .onChange(of: dockRaw) { _, _ in if let id = store.selectedObjectID { locate(id) } }
+        .onChange(of: navigationDockRaw) { _, _ in if let id = store.selectedObjectID { locate(id) } }
         .popover(isPresented: Binding(get: { inspectedObjectID != nil }, set: { if !$0 { inspectedObjectID = nil } })) {
             if let id = inspectedObjectID { ObjectInspector(id: id, onClose: { inspectedObjectID = nil }).environmentObject(store).frame(width: 330, height: 500) }
         }

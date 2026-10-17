@@ -1,6 +1,7 @@
 import SwiftUI
 import Foundation
 import AppKit
+import ReadingCore
 
 struct GraphItem: Identifiable {
     var id: String
@@ -15,6 +16,7 @@ struct GraphLine: Identifiable { var id: String; var from: String; var to: Strin
 /// Canvas identity is the node ID; opening content uses the separate target ID.
 /// Body dragging moves a card. Its edge ports own a separate connection gesture.
 struct GraphSurface: View {
+    @AppStorage("frost-navigation-dock-v1") private var navigationDock = NavigationOrbDock.topLeading.rawValue
     var items: [GraphItem]
     var lines: [GraphLine]
     var selectedID: String?
@@ -150,7 +152,8 @@ struct GraphSurface: View {
             .overlay(alignment: .bottomLeading) {
                 statusOverlay.lineLimit(2).multilineTextAlignment(.leading)
                     .frame(maxWidth: min(300, statusWidth(in: geometry.size)), alignment: .leading)
-                    .padding(.leading, 24).padding(.bottom, geometry.size.width < 1050 ? 96 : 24).allowsHitTesting(false)
+                    .padding(.leading, geometry.size.width >= 1050 && navigationDock == NavigationOrbDock.bottomLeading.rawValue ? 80 : 24)
+                    .padding(.bottom, geometry.size.width < 1050 ? 96 : 24).allowsHitTesting(false)
             }
             .overlay(alignment: .bottom) {
                 cameraControls.background {

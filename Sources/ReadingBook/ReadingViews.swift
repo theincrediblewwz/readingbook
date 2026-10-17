@@ -313,7 +313,7 @@ struct DocumentEditorView: View {
     }
     var body: some View {
         GeometryReader { geometry in
-            // WorkspaceView already reserves the 64pt navigation lane.
+            // Only the document list reserves space; navigation floats above it.
             let wide = geometry.size.width >= 1036
             let leftInset: CGFloat = showingDocuments && wide && !listCollapsed ? 378 : 12
             ZStack(alignment: .topLeading) {

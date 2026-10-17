@@ -18,7 +18,7 @@ extension EnvironmentValues {
 
     /// SwiftUI `.global` rectangles occupied by the workspace command islands.
     /// Each canvas converts these to its own local coordinates. Callers must
-    /// not subtract the navigation gutter or assume a full-window canvas.
+    /// not invent navigation padding; the button is only a 48pt exclusion.
     var workspaceCanvasExclusionRects: [CGRect] {
         get { self[WorkspaceCanvasExclusionRectsKey.self] }
         set { self[WorkspaceCanvasExclusionRectsKey.self] = newValue }
@@ -34,7 +34,7 @@ extension EnvironmentValues {
 
 /// One native coordinate space for every background, node body and port in a
 /// canvas. AppKit performs the actual conversion through SwiftUI's scaled and
-/// positioned hosting views; callers never reapply zoom or the navigation gap.
+/// positioned hosting views; callers never reapply zoom or invent a layout gap.
 @MainActor enum WorkspaceCanvasInputRegions {
     private final class Region {
         weak var viewport: NSView?

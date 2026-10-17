@@ -46,7 +46,7 @@ struct ReaderFloatingPanel<Content: View>: View {
             } else if hasOpened {
                 Button { collapsed = false; isPresented = true } label: { Label(title, systemImage: icon) }
                     .buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 18)
-                    .position(x: trailing ? max(100, viewport.width - 90) : 90, y: trailing ? max(100, viewport.height - 108) : 110)
+                    .position(x: trailing ? max(100, viewport.width - 90) : 90, y: trailing ? max(100, viewport.height - 108) : 128)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .onAppear { hasOpened = isPresented; if viewport.width < 1050 && trailing { isPresented = false } }

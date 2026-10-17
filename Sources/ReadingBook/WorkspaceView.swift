@@ -36,7 +36,6 @@ struct WorkspaceView: View {
                         }
                     }
                     .clipped()
-                    .padding(.leading, NavigationOrbGeometry.leadingInset)
                 if store.isBusy && !viewingWorkflow && !viewingGraph && !viewingSpatial && store.route != "reader" {
                     footer.frame(maxWidth: 310).readingGlass(radius: 16)
                         .padding(.trailing, 24).padding(.bottom, 86).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -52,9 +51,9 @@ struct WorkspaceView: View {
                 }.opacity(navigationExpanded ? 0 : 1).allowsHitTesting(!navigationExpanded).accessibilityHidden(navigationExpanded).zIndex(11)
             }
             .onPreferenceChange(WorkspaceChromeBoundsPreference.self) { chromeBounds = $0 }
-            .onAppear { detailWidth = max(0, geometry.size.width - NavigationOrbGeometry.leadingInset) }
+            .onAppear { detailWidth = geometry.size.width }
             .onChange(of: geometry.size.width) { _, width in
-                detailWidth = max(0, width - NavigationOrbGeometry.leadingInset)
+                detailWidth = width
                 if width < 920 { showsInspector = false }
             }
         }
@@ -199,7 +198,7 @@ struct WorkspaceView: View {
         return kind == .map || kind == .timeline
     }
     /// Exclusion rectangles stay in SwiftUI global coordinates. GraphSurface
-    /// converts them once into its own, already inset, canvas coordinates.
+    /// converts them once into its own canvas coordinates.
     private var canvasInteractionBlocked: Bool {
         navigationExpanded || servicePopover || compactInspector || activeSheet != nil || sheetClosing
             || pendingRoute != nil || pendingModelRoute != nil || store.deletionRequest != nil
@@ -454,13 +453,13 @@ struct WorkspaceView: View {
 
 /// Layout-only measurements. They are collected after compact chrome has been
 /// sized, so invisible maximum-width frames never block the canvas underneath.
-private struct WorkspaceChromeBoundsPreference: PreferenceKey {
+struct WorkspaceChromeBoundsPreference: PreferenceKey {
     static var defaultValue: [String: CGRect] = [:]
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
     }
 }
-private extension View {
+extension View {
     func workspaceChromeBounds(_ id: String) -> some View {
         background {
             GeometryReader { geometry in

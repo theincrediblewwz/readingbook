@@ -32,6 +32,9 @@ struct FloatingNavigationButton: View {
                     } else { movingCenter = point }
                 }, cancel: { movingCenter = nil; origin = nil }, activate: activate)
             }
+            // Measure the 48pt control before position expands its layout box.
+            // The canvas excludes this footprint, never a full-height column.
+            .workspaceChromeBounds("navigation")
             .position(center)
             .help("点击\(isExpanded ? "收起" : "展开")导航；上下拖动后停靠左上或左下 · ⌘B")
             .accessibilityLabel(isExpanded ? "收起导航" : "展开导航")
