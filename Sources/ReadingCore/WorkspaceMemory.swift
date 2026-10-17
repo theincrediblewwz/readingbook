@@ -61,6 +61,8 @@ public struct BookWorkspaceMemory: Codable, Equatable, Sendable {
     public var readerShowsPDF = true
     public var readerOutline = false
     public var readingSourceMode = "original"
+    /// A hidden PDF must not override the last text/OCR unit or parallel-reading position.
+    public var activePDFPage: Int? { readerShowsPDF && readingSourceMode == "original" ? pdf?.page : nil }
     public init(bookID: String = "", sourceHash: String = "") { self.bookID = bookID; self.sourceHash = sourceHash }
     public func sanitized(bookID: String, sourceHash: String) -> Self {
         guard version == 1, self.bookID == bookID, self.sourceHash == sourceHash else { return Self(bookID: bookID, sourceHash: sourceHash) }

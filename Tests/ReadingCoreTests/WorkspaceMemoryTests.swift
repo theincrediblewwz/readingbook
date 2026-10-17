@@ -2,6 +2,17 @@ import XCTest
 @testable import ReadingCore
 
 final class WorkspaceMemoryTests: XCTestCase {
+    func testHiddenPDFCannotReplaceTextOrParallelReadingPosition() throws {
+        var memory = BookWorkspaceMemory(bookID: "a", sourceHash: "s")
+        memory.pdf = WorkspacePDFMemory(page: 8)
+        XCTAssertEqual(memory.activePDFPage, 8)
+        memory.readerShowsPDF = false
+        XCTAssertNil(memory.activePDFPage)
+        memory.readerShowsPDF = true; memory.readingSourceMode = "parallel"
+        XCTAssertNil(memory.activePDFPage)
+        let restored = try JSONDecoder().decode(BookWorkspaceMemory.self, from: JSONEncoder().encode(memory))
+        XCTAssertEqual(restored.readingSourceMode, "parallel"); XCTAssertNil(restored.activePDFPage)
+    }
     func testSourceIdentityCannotRestoreAnotherBookOrReplacementSource() {
         var memory = BookWorkspaceMemory(bookID: "a", sourceHash: "first")
         memory.route = "editor"; memory.documentID = "note-a"

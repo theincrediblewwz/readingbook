@@ -23,7 +23,7 @@ import ReadingCore
     @Published var focusedReadingAnchorID: String?
     @Published var readingCompanionVisible = false
     @Published var readingCompanionSection = "context"
-    @Published var readingSourceMode = "original"
+    @Published var readingSourceMode = "original" { didSet { updateWorkspaceMemory { $0.readingSourceMode = readingSourceMode } } }
     @Published var readingExperienceIndex = ReadingExperienceState()
     @Published var readingScopeCurrent = false
     @Published var lastQuestionContext = ""
@@ -117,7 +117,7 @@ import ReadingCore
         sourceReadingSelection = nil; focusedReadingAnchorID = nil; readingCompanionVisible = false; readingCompanionSection = "context"; readingSourceMode = "original"; readingScopeCurrent = false; lastQuestionContext = ""; readingExperienceError = nil
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
         if book?.units.contains(where: { $0.id == selectedUnitID }) != true { selectedUnitID = book?.units.first?.id }
-        if let page = workspaceMemory.pdf?.page, let unit = book?.units.first(where: { $0.page == page }) { selectedUnitID = unit.id }
+        if let page = workspaceMemory.activePDFPage, let unit = book?.units.first(where: { $0.page == page }) { selectedUnitID = unit.id }
         if let project = book {
             let url = await repository.sourceURL(for: project)
             guard bookID == id && generation == navigationGeneration else { return }
