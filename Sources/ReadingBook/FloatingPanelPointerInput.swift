@@ -31,7 +31,8 @@ struct FloatingPanelPointerInput: NSViewRepresentable {
             stopTracking(); origin = event.locationInWindow; begin?()
             NSCursor.closedHand.set()
             escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard event.keyCode == 53, let self, self.origin != nil else { return event }
+                guard event.keyCode == 53, let self, self.origin != nil,
+                      event.window === self.window, self.window?.attachedSheet == nil else { return event }
                 self.stopTracking(); self.cancel?(); return nil
             }
             for (name, object) in [(NSWindow.didResignKeyNotification, window as AnyObject?), (NSApplication.didResignActiveNotification, NSApplication.shared as AnyObject?)] {

@@ -226,11 +226,16 @@ struct ReadingExperienceWorkspaceView: View {
     @EnvironmentObject var store: AppStore
     var section: String
     var definition: ViewDefinition?
+    @ViewBuilder
     var body: some View {
-        ReadingCompanionPanel(section: section, scope: definition?.scope ?? "current")
-            .frame(maxWidth: 900).padding(22).readingGlass(radius: 22)
-            .padding(.horizontal, 76).padding(.top, 96).padding(.bottom, 24)
-            .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.canvas)
+        if section == "layers" { ReadingLayersWorkspaceView(definition: definition) }
+        else if section == "mentions" { SourceIndexWorkspaceView(definition: definition) }
+        else {
+            ReadingCompanionPanel(section: section, scope: definition?.scope ?? "current")
+                .frame(maxWidth: 900).padding(22).readingGlass(radius: 22)
+                .padding(.horizontal, 24).padding(.top, 96).padding(.bottom, 24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.canvas)
+        }
     }
 }
 

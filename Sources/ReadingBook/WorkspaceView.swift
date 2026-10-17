@@ -21,16 +21,22 @@ struct WorkspaceView: View {
     @State private var navigationExpanded = false
     @State private var pendingRoute: String?
     @State private var pendingModelRoute: String?
+    @State private var chromeBounds: [String: CGRect] = [:]
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
                 Palette.canvas.ignoresSafeArea()
-                content.frame(maxWidth: .infinity, maxHeight: .infinity)
+                content
+                    .environment(\.workspaceCanvasBlocked, canvasInteractionBlocked)
+                    .environment(\.workspaceCanvasExclusionRects, canvasExclusionRects)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(alignment: .bottom) {
                         if store.route == "reader", store.selectedUnit != nil {
                             readerControls.padding(.horizontal, 18).padding(.bottom, 22)
                         }
                     }
+                    .clipped()
+                    .padding(.leading, NavigationOrbGeometry.leadingInset)
                 if store.isBusy && !viewingWorkflow && !viewingGraph && !viewingSpatial && store.route != "reader" {
                     footer.frame(maxWidth: 310).readingGlass(radius: 16)
                         .padding(.trailing, 24).padding(.bottom, 86).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -38,16 +44,17 @@ struct WorkspaceView: View {
                 topIslands(width: geometry.size.width).padding(.top, 14).padding(.leading, 104).padding(.trailing, 24)
                 if navigationExpanded {
                     sidebar.frame(width: min(286, geometry.size.width - 96), height: max(100, min(690, geometry.size.height - 126)))
-                        .readingGlass(radius: 24).padding(.leading, 24).padding(.top, 88)
+                        .readingGlass(radius: 24).padding(.leading, 16).padding(.top, 88)
                         .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading))).zIndex(10)
                 }
                 FloatingNavigationButton(viewport: geometry.size, isExpanded: navigationExpanded) {
                     withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { navigationExpanded.toggle(); servicePopover = false }
                 }.opacity(navigationExpanded ? 0 : 1).allowsHitTesting(!navigationExpanded).accessibilityHidden(navigationExpanded).zIndex(11)
             }
-            .onAppear { detailWidth = geometry.size.width }
+            .onPreferenceChange(WorkspaceChromeBoundsPreference.self) { chromeBounds = $0 }
+            .onAppear { detailWidth = max(0, geometry.size.width - NavigationOrbGeometry.leadingInset) }
             .onChange(of: geometry.size.width) { _, width in
-                detailWidth = width
+                detailWidth = max(0, width - NavigationOrbGeometry.leadingInset)
                 if width < 920 { showsInspector = false }
             }
         }
@@ -191,8 +198,31 @@ struct WorkspaceView: View {
         let kind = store.book?.views.first(where: { $0.id == store.route })?.kind ?? ComponentKind(rawValue: store.route)
         return kind == .map || kind == .timeline
     }
+    /// Exclusion rectangles stay in SwiftUI global coordinates. GraphSurface
+    /// converts them once into its own, already inset, canvas coordinates.
+    private var canvasInteractionBlocked: Bool {
+        navigationExpanded || servicePopover || compactInspector || activeSheet != nil || sheetClosing
+            || pendingRoute != nil || pendingModelRoute != nil || store.deletionRequest != nil
+            || store.errorMessage != nil || store.serviceProfileDraft.pendingChange != nil
+    }
+    private var canvasExclusionRects: [CGRect] { chromeBounds.keys.sorted().compactMap { chromeBounds[$0] } }
+    private var showsObjectInspector: Bool {
+        guard let book = store.book, let id = store.selectedObjectID, !viewingGraph, !viewingSpatial else { return false }
+        let kind = book.views.first { $0.id == store.route }?.kind ?? ComponentKind(rawValue: store.route)
+        guard store.route == "reader" || kind == .cards || kind == .knowledge else { return false }
+        let evidence = book.entities.first { $0.id == id }?.evidence
+            ?? book.events.first { $0.id == id }?.evidence
+            ?? book.activeDocuments.first { $0.id == id }?.evidence
+        guard let evidence else { return false }
+        if store.route == "reader" { return evidence.contains { $0.unitID == store.selectedUnitID } }
+        return true
+    }
     private func topIslands(width: CGFloat) -> some View {
-        HStack(spacing: 10) {
+        let compact = width < 1050
+        let hasPrimaryAction = store.route == "editor" || store.route == "reader" || store.route == "library" || store.book == nil
+        let titleLimit: CGFloat = compact ? (hasPrimaryAction ? (showsObjectInspector ? 140 : 188) : 240) : 360
+        let serviceLimit: CGFloat = compact ? 108 : 170
+        return HStack(spacing: 10) {
             Menu {
                 ForEach(store.books) { book in
                     Button { navigationExpanded = false; Task { await store.selectBook(book.id) } } label: {
@@ -205,28 +235,33 @@ struct WorkspaceView: View {
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "book.closed.fill").foregroundStyle(Palette.accent)
-                    Text(workspaceTitle).font(.system(size: 15, weight: .semibold)).lineLimit(1).truncationMode(.middle)
-                }.padding(.horizontal, 16).frame(minHeight: 46)
-            }.menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true).frame(maxWidth: width < 1050 ? 290 : 430, alignment: .leading).readingGlass(radius: 24, interactive: true)
-            FrostWindowDragRegion().frame(minWidth: 12, maxWidth: .infinity).frame(height: 46)
-            if store.selectedObjectID != nil, !viewingGraph, !viewingSpatial, store.route != "editor" {
+                    Text(workspaceTitle).font(.system(size: 15, weight: .semibold)).lineLimit(1).truncationMode(.middle).frame(maxWidth: titleLimit)
+                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                }.padding(.horizontal, 16).frame(minHeight: 46).foregroundStyle(Palette.ink).contentShape(Capsule())
+            }.menuStyle(.borderlessButton).buttonStyle(.plain).menuIndicator(.hidden)
+                .fixedSize(horizontal: true, vertical: true).frame(minHeight: 46).readingGlass(radius: 24, interactive: true)
+                .help(workspaceTitle).workspaceChromeBounds("book")
+            FrostWindowDragRegion().frame(minWidth: 12, maxWidth: .infinity).frame(height: 46).workspaceChromeBounds("window-drag")
+            if showsObjectInspector {
                 Button { compactInspector.toggle() } label: { Image(systemName: "info.circle") }.buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 22)
+                    .workspaceChromeBounds("object-inspector")
                     .help("所选对象详情").popover(isPresented: $compactInspector) {
                         if let id = store.selectedObjectID { ObjectInspector(id: id, onClose: { compactInspector = false }).environmentObject(store).frame(width: 370, height: 520) }
                     }
             }
             Button { servicePopover.toggle() } label: {
-                HStack(spacing: 8) { Circle().fill(Palette.accent).frame(width: 7, height: 7); Text(store.serviceName.isEmpty ? "选择 AI" : store.serviceName).lineLimit(1); Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)) }
+                HStack(spacing: 8) { Circle().fill(Palette.accent).frame(width: 7, height: 7); Text(store.serviceName.isEmpty ? "选择 AI" : store.serviceName).lineLimit(1).truncationMode(.middle).frame(maxWidth: serviceLimit); Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)) }
                     .font(.system(size: 14)).padding(.horizontal, 16).frame(minHeight: 46)
-            }.buttonStyle(.plain).frame(maxWidth: width < 1050 ? 155 : 210).readingGlass(radius: 24, interactive: true)
+            }.buttonStyle(.plain).fixedSize(horizontal: true, vertical: true).readingGlass(radius: 24, interactive: true)
+                .help(store.serviceName.isEmpty ? "选择 AI 服务" : "AI 服务：\(store.serviceName)").workspaceChromeBounds("service")
                 .popover(isPresented: $servicePopover) { servicePicker }
             if store.route == "editor" {
                 Button { Task { await store.saveCurrentDocument() } } label: { Label(store.isSavingDocument ? "保存中…" : "保存", systemImage: "square.and.arrow.down").padding(.horizontal, 8).frame(minHeight: 34) }
-                    .buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(!store.editorDirty || store.isBusy)
+                    .buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(!store.editorDirty || store.isBusy).fixedSize().workspaceChromeBounds("primary")
             } else if store.route == "reader", store.book != nil {
-                Button { navigate("workflow") } label: { Label(store.isBusy ? "查看精读" : (store.book?.plan == nil ? "预读与精读" : "继续精读"), systemImage: "sparkles").padding(.horizontal, 5).frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule())
+                Button { navigate("workflow") } label: { Label(store.isBusy ? "查看精读" : (store.book?.plan == nil ? "预读与精读" : "继续精读"), systemImage: "sparkles").padding(.horizontal, 5).frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).fixedSize().workspaceChromeBounds("primary")
             } else if store.route == "library" || store.book == nil {
-                Button { store.chooseBook() } label: { Label("导入书籍", systemImage: "plus").frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(store.isBusy)
+                Button { store.chooseBook() } label: { Label("导入书籍", systemImage: "plus").frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(store.isBusy).fixedSize().workspaceChromeBounds("primary")
             }
         }.frame(maxWidth: .infinity).readingGlassGroup()
     }
@@ -414,6 +449,24 @@ struct WorkspaceView: View {
             if store.requestsUsed > 0 { Text("本轮 \(store.requestsUsed) 次请求").font(.caption2.monospacedDigit()).foregroundStyle(.tertiary) }
             Text("本地书库").font(.caption2).foregroundStyle(.tertiary)
         }.padding(.horizontal, 16).padding(.vertical, 12)
+    }
+}
+
+/// Layout-only measurements. They are collected after compact chrome has been
+/// sized, so invisible maximum-width frames never block the canvas underneath.
+private struct WorkspaceChromeBoundsPreference: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+private extension View {
+    func workspaceChromeBounds(_ id: String) -> some View {
+        background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: WorkspaceChromeBoundsPreference.self, value: [id: geometry.frame(in: .global)])
+            }.allowsHitTesting(false)
+        }
     }
 }
 

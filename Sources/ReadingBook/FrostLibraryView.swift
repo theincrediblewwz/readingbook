@@ -51,7 +51,7 @@ struct FrostLibraryView: View {
                     Button { store.importProject() } label: { Label("导入书项目", systemImage: "square.and.arrow.down") }
                     Button { store.route = "trash" } label: { Label("回收站", systemImage: "trash") }
                 }.controlSize(.large).disabled(store.isBusy)
-            }.padding(.horizontal, 76).padding(.top, 112).padding(.bottom, 40)
+            }.padding(.horizontal, 24).padding(.top, 112).padding(.bottom, 40)
         }.background(Palette.canvas)
     }
 }

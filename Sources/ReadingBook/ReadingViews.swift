@@ -301,7 +301,7 @@ struct DocumentEditorView: View {
     @State private var showingDocuments = true
     @State private var listCollapsed = false
     @State private var measuredWindow = false
-    @State private var listOrigin = CGPoint(x: 72, y: 100)
+    @State private var listOrigin = CGPoint(x: 12, y: 100)
     @State private var dragOrigin = CGPoint.zero
     @State private var panelEpoch = 0
     @State private var documentSearch = ""
@@ -313,8 +313,9 @@ struct DocumentEditorView: View {
     }
     var body: some View {
         GeometryReader { geometry in
-            let wide = geometry.size.width >= 1100
-            let leftInset: CGFloat = showingDocuments && wide && !listCollapsed ? 442 : 76
+            // WorkspaceView already reserves the 64pt navigation lane.
+            let wide = geometry.size.width >= 1036
+            let leftInset: CGFloat = showingDocuments && wide && !listCollapsed ? 378 : 12
             ZStack(alignment: .topLeading) {
                 Palette.canvas.ignoresSafeArea()
                 documentPaper
@@ -323,10 +324,10 @@ struct DocumentEditorView: View {
                 if showingDocuments {
                     documentPanel(viewport: geometry.size)
                 } else {
-                    Button { showingDocuments = true; listCollapsed = false; listOrigin = CGPoint(x: 72, y: 100) } label: {
+                    Button { showingDocuments = true; listCollapsed = false; listOrigin = CGPoint(x: 12, y: 100) } label: {
                         Label("笔记", systemImage: "doc.on.doc")
                     }.buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 16)
-                        .padding(.leading, 76).padding(.top, 104).help("恢复笔记列表")
+                        .padding(.leading, 12).padding(.top, 104).help("恢复笔记列表")
                 }
                 VStack { Spacer(); editorToolbar(compact: geometry.size.width < 960).padding(8).readingGlass(radius: 22).padding(.bottom, 22) }
                     .frame(maxWidth: .infinity)
@@ -337,7 +338,7 @@ struct DocumentEditorView: View {
                 if store.selectedDocumentID == nil && store.editorDirty { preview = false }
             }
             .onChange(of: geometry.size) { previous, next in
-                if previous.width >= 1100 && next.width < 1100 { showingDocuments = false }
+                if previous.width >= 1036 && next.width < 1036 { showingDocuments = false }
                 listOrigin = clampedListOrigin(listOrigin, viewport: next)
                 panelEpoch += 1
             }

@@ -16,8 +16,9 @@ struct FloatingNavigationButton: View {
 
     var body: some View {
         Button(action: activate) {
-            Circle().fill(Palette.accent).frame(width: 15, height: 15)
-                .frame(width: 48, height: 48).readingGlass(radius: 24, interactive: true)
+            Image(systemName: "sidebar.left").font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
+                .frame(width: NavigationOrbGeometry.buttonDiameter, height: NavigationOrbGeometry.buttonDiameter)
+                .readingGlass(radius: 24, interactive: true)
         }.buttonStyle(.plain).keyboardShortcut("b", modifiers: .command)
             .overlay {
                 NavigationOrbPointerInput(epoch: epoch, begin: { origin = center }, move: { delta, finished in
@@ -32,9 +33,9 @@ struct FloatingNavigationButton: View {
                 }, cancel: { movingCenter = nil; origin = nil }, activate: activate)
             }
             .position(center)
-            .help("点击\(isExpanded ? "收起" : "展开")导航；拖动后停靠左上或左下 · ⌘B")
+            .help("点击\(isExpanded ? "收起" : "展开")导航；上下拖动后停靠左上或左下 · ⌘B")
             .accessibilityLabel(isExpanded ? "收起导航" : "展开导航")
-            .accessibilityHint("可拖动到左上或左下。也可用 Command B 展开。")
+            .accessibilityHint("在左侧上下拖动可停靠左上或左下。也可用 Command B 展开。")
             .accessibilityAction(named: Text("停靠左上角")) { dockName = NavigationOrbDock.topLeading.rawValue }
             .accessibilityAction(named: Text("停靠左下角")) { dockName = NavigationOrbDock.bottomLeading.rawValue }
             .onChange(of: viewport) { _, _ in epoch += 1; origin = nil; movingCenter = nil }
@@ -70,7 +71,8 @@ private struct NavigationOrbPointerInput: NSViewRepresentable {
         override func mouseDown(with event: NSEvent) {
             finish(); origin = event.locationInWindow; begin?()
             escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard event.keyCode == 53, let self, self.origin != nil else { return event }
+                guard event.keyCode == 53, let self, self.origin != nil,
+                      let trackingWindow = self.window, event.window === trackingWindow else { return event }
                 self.finish(); self.cancel?(); return nil
             }
             for (name, object) in [(NSWindow.didResignKeyNotification, window as AnyObject?), (NSApplication.didResignActiveNotification, NSApplication.shared as AnyObject?)] {

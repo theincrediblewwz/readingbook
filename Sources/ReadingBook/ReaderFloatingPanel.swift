@@ -19,7 +19,7 @@ struct ReaderFloatingPanel<Content: View>: View {
 
     private var panelWidth: CGFloat { min(width, max(240, viewport.width - 100)) }
     private var panelHeight: CGFloat { collapsed ? 58 : min(height, max(120, viewport.height - 190)) }
-    private var origin: CGPoint { clamp(savedOrigin ?? CGPoint(x: trailing ? viewport.width - panelWidth - 24 : 76, y: 100)) }
+    private var origin: CGPoint { clamp(savedOrigin ?? CGPoint(x: trailing ? viewport.width - panelWidth - 24 : 24, y: 100)) }
     private func clamp(_ point: CGPoint) -> CGPoint {
         CGPoint(x: min(max(24, point.x), max(24, viewport.width - panelWidth - 24)),
                 y: min(max(88, point.y), max(88, viewport.height - panelHeight - 88)))
@@ -46,7 +46,7 @@ struct ReaderFloatingPanel<Content: View>: View {
             } else if hasOpened {
                 Button { collapsed = false; isPresented = true } label: { Label(title, systemImage: icon) }
                     .buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 18)
-                    .position(x: trailing ? max(100, viewport.width - 90) : 130, y: trailing ? max(100, viewport.height - 108) : 110)
+                    .position(x: trailing ? max(100, viewport.width - 90) : 90, y: trailing ? max(100, viewport.height - 108) : 110)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .onAppear { hasOpened = isPresented; if viewport.width < 1050 && trailing { isPresented = false } }
