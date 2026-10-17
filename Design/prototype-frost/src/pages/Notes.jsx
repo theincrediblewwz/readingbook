@@ -49,7 +49,8 @@ export function NotesPage() {
   }, [state.selectedDocId, state.currentBookId, selected?.id, selected?.title, selected?.markdown]);
   useEffect(() => {
     if (state.noteDraftRequest) {
-      setDraft({ id: uid(), bookId: state.currentBookId, title: '未命名笔记', markdown: '', source: null, isNew: true });
+      const request=typeof state.noteDraftRequest==='object'?state.noteDraftRequest:{};
+      setDraft({ id: uid(), bookId: state.currentBookId, title: request.title||'未命名笔记', markdown: request.markdown||'', source: request.source||null, isNew: true });
       setMode('edit'); setError(''); update({ noteDraftRequest: null });
     }
   }, [state.noteDraftRequest]);

@@ -1,3 +1,25 @@
+# 0.12 伴读与索引：浏览器对照（2026-10-17）
+
+final result: passed
+
+源视觉：`../2026-10-ui-study/screens/layers.png`、`source-index.png`，两张1487×1058生成目标。实现：本地4178的layers/source-index，1440×1024 CSS px、DPR1；800×600另验。整体在同一1600×600输入左源右实现，等比缩放至800×568；局部以1440px尺度裁切比较，细字不由缩略图代验。
+
+- 全景：[伴读](evidence/revision-0.12/compare-layers.png)、[索引](evidence/revision-0.12/compare-source-index.png)。
+- 局部：[伴读](evidence/revision-0.12/focus-layers.png)、[索引](evidence/revision-0.12/focus-source-index.png)。
+- 实现：[伴读宽窗](evidence/revision-0.12/layers-wide.png)、[索引宽窗](evidence/revision-0.12/source-index-wide.png)、[伴读窄窗](evidence/revision-0.12/layers-narrow.png)、[索引窄窗](evidence/revision-0.12/source-index-narrow.png)。
+
+初轮发现P2：新页标题/正文层级偏小；选中筛选背景被quiet样式覆盖；引用关键词为默认黄色。已提高标题至31/28px、阅读正文19px，明确选中背景及钴蓝引用，再同状态重拍并同屏核对。初轮图片被最终重拍替换，上述为修后证据。另将浮窗定位转换到扣除64px后的工作区坐标，避免安全带造成右侧越界。
+
+五项表面核对：系统无衬线控件与衬线阅读正文，中文标题/行距/截断可读；24px边距与304/310px目录构成稳定网格；银白玻璃、钴蓝、细边和柔影延续已选风格；书页品牌资产与统一Phosphor图标保留，没有以整屏图片冒充控件；释义/译文/评注和对象/别名/出现处使用不同结构，示例及待核对有标注。Windows字体光栅化与Mac不同。
+
+有意差异：增强操作放页内，省去效果稿重复的顶部“继续精读”；导航为侧栏图标、64px安全带、上下拖动吸附。示例书页/条数为自编，不采用生成图中的错误解值。本轮无新增装饰图片或替代图片的CSS绘画。
+
+[28项操作](evidence/revision-0.12/checks.json)通过：目录开合、公式、选段/类型/别名/范围筛选、取消删除/删除/恢复、草稿/主动保存、依据单列、回原句、导航拖动、侧栏实际滚动而相机不动。[34个状态](evidence/revision-0.12/render-checks.json)覆盖17页面×宽/窄，无根页面溢出、浮窗越界、KaTeX错误或控制台异常。npm run build通过，既有PDF/KaTeX大包体积提示仍在。
+
+IAB工具因Windows kernelCreateProcess权限错误无法初始化，改用本任务专用隐藏Chrome/CDP，记录进程身份并在检查后关闭。未接管用户浏览器。效果图未提供的窄窗/失败/恢复按共享规则延伸。当前无待修P0/P1/P2；Mac系统玻璃、原生截图、真实触控板/多窗口及模型质量仍待独立验收。
+
+---
+
 # 霜银 · 钴蓝交互稿：设计对照与验收
 
 日期：2026-10-16。对象是浏览器交互稿，不是生产 macOS App。

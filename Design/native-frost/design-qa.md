@@ -1,3 +1,15 @@
+# 0.12 原生修订：Mac对照待验
+
+final result: blocked
+
+此状态仅指原生视觉/手势对照。Windows不能运行SwiftUI，不把浏览器或编译当作Mac截图。用户画面在 `../2026-10-ui-study/evidence/05-user-0.11-top-islands.png`（版本来自会话，图内未显示）。两张本轮生成目标在 `../2026-10-ui-study/screens/layers.png` / `source-index.png`，浏览器对照见 `../prototype-frost/design-qa.md`。
+
+WorkspaceView书名/AI胶囊改内容宽度；导航sidebar.left、48pt、左64pt安全带。GraphViewport/Pointer对背景/节点/端口/边标签统一原生坐标排除浮窗，侧栏/表单/其他窗口/惯性不被画布认领。伴读围绕原文、类型、解释与资料对读；索引按全书对象/别名/引句组织，精确锚点与单元依据分开，后台任务取消过期结果。完整Markdown/公式不按字符截断；真实笔记草稿、来源和恢复保留。
+
+源码f4138d7，Actions38990324472成功：102项Core、双架构release、签名及资源检查通过，无编译警告；下载核对0.12/build12、SHA/CRC、权限与32资源。构建及安装包证据见根README的0.12节。请按MAC_TEST_CHECKLIST.md的0.12顺序采集1440/1080/800×600、深色、减少透明/动态的原生截图与手势结果，再与目标同屏比较。收到原生证据前保持blocked。
+
+---
+
 # 0.11 原生还原：视觉对照状态
 
 final result: blocked
