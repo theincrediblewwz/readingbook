@@ -118,6 +118,9 @@ public enum BookSchemeRuntime {
                 guard try encoded(old) == encoded(plugin) else { throw ReadingError.invalid("模板声明包版本与本书冲突，请单独预览该插件升级。") }
             } else { next.plugins.append(plugin) }
         }
+        let templatePlugins = Set(template.configuration.plugins.map(\.id))
+        next.disabledPluginIDs.removeAll { templatePlugins.contains($0) }
+        next.disabledPluginIDs.append(contentsOf: template.configuration.disabledPluginIDs.filter { templatePlugins.contains($0) })
         try PluginEngine.validateSchemeConfiguration(next, in: project)
         var state = project.bookSchemes ?? BookSchemeState()
         state.pending = BookSchemeProposal(title: "模板 · \(template.name)", origin: "template", before: before, proposed: next,

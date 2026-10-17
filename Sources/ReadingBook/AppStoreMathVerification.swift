@@ -8,7 +8,9 @@ import ReadingCore
         guard (current.mathVerifications?.count ?? 0) < MathVerificationTools.maximumRecords else {
             errorMessage = "本书已达到 256 条核查记录上限；删除的记录仍保留以便恢复。请导出书项目留存。"; return nil
         }
-        var request = supplied; request.origin = .user
+        let request: MathVerificationRequest = {
+            var value = supplied; value.origin = .user; return value
+        }()
         guard request.evidence.allSatisfy({ evidence in current.units.contains { $0.id == evidence.unitID && !evidence.quote.isEmpty && $0.text.range(of: evidence.quote, options: .literal) != nil } }) else {
             errorMessage = "原文出处已变化，请重新选择后核查。"; return nil
         }

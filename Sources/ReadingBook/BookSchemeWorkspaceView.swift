@@ -130,6 +130,24 @@ struct BookSchemeWorkspaceView: View {
             Divider()
             sectionTitle("卡片类型", subtitle: "已有类型保留原 ID；新增类型可选择，依赖它的组件须一并保持有效。", count: configuration.types.count)
             ForEach(configuration.types) { type in typeRow(type) }
+            if !configuration.plugins.isEmpty {
+                Divider()
+                sectionTitle("声明包", subtitle: "版本与启用状态随方案保存。已有卡片继续引用其原来的类型。", count: configuration.plugins.count)
+                ForEach(configuration.plugins) { plugin in
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "shippingbox").foregroundStyle(Palette.accent)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(plugin.name) · v\(plugin.version)").font(.system(size: 15, weight: .medium))
+                            if let old = pending?.before.plugins.first(where: { $0.id == plugin.id }), old.version != plugin.version {
+                                Text("v\(old.version) → v\(plugin.version)").font(.system(size: 12)).foregroundStyle(Palette.accent)
+                            }
+                            Text(plugin.description).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        Text(configuration.disabledPluginIDs.contains(plugin.id) ? "停用" : "启用").font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                }
+            }
         }.padding(26).frame(maxWidth: .infinity, alignment: .leading)
             .background(Palette.surface.opacity(0.85), in: RoundedRectangle(cornerRadius: 24))
             .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Palette.line, lineWidth: 0.6))

@@ -124,6 +124,27 @@ final class BookSchemeTests: XCTestCase {
         XCTAssertThrowsError(try BookSchemeRuntime.stagePlugin(pack(3), in: &book))
     }
 
+    func testImportedTemplateKeepsPackDisabledWithoutChangingUnrelatedPack() throws {
+        var source = project()
+        let pack = PluginManifest(id: "optional.pack", name: "可选卡片", description: "模板声明",
+                                  types: [EntityType(id: "optional-type", name: "可选类型")])
+        try PluginEngine.install(pack, into: &source)
+        try PluginEngine.setEnabled(false, pluginID: pack.id, in: &source)
+        let template = try BookSchemeRuntime.saveTemplate(name: "保留停用状态", in: &source)
+        let imported = try JSONDecoder().decode(BookSchemeTemplate.self, from: JSONEncoder().encode(template))
+        var target = project()
+        let local = PluginManifest(id: "local.pack", name: "本书声明", description: "不在模板内",
+                                   types: [EntityType(id: "local-type", name: "本地类型")])
+        try PluginEngine.install(local, into: &target)
+        try PluginEngine.setEnabled(false, pluginID: local.id, in: &target)
+        let documents = try encode(target.documents)
+        try BookSchemeRuntime.stageTemplate(imported, in: &target)
+        XCTAssertFalse(target.plugins.contains { $0.id == pack.id })
+        try BookSchemeRuntime.applyPending(in: &target)
+        XCTAssertEqual(Set(target.disabledPluginIDs), [pack.id, local.id])
+        XCTAssertEqual(try encode(target.documents), documents)
+    }
+
     func testDeselectingRequiredNewTypeFailsAtomically() throws {
         let original = project()
         var book = try BookSchemeRuntime.stageAIProposal(from: original, proposed: proposed(original))
