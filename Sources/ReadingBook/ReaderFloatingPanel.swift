@@ -18,6 +18,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     var restoreNearTop = false
     var elevated = false
     var onExpansionChange: (Bool) -> Void = { _ in }
+    var onFrameChange: (CGRect) -> Void = { _ in }
     @ViewBuilder var content: () -> Content
     @State private var collapsed = false
     @State private var hasOpened = false
@@ -29,6 +30,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     @State private var memoryScope: String?
     @State private var initialPresented: Bool?
     @State private var transientPresentation: PanelPresentation?
+    @State private var lastReportedFrame: CGRect?
     private struct PanelPresentation: Equatable { var presented: Bool; var collapsed: Bool }
     private var memoryID: String { memoryIDOverride ?? (trailing ? "reader.companion" : "reader.outline") }
 
@@ -126,6 +128,21 @@ struct ReaderFloatingPanel<Content: View>: View {
             return a == b ? distance(lhs) < distance(rhs) : a < b
         } ?? fit(preferred)
     }
+    /// The host can establish one-way avoidance priorities. Publish only the
+    /// settled frame, never the pointer's intermediate positions.
+    private func reportStableFrame() {
+        guard dragOrigin == nil && dragStart == nil else { return }
+        let frame: CGRect
+        if isPresented {
+            let placement = presentationPlacement()
+            frame = CGRect(origin: placement.origin, size: CGSize(width: panelWidth, height: placement.height))
+        } else if hasOpened {
+            let center = restoreButtonPosition
+            frame = CGRect(x: center.x - 90, y: center.y - 22, width: 180, height: 44)
+        } else { frame = .zero }
+        guard lastReportedFrame != frame else { return }
+        lastReportedFrame = frame; onFrameChange(frame)
+    }
     var body: some View {
         ZStack(alignment: .topLeading) {
                 // Keep the panel's contents mounted while collapsed or closed.
@@ -142,8 +159,8 @@ struct ReaderFloatingPanel<Content: View>: View {
                                 }, drag: { delta, finished in
                                     let start = dragStart ?? origin
                                     dragOrigin = clamp(CGPoint(x: start.x + delta.width, y: start.y + delta.height), height: dragHeight ?? wantedHeight)
-                                    if finished { savedOrigin = dragOrigin; dragStart = nil; dragOrigin = nil; dragHeight = nil }
-                                }, cancel: { dragStart = nil; dragOrigin = nil; dragHeight = nil })
+                                    if finished { savedOrigin = dragOrigin; dragStart = nil; dragOrigin = nil; dragHeight = nil; reportStableFrame() }
+                                }, cancel: { dragStart = nil; dragOrigin = nil; dragHeight = nil; reportStableFrame() })
                             }
                             .help("拖动\(title)面板").accessibilityLabel("拖动\(title)面板")
                         Label(title, systemImage: icon).font(.system(size: 16, weight: .semibold)).lineLimit(1)
@@ -170,20 +187,23 @@ struct ReaderFloatingPanel<Content: View>: View {
             // These keys animate opening only. Pointer-driven origins never acquire an animation.
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: isPresented)
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: collapsed)
-            .onAppear { initialPresented = isPresented; restoreMemory(); if viewport.width < 1050 && trailing { isPresented = false }; receivePanelCommand(store.workspaceAICommand) }
+            .onAppear { initialPresented = isPresented; restoreMemory(); if viewport.width < 1050 && trailing { isPresented = false }; receivePanelCommand(store.workspaceAICommand); reportStableFrame() }
             .onChange(of: store.workspaceAICommand) { _, command in receivePanelCommand(command) }
-            .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreMemory() }
-            .onChange(of: collapsed) { _, value in onExpansionChange(!value && isPresented); saveMemory() }
-            .onChange(of: isPresented) { _, value in if value { hasOpened = true }; onExpansionChange(value && !collapsed); saveMemory() }
-            .onChange(of: savedOrigin) { _, _ in saveMemory() }
-            .onDisappear { saveMemory() }
+            .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreMemory(); reportStableFrame() }
+            .onChange(of: collapsed) { _, value in onExpansionChange(!value && isPresented); saveMemory(); reportStableFrame() }
+            .onChange(of: isPresented) { _, value in if value { hasOpened = true }; onExpansionChange(value && !collapsed); saveMemory(); reportStableFrame() }
+            .onChange(of: savedOrigin) { _, _ in saveMemory(); reportStableFrame() }
+            .onChange(of: avoidRects) { _, _ in reportStableFrame() }
+            .onDisappear { saveMemory(); lastReportedFrame = nil; onFrameChange(.zero) }
             .onChange(of: viewport) { old, value in
                 epoch += 1; dragStart = nil; dragOrigin = nil; dragHeight = nil
                 if old.width >= 1050, value.width < 1050, trailing { isPresented = false }
+                reportStableFrame()
             }
     }
     private func restoreMemory() {
         transientPresentation = nil
+        if memoryScope != store.workspaceMemoryKey { lastReportedFrame = nil }
         memoryScope = store.workspaceMemoryKey
         let saved = store.workspaceMemory.panels[memoryID]
         collapsed = saved?.collapsed ?? false

@@ -10,6 +10,7 @@ struct ReaderWorkspaceView: View {
     @EnvironmentObject var pdfController: PDFReaderController
     @State private var questionExpanded = false
     @State private var questionFrame = CGRect.zero
+    @State private var outlineFrame = CGRect.zero
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     var body: some View {
         GeometryReader { geometry in
@@ -47,8 +48,11 @@ struct ReaderWorkspaceView: View {
                     }
                 }.padding(.top, store.readingSourceMode == "original" ? 78 : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
-                ReaderFloatingPanel(title: "目录与原文", icon: "list.bullet", width: 330, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 100, avoidRects: questionFrame.isEmpty ? [] : [questionFrame]) { outline }
-                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 620, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: 100, avoidRects: questionFrame.isEmpty ? [] : [questionFrame], elevated: true) {
+                ReaderFloatingPanel(title: "目录与原文", icon: "list.bullet", width: 330, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 100, avoidRects: questionFrame.isEmpty ? [] : [questionFrame],
+                    onFrameChange: { value in if outlineFrame != value { outlineFrame = value } }) { outline }
+                // A one-way priority prevents two floating panels from chasing
+                // each other when a large question moves beside the outline.
+                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 620, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: 100, avoidRects: [questionFrame, outlineFrame].filter { !$0.isEmpty }, elevated: true) {
                     ReadingCompanionPanel(showsHeader: false)
                 }
                 ReaderQuestionComposer(isExpanded: $questionExpanded, viewport: geometry.size,
