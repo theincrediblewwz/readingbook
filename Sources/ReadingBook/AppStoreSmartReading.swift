@@ -156,7 +156,8 @@ import ReadingCore
                         var result = try await reader.readNext(project: input, settings: requestSettings, apiKey: requestKey, allowedUnitIDs: unitIDs)
                         try Task.checkCancellation()
                         result.smartReading?.updatedAt = Date()
-                        result.smartReading?.currentUnitID = try SmartReadingRuntime.nextUnit(in: result, allowedUnitIDs: unitIDs)?.id
+                        let nextUnitID = try SmartReadingRuntime.nextUnit(in: result, allowedUnitIDs: unitIDs)?.id
+                        result.smartReading?.currentUnitID = nextUnitID
                         try await repository.save(result); publish(result)
                         requestsUsed = await reader.requestCount
                         if let failure = ReadingWorkflowRuntime.failureMessage(in: result, unitID: unit.id) { throw ReadingError.invalid(failure) }

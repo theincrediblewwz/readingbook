@@ -8,11 +8,14 @@ export function SmartReadingPage(){
   const [automatic,setAutomatic]=useState(true),[selected,setSelected]=useState([]),[scope,setScope]=useState('book'),[from,setFrom]=useState(1),[to,setTo]=useState(3),[preview,setPreview]=useState(false);
   const range=scope==='page'?'当前页':scope==='chapter'?'当前章':scope==='range'?`第 ${from}–${to} 页`:'全书';
   function choose(id){setAutomatic(false);setSelected(old=>old.includes(id)?old.filter(x=>x!==id):[...old,id]);setPreview(false);}
-  useEffect(()=>{setAutomatic(true);setSelected([]);setPreview(false);},[book.id]);
+  useEffect(()=>{
+    const saved=state.workflow.bookId===book.id?state.workflow.selection:null;
+    setAutomatic(saved?.automatic??true);setSelected(saved?.methodIDs||[]);setScope(saved?.scope||'book');setFrom(saved?.from||1);setTo(saved?.to||3);setPreview(false);
+  },[book.id]);
   function start(){
     const first=scope==='page'?state.page:scope==='range'?from:1;
     const total=scope==='page'?1:scope==='range'?Math.max(1,to-from+1):3;
-    update({workflow:{...state.workflow,status:'running',smart:true,bookId:book.id,scope:scope==='page'?`第 ${first} 页`:range,first,total,cursor:1}});navigate('reader');
+    update({workflow:{...state.workflow,status:'running',smart:true,bookId:book.id,selection:{automatic,methodIDs:selected,scope,from,to},scope:scope==='page'?`第 ${first} 页`:range,first,total,cursor:1}});navigate('reader');
   }
   return <section className="smart-page"><div className="smart-content">
     <div className="smart-eyebrow"><Icon name="sparkle" size={18}/>智能阅读</div>
@@ -27,7 +30,7 @@ export function SmartReadingPage(){
         <h2 className="smart-range-title"><Icon name="target"/>分析多少</h2>
         <div className="smart-range">{[['page','当前页'],['chapter','当前章'],['book','全书'],['range','指定页码']].map(([id,label])=><button key={id} aria-pressed={scope===id} className={scope===id?'selected':''} onClick={()=>{setScope(id);setPreview(false);}}>{label}</button>)}</div>
         {scope==='range'&&<div className="smart-pages"><label>从第<input type="number" min="1" max="3" value={from} onChange={e=>setFrom(Number(e.target.value))}/></label><label>到第<input type="number" min={from} max="3" value={to} onChange={e=>setTo(Number(e.target.value))}/>页</label></div>}
-        <footer><span>{range} · 发送后范围固定</span><Button icon="sparkle" variant="primary" onClick={()=>setPreview(true)} disabled={!automatic&&!selected.length}>预读并制定方案</Button></footer>
+        <footer><span>{range} · 发送后范围固定</span><Button icon="sparkle" variant="primary" onClick={()=>setPreview(true)} disabled={(!automatic&&!selected.length)||(state.workflow.bookId===book.id&&state.workflow.status==='running')}>预读并制定方案</Button></footer>
       </article>
       <aside className="smart-outline"><small>接下来会发生什么</small><div><span>01</span><section><h3>先了解这本书</h3><p>预读只用于选方法，还没有读完整本书。</p></section></div><div><span>02</span><section><h3>逐段读，再整理</h3><p>每段留下简短复述，再保存有出处的要素和联系。</p></section></div><div><span>03</span><section><h3>在组件里看见结果</h3><p>人物、战役与地点使用同一对象；适用时，地图、时间和关系同步呈现。</p></section></div><Button icon="reader" variant="quiet" onClick={()=>navigate('reader')}>先回原文，稍后再分析</Button></aside>
     </div>
