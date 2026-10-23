@@ -1,5 +1,23 @@
 import Foundation
 
+public struct LibraryLoadIssue: Sendable {
+    public var folder: String
+    public var message: String
+    public init(folder: String, message: String) { self.folder = folder; self.message = message }
+}
+
+public struct LibraryLoadReport: Sendable {
+    public var projects: [BookProject]
+    public var issues: [LibraryLoadIssue]
+    public init(projects: [BookProject], issues: [LibraryLoadIssue]) { self.projects = projects; self.issues = issues }
+}
+
+public struct DocumentContentSnapshot: Sendable {
+    public var markdown: String
+    public var contentHash: String
+    public init(markdown: String, contentHash: String) { self.markdown = markdown; self.contentHash = contentHash }
+}
+
 /// Local, file-backed library. Markdown files are the only document body source;
 /// project.json contains references and structured book analysis, never a body mirror.
 public actor LibraryRepository {
@@ -8,12 +26,22 @@ public actor LibraryRepository {
     private static let metadataLimit = 64 * 1_024 * 1_024
     private static let documentLimit = 16 * 1_024 * 1_024
     private static let packageLimit = 512 * 1_024 * 1_024
+    private struct DocumentValidationStamp: Equatable {
+        var size: Int
+        var modified: Date
+        var created: Date?
+        var fileNumber: UInt64?
+        var deviceNumber: UInt64?
+    }
+    private var documentValidationCache: [String: DocumentValidationStamp] = [:]
+    private var mathValidationCache = MathVerificationValidationCache()
 
     private struct DocumentJournal: Codable {
         var version: Int = 1
         var bookID: String
         var documentID: String
         var markdownHash: String
+        var previousMarkdownHash: String? = nil
         var project: BookProject
     }
 
@@ -22,15 +50,24 @@ public actor LibraryRepository {
     }
 
     public func loadAll() throws -> [BookProject] {
+        try loadReport().projects
+    }
+
+    /// Recover readable books independently. Damaged and interrupted imports stay
+    /// exactly where they are and produce diagnostics instead of hiding healthy books.
+    public func loadReport() throws -> LibraryLoadReport {
         let books = try booksDirectory()
         let children = try files.contentsOfDirectory(at: books, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         var projects: [BookProject] = []
+        var issues: [LibraryLoadIssue] = []
         for directory in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             if directory.lastPathComponent == ".DS_Store" { continue }
             // Incomplete imports have not entered the committed book namespace. Keep them
             // on disk and surface them rather than quietly discarding possible recovery data.
             guard UUID(uuidString: directory.lastPathComponent) != nil else {
-                throw ReadingError.invalid("书库包含无法识别的项目目录：\(directory.lastPathComponent)。原文件已保留。")
+                let unfinished = directory.lastPathComponent.hasPrefix(".creating-") || directory.lastPathComponent.hasPrefix(".importing-")
+                issues.append(LibraryLoadIssue(folder: directory.path, message: unfinished ? "发现未完成的导入暂存目录，已保留恢复现场，不影响其他书籍。" : "无法识别的书库条目，已保留原文件。"))
+                continue
             }
             do {
                 let checked = try bookDirectory(directory.lastPathComponent, mustExist: true)
@@ -41,10 +78,10 @@ public actor LibraryRepository {
                 try validatePackageFiles(project, in: checked, strictContents: false, verifySourceHash: true)
                 projects.append(project)
             } catch {
-                throw ReadingError.invalid("无法载入书籍 \(directory.lastPathComponent)：\(error.localizedDescription) 原文件已保留；未将损坏项目当作空书。")
+                issues.append(LibraryLoadIssue(folder: directory.path, message: "无法载入此书：\(error.localizedDescription) 原文件已保留，其他书籍仍可使用。"))
             }
         }
-        return projects.sorted { $0.importedAt > $1.importedAt }
+        return LibraryLoadReport(projects: projects.sorted { $0.importedAt > $1.importedAt }, issues: issues)
     }
 
     public func create(_ project: BookProject, sourceURL: URL) throws {
@@ -79,11 +116,16 @@ public actor LibraryRepository {
         for saved in existing.documents {
             if let index = updated.documents.firstIndex(where: { $0.id == saved.id }) { updated.documents[index].trashedAt = saved.trashedAt }
         }
-        try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false)
-        try atomicWrite(encode(updated), to: try child(directory, "project.json"))
+        let metadata = try encode(updated)
+        try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false, encodedMetadataSize: metadata.count, reuseDocumentValidation: true)
+        try atomicWrite(metadata, to: try child(directory, "project.json"))
     }
 
     public func readDocument(bookID: String, document: DocumentRecord) throws -> String {
+        try readDocumentSnapshot(bookID: bookID, document: document).markdown
+    }
+
+    public func readDocumentSnapshot(bookID: String, document: DocumentRecord) throws -> DocumentContentSnapshot {
         let directory = try bookDirectory(bookID, mustExist: true)
         try recoverDocument(in: directory)
         let stored = try readProject(in: directory)
@@ -92,10 +134,10 @@ public actor LibraryRepository {
         }
         let data = try readLimited(try documentURL(document, in: directory), limit: Self.documentLimit)
         guard let markdown = String(data: data, encoding: .utf8) else { throw ReadingError.invalid("Markdown 不是有效 UTF-8，未用替换字符覆盖原文。") }
-        return markdown
+        return DocumentContentSnapshot(markdown: markdown, contentHash: try BookImporter.sha256(data))
     }
 
-    public func saveDocument(project: BookProject, document: DocumentRecord, markdown: String) throws -> BookProject {
+    public func saveDocument(project: BookProject, document: DocumentRecord, markdown: String, expectedContentHash: String? = nil) throws -> BookProject {
         let directory = try bookDirectory(project.id, mustExist: true)
         try recoverDocument(in: directory)
         let existing = try readProject(in: directory)
@@ -111,18 +153,30 @@ public actor LibraryRepository {
             if let index = updated.documents.firstIndex(where: { $0.id == saved.id }) { updated.documents[index].trashedAt = saved.trashedAt }
         }
         var record = document
+        var previousMarkdownHash: String?
         if let previous = existing.documents.first(where: { $0.id == document.id }) {
             guard previous.relativePath == document.relativePath else { throw ReadingError.invalid("不能通过保存正文改变文档路径。") }
             guard previous.trashedAt == nil else { throw ReadingError.invalid("文档已在回收站，请先恢复后再编辑；原 Markdown 已保留。") }
             record.createdAt = previous.createdAt
             record.trashedAt = previous.trashedAt
+            let storedBody = try readLimited(try documentURL(previous, in: directory), limit: Self.documentLimit)
+            guard let expectedContentHash, expectedContentHash.count == 64,
+                  expectedContentHash.allSatisfy({ $0.isASCII && $0.isHexDigit }),
+                  try BookImporter.sha256(storedBody) == expectedContentHash.lowercased() else {
+                throw ReadingError.invalid("磁盘 Markdown 已改变，或缺少打开时版本；未覆盖正文。请重新打开对照，或把当前草稿另存为新笔记。")
+            }
+            previousMarkdownHash = expectedContentHash.lowercased()
+        } else {
+            guard !files.fileExists(atPath: try documentURL(document, in: directory).path) else {
+                throw ReadingError.invalid("同名 Markdown 已存在但未登记；已保留文件，不会用新文档覆盖恢复资料。")
+            }
         }
         record.updatedAt = Date()
         if let index = updated.documents.firstIndex(where: { $0.id == record.id }) { updated.documents[index] = record }
         else { updated.documents.append(record) }
         try validate(updated)
         // Validate all pre-existing files; the one being saved is allowed not to exist yet.
-        try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false, pendingDocumentID: record.id)
+        try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false, pendingDocumentID: record.id, pendingDocumentBytes: data.count)
         let journalDirectory = try ensureDirectory(try child(directory, ".journal"))
         let stagedBody = try child(journalDirectory, "document.md")
         let marker = try child(journalDirectory, "transaction.json")
@@ -131,7 +185,7 @@ public actor LibraryRepository {
         // changed; after it exists loadAll can repeat both idempotent replacements.
         try atomicWrite(data, to: stagedBody)
         let journal = DocumentJournal(bookID: updated.id, documentID: record.id,
-                                      markdownHash: try BookImporter.sha256(data), project: updated)
+                                      markdownHash: try BookImporter.sha256(data), previousMarkdownHash: previousMarkdownHash, project: updated)
         try atomicWrite(encode(journal), to: marker)
         try recoverDocument(in: directory)
         return updated
@@ -214,9 +268,14 @@ public actor LibraryRepository {
     }
 
     public func archivedBooks() throws -> [BookProject] {
+        try trashReport().projects
+    }
+
+    public func trashReport() throws -> LibraryLoadReport {
         let trash = try trashDirectory()
         let children = try files.contentsOfDirectory(at: trash, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         var result: [BookProject] = []
+        var issues: [LibraryLoadIssue] = []
         for directory in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             if directory.lastPathComponent == ".DS_Store" { continue }
             do {
@@ -228,9 +287,9 @@ public actor LibraryRepository {
                 try validatePackageFiles(project, in: checked, strictContents: false, verifySourceHash: true)
                 try validateArchiveTree(checked)
                 result.append(project)
-            } catch { throw ReadingError.invalid("回收书籍 \(directory.lastPathComponent) 读取失败，文件已保留：\(error.localizedDescription)") }
+            } catch { issues.append(LibraryLoadIssue(folder: directory.path, message: "此回收条目无法载入，原文件已保留：\(error.localizedDescription)")) }
         }
-        return result.sorted { $0.importedAt > $1.importedAt }
+        return LibraryLoadReport(projects: result.sorted { $0.importedAt > $1.importedAt }, issues: issues)
     }
 
     public func restoreBook(id: String) throws -> BookProject {
@@ -354,8 +413,17 @@ public actor LibraryRepository {
               Set(existing.documents.map(\.id)).isSubset(of: Set(journal.project.documents.map(\.id))) else {
             throw ReadingError.invalid("恢复日志与现有书籍冲突，未覆盖现有资料。")
         }
-        try validatePackageFiles(journal.project, in: directory, strictContents: false, verifySourceHash: false, pendingDocumentID: document.id)
-        try atomicWrite(body, to: try documentURL(document, in: directory))
+        try validatePackageFiles(journal.project, in: directory, strictContents: false, verifySourceHash: false, pendingDocumentID: document.id, pendingDocumentBytes: body.count)
+        let destination = try documentURL(document, in: directory)
+        if files.fileExists(atPath: destination.path) {
+            let currentHash = try BookImporter.sha256(readLimited(destination, limit: Self.documentLimit))
+            guard currentHash == journal.markdownHash || currentHash == journal.previousMarkdownHash else {
+                throw ReadingError.invalid("恢复期间 Markdown 已被其他编辑器修改；磁盘正文和待恢复事务均保留，未自动覆盖。")
+            }
+        } else if journal.previousMarkdownHash != nil {
+            throw ReadingError.invalid("待恢复的原 Markdown 已移除，事务已保留；不会自动重建覆盖用户文件操作。")
+        }
+        try atomicWrite(body, to: destination)
         try atomicWrite(encode(journal.project), to: try child(directory, "project.json"))
         // Remove only our two exact journal files, after both durable replacements succeed.
         try files.removeItem(at: marker)
@@ -402,7 +470,9 @@ public actor LibraryRepository {
         }
         // Older projects may have no ledger. When present, its source hashes,
         // anchors, historical method versions and batch must survive every load/save/import.
-        try ReadingLedger.validateStoredRecords(in: project)
+        try MathVerificationTools.validateStoredRecords(in: project, cache: &mathValidationCache)
+        try ReadingLedger.validateStoredRecords(in: project, mathCache: &mathValidationCache)
+        try BookSchemeRuntime.validateStoredState(in: project)
         if let experience = project.readingExperience {
             try ReadingExperienceRuntime.validateStoredState(experience, in: project)
         }
@@ -526,7 +596,8 @@ public actor LibraryRepository {
     }
 
     private func validatePackageFiles(_ project: BookProject, in directory: URL, strictContents: Bool,
-                                      verifySourceHash: Bool, pendingDocumentID: String? = nil) throws {
+                                      verifySourceHash: Bool, pendingDocumentID: String? = nil, pendingDocumentBytes: Int = 0,
+                                      encodedMetadataSize: Int? = nil, reuseDocumentValidation: Bool = false) throws {
         try requireDirectory(directory)
         let source = try child(try child(directory, "source"), project.originalName)
         try requireDirectory(try child(directory, "source"))
@@ -535,13 +606,13 @@ public actor LibraryRepository {
         let storedMetadata = try child(directory, "project.json")
         var storedSize = 0
         if files.fileExists(atPath: storedMetadata.path) { storedSize = try regularFileSize(storedMetadata, limit: Self.metadataLimit) }
-        total += max(storedSize, try encode(project).count)
+        let metadataSize = try encodedMetadataSize ?? encode(project).count
+        total += max(storedSize, metadataSize) + pendingDocumentBytes
+        guard total <= Self.packageLimit else { throw ReadingError.invalid("书籍与文档总大小超过 512 MiB。") }
         if verifySourceHash { try verifyOriginal(at: source, expectedHash: project.sourceHash) }
         for document in project.documents where document.id != pendingDocumentID {
             let url = try documentURL(document, in: directory)
-            let data = try readLimited(url, limit: Self.documentLimit)
-            guard String(data: data, encoding: .utf8) != nil else { throw ReadingError.invalid("Markdown 文件不是有效 UTF-8：\(document.relativePath)") }
-            total += data.count
+            total += try validateDocumentFile(url, reuseValidation: reuseDocumentValidation)
             guard total <= Self.packageLimit else { throw ReadingError.invalid("书籍与文档总大小超过 512 MiB。") }
         }
         if strictContents {
@@ -552,6 +623,36 @@ public actor LibraryRepository {
             let docNames = try files.contentsOfDirectory(atPath: try child(directory, "docs").path).filter { $0 != ".DS_Store" }
             guard Set(docNames) == Set(project.documents.map { "\($0.id).md" }) else { throw ReadingError.invalid(".readingbook 文档目录有缺失或未声明文件。") }
         }
+    }
+
+    /// Every call checks the file type, link boundary and size. Only unchanged
+    /// file identity and timestamps reuse the expensive UTF-8 content validation.
+    /// Load, import and export deliberately perform a fresh complete validation.
+    private func validateDocumentFile(_ url: URL, reuseValidation: Bool) throws -> Int {
+        let size = try regularFileSize(url, limit: Self.documentLimit)
+        let attributes = try files.attributesOfItem(atPath: url.path)
+        let stamp: DocumentValidationStamp?
+        if let modified = attributes[.modificationDate] as? Date,
+           let fileNumber = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+           let deviceNumber = (attributes[.systemNumber] as? NSNumber)?.uint64Value {
+            stamp = DocumentValidationStamp(size: size, modified: modified, created: attributes[.creationDate] as? Date,
+                                            fileNumber: fileNumber, deviceNumber: deviceNumber)
+        } else { stamp = nil } // An unknown identity never earns a cached admission.
+        if reuseValidation, let stamp, documentValidationCache[url.path] == stamp { return size }
+        let data = try readLimited(url, limit: Self.documentLimit)
+        guard String(data: data, encoding: .utf8) != nil else { throw ReadingError.invalid("Markdown 文件不是有效 UTF-8：\(url.lastPathComponent)") }
+        // Read after validation as well, so a concurrent atomic replacement cannot
+        // inherit the old inode's admission stamp.
+        let after = try files.attributesOfItem(atPath: url.path)
+        if let stamp, (after[.size] as? NSNumber)?.intValue == stamp.size,
+           after[.modificationDate] as? Date == stamp.modified,
+           after[.creationDate] as? Date == stamp.created,
+           (after[.systemFileNumber] as? NSNumber)?.uint64Value == stamp.fileNumber,
+           (after[.systemNumber] as? NSNumber)?.uint64Value == stamp.deviceNumber {
+            if documentValidationCache.count >= 20_000 { documentValidationCache.removeAll(keepingCapacity: true) }
+            documentValidationCache[url.path] = stamp
+        } else { documentValidationCache.removeValue(forKey: url.path) }
+        return data.count
     }
 
     // MARK: Restricted filesystem helpers

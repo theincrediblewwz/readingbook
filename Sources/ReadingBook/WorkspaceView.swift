@@ -94,8 +94,11 @@ struct WorkspaceView: View {
         .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreReaderMemory() }
         .onChange(of: readerShowsPDF) { _, value in store.updateWorkspaceMemory { $0.readerShowsPDF = value } }
         .onChange(of: readerOutline) { _, value in store.updateWorkspaceMemory { $0.readerOutline = value } }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in store.flushWorkspaceMemory() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in store.flushWorkspaceMemory() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in captureAndFlushWorkspace() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in captureAndFlushWorkspace() }
+        .onChange(of: store.requestedWorkspaceRoute) { _, route in
+            guard let route else { return }; store.requestedWorkspaceRoute = nil; navigate(route)
+        }
         .confirmationDialog("删除保存的内容？", isPresented: Binding(get: { store.deletionRequest != nil }, set: { if !$0 { store.deletionRequest = nil } }), presenting: store.deletionRequest) { request in
             Button(request.kind == .book || request.kind == .document ? "移入回收站" : "删除对象", role: .destructive) { store.confirmDeletion(request) }
         } message: { request in Text("“\(request.title)”\n" + request.detail) }
@@ -115,6 +118,10 @@ struct WorkspaceView: View {
     private func restoreReaderMemory() {
         readerShowsPDF = store.workspaceMemory.readerShowsPDF
         readerOutline = store.workspaceMemory.readerOutline
+    }
+    private func captureAndFlushWorkspace() {
+        NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
+        store.flushWorkspaceMemory(); store.flushDocumentDraft()
     }
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {

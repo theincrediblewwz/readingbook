@@ -24,7 +24,7 @@ struct FrostLibraryView: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 260, maximum: 360), spacing: 24)], spacing: 24) {
                         ForEach(books) { book in
                             VStack(alignment: .leading, spacing: 18) {
-                                Button { Task { await store.selectBook(book.id) } } label: {
+                                Button { Task { await store.selectBook(book.id, preferredRoute: "reader") } } label: {
                                     VStack(alignment: .leading, spacing: 22) {
                                         Image(systemName: "book.closed.fill").font(.system(size: 36, weight: .light)).foregroundStyle(Palette.accent).frame(height: 90)
                                         Text(book.title).font(.system(size: 21, weight: .semibold, design: .serif)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
@@ -35,7 +35,7 @@ struct FrostLibraryView: View {
                                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                                 }.buttonStyle(.plain).disabled(store.isBusy)
                                 HStack {
-                                    Button("继续阅读") { Task { await store.selectBook(book.id) } }.buttonStyle(.borderless).foregroundStyle(Palette.accent).frame(minHeight: 44)
+                                    Button("继续阅读") { Task { await store.selectBook(book.id, preferredRoute: "reader") } }.buttonStyle(.borderless).foregroundStyle(Palette.accent).frame(minHeight: 44).disabled(store.isBusy)
                                     Spacer()
                                     Menu {
                                         Button("移入回收站", role: .destructive) { store.requestDeletion(.book, id: book.id, title: book.title) }

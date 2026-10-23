@@ -4,7 +4,7 @@ import AppKit
 struct ReadingBookApp: App {
     @StateObject private var store = AppStore()
     var body: some Scene {
-        WindowGroup {
+        Window("ReadingBook", id: "main") {
             WorkspaceView().environmentObject(store)
                 .background(FrostWindowAppearance())
                 .frame(minWidth: 800, minHeight: 600)
@@ -25,10 +25,10 @@ struct ReadingBookApp: App {
                 Button("暂停任务") { store.pause() }.keyboardShortcut(".").disabled(!store.isBusy)
             }
             CommandMenu("工作台") {
-                Button("原文阅读") { store.route = "reader" }.keyboardShortcut("1")
-                Button("阅读流程") { store.route = "workflow" }.keyboardShortcut("2")
-                Button("与书对话") { store.route = "query" }.keyboardShortcut("3")
-                Button("我的理解") { store.route = "editor" }.keyboardShortcut("4")
+                Button("原文阅读") { store.requestedWorkspaceRoute = "reader" }.keyboardShortcut("1")
+                Button("阅读流程") { store.requestedWorkspaceRoute = "workflow" }.keyboardShortcut("2")
+                Button("与书对话") { store.requestedWorkspaceRoute = "query" }.keyboardShortcut("3")
+                Button("我的理解") { store.requestedWorkspaceRoute = "editor" }.keyboardShortcut("4")
             }
         }
         Settings { ProviderSettingsView().environmentObject(store).frame(minWidth: 760, idealWidth: 1060, minHeight: 620, idealHeight: 760) }

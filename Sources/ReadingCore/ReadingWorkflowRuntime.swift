@@ -327,6 +327,12 @@ public enum ReadingWorkflowRuntime {
     /// Reading archives remains possible without the optional native action loaded.
     /// Execution/finish callers pass a real registry and reject missing handlers.
     public static func validateStoredRecords(in project: BookProject, registry: ReadingWorkflowActionRegistry? = nil) throws {
+        var mathCache = MathVerificationValidationCache()
+        try validateStoredRecords(in: project, registry: registry, mathCache: &mathCache)
+    }
+
+    public static func validateStoredRecords(in project: BookProject, registry: ReadingWorkflowActionRegistry? = nil,
+                                             mathCache: inout MathVerificationValidationCache) throws {
         let runs = project.workflowRuns ?? []
         guard runs.count <= 100_000, Set(runs.map(\.stepID)).count == runs.count, runs.filter({ $0.status == .running }).count <= 1 else { throw ReadingError.invalid("流程检查点重复、过多或同时运行多个步骤。") }
         let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -358,7 +364,7 @@ public enum ReadingWorkflowRuntime {
             guard run.toolNames.allSatisfy({ $0.range(of: "^[A-Za-z0-9_.-]{1,128}$", options: .regularExpression) != nil }) else { throw ReadingError.invalid("流程检查点工具标识无效。") }
             let writes = run.knowledgeWriteTools ?? []
             guard Set(writes).count == writes.count, Set(writes).isSubset(of: Set(run.toolNames)) else { throw ReadingError.invalid("流程知识写入凭据无效。") }
-            if run.status != .completed { try validateMathReferences(run: run, in: project) }
+            if run.status != .completed { try validateMathReferences(run: run, in: project, cache: &mathCache, sourceUnit: unit) }
             let available: Set<String>
             if let cached = paragraphCache[unit.id] { available = cached }
             else {
@@ -373,7 +379,7 @@ public enum ReadingWorkflowRuntime {
                 guard let output = run.output, run.error == nil, run.attempts > 0, run.toolNames.contains(terminalTool),
                       (project.readingStepResults ?? []).contains(where: { $0.stepID == run.stepID && $0.unitID == run.unitID && $0.methodID == run.methodID && $0.methodHash == run.methodHash && $0.stepIndex == run.stepIndex && $0.result == output.result && $0.paragraphIDs == output.paragraphIDs }) else { throw ReadingError.invalid("已完成流程缺少工具凭据、步骤结果或仍有错误。") }
                 try validate(output: output, unitID: run.unitID, project: project, sourceUnit: unit, availableParagraphIDs: available)
-                try validateActionOutput(output, run: run, project: project)
+                try validateActionOutput(output, run: run, project: project, mathCache: &mathCache, sourceUnit: unit)
             } else if run.status == .failed {
                 guard run.output == nil, let error = run.error, !error.isEmpty, error.count <= 1600 else { throw ReadingError.invalid("失败流程缺少错误信息。") }
             }
@@ -417,13 +423,19 @@ public enum ReadingWorkflowRuntime {
     }
 
     private static func validateActionOutput(_ output: ReadingWorkflowOutput, run: ReadingWorkflowStepRun, project: BookProject) throws {
+        var mathCache = MathVerificationValidationCache()
+        try validateActionOutput(output, run: run, project: project, mathCache: &mathCache)
+    }
+
+    private static func validateActionOutput(_ output: ReadingWorkflowOutput, run: ReadingWorkflowStepRun, project: BookProject,
+                                            mathCache: inout MathVerificationValidationCache, sourceUnit: SourceUnit? = nil) throws {
         if ["facts.extract", "reading.enrich"].contains(run.actionID), (run.knowledgeWriteTools ?? []).isEmpty, output.noChangesReason == nil {
             throw ReadingError.invalid("知识抽取没有实际知识写入凭据；请调用知识工具，或用noChangesReason明确说明无适用对象。")
         }
         if run.actionID == "reading.enrich", !(run.knowledgeWriteTools ?? []).contains("reading_enrich"), output.noChangesReason == nil {
             throw ReadingError.invalid("多层伴读没有 reading_enrich 实际产物凭据；请保存锚点和阅读层，或明确说明本步无新增适用内容。")
         }
-        try validateMathReferences(run: run, in: project)
+        try validateMathReferences(run: run, in: project, cache: &mathCache, sourceUnit: sourceUnit)
         if run.actionID == "math.verify", (run.mathVerificationIDs ?? []).isEmpty, output.noChangesReason == nil {
             throw ReadingError.invalid("数学步骤没有本次实际 math_verify 计算记录；请执行精确核查，或用noChangesReason说明不适用/不支持的具体原因。")
         }
@@ -433,7 +445,8 @@ public enum ReadingWorkflowRuntime {
         }
     }
 
-    private static func validateMathReferences(run: ReadingWorkflowStepRun, in project: BookProject) throws {
+    private static func validateMathReferences(run: ReadingWorkflowStepRun, in project: BookProject,
+                                               cache: inout MathVerificationValidationCache, sourceUnit: SourceUnit? = nil) throws {
         let ids = run.mathVerificationIDs ?? []
         guard ids.count <= MathVerificationTools.maximumRecords, Set(ids).count == ids.count,
               ids.isEmpty || run.toolNames.contains("math_verify") else { throw ReadingError.invalid("数学流程产物凭据重复、过多或缺少实际工具。") }
@@ -445,7 +458,9 @@ public enum ReadingWorkflowRuntime {
             }
             // A failed check is still a real calculation; do not turn it into a
             // passing proof. Trash keeps the immutable record for historical audit.
-            try MathVerificationTools.validateRecord(record, allowedUnitIDs: [run.unitID], in: project)
+            var scoped = project
+            if let sourceUnit { scoped.units = [sourceUnit] }
+            try MathVerificationTools.validateRecord(record, allowedUnitIDs: [run.unitID], in: scoped, cache: &cache)
         }
     }
 

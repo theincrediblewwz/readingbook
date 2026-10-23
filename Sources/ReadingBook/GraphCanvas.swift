@@ -3,7 +3,7 @@ import Foundation
 import AppKit
 import ReadingCore
 
-struct GraphItem: Identifiable {
+struct GraphItem: Identifiable, Equatable {
     var id: String
     var targetID: String
     var title: String
@@ -11,7 +11,47 @@ struct GraphItem: Identifiable {
     var x: Double
     var y: Double
 }
-struct GraphLine: Identifiable { var id: String; var from: String; var to: String; var label: String }
+struct GraphLine: Identifiable, Equatable { var id: String; var from: String; var to: String; var label: String }
+
+/// Camera movement reuses data indices and edge lanes. These caches are only
+/// presentation data and never publish a model change during a render.
+private final class GraphRenderCache {
+    private var items: [GraphItem] = []
+    private var lines: [GraphLine] = []
+    var byID: [String: GraphItem] = [:]
+    var identities = GraphIdentityIndex(nodes: [])
+    var lanes: [String: CGFloat] = [:]
+    var incident: [String: [GraphLine]] = [:]
+    private var memorySave: Task<Void, Never>?
+    func cancelMemorySave() { memorySave?.cancel(); memorySave = nil }
+    func queueCameraMemory(store: AppStore, scope: String, id: String, camera: GraphCamera) {
+        cancelMemorySave()
+        let value = WorkspaceGraphCamera(center: WorkspacePoint(x: camera.center.x, y: camera.center.y), scale: camera.scale)
+        memorySave = Task { @MainActor [weak store] in
+            do { try await Task.sleep(nanoseconds: 180_000_000) } catch { return }
+            guard !Task.isCancelled else { return }
+            store?.updateWorkspaceMemory({ $0.graphs[id] = value }, expectedKey: scope)
+        }
+    }
+    deinit { memorySave?.cancel() }
+    func update(items: [GraphItem], lines: [GraphLine]) {
+        if self.items != items {
+            self.items = items
+            byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            identities = GraphIdentityIndex(nodes: items.map { (nodeID: $0.id, targetID: $0.targetID) })
+        }
+        if self.lines != lines {
+            self.lines = lines; lanes = [:]; incident = [:]
+            for line in lines { incident[line.from, default: []].append(line); if line.to != line.from { incident[line.to, default: []].append(line) } }
+            for group in Dictionary(grouping: lines, by: { [$0.from, $0.to].sorted().joined(separator: "|") }).values {
+                for (offset, line) in group.sorted(by: { $0.id < $1.id }).enumerated() {
+                    let lane = (CGFloat(offset) - CGFloat(group.count - 1) / 2) * 32
+                    lanes[line.id] = line.from < line.to ? lane : -lane
+                }
+            }
+        }
+    }
+}
 
 /// Canvas identity is the node ID; opening content uses the separate target ID.
 /// Body dragging moves a card. Its edge ports own a separate connection gesture.
@@ -58,6 +98,7 @@ struct GraphSurface: View {
     @State private var controlsRect = CGRect.zero
     @State private var cameraInitialized = false
     @State private var memoryScope: String?
+    @State private var renderCache = GraphRenderCache()
     @State private var panOrigin: GraphCamera?
     @State private var connectionDragScale: CGFloat?
     @State private var gestureEpoch = 0
@@ -91,26 +132,17 @@ struct GraphSurface: View {
         return CGRect(x: center.x - nodeSize.width / 2, y: center.y - nodeSize.height / 2, width: nodeSize.width, height: nodeSize.height)
     }
     private var selectedPhysicalID: String? {
-        if let id = selectedNodeID, items.first(where: { $0.id == id })?.targetID == selectedID { return id }
-        return items.first(where: { $0.targetID == selectedID })?.id
+        renderCache.identities.selectedNode(targetID: selectedID, preferredNodeID: selectedNodeID)
     }
     private var renderedLines: [RenderedGraphLine] {
-        let index = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
-        let groups = Dictionary(grouping: lines) { [$0.from, $0.to].sorted().joined(separator: "|") }
-        var lanes: [String: CGFloat] = [:]
-        for group in groups.values {
-            for (offset, line) in group.sorted(by: { $0.id < $1.id }).enumerated() {
-                let lane = (CGFloat(offset) - CGFloat(group.count - 1) / 2) * 32
-                lanes[line.id] = line.from < line.to ? lane : -lane
-            }
-        }
         return lines.compactMap { line in
-            guard let from = index[line.from], let to = index[line.to] else { return nil }
+            guard let from = renderCache.byID[line.from], let to = renderCache.byID[line.to] else { return nil }
             let a = anchor(rect(from), towards: point(to)), b = anchor(rect(to), towards: point(from))
-            return RenderedGraphLine(line: line, curve: GraphCurve(start: a.point, end: b.point, startNormal: a.normal, endNormal: b.normal, lane: lanes[line.id] ?? 0))
+            return RenderedGraphLine(line: line, curve: GraphCurve(start: a.point, end: b.point, startNormal: a.normal, endNormal: b.normal, lane: renderCache.lanes[line.id] ?? 0))
         }
     }
     var body: some View {
+        let _ = renderCache.update(items: items, lines: lines)
         GeometryReader { geometry in
             let rendered = renderedLines
             let globalFrame = geometry.frame(in: .global)
@@ -200,7 +232,12 @@ struct GraphSurface: View {
             else { cancelTransientInteractions() }
         }
         .onChange(of: isEnabled) { _, enabled in if !enabled { cancelTransientInteractions() } }
-        .onChange(of: camera) { _, _ in saveCameraMemory() }
+        .onChange(of: camera) { _, _ in
+            guard cameraInitialized, let memoryScope else { return }
+            // Keep high-frequency camera changes local to this surface; the
+            // whole AppStore need not republish on every wheel/pinch frame.
+            renderCache.queueCameraMemory(store: store, scope: memoryScope, id: title ?? store.route, camera: camera)
+        }
         .onChange(of: store.workspaceMemoryRevision) { _, _ in cancelTransientInteractions(); restoreCameraMemory() }
         .onChange(of: workspaceCanvasBlocked) { _, blocked in if blocked { cancelTransientInteractions() } }
         .onChange(of: obscuredLeadingWidth) { old, _ in reframeCamera(previousLeadingWidth: old, previousTrailingWidth: obscuredTrailingWidth) }
@@ -213,11 +250,13 @@ struct GraphSurface: View {
             if let drag = nodeDragState, !ids.contains(drag.id) { nodeDragState = nil; gestureEpoch += 1 }
         }
         .onChange(of: lines.map(\.id)) { _, ids in if let id = editingLineID, !ids.contains(id) { editingLineID = nil } }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ReadingBookCaptureWorkspaceMemory"))) { _ in saveCameraMemory() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in cancelTransientInteractions() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in cancelTransientInteractions() }
         .onDisappear { saveCameraMemory(); cancelTransientInteractions(); editingLineID = nil }
     }
     private func restoreCameraMemory() {
+        renderCache.cancelMemorySave()
         memoryScope = store.workspaceMemoryKey
         if let saved = store.workspaceMemory.graphs[title ?? store.route], saved.isValid {
             camera = GraphCamera(center: CGPoint(x: saved.center.x, y: saved.center.y), scale: saved.scale)
@@ -227,6 +266,7 @@ struct GraphSurface: View {
         }
     }
     private func saveCameraMemory() {
+        renderCache.cancelMemorySave()
         guard cameraInitialized, let memoryScope else { return }
         let saved = WorkspaceGraphCamera(center: WorkspacePoint(x: camera.center.x, y: camera.center.y), scale: camera.scale)
         store.updateWorkspaceMemory({ $0.graphs[title ?? store.route] = saved }, expectedKey: memoryScope)
@@ -310,11 +350,11 @@ struct GraphSurface: View {
         connectionPoint = nil; connectionTargetID = nil
     }
     private func centerSelection() {
-        guard canNavigate, let item = items.first(where: { $0.id == selectedPhysicalID }) else { return }
+        guard canNavigate, let selectedPhysicalID, let item = renderCache.byID[selectedPhysicalID] else { return }
         camera.focus(point(item), in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
     }
     private func focusRequestedNode() {
-        guard let id = focusNodeID, let item = items.first(where: { $0.id == id }), !savingPosition, !savingConnection, !savingLine else { return }
+        guard let id = focusNodeID, let item = renderCache.byID[id], !savingPosition, !savingConnection, !savingLine else { return }
         cancelTransientInteractions(); setPhysicalSelection(id)
         camera.focus(point(item), in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
     }
@@ -344,7 +384,7 @@ struct GraphSurface: View {
     }
     @ViewBuilder private var statusOverlay: some View {
         if savingConnection || savingLine { Text("正在保存连线…").font(.caption).padding(9).readingGlass() }
-        else if let id = connectionFromID, let source = items.first(where: { $0.id == id }) {
+        else if let id = connectionFromID, let source = renderCache.byID[id] {
             Text(message.isEmpty ? "从「\(source.title)」连线 · 点击目标节点，Esc 或点空白取消" : message)
                 .font(.caption).padding(9).readingGlass()
         } else if editingLineID != nil {
@@ -418,18 +458,13 @@ struct GraphSurface: View {
                 Button("连接到这里") { commitConnection(from: source, to: item.id) }
             }
             Button("从这里连线") { beginConnection(item, side: .trailing) }
-            Menu("连接到…") {
-                ForEach(items.filter { $0.id != item.id }) { target in
-                    Button("\(target.title) · 节点 \(nodeNumber(target))") { commitConnection(from: item.id, to: target.id) }
-                }
-            }.disabled(items.count < 2)
             if connectionFromID != nil { Button("取消连线") { cancelConnection() } }
         }
-        let incident = lines.filter { $0.from == item.id || $0.to == item.id }
+        let incident = renderCache.incident[item.id] ?? []
         if !incident.isEmpty, renameLine != nil || removeLine != nil {
             Menu("已有连线") {
                 ForEach(incident) { line in
-                    let other = items.first { $0.id == (line.from == item.id ? line.to : line.from) }
+                    let other = renderCache.byID[line.from == item.id ? line.to : line.from]
                     Menu("\(line.from == item.id ? "→" : "←") \(line.label) · \(other?.title ?? "节点") · \(other.map(nodeNumber) ?? 0)") {
                         if renameLine != nil { Button("修改关系名称") { beginRename(line) } }
                         if removeLine != nil { Button("移除这条连线", role: .destructive) { deleteLine(line.id) } }
@@ -507,9 +542,9 @@ struct GraphSurface: View {
         return eligible.first(where: { $0.id == selectedPhysicalID }) ?? eligible.first
     }
     private func commitConnection(from: String, to: String) {
-        guard acceptsCanvasInput, !savingPosition, !savingConnection, !savingLine, from != to, items.contains(where: { $0.id == from }), items.contains(where: { $0.id == to }), let connect else { cancelConnection(); return }
+        guard acceptsCanvasInput, !savingPosition, !savingConnection, !savingLine, from != to, renderCache.byID[from] != nil, renderCache.byID[to] != nil, let connect else { cancelConnection(); return }
         guard editingLineID == nil else { return }
-        connectionFromID = from; connectionTargetID = to; connectionPoint = items.first { $0.id == to }.map(point)
+        connectionFromID = from; connectionTargetID = to; connectionPoint = renderCache.byID[to].map(point)
         savingConnection = true; message = ""
         Task {
             let saved = await connect(from, to)
@@ -567,12 +602,12 @@ struct GraphSurface: View {
         cancelConnection(); savingLine = true
         Task { let saved = await removeLine(id); savingLine = false; if saved && editingLineID == id { editingLineID = nil }; if !saved { message = errorText?() ?? "连线未移除，请重试。" } }
     }
-    private func nodeNumber(_ item: GraphItem) -> Int { (items.firstIndex { $0.id == item.id } ?? 0) + 1 }
+    private func nodeNumber(_ item: GraphItem) -> Int { renderCache.identities.ordinalByNodeID[item.id] ?? 0 }
     private var previewCurve: GraphCurve? {
-        guard let sourceID = connectionFromID, let source = items.first(where: { $0.id == sourceID }), let cursor = connectionPoint else { return nil }
+        guard let sourceID = connectionFromID, let source = renderCache.byID[sourceID], let cursor = connectionPoint else { return nil }
         let sourceRect = rect(source)
         let a = CGPoint(x: connectionSide == .leading ? sourceRect.minX : sourceRect.maxX, y: sourceRect.midY)
-        let target = items.first { $0.id == connectionTargetID }
+        let target = connectionTargetID.flatMap { renderCache.byID[$0] }
         let end = target.map { anchor(rect($0), towards: a) } ?? GraphAnchor(point: cursor, normal: CGVector(dx: -1, dy: 0))
         return GraphCurve(start: a, end: end.point, startNormal: CGVector(dx: connectionSide == .leading ? -1 : 1, dy: 0), endNormal: end.normal)
     }

@@ -34,6 +34,7 @@ struct SpatialTimelineView: View {
     @State private var dragCenter: CGPoint?
     @State private var pointerEpoch = 0
     @State private var memoryScope: String?
+    @State private var selectionLayoutToken: UUID?
 
     private var filteredEvents: [KnowledgeEvent] {
         store.visibleEvents.filter { eventQuery.isEmpty || $0.name.localizedCaseInsensitiveContains(eventQuery) || $0.dateText.localizedCaseInsensitiveContains(eventQuery) || $0.participantIDs.contains(where: { store.objectTitle($0).localizedCaseInsensitiveContains(eventQuery) }) }
@@ -136,7 +137,7 @@ struct SpatialTimelineView: View {
             restoreMapMemory()
             if let id = store.selectedObjectID, store.book?.events.contains(where: { $0.id == id }) == true { expandedEventID = id }
         }
-        .onDisappear { saveMapPanelMemory(); cancelPanelDrag() }
+        .onDisappear { selectionLayoutToken = nil; saveMapPanelMemory(); cancelPanelDrag() }
         .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreMapMemory() }
         .onChange(of: showsTimeline) { _, _ in saveMapPanelMemory() }
         .onChange(of: timelineCollapsed) { _, _ in saveMapPanelMemory() }
@@ -144,20 +145,23 @@ struct SpatialTimelineView: View {
         .onChange(of: store.timeTo) { _, _ in saveMapPanelMemory() }
         .onChange(of: store.showUndated) { _, _ in saveMapPanelMemory() }
         .onExitCommand { cancelPanelDrag() }
-        .onChange(of: measuredPanelSize) { _, _ in if let id = store.selectedObjectID { locate(id) } }
-        .onChange(of: viewport) { _, _ in if let id = store.selectedObjectID { locate(id) } }
-        .onChange(of: dockRaw) { _, _ in saveMapPanelMemory(); if let id = store.selectedObjectID { locate(id) } }
-        .onChange(of: navigationDockRaw) { _, _ in if let id = store.selectedObjectID { locate(id) } }
+        .onChange(of: measuredPanelSize) { _, _ in
+            // Only settle a newly selected event's expanding detail card.
+            // Resizing or moving chrome after manual navigation preserves the map.
+            if selectionLayoutToken != nil, !camera.positionedByUser, let id = store.selectedObjectID { locate(id) }
+        }
+        .onChange(of: dockRaw) { _, _ in saveMapPanelMemory() }
         .popover(isPresented: Binding(get: { inspectedObjectID != nil }, set: { if !$0 { inspectedObjectID = nil } })) {
             if let id = inspectedObjectID { ObjectInspector(id: id, onClose: { inspectedObjectID = nil }).environmentObject(store).frame(width: 330, height: 500) }
         }
         .onChange(of: store.selectedObjectID) { _, id in
             guard let id else { return }
             if store.book?.events.contains(where: { $0.id == id }) == true { expand(id) }
-            locate(id)
+            locateSelection(id)
         }
         .onChange(of: store.bookID) { _, _ in
             cancelPanelDrag()
+            selectionLayoutToken = nil
             normalizeRange(); showingEvents = false; editingRange = false; eventQuery = ""; expandedEventID = nil; inspectedObjectID = nil; camera = .automatic; showsTimeline = true; timelineCollapsed = false
         }
         .onChange(of: store.book?.events.map(\.id) ?? []) { _, ids in
@@ -186,6 +190,7 @@ struct SpatialTimelineView: View {
         .safeAreaPadding(.top, topReserve).safeAreaPadding(.trailing, 16)
     }
     private func restoreMapMemory() {
+        selectionLayoutToken = nil
         memoryScope = store.workspaceMemoryKey
         let saved = store.workspaceMemory
         if let map = saved.map, map.isValid {
@@ -446,7 +451,19 @@ struct SpatialTimelineView: View {
             store.focus(id); expand(id)
         } else { store.focus(id); inspectedObjectID = id }
         // Repeat even for the same selected ID, whose onChange will not fire.
+        locateSelection(id)
+    }
+    private func locateSelection(_ id: String) {
         locate(id)
+        let token = UUID(), key = store.workspaceMemoryKey
+        selectionLayoutToken = token
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard selectionLayoutToken == token else { return }
+            defer { selectionLayoutToken = nil }
+            guard key == store.workspaceMemoryKey, store.selectedObjectID == id, !camera.positionedByUser else { return }
+            locate(id)
+        }
     }
     private func locate(_ id: String) {
         guard let point = points.first(where: { $0.targetID == id }) else { return }
@@ -475,7 +492,6 @@ struct SpatialTimelineView: View {
         guard let dragOrigin else { return }
         let center = clampedPanelCenter(CGPoint(x: dragOrigin.x + delta.width, y: dragOrigin.y + delta.height))
         if ended {
-            let previousDock = dock
             let candidates = [dock] + FloatingPanelDock.allCases.filter { $0 != dock }
             let target = candidates.min { first, second in
                 let a = dockFrame(first), b = dockFrame(second)
@@ -484,7 +500,6 @@ struct SpatialTimelineView: View {
             withAnimation(ReadingMotion.animation(reduce: reduceMotion)) {
                 self.dragOrigin = nil; dragCenter = nil; dockRaw = target.rawValue
             }
-            if target == previousDock, let id = store.selectedObjectID { locate(id) }
         } else {
             var transaction = Transaction(); transaction.animation = nil
             withTransaction(transaction) { dragCenter = center }

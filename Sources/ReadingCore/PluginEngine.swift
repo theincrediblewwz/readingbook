@@ -5,6 +5,14 @@ import CoreFoundation
 /// Types, methods and views are declarative configuration; knowledge changes always require source evidence.
 public enum PluginEngine {
     private static let maximumPayloadBytes = 262_144
+    /// Model-callable renderers implemented by the native component registry.
+    /// Unknown renderer metadata may be archived by declaration packs, but AI
+    /// cannot claim an uninstalled renderer is executable.
+    public static let modelRendererKinds: [String: ComponentKind] = [
+        "reading.layers": .knowledge, "reading.mentions": .knowledge,
+        "reading.decisions": .knowledge, "reading.atlas": .knowledge,
+        "math.verify": .knowledge, "book.scheme": .workflow
+    ]
 
     public static func seed(_ project: inout BookProject) {
         let defaults: [EntityType] = [
@@ -569,7 +577,10 @@ public enum PluginEngine {
         let raw = try string(input, key: "kind", maximum: 128)
         guard let kind = ComponentKind(rawValue: raw) else { throw invalid("未知组件类型：\(raw)") }
         let rendererID = try optionalString(input, key: "rendererID", maximum: 128)
-        if let rendererID, !["reading.layers", "reading.mentions", "reading.decisions", "reading.atlas"].contains(rendererID) { throw invalid("视图渲染器尚未注册，不能声称可执行：\(rendererID)") }
+        if let rendererID {
+            guard let expectedKind = modelRendererKinds[rendererID] else { throw invalid("视图渲染器尚未注册，不能声称可执行：\(rendererID)") }
+            guard expectedKind == kind else { throw invalid("视图渲染器 \(rendererID) 应使用 \(expectedKind.rawValue) 类型。") }
+        }
         let scope = try optionalString(input, key: "scope", maximum: 80) ?? (rendererID == nil ? nil : "current")
         if let scope, !["current", "book"].contains(scope) { throw invalid("视图scope须为current或book。") }
         let configuration: [String: String]?
@@ -601,7 +612,10 @@ public enum PluginEngine {
         try uniqueIDs(view.typeIDs)
         guard view.typeIDs.allSatisfy({ id in project.types.contains(where: { $0.id == id }) }) else { throw invalid("视图引用了尚未定义的实体类型。") }
         guard !view.typeIDs.contains(where: { isDisabledType($0, in: project) }) else { throw invalid("视图不能新选用已停用声明包提供的类型。") }
-        if let rendererID = view.rendererID { try validateID(rendererID) }
+        if let rendererID = view.rendererID {
+            try validateID(rendererID)
+            if let expectedKind = modelRendererKinds[rendererID], expectedKind != view.kind { throw invalid("视图渲染器 \(rendererID) 应使用 \(expectedKind.rawValue) 类型。") }
+        }
         if let scope = view.scope { try nonempty(scope, field: "组件上下文范围", maximum: 80) }
         if let configuration = view.configuration {
             guard configuration.count <= 16, configuration.allSatisfy({ !$0.key.isEmpty && $0.key.count <= 128 && $0.value.count <= 4000 }) else { throw invalid("组件声明配置超过数量或长度上限。") }

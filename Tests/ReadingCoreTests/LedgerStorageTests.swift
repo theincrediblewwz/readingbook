@@ -116,7 +116,9 @@ final class LedgerStorageTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: packageMetadata), damagedData)
         let storedMetadata = directory.appendingPathComponent("library/books/\(valid.id)/project.json")
         try damagedData.write(to: storedMetadata, options: .atomic)
-        do { _ = try await repository.loadAll(); XCTFail("应拒绝载入断链账本") } catch { }
+        let report = try await repository.loadReport()
+        XCTAssertTrue(report.projects.isEmpty, "断链书籍不能作为正常项目载入。")
+        XCTAssertEqual(report.issues.count, 1, "断链书籍须报告恢复诊断。")
         XCTAssertEqual(try Data(contentsOf: storedMetadata), damagedData)
     }
 }

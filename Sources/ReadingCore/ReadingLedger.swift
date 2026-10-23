@@ -197,6 +197,11 @@ public enum ReadingLedger {
 
     /// Storage/import validation is deliberately independent from the completion gate: old projects may have no ledger.
     public static func validateStoredRecords(in project: BookProject) throws {
+        var mathCache = MathVerificationValidationCache()
+        try validateStoredRecords(in: project, mathCache: &mathCache)
+    }
+
+    public static func validateStoredRecords(in project: BookProject, mathCache: inout MathVerificationValidationCache) throws {
         let unitIDs = Set(project.units.map(\.id))
         let records = project.paragraphReceipts ?? [], steps = project.readingStepResults ?? []
         guard Set(records.map(\.paragraphID)).count == records.count, Set(steps.map(\.stepID)).count == steps.count,
@@ -229,7 +234,7 @@ public enum ReadingLedger {
             let manifest = try paragraphs(for: unit, in: project).filter { batch.paragraphIDs.contains($0.id) }
             guard try makeBatch(unit: unit, paragraphs: manifest) == batch else { throw ReadingError.invalid("保存的阅读批次与原文不匹配。") }
         }
-        try ReadingWorkflowRuntime.validateStoredRecords(in: project)
+        try ReadingWorkflowRuntime.validateStoredRecords(in: project, mathCache: &mathCache)
     }
 
     static func matches(_ receipt: ParagraphReceipt, paragraph: ReadingParagraph) -> Bool {

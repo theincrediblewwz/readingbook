@@ -49,16 +49,16 @@ extension AppStore {
                     if bookID == project.id && selectedDocumentID == request.id { selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; UserDefaults.standard.removeObject(forKey: "draft-\(project.id)") }
                     activity = request.kind == .document ? "文档已移入回收站，可以恢复。" : "派生对象及结构化关联已移除。"
                 }
-                archivedBooks = try await repository.archivedBooks()
+                await reloadTrash()
             } catch { errorMessage = error.localizedDescription }
         }
     }
     func reloadTrash() async {
-        do { archivedBooks = try await repository.archivedBooks() } catch { errorMessage = error.localizedDescription }
+        do { let report = try await repository.trashReport(); archivedBooks = report.projects; if !report.issues.isEmpty { errorMessage = libraryLoadIssueSummary(report.issues) } } catch { errorMessage = error.localizedDescription }
     }
     func restoreBook(_ id: String) async {
         guard !isBusy else { return }; isBusy = true; defer { isBusy = false }
-        do { let restored = try await repository.restoreBook(id: id); publish(restored); archivedBooks = try await repository.archivedBooks(); activity = "书籍已恢复到书库。" }
+        do { let restored = try await repository.restoreBook(id: id); publish(restored); await reloadTrash(); activity = "书籍已恢复到书库。" }
         catch { errorMessage = error.localizedDescription }
     }
     func restoreDocument(bookID: String, documentID: String) async {

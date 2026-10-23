@@ -157,6 +157,7 @@ struct PDFReaderView: NSViewRepresentable {
         NotificationCenter.default.addObserver(self, selector: #selector(selectionChanged(_:)), name: .PDFViewSelectionChanged, object: pdfView)
         NotificationCenter.default.addObserver(self, selector: #selector(annotationHit(_:)), name: .PDFViewAnnotationHit, object: pdfView)
         NotificationCenter.default.addObserver(self, selector: #selector(pdfViewportScrolled(_:)), name: NSView.boundsDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(captureWorkspaceMemoryNow(_:)), name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
 
         thumbnails.pdfView = pdfView
         thumbnails.thumbnailSize = NSSize(width: 86, height: 112)
@@ -643,6 +644,12 @@ struct PDFReaderView: NSViewRepresentable {
         memoryCaptureTask?.cancel()
         let item = DispatchWorkItem { [weak self] in self?.captureWorkspaceMemory() }
         memoryCaptureTask = item; DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+    }
+    @objc private func captureWorkspaceMemoryNow(_ notification: Notification) {
+        // The caller flushes immediately after posting, before a book switch or
+        // app shutdown can invalidate this reader's scoped memory callback.
+        memoryCaptureTask?.cancel(); memoryCaptureTask = nil
+        captureWorkspaceMemory()
     }
     private func captureWorkspaceMemory() {
         guard !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil,

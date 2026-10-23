@@ -130,9 +130,9 @@ enum ProviderClient {
         return Prepared(request: request, estimatedInputTokens: estimate)
     }
 
-    static func perform(_ prepared: Prepared) async throws -> Result {
+    static func perform(_ prepared: Prepared, configuration suppliedConfiguration: URLSessionConfiguration? = nil) async throws -> Result {
         try Task.checkCancellation()
-        let configuration = URLSessionConfiguration.ephemeral
+        let configuration = suppliedConfiguration ?? URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 600
         configuration.timeoutIntervalForResource = 1800
         configuration.urlCache = nil
@@ -141,9 +141,7 @@ enum ProviderClient {
         configuration.httpShouldSetCookies = false
         // Redirects could otherwise move a user-supplied bearer token to a
         // different destination or downgrade HTTPS to HTTP.
-        let session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
-        let (data, response) = try await session.data(for: prepared.request)
+        let (data, response) = try await BoundedProviderResponse.read(prepared.request, configuration: configuration)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw ReadingError.invalid("模型服务未返回 HTTP 响应。") }
         guard (200...299).contains(http.statusCode) else {
@@ -164,16 +162,8 @@ enum ProviderClient {
             throw ReadingError.invalid("模型\(detail)，当前内容未计为已读。")
         }
         let reported = decoded.usage?.total_tokens
-        if let reported, reported < 0 { throw ReadingError.invalid("模型返回了无效 token 计数。") }
+        if let reported, !(0...4_194_304).contains(reported) { throw ReadingError.invalid("模型返回了无效或超出保护范围的 token 计数。") }
         return Result(message: choice.message, finishReason: reason,
                       tokenCost: max(1, reported ?? (prepared.estimatedInputTokens + data.count)))
-    }
-}
-
-private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(_ session: URLSession, task: URLSessionTask,
-                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
-                    completionHandler: @escaping (URLRequest?) -> Void) {
-        completionHandler(nil)
     }
 }

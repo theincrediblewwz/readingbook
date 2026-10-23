@@ -61,14 +61,14 @@ struct DocumentGraphView: View {
     @State private var physicalSelection: String?
     @State private var focusRequest: String?
     @State private var focusToken: UUID?
-    private var nodes: [CanvasNode] {
-        guard let book = store.book else { return [] }
-        let hidden = Set(book.trashedDocuments.map(\.id))
-        return book.nodes.filter { !hidden.contains($0.targetID) }
+    @State private var presentation = BookGraphPresentationCache()
+    private var graphData: BookGraphSnapshot {
+        guard let book = store.book else { return BookGraphSnapshot() }
+        return presentation.documents(book: book, revision: store.projectRevision)
     }
     var body: some View {
         Group {
-            if let book = store.book, !nodes.isEmpty {
+            if let book = store.book, !graphData.items.isEmpty {
                 graphWorkspace(book).id(book.id)
             } else {
                 EmptyState(title: "从第一篇理解开始", detail: "在“我的理解”写一篇笔记，或主动保存 AI 回答。双击节点打开文档，从节点边缘的圆点拖出连线。", icon: "point.3.connected.trianglepath.dotted")
@@ -79,10 +79,9 @@ struct DocumentGraphView: View {
     }
 
     private func graphWorkspace(_ book: BookProject) -> some View {
-        let nodeIDs = Set(nodes.map(\.id))
-        let graphItems = nodes.map { node in GraphItem(id: node.id, targetID: node.targetID, title: store.objectTitle(node.targetID), subtitle: book.activeDocuments.contains { $0.id == node.targetID } ? "Markdown" : "知识节点", x: node.x, y: node.y) }
-        let graphLines: [GraphLine] = book.edges.filter { nodeIDs.contains($0.fromID) && nodeIDs.contains($0.toID) }.map { GraphLine(id: $0.id, from: $0.fromID, to: $0.toID, label: $0.label) }
+        let graphItems = graphData.items, graphLines = graphData.lines
         return FloatingGraphWorkspace<GraphSurface>(items: graphItems,
+                                       memoryID: "mindmap.browser",
                                        selectedNodeID: physicalSelection ?? graphItems.first(where: { $0.targetID == store.selectedObjectID })?.id,
                                        select: { item in
                                            guard !store.isBusy else { return }
@@ -140,27 +139,14 @@ struct RelationGraphView: View {
     @State private var physicalSelection: String?
     @State private var focusRequest: String?
     @State private var focusToken: UUID?
-    private var items: [GraphItem] {
-        guard let book = store.book else { return [] }
-        let entities = store.readingScopeCurrent ? store.readingContextItems.entities : book.entities
-        let events = store.readingScopeCurrent ? store.readingContextItems.events : book.events
-        let objects = entities.map { entity in (entity.id, entity.name, book.types.first(where: { $0.id == entity.typeID })?.name ?? "要素") } + events.map { ($0.id, $0.name, "事件") }
-        return objects.enumerated().map { index, item in
-            let angle = Double(index) * 2.399963229728653
-            let radius = max(190, sqrt(Double(index + 1)) * 125)
-            return GraphItem(id: item.0, targetID: item.0, title: item.1, subtitle: item.2, x: cos(angle) * radius, y: sin(angle) * radius)
-        }
+    @State private var presentation = BookGraphPresentationCache()
+    private var graphData: BookGraphSnapshot {
+        guard let book = store.book else { return BookGraphSnapshot() }
+        return presentation.relations(book: book, revision: store.projectRevision, context: store.readingScopeCurrent ? store.currentReadingContext : nil,
+                                      scopedItems: { store.readingContextItems })
     }
-    private var lines: [GraphLine] {
-        guard let book = store.book else { return [] }
-        var lines = book.relations.map { GraphLine(id: $0.id, from: $0.fromID, to: $0.toID, label: $0.label) }
-        for event in book.events {
-            lines += event.placeIDs.map { GraphLine(id: "event-place|\(event.id)|\($0)", from: event.id, to: $0, label: "发生于") }
-            lines += event.participantIDs.map { GraphLine(id: "event-person|\(event.id)|\($0)", from: $0, to: event.id, label: "参与") }
-        }
-        let ids = Set(items.map(\.id))
-        return lines.filter { ids.contains($0.from) && ids.contains($0.to) }
-    }
+    private var items: [GraphItem] { graphData.items }
+    private var lines: [GraphLine] { graphData.lines }
     var body: some View {
         Group {
             if items.isEmpty {
@@ -171,7 +157,7 @@ struct RelationGraphView: View {
                         }.buttonStyle(ReadingToolbarButtonStyle()).padding(7).readingGlass().padding(.bottom, 24)
                     }
             }
-            else { FloatingGraphWorkspace(items: items, selectedNodeID: physicalSelection ?? store.selectedObjectID,
+            else { FloatingGraphWorkspace(items: items, memoryID: "relations.browser", selectedNodeID: physicalSelection ?? store.selectedObjectID,
                                           select: { item in physicalSelection = item.id; store.focus(item.targetID); focusRequest = item.id; focusToken = UUID() },
                                           open: { inspectedID = $0.targetID }) { exclusion, leading, trailing in
                 GraphSurface(items: items, lines: lines, selectedID: store.selectedObjectID, select: store.focus,
@@ -184,6 +170,46 @@ struct RelationGraphView: View {
         }.popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
             if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 330, height: 500) }
         }.onChange(of: store.bookID) { _, _ in inspectedID = nil; physicalSelection = nil; focusRequest = nil; focusToken = nil }
+    }
+}
+
+private struct BookGraphSnapshot { var items: [GraphItem] = []; var lines: [GraphLine] = [] }
+
+/// Workspace camera/panel updates publish presentation state frequently. The
+/// expensive book-to-graph projection only changes with book content or scope.
+private final class BookGraphPresentationCache {
+    private struct Key: Equatable { var bookID: String; var revision: Int; var kind: String; var context: ReadingContext? }
+    private var key: Key?
+    private var snapshot = BookGraphSnapshot()
+    func documents(book: BookProject, revision: Int) -> BookGraphSnapshot {
+        let next = Key(bookID: book.id, revision: revision, kind: "documents", context: nil)
+        if key == next { return snapshot }
+        let hidden = Set(book.trashedDocuments.map(\.id)), active = Set(book.activeDocuments.map(\.id))
+        let nodes = book.nodes.filter { !hidden.contains($0.targetID) }, ids = Set(nodes.map(\.id))
+        let titles = Dictionary((book.entities.map { ($0.id, $0.name) } + book.events.map { ($0.id, $0.name) } + book.documents.map { ($0.id, $0.title) }), uniquingKeysWith: { first, _ in first })
+        let items = nodes.map { GraphItem(id: $0.id, targetID: $0.targetID, title: titles[$0.targetID] ?? $0.targetID, subtitle: active.contains($0.targetID) ? "Markdown" : "知识节点", x: $0.x, y: $0.y) }
+        snapshot = BookGraphSnapshot(items: items, lines: book.edges.filter { ids.contains($0.fromID) && ids.contains($0.toID) }.map { GraphLine(id: $0.id, from: $0.fromID, to: $0.toID, label: $0.label) })
+        key = next; return snapshot
+    }
+    func relations(book: BookProject, revision: Int, context: ReadingContext?, scopedItems: () -> ReadingContextItems) -> BookGraphSnapshot {
+        let next = Key(bookID: book.id, revision: revision, kind: "relations", context: context)
+        if key == next { return snapshot }
+        let scoped = context == nil ? nil : scopedItems()
+        let entities = scoped?.entities ?? book.entities, events = scoped?.events ?? book.events
+        let types = Dictionary(book.types.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let objects = entities.map { ($0.id, $0.name, types[$0.typeID] ?? "要素") } + events.map { ($0.id, $0.name, "事件") }
+        let items = objects.enumerated().map { index, item in
+            let angle = Double(index) * 2.399963229728653, radius = max(190, sqrt(Double(index + 1)) * 125)
+            return GraphItem(id: item.0, targetID: item.0, title: item.1, subtitle: item.2, x: cos(angle) * radius, y: sin(angle) * radius)
+        }
+        let ids = Set(items.map(\.id))
+        var lines = book.relations.map { GraphLine(id: $0.id, from: $0.fromID, to: $0.toID, label: $0.label) }
+        for event in book.events {
+            lines += event.placeIDs.map { GraphLine(id: "event-place|\(event.id)|\($0)", from: event.id, to: $0, label: "发生于") }
+            lines += event.participantIDs.map { GraphLine(id: "event-person|\(event.id)|\($0)", from: $0, to: event.id, label: "参与") }
+        }
+        snapshot = BookGraphSnapshot(items: items, lines: lines.filter { ids.contains($0.from) && ids.contains($0.to) })
+        key = next; return snapshot
     }
 }
 

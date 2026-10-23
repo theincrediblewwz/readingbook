@@ -286,14 +286,7 @@ struct MarkdownText: View {
             })
     }
     private var preparedMarkdown: String {
-        var text = markdown
-        for kind in ["unit", "doc"] {
-            let pattern = "\\[\(kind):([A-Za-z0-9._-]+)\\]"
-            if let regex = try? NSRegularExpression(pattern: pattern) {
-                text = regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "[\(kind == "unit" ? "原文" : "文档") $1](readingbook://book/\(store.bookID ?? "")/\(kind == "unit" ? "unit" : "document")/$1)")
-            }
-        }
-        return text
+        MarkdownReferenceLinks.render(markdown, bookID: store.bookID ?? "")
     }
 }
 
@@ -381,7 +374,13 @@ struct DocumentEditorView: View {
                 else if let document = currentDocument { Text(document.updatedAt, style: .time).font(.system(size: 13)).foregroundStyle(.secondary) }
             }.padding(.horizontal, 28).padding(.vertical, 18)
             if let error = store.documentError, hasDocument {
-                Label(error, systemImage: "exclamationmark.circle").font(.system(size: 14)).foregroundStyle(Palette.copper).textSelection(.enabled).padding(.horizontal, 28).padding(.bottom, 12)
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(error, systemImage: "exclamationmark.circle").font(.system(size: 14)).foregroundStyle(Palette.copper).textSelection(.enabled)
+                    if store.editorDirty, store.selectedDocumentID != nil {
+                        Button("另存为新笔记") { Task { await store.saveCurrentDocument(asNew: true) } }
+                            .buttonStyle(.bordered).disabled(store.isBusy || store.isSavingDocument)
+                    }
+                }.padding(.horizontal, 28).padding(.bottom, 12)
             }
             if hasDocument {
                 if preview {

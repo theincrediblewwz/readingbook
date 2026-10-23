@@ -1,10 +1,13 @@
 import SwiftUI
+import ReadingCore
 
 /// The browser is an overlay over the same world canvas, never a layout column.
 /// Its native handle measures a single window-space drag origin so previewing a
 /// node or saving its position cannot move the panel underneath the pointer.
 struct FloatingGraphWorkspace<Surface: View>: View {
+    @EnvironmentObject private var store: AppStore
     var items: [GraphItem]
+    var memoryID: String
     var selectedNodeID: String?
     var select: (GraphItem) -> Void
     var open: (GraphItem) -> Void
@@ -18,12 +21,13 @@ struct FloatingGraphWorkspace<Surface: View>: View {
     @State private var dragPosition: CGPoint?
     @State private var pointerEpoch = 0
     @State private var initialized = false
+    @State private var memoryScope: String?
     private let margin: CGFloat = 24
     private let topReserve: CGFloat = 96
 
-    init(items: [GraphItem], selectedNodeID: String?, select: @escaping (GraphItem) -> Void,
+    init(items: [GraphItem], memoryID: String = "graph.browser", selectedNodeID: String?, select: @escaping (GraphItem) -> Void,
          open: @escaping (GraphItem) -> Void, @ViewBuilder surface: @escaping (CGRect, CGFloat, CGFloat) -> Surface) {
-        self.items = items; self.selectedNodeID = selectedNodeID
+        self.items = items; self.memoryID = memoryID; self.selectedNodeID = selectedNodeID
         self.select = select; self.open = open; self.surface = surface
     }
 
@@ -56,14 +60,18 @@ struct FloatingGraphWorkspace<Surface: View>: View {
                 }
             }.onAppear {
                 viewport = geometry.size
-                if !initialized { shown = geometry.size.width >= 1050; initialized = true }
+                if !initialized { restoreMemory(defaultShown: geometry.size.width >= 1050); initialized = true }
             }
             .onChange(of: geometry.size) { old, next in
                 cancelDrag(); viewport = next
                 if let savedOrigin { self.savedOrigin = clamp(savedOrigin) }
                 if old.width >= 1050, next.width < 1050 { animate { shown = false } }
             }
-        }.onDisappear { cancelDrag() }.onExitCommand { cancelDrag() }
+        }.onDisappear { saveMemory(); cancelDrag() }.onExitCommand { cancelDrag() }
+            .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreMemory(defaultShown: viewport.width >= 1050) }
+            .onChange(of: shown) { _, _ in saveMemory() }
+            .onChange(of: collapsed) { _, _ in saveMemory() }
+            .onChange(of: savedOrigin) { _, _ in saveMemory() }
     }
     @ViewBuilder private var browserOverlay: some View {
         if shown {
@@ -100,4 +108,15 @@ struct FloatingGraphWorkspace<Surface: View>: View {
         withTransaction(transaction) { dragOrigin = nil; dragPosition = nil; pointerEpoch &+= 1 }
     }
     private func animate(_ action: () -> Void) { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { action() } }
+    private func restoreMemory(defaultShown: Bool) {
+        memoryScope = store.workspaceMemoryKey
+        let saved = store.workspaceMemory.panels[memoryID]
+        shown = saved?.isPresented ?? defaultShown; collapsed = saved?.collapsed ?? false
+        savedOrigin = saved?.origin.map { clamp(CGPoint(x: $0.x, y: $0.y)) }
+    }
+    private func saveMemory() {
+        guard let memoryScope else { return }
+        let saved = WorkspacePanelMemory(origin: savedOrigin.map { WorkspacePoint(x: $0.x, y: $0.y) }, isPresented: shown, collapsed: collapsed)
+        store.updateWorkspaceMemory({ $0.panels[memoryID] = saved }, expectedKey: memoryScope)
+    }
 }

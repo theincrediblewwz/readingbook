@@ -239,10 +239,17 @@ final class MathVerificationTests: XCTestCase {
         XCTAssertNoThrow(try ReadingWorkflowRuntime.validateStoredRecords(in: book))
         book.mathVerifications?[0].deletedAt = Date()
         XCTAssertNoThrow(try ReadingWorkflowRuntime.validateStoredRecords(in: book), "用户移入回收站仍保留已执行步骤证据。")
+        var cache = MathVerificationValidationCache()
+        try MathVerificationTools.validateStoredRecords(in: book, cache: &cache)
+        XCTAssertNoThrow(try ReadingLedger.validateStoredRecords(in: book, mathCache: &cache))
         var tampered = book; tampered.mathVerifications?[0].workflowAttempt = 2
         XCTAssertThrowsError(try ReadingWorkflowRuntime.validateStoredRecords(in: tampered))
+        XCTAssertThrowsError(try ReadingWorkflowRuntime.validateStoredRecords(in: tampered, mathCache: &cache))
         tampered = book; tampered.mathVerifications?[0].solution?.particular = ["99"]
         XCTAssertThrowsError(try ReadingWorkflowRuntime.validateStoredRecords(in: tampered))
+        XCTAssertThrowsError(try ReadingWorkflowRuntime.validateStoredRecords(in: tampered, mathCache: &cache))
+        tampered = book; tampered.units[0].text = "变化后的原文"
+        XCTAssertThrowsError(try ReadingWorkflowRuntime.validateStoredRecords(in: tampered, mathCache: &cache))
     }
 
     func testUnrelatedNativeToolCannotAppendMathOrEditSchemeHistory() throws {

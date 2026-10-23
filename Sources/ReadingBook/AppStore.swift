@@ -8,6 +8,7 @@ import ReadingCore
     @Published var books: [BookProject] = []
     @Published var bookID: String?
     @Published var route = "reader" { didSet { rememberWorkspaceNavigation() } }
+    @Published var requestedWorkspaceRoute: String?
     @Published var workspaceMemory = BookWorkspaceMemory()
     @Published var workspaceMemoryRevision = 0
     var restoringWorkspaceMemory = false
@@ -39,7 +40,10 @@ import ReadingCore
     @Published var selectedDocumentID: String? { didSet { rememberWorkspaceNavigation() } }
     @Published var editorTitle = "" { didSet { if editorDirty { persistDraft() } } }
     @Published var editorMarkdown = "" { didSet { if editorDirty { persistDraft() } } }
-    @Published var editorDirty = false { didSet { if editorDirty { persistDraft() } } }
+    @Published var editorDirty = false { didSet { if editorDirty { persistDraft() } else { draftSaveTask?.cancel() } } }
+    var documentBaseHash: String?
+    private var draftSaveTask: Task<Void, Never>?
+    @Published var libraryLoadIssues: [LibraryLoadIssue] = []
     @Published var documentError: String?
     @Published var draftEvidence: [Evidence] = []
     @Published var sourceFileURL: URL?
@@ -97,22 +101,28 @@ import ReadingCore
     func load() async {
         guard !loaded else { return }; loaded = true
         do {
-            books = try await repository.loadAll()
+            let report = try await repository.loadReport()
+            books = report.projects; libraryLoadIssues = report.issues
             let lastID = UserDefaults.standard.string(forKey: "workspace-last-book-v1")
             if let first = books.first(where: { $0.id == lastID }) ?? books.first { await selectBook(first.id) }
+            if !report.issues.isEmpty { errorMessage = libraryLoadIssueSummary(report.issues) }
         }
         catch { errorMessage = "书库读取失败，原文件已保留：\(error.localizedDescription)" }
     }
-    func selectBook(_ id: String) async {
+    func selectBook(_ id: String, preferredRoute: String? = nil) async {
         guard !isBusy else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档，再切换书籍。"; return }
+        guard books.contains(where: { $0.id == id }) else { errorMessage = "这本书当前不可用，请回到书库重新选择。"; return }
+        isBusy = true
+        defer { isBusy = false; restoringWorkspaceMemory = false }
+        NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
         flushWorkspaceMemory()
         restoringWorkspaceMemory = true
         navigationGeneration += 1; documentGeneration += 1
         pdfNavigationToken += 1
         pdfPasswordRequest = nil
         let generation = navigationGeneration
-        bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil
+        bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil; documentBaseHash = nil
         loadWorkspaceMemory()
         sourceReadingSelection = nil; focusedReadingAnchorID = nil; readingCompanionVisible = false; readingCompanionSection = "context"; readingSourceMode = "original"; readingScopeCurrent = false; lastQuestionContext = ""; readingExperienceError = nil
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
@@ -130,6 +140,7 @@ import ReadingCore
         restoreDraft()
         await restoreWorkspaceNavigation(expectedBookID: id, generation: generation)
         guard bookID == id && generation == navigationGeneration else { return }
+        if let preferredRoute, !editorDirty { route = preferredRoute }
         restoringWorkspaceMemory = false
         workspaceMemoryRevision &+= 1
         rememberWorkspaceNavigation()
@@ -202,7 +213,7 @@ import ReadingCore
             requestsUsed = await reader.requestCount; isBusy = false
         }
     }
-    func pause() { guard !isSavingDocument, !isExportingProject, !isImportingBookCommit, !isCommittingLocalWrite else { return }; task?.cancel(); activity = "正在暂停，已保存结果可以继续阅读。" }
+    func pause() { guard !restoringWorkspaceMemory, !isSavingDocument, !isExportingProject, !isImportingBookCommit, !isCommittingLocalWrite else { return }; task?.cancel(); activity = "正在暂停，已保存结果可以继续阅读。" }
     private var requiresPDFRecognition: Bool {
         guard let book, book.originalName.lowercased().hasSuffix(".pdf") else { return false }
         return book.units.contains { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (book.coverage[$0.id]?.status ?? .pending) == .pending }
@@ -230,13 +241,13 @@ import ReadingCore
     func newDocument() {
         guard book != nil, !isRecognizingPDF else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档。"; return }
-        documentGeneration += 1; documentError = nil
+        documentGeneration += 1; documentError = nil; documentBaseHash = nil
         selectedDocumentID = nil; editorTitle = "新的理解"; editorMarkdown = "# 新的理解\n\n"; draftEvidence = []; editorDirty = true; route = "editor"
     }
     func discardDraftForWorkspaceNavigation() {
         guard !isSavingDocument, let bookID else { return }
         documentGeneration += 1
-        editorDirty = false; documentError = nil
+        editorDirty = false; documentError = nil; documentBaseHash = nil
         selectedDocumentID = nil; editorTitle = ""; editorMarkdown = ""; draftEvidence = []
         UserDefaults.standard.removeObject(forKey: "draft-\(bookID)")
         activity = "未保存修改已放弃；已保存的 Markdown 保留。"
@@ -245,7 +256,7 @@ import ReadingCore
         guard !isSavingDocument, let bookID else { return }
         documentGeneration += 1; documentError = nil
         let document = book?.activeDocuments.first { $0.id == selectedDocumentID }
-        editorDirty = false
+        editorDirty = false; documentBaseHash = nil
         UserDefaults.standard.removeObject(forKey: "draft-\(bookID)")
         selectedDocumentID = nil; editorTitle = ""; editorMarkdown = ""; draftEvidence = []
         if let document { Task { await openDocument(document) } }
@@ -261,15 +272,15 @@ import ReadingCore
         documentGeneration += 1
         let generation = documentGeneration
         do {
-            let markdown = try await repository.readDocument(bookID: current.id, document: document)
+            let snapshot = try await repository.readDocumentSnapshot(bookID: current.id, document: document)
             guard current.id == bookID, generation == documentGeneration, !editorDirty else { return }
-            editorMarkdown = markdown
+            editorMarkdown = snapshot.markdown; documentBaseHash = snapshot.contentHash
             documentError = nil
             editorTitle = document.title; selectedDocumentID = document.id; draftEvidence = document.evidence; editorDirty = false; route = "editor"
             selectedObjectID = document.id; readingContextDocumentID = document.id
         } catch { if current.id == bookID && generation == documentGeneration { errorMessage = error.localizedDescription } }
     }
-    func saveCurrentDocument() async {
+    func saveCurrentDocument(asNew: Bool = false) async {
         guard var current = book, !isBusy, editorDirty else { return }
         documentError = nil
         let savingBookID = current.id, savingDocumentID = selectedDocumentID
@@ -277,15 +288,15 @@ import ReadingCore
         isBusy = true; isSavingDocument = true; activity = "正在保存 Markdown…"
         defer { isBusy = false; isSavingDocument = false }
         do {
-            var document = current.documents.first { $0.id == savingDocumentID } ?? DocumentRecord(title: savingTitle, linkedIDs: selectedObjectID.map { [$0] } ?? [], evidence: savingEvidence)
+            var document = (asNew ? nil : current.documents.first { $0.id == savingDocumentID }) ?? DocumentRecord(title: savingTitle, linkedIDs: selectedObjectID.map { [$0] } ?? [], evidence: savingEvidence)
             document.title = savingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名笔记" : savingTitle; document.updatedAt = Date()
             if !current.nodes.contains(where: { $0.targetID == document.id }) {
                 let index = current.nodes.count; current.nodes.append(CanvasNode(targetID: document.id, x: Double(index % 3) * 270 + 60, y: Double(index / 3) * 150 + 60))
             }
-            current = try await repository.saveDocument(project: current, document: document, markdown: savingMarkdown)
+            current = try await repository.saveDocument(project: current, document: document, markdown: savingMarkdown, expectedContentHash: asNew ? nil : documentBaseHash)
             publish(current)
             let unchanged = bookID == savingBookID && selectedDocumentID == savingDocumentID && editorTitle == savingTitle && editorMarkdown == savingMarkdown && draftEvidence == savingEvidence
-            if bookID == savingBookID && selectedDocumentID == savingDocumentID { selectedDocumentID = document.id }
+            if bookID == savingBookID && selectedDocumentID == savingDocumentID { selectedDocumentID = document.id; documentBaseHash = try BookImporter.sha256(Data(savingMarkdown.utf8)) }
             if unchanged {
                 editorDirty = false; UserDefaults.standard.removeObject(forKey: "draft-\(current.id)"); activity = "Markdown 文档已保存。"
             } else {
@@ -321,7 +332,9 @@ import ReadingCore
                 await reader.resetBudget()
                 var documents: [String: String] = [:]
                 var remaining = 200_000
-                for document in current.activeDocuments {
+                let candidates = current.activeDocuments
+                let orderedDocuments = candidates.filter { $0.id == context.documentID } + candidates.filter { $0.id != context.documentID }
+                for document in orderedDocuments {
                     let content = try await repository.readDocument(bookID: current.id, document: document)
                     let bounded = String(content.prefix(max(0, remaining)))
                     documents[document.id] = bounded; remaining -= bounded.count
@@ -464,7 +477,15 @@ import ReadingCore
         guard !editorDirty else { errorMessage = "请先保存或放弃当前 Markdown 草稿，再导入书项目。"; return }
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.treatsFilePackagesAsDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
-            Task { do { let current = try await repository.importProject(from: url); publish(current); await selectBook(current.id) } catch { errorMessage = error.localizedDescription } }
+            isBusy = true; isImportingBookCommit = true; activity = "正在验证并导入书项目…"
+            task = Task {
+                do {
+                    let current = try await repository.importProject(from: url); publish(current)
+                    isImportingBookCommit = false; isBusy = false
+                    activity = "书项目已导入；原书与用户 Markdown 已保留。"
+                    await selectBook(current.id, preferredRoute: "reader")
+                } catch { isImportingBookCommit = false; isBusy = false; errorMessage = error.localizedDescription }
+            }
         }
     }
     func exportMarkdown() {
@@ -567,16 +588,31 @@ import ReadingCore
         let disabled = Set(current.plugins.filter { current.disabledPluginIDs.contains($0.id) }.flatMap { $0.views.map(\.id) })
         return current.views.filter { !disabled.contains($0.id) }
     }
-    private struct DocumentDraft: Codable { var documentID: String?; var title: String; var markdown: String; var evidence: [Evidence] }
+    private struct DocumentDraft: Codable { var documentID: String?; var title: String; var markdown: String; var evidence: [Evidence]; var baseHash: String? = nil }
     private func persistDraft() {
         guard let bookID, editorDirty else { return }
-        let draft = DocumentDraft(documentID: selectedDocumentID, title: editorTitle, markdown: editorMarkdown, evidence: draftEvidence)
+        draftSaveTask?.cancel()
+        let generation = documentGeneration
+        draftSaveTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
+            guard let self, !Task.isCancelled, self.bookID == bookID, self.documentGeneration == generation else { return }
+            self.flushDocumentDraft()
+        }
+    }
+    func flushDocumentDraft() {
+        draftSaveTask?.cancel(); draftSaveTask = nil
+        guard let bookID, editorDirty else { return }
+        let draft = DocumentDraft(documentID: selectedDocumentID, title: editorTitle, markdown: editorMarkdown, evidence: draftEvidence, baseHash: documentBaseHash)
         if let data = try? JSONEncoder().encode(draft) { UserDefaults.standard.set(data, forKey: "draft-\(bookID)") }
     }
     private func restoreDraft() {
         guard let bookID, let data = UserDefaults.standard.data(forKey: "draft-\(bookID)"), let draft = try? JSONDecoder().decode(DocumentDraft.self, from: data) else { return }
         selectedDocumentID = book?.activeDocuments.contains(where: { $0.id == draft.documentID }) == true ? draft.documentID : nil
+        documentBaseHash = selectedDocumentID == nil ? nil : draft.baseHash
         editorTitle = draft.title; editorMarkdown = draft.markdown; draftEvidence = draft.evidence; editorDirty = true; route = "editor"; activity = "已恢复上次尚未保存的文档草稿。"
+    }
+    func libraryLoadIssueSummary(_ issues: [LibraryLoadIssue]) -> String {
+        "有 \(issues.count) 个目录未载入，其他书籍仍可使用；原文件保留。\n" + issues.prefix(8).map { "\($0.folder)：\($0.message)" }.joined(separator: "\n")
     }
     func objectTitle(_ id: String) -> String { book?.entities.first { $0.id == id }?.name ?? book?.events.first { $0.id == id }?.name ?? book?.documents.first { $0.id == id }?.title ?? id }
 }

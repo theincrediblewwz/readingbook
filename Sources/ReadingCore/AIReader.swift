@@ -439,8 +439,7 @@ public actor AIReader {
             try Task.checkCancellation()
             let response = try await request(messages: messages, tools: tools, settings: settings,
                                              apiKey: apiKey, remainingTokens: operationTokenLimit - tokensUsed)
-            tokensUsed += response.tokenCost
-            guard tokensUsed <= operationTokenLimit else { throw ReadingWorkflowBudgetPause(message: "本次分析达到 token 保护上限，当前单元未提交。") }
+            try ReadingTokenBudget.charge(response.tokenCost, to: &tokensUsed, limit: operationTokenLimit)
             let calls = response.message.tool_calls ?? []
             if response.finishReason == "stop" {
                 guard calls.isEmpty, requiredSucceeded, unresolvedErrors.isEmpty else {
@@ -539,7 +538,7 @@ public actor AIReader {
 
     private func beginOperation(settings: ProviderSettings) throws {
         guard !operationActive else { throw ReadingError.invalid("已有模型任务正在运行，请先等待或暂停。") }
-        operationTokenLimit = min(4_194_304, max(1024, settings.contextWindowTokens ?? max(196_000, settings.maxOutputTokens + 64_000)))
+        operationTokenLimit = try ReadingTokenBudget.operationLimit(for: settings)
         operationActive = true
     }
 
