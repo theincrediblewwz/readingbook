@@ -9,7 +9,11 @@ export function SmartReadingPage(){
   const range=scope==='page'?'当前页':scope==='chapter'?'当前章':scope==='range'?`第 ${from}–${to} 页`:'全书';
   function choose(id){setAutomatic(false);setSelected(old=>old.includes(id)?old.filter(x=>x!==id):[...old,id]);setPreview(false);}
   useEffect(()=>{setAutomatic(true);setSelected([]);setPreview(false);},[book.id]);
-  function start(){update({workflow:{...state.workflow,status:'running',smart:true,bookId:book.id,scope:range,cursor:1}});navigate('reader');}
+  function start(){
+    const first=scope==='page'?state.page:scope==='range'?from:1;
+    const total=scope==='page'?1:scope==='range'?Math.max(1,to-from+1):3;
+    update({workflow:{...state.workflow,status:'running',smart:true,bookId:book.id,scope:scope==='page'?`第 ${first} 页`:range,first,total,cursor:1}});navigate('reader');
+  }
   return <section className="smart-page"><div className="smart-content">
     <div className="smart-eyebrow"><Icon name="sparkle" size={18}/>智能阅读</div>
     <h1>安心读，线索会慢慢连起来。</h1>
@@ -35,5 +39,5 @@ export function SmartReadingProgress(){
   const {state,update,navigate}=useApp();const [expanded,setExpanded]=useState(false);
   if(!state.workflow.smart||state.workflow.bookId!==state.currentBookId)return null;
   const running=state.workflow.status==='running';
-  return <aside className="smart-progress glass" aria-label="智能阅读进度"><header><button className="smart-progress-summary" aria-expanded={expanded} onClick={()=>setExpanded(!expanded)}><Icon name={running?'sparkle':'pause'}/><span><b>{running?'正在分析':'分析已暂停'}</b><small>{state.workflow.scope} · 第 1 / 3 页</small><i><em/></i></span><Icon name={expanded?'chevronDown':'expand'} size={16}/></button><Button variant="quiet" icon={running?'pause':'play'} aria-label={running?'暂停分析':'继续分析'} onClick={()=>update({workflow:{...state.workflow,status:running?'paused':'running'}})}/></header>{expanded&&<div className="smart-progress-detail"><p><Icon name="check"/>预读并确定阅读方案</p><p><Icon name="check"/>第 1 页 · 逐段阅读</p><p><Icon name="sparkle"/>正在整理要素与联系</p><small>仅展示实际保存的处理状态；仍可阅读和查看组件。</small><Button icon="workflow" variant="quiet" onClick={()=>navigate('workflow')}>阅读方案与结果</Button></div>}</aside>;
+  return <aside className="smart-progress glass" aria-label="智能阅读进度"><header><button className="smart-progress-summary" aria-expanded={expanded} onClick={()=>setExpanded(!expanded)}><Icon name={running?'sparkle':'pause'}/><span><b>{running?'正在分析':'分析已暂停'}</b><small>{state.workflow.scope} · 第 1 / {state.workflow.total||3} 页</small><i><em/></i></span><Icon name={expanded?'chevronDown':'expand'} size={16}/></button><Button variant="quiet" icon={running?'pause':'play'} aria-label={running?'暂停分析':'继续分析'} onClick={()=>update({workflow:{...state.workflow,status:running?'paused':'running'}})}/></header>{expanded&&<div className="smart-progress-detail"><p><Icon name="check"/>预读并确定阅读方案</p><p><Icon name="check"/>第 {state.workflow.first||1} 页 · 逐段阅读</p><p><Icon name="sparkle"/>正在整理要素与联系</p><small>仅展示实际保存的处理状态；仍可阅读和查看组件。</small><Button icon="workflow" variant="quiet" onClick={()=>navigate('workflow')}>阅读方案与结果</Button></div>}</aside>;
 }
