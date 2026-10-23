@@ -1,5 +1,11 @@
 # 插件与 AI 工具
 
+## 0.13.2：退役能力与下一版接口提案
+
+数学核查 `math.verify` / `math_verify`、原文索引 `reading.mentions` 和思考卡 `reading.decisions` 不再对新任务开放。旧 Codable、验证器与历史记录保留兼容，不删除笔记；旧计划使用数学核查或明确生成思考卡的 `layered-reading-v1` 时需重新预读。新伴读方法 `layered-reading-v2` 只生成适用释义、译文、对象提及和资料对齐，`reading_enrich` 拒绝新的 decisions 字段。
+
+下方旧版本章节仅说明历史协议，不代表退役工具仍可调用。新一轮拟公开的原文/文档/会话读取、节点/文档挂载、实体时空与视图接口共 28 个，详见 [下一版方案](Design/2026-10-reader-redesign/PROPOSAL.md)；尚未写入可调用 schema，待用户评审。
+
 ## 0.13.1：模型配置与导入校验
 
 `views_configure` 的 `rendererID` 必须与 `PluginEngine.modelRendererKinds` 的实际种类一致，包含 `math.verify → knowledge` 和 `book.scheme → workflow`；模型提示与解析器使用同一组有效元数据。未知模型请求仍拒绝；已保存的未知历史配置保留，不能冒充可执行插件。
