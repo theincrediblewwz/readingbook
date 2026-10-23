@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import Security
+import CryptoKit
 import ReadingCore
 
 @MainActor final class AppStore: ObservableObject {
@@ -285,6 +286,7 @@ import ReadingCore
         documentError = nil
         let savingBookID = current.id, savingDocumentID = selectedDocumentID
         let savingTitle = editorTitle, savingMarkdown = editorMarkdown, savingEvidence = draftEvidence
+        let savingContentHash = SHA256.hash(data: Data(savingMarkdown.utf8)).map { String(format: "%02x", $0) }.joined()
         isBusy = true; isSavingDocument = true; activity = "正在保存 Markdown…"
         defer { isBusy = false; isSavingDocument = false }
         do {
@@ -296,7 +298,7 @@ import ReadingCore
             current = try await repository.saveDocument(project: current, document: document, markdown: savingMarkdown, expectedContentHash: asNew ? nil : documentBaseHash)
             publish(current)
             let unchanged = bookID == savingBookID && selectedDocumentID == savingDocumentID && editorTitle == savingTitle && editorMarkdown == savingMarkdown && draftEvidence == savingEvidence
-            if bookID == savingBookID && selectedDocumentID == savingDocumentID { selectedDocumentID = document.id; documentBaseHash = try BookImporter.sha256(Data(savingMarkdown.utf8)) }
+            if bookID == savingBookID && selectedDocumentID == savingDocumentID { selectedDocumentID = document.id; documentBaseHash = savingContentHash }
             if unchanged {
                 editorDirty = false; UserDefaults.standard.removeObject(forKey: "draft-\(current.id)"); activity = "Markdown 文档已保存。"
             } else {
