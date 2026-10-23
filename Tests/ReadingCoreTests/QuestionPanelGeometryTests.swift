@@ -32,7 +32,7 @@ final class QuestionPanelGeometryTests: XCTestCase {
         XCTAssertEqual(maximum.size, QuestionPanelGeometry.maximumSize); XCTAssertTrue(bounds.contains(maximum))
         let minimum = QuestionPanelGeometry.resizedFrame(from: start, delta: CGSize(width: 10000, height: 10000), corner: corner, in: bounds)
         XCTAssertEqual(minimum.size, QuestionPanelGeometry.minimumSize)
-        let invalid = QuestionPanelGeometry.resizedFrame(from: start, delta: CGSize(width: .nan, height: .infinity), corner: corner, in: bounds)
+        let invalid = QuestionPanelGeometry.resizedFrame(from: start, delta: CGSize(width: CGFloat.nan, height: CGFloat.infinity), corner: corner, in: bounds)
         XCTAssertEqual(invalid, start)
         for dock in FloatingPanelDock.allCases {
             let origin = QuestionPanelGeometry.frame(at: dock, in: bounds, panel: QuestionPanelGeometry.defaultSize)
