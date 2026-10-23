@@ -37,7 +37,7 @@ struct WorkspaceView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(alignment: .bottom) {
                         if store.route == "reader", store.selectedUnit != nil {
-                            readerControls.padding(.horizontal, 18).padding(.bottom, 22)
+                            readerControls.workspaceChromeBounds("reader-tools").padding(.horizontal, 18).padding(.bottom, 22)
                         }
                     }
                     .clipped()
@@ -47,11 +47,11 @@ struct WorkspaceView: View {
                 }
                 topIslands(width: geometry.size.width).padding(.top, 14).padding(.leading, 104).padding(.trailing, 24)
                     .allowsHitTesting(managementRoute == nil)
-                if store.book != nil && managementRoute == nil && !navigationExpanded && store.route != "library" && (store.route != "workflow" || store.book?.smartReading != nil) {
-                    SmartReadingProgressPanel(maximumExpandedHeight: max(120, min(430, geometry.size.height - (store.route == "reader" ? 103 : 26) - 190))).environmentObject(store)
+                if store.book?.smartReading != nil && managementRoute == nil && !navigationExpanded && store.route != "library" && !questionOverlapsProgress(in: geometry) {
+                    SmartReadingProgressPanel(maximumExpandedHeight: max(120, min(430, geometry.size.height - 104 - 166))).environmentObject(store)
                         .workspaceChromeBounds("smart-progress")
                         .padding(.leading, geometry.size.width < 700 ? 68 : 80)
-                        .padding(.bottom, store.route == "reader" ? 103 : 26)
+                        .padding(.bottom, 104)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                         .zIndex(6)
                 }
@@ -141,6 +141,14 @@ struct WorkspaceView: View {
             } else if viewingGraph || viewingSpatial { showsInspector = false; compactInspector = false }
         }
     }
+    private func questionOverlapsProgress(in geometry: GeometryProxy) -> Bool {
+        guard store.route == "reader", let question = chromeBounds["reader-question"] else { return false }
+        let frame = geometry.frame(in: .global)
+        let height = min(430, max(120, geometry.size.height - 270))
+        let zone = CGRect(x: frame.minX + (geometry.size.width < 700 ? 68 : 80),
+                          y: frame.maxY - 104 - height - 53, width: 306, height: height + 53)
+        return zone.insetBy(dx: -12, dy: -12).intersects(question)
+    }
     private func restoreReaderMemory() {
         readerShowsPDF = store.workspaceMemory.readerShowsPDF
         readerOutline = store.workspaceMemory.readerOutline
@@ -192,12 +200,12 @@ struct WorkspaceView: View {
                     Divider().padding(.vertical, 8)
                     routeButton("插件与组件", icon: "puzzlepiece.extension", route: "plugins")
                     routeButton("模型设置", icon: "slider.horizontal.3", route: "models")
-                    routeButton("搜索本书与书库", icon: "magnifyingglass", route: "librarySearch")
+                    routeButton("搜索", icon: "magnifyingglass", route: "librarySearch").help("搜索本书与书库")
                     routeButton("回收站", icon: "trash", route: "trash")
                     Menu {
-                        Button("导入书籍…") { store.chooseBook() }
-                        Button("导入书项目…") { store.importProject() }
-                        Button("导出完整书项目…") { store.exportProject() }.disabled(store.book == nil)
+                        Button { store.chooseBook() } label: { Label("导入书籍…", systemImage: "book.badge.plus") }
+                        Button { store.importProject() } label: { Label("导入书项目…", systemImage: "square.and.arrow.down") }
+                        Button { store.exportProject() } label: { Label("导出完整书项目…", systemImage: "square.and.arrow.up") }.disabled(store.book == nil)
                     } label: { Label("导入与导出", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.menuStyle(.borderlessButton).padding(.horizontal, 14).disabled(store.isBusy)
                 }.padding(.horizontal, 10).padding(.bottom, 14)
             }
@@ -214,8 +222,8 @@ struct WorkspaceView: View {
     private func routeButton(_ title: String, icon: String, route: String) -> some View {
         Button { navigate(route) } label: {
             HStack(spacing: 12) {
-                Image(systemName: icon).font(.system(size: 17, weight: .medium)).frame(width: 20, height: 20)
-                Text(title).font(.system(size: 14, weight: store.route == route ? .semibold : .regular))
+                Image(systemName: icon).font(.system(size: 18, weight: .medium)).frame(width: 22, height: 22)
+                Text(title).font(.system(size: 15, weight: store.route == route ? .semibold : .regular))
                 Spacer(minLength: 0)
             }.padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: ReadingLayout.navigationRowHeight, alignment: .leading)
                 .background(hoveredRoute == route ? Palette.accent.opacity(0.045) : .clear, in: RoundedRectangle(cornerRadius: 12))
@@ -275,12 +283,12 @@ struct WorkspaceView: View {
                 }
                 Divider()
                 if store.book != nil {
-                    Button("书本方案…") { store.openBookScheme() }.disabled(store.isBusy || store.editorDirty)
-                    Button("恢复本书默认布局") { store.resetWorkspaceLayout() }
+                    Button { store.openBookScheme() } label: { Label("书本方案…", systemImage: "slider.horizontal.3") }.disabled(store.isBusy || store.editorDirty)
+                    Button { store.resetWorkspaceLayout() } label: { Label("恢复本书默认布局", systemImage: "arrow.counterclockwise") }
                     Divider()
                 }
-                Button("打开书库") { navigate("library") }
-                Button("导入一本书…") { store.chooseBook() }
+                Button { navigate("library") } label: { Label("打开书库", systemImage: "books.vertical") }
+                Button { store.chooseBook() } label: { Label("导入一本书…", systemImage: "book.badge.plus") }
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "book.closed.fill").foregroundStyle(Palette.accent)

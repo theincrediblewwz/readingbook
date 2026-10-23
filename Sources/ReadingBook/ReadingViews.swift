@@ -9,6 +9,7 @@ struct ReaderWorkspaceView: View {
     @Binding var showOutline: Bool
     @EnvironmentObject var pdfController: PDFReaderController
     @State private var questionExpanded = false
+    @State private var questionFrame = CGRect.zero
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     var body: some View {
         GeometryReader { geometry in
@@ -46,16 +47,16 @@ struct ReaderWorkspaceView: View {
                     }
                 }.padding(.top, store.readingSourceMode == "original" ? 78 : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
-                ReaderFloatingPanel(title: "目录与原文", icon: "list.bullet", width: 330, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: questionExpanded ? 240 : 100) { outline }
-                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 620, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: questionExpanded ? 240 : 100, elevated: true) {
+                ReaderFloatingPanel(title: "目录与原文", icon: "list.bullet", width: 330, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 100, avoidRects: questionFrame.isEmpty ? [] : [questionFrame]) { outline }
+                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 620, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: 100, avoidRects: questionFrame.isEmpty ? [] : [questionFrame], elevated: true) {
                     ReadingCompanionPanel(showsHeader: false)
                 }
-                ReaderQuestionComposer(isExpanded: $questionExpanded, compact: geometry.size.height < 680)
-                    .frame(maxWidth: min(410, max(260, geometry.size.width - 48)))
-                    .padding(.trailing, 24).padding(.bottom, geometry.size.width < 1100 ? 96 : 26)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }.onChange(of: showOutline) { _, value in if value && geometry.size.width < 1050 { store.readingCompanionVisible = false } }
+                ReaderQuestionComposer(isExpanded: $questionExpanded, viewport: geometry.size,
+                    availableRect: CGRect(x: 20, y: 88, width: max(0, geometry.size.width - 40), height: max(0, geometry.size.height - 184)),
+                    compact: geometry.size.height < 680,
+                    onFrameChange: { value in if questionFrame != value { questionFrame = value } })
+            }.preference(key: WorkspaceChromeBoundsPreference.self, value: questionFrame.isEmpty ? [:] : ["reader-question": questionFrame.offsetBy(dx: geometry.frame(in: .global).minX, dy: geometry.frame(in: .global).minY)])
+                .onChange(of: showOutline) { _, value in if value && geometry.size.width < 1050 { store.readingCompanionVisible = false } }
                 .onChange(of: store.readingCompanionVisible) { _, value in if value && geometry.size.width < 1050 { showOutline = false } }
                 .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.readingCompanionVisible)
                 .animation(ReadingMotion.animation(reduce: reduceMotion), value: questionExpanded)
@@ -63,7 +64,11 @@ struct ReaderWorkspaceView: View {
     }
     private var outline: some View {
         VStack(spacing: 0) {
-            TextField("搜索原文或章节", text: $store.search).textFieldStyle(.roundedBorder).padding(.horizontal, 12).padding(.bottom, 10)
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("搜索原文或章节", text: $store.search).textFieldStyle(.plain).font(.system(size: 15))
+                if !store.search.isEmpty { Button { store.search = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).frame(width: 44, height: 44).accessibilityLabel("清空原文搜索") }
+            }.padding(.horizontal, 14).frame(minHeight: 46).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16).padding(.bottom, 12)
             Divider().opacity(0.4)
             ScrollViewReader { proxy in
                 ScrollView {
@@ -311,6 +316,7 @@ struct DocumentEditorView: View {
     @State private var dragOrigin = CGPoint.zero
     @State private var panelEpoch = 0
     @State private var documentSearch = ""
+    @State private var showingSources = false
     @State private var memoryScope: String?
     private var hasDocument: Bool { store.selectedDocumentID != nil || store.editorDirty }
     private var currentDocument: DocumentRecord? { store.book?.activeDocuments.first { $0.id == store.selectedDocumentID } }
@@ -320,9 +326,11 @@ struct DocumentEditorView: View {
     }
     var body: some View {
         GeometryReader { geometry in
-            // Only the document list reserves space; navigation floats above it.
             let wide = geometry.size.width >= 1036
-            let leftInset: CGFloat = showingDocuments && wide && !listCollapsed ? 378 : 12
+            let listFrame = clampedListOrigin(listOrigin, viewport: geometry.size)
+            // Only an actually left-docked list shapes the paper. Moving it away
+            // releases the old space immediately; the viewport itself stays full.
+            let leftInset: CGFloat = showingDocuments && wide && !listCollapsed && listFrame.x < 40 ? listFrame.x + 360 : 24
             ZStack(alignment: .topLeading) {
                 Palette.canvas.ignoresSafeArea()
                 documentPaper
@@ -379,6 +387,13 @@ struct DocumentEditorView: View {
                 Label(currentDocument?.origin == "user" || currentDocument == nil ? "用户笔记" : "已保存的 AI 摘记", systemImage: currentDocument?.origin == "user" || currentDocument == nil ? "doc.text" : "sparkles")
                     .font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
                 Spacer(minLength: 8)
+                if !noteEvidence.isEmpty {
+                    Button { showingSources.toggle() } label: { Label("来源 · \(noteEvidence.count)", systemImage: "quote.bubble") }
+                        .buttonStyle(ReadingToolbarButtonStyle()).help("查看这篇笔记的原文依据")
+                        .popover(isPresented: $showingSources) {
+                            ScrollView { EvidenceList(evidence: noteEvidence).padding(20) }.frame(width: 460, height: 340)
+                        }
+                }
                 if store.isSavingDocument { ProgressView().controlSize(.small); Text("正在保存").font(.system(size: 13)).foregroundStyle(.secondary) }
                 else if store.editorDirty { Label("未保存", systemImage: "circle.fill").font(.system(size: 13)).foregroundStyle(Palette.copper) }
                 else if let document = currentDocument { Text(document.updatedAt, style: .time).font(.system(size: 13)).foregroundStyle(.secondary) }
@@ -398,10 +413,6 @@ struct DocumentEditorView: View {
                         VStack(alignment: .leading, spacing: 22) {
                             Text(store.editorTitle.isEmpty ? "未命名笔记" : store.editorTitle).font(.system(size: 30, weight: .semibold)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                             MarkdownText(markdown: previewBody)
-                            if let document = currentDocument, !document.evidence.isEmpty {
-                                EvidenceDisclosure(evidence: document.evidence).id(document.id)
-                                    .padding(18).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
-                            }
                         }.padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 30)
                     }
                 } else {
@@ -419,6 +430,7 @@ struct DocumentEditorView: View {
             .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line.opacity(0.85), lineWidth: 0.8))
             .shadow(color: Palette.accent.opacity(0.035), radius: 18, y: 6).frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+    private var noteEvidence: [Evidence] { currentDocument?.evidence ?? store.draftEvidence }
     private var previewBody: String {
         // The paper already owns the document title. Strip only an identical first
         // heading from the preview; the user's Markdown source is never rewritten.
@@ -431,7 +443,6 @@ struct DocumentEditorView: View {
             Button { preview = false } label: { Text("编辑").frame(minWidth: 60) }.buttonStyle(ReadingToolbarButtonStyle(selected: !preview)).disabled(!hasDocument)
             Button { preview = true } label: { Text("预览").frame(minWidth: 60) }.buttonStyle(ReadingToolbarButtonStyle(selected: preview)).disabled(!hasDocument)
             Rectangle().fill(Palette.line).frame(width: 1, height: 26).padding(.horizontal, 4)
-            Text("Markdown").font(.system(size: 15)).padding(.horizontal, 10)
             Button { showingDocuments.toggle(); if showingDocuments { listCollapsed = false } } label: { Image(systemName: "list.bullet.rectangle") }
                 .buttonStyle(ReadingToolbarButtonStyle(selected: showingDocuments)).help("显示或收起笔记列表")
             documentMenu
@@ -444,11 +455,11 @@ struct DocumentEditorView: View {
                 Divider()
             }
             if let document = currentDocument {
-                Button("加入导图") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
-                Button("导出 .md…") { store.exportMarkdown() }.disabled(store.editorDirty || store.isBusy)
+                Button { Task { await store.addDocumentToGraph(document) } } label: { Label("加入导图", systemImage: "point.3.connected.trianglepath.dotted") }.disabled(store.isBusy)
+                Button { store.exportMarkdown() } label: { Label("导出 .md…", systemImage: "square.and.arrow.up") }.disabled(store.editorDirty || store.isBusy)
                 Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
             }
-            Button("查看回收站") { store.showingTrash = true }
+            Button { store.showingTrash = true } label: { Label("查看回收站", systemImage: "trash") }
             Button("新建笔记") { store.newDocument(); preview = false }.disabled(store.editorDirty || store.isBusy)
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("草稿、导图与文档管理")
     }
@@ -457,7 +468,7 @@ struct DocumentEditorView: View {
         let origin = clampedListOrigin(listOrigin, viewport: viewport)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                Text("我的笔记").font(.system(size: 18, weight: .semibold)).frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+                Text("我的笔记").font(.system(size: 16, weight: .semibold)).frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
                     .overlay { FloatingPanelPointerInput(epoch: panelEpoch, begin: { dragOrigin = listOrigin }, drag: { delta, _ in listOrigin = clampedListOrigin(CGPoint(x: dragOrigin.x + delta.width, y: dragOrigin.y + delta.height), viewport: viewport) }, cancel: { listOrigin = clampedListOrigin(dragOrigin, viewport: viewport) }) }.help("拖动笔记列表")
                 Button { listCollapsed.toggle() } label: { Image(systemName: listCollapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(listCollapsed ? "展开列表" : "折叠列表")
                 Button { showingDocuments = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭列表")
@@ -494,7 +505,7 @@ struct DocumentEditorView: View {
                                 .background(store.selectedDocumentID == document.id ? Palette.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 12))
                         }.buttonStyle(.plain).disabled(store.isBusy || (store.editorDirty && store.selectedDocumentID != document.id))
                             .contextMenu {
-                                Button("加入导图") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
+                                Button { Task { await store.addDocumentToGraph(document) } } label: { Label("加入导图", systemImage: "point.3.connected.trianglepath.dotted") }.disabled(store.isBusy)
                                 Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
                             }
                     }

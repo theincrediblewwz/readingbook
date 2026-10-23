@@ -6,6 +6,7 @@ struct SmartReadingProgressPanel: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
+    @State private var minimized = false
     private var session: SmartReadingSession? { store.book?.smartReading }
     private var progress: SmartReadingProgress? { store.smartReadingProgress }
     private var awaiting: Bool { store.book?.bookSchemes?.pending != nil }
@@ -18,36 +19,41 @@ struct SmartReadingProgressPanel: View {
         if store.isSmartReadingRunning { return session?.status == .planning ? "正在制定阅读方案" : "正在分析" }
         if awaiting { return "阅读方案待确认" }
         if session?.status == .completed { return "本轮已结束" }
-        return session == nil ? "为这本书开启智能阅读" : "智能阅读已暂停"
+        return session == nil ? "智能阅读" : "智能阅读已暂停"
+    }
+    private var compactTitle: String {
+        if store.isSmartReadingRunning { return session?.status == .planning ? "制定方案" : "分析中" }
+        if awaiting { return "待确认" }
+        return session?.status == .completed ? "已结束" : session == nil ? "智能阅读" : "已暂停"
+    }
+    private var statusIcon: String {
+        store.isSmartReadingRunning ? "sparkles" : session?.status == .completed ? "checkmark.circle" : "book.pages"
+    }
+    private var countText: String? {
+        guard let progress, session?.isPlanConfirmed == true else { return nil }
+        return "\(progress.completed)/\(progress.total)"
     }
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 2) {
-                Button {
-                    if session == nil { store.requestedWorkspaceRoute = "workflow" }
-                    else { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { expanded.toggle() } }
-                } label: {
-                    HStack(spacing: 11) {
-                        Image(systemName: store.isSmartReadingRunning ? "sparkles" : session?.status == .completed ? "checkmark.circle" : "book.pages").font(.system(size: 20)).foregroundStyle(Palette.accent)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(title).font(.system(size: 14, weight: .medium)).foregroundStyle(.primary)
-                            if let progress, session?.isPlanConfirmed == true {
-                                Text("\(session?.scopeTitle ?? "本轮") · 已处理 \(progress.completed)/\(progress.total)")
-                                    .font(.system(size: 11).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
-                                ProgressView(value: Double(progress.completed), total: Double(max(1, progress.total))).tint(Palette.accent).frame(height: 3)
-                            } else { Text(session?.scopeTitle ?? "选择方式与范围，随时可以开始").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                        Image(systemName: session == nil ? "chevron.right" : expanded ? "chevron.down" : "chevron.up").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
-                    }.padding(.vertical, 14).padding(.leading, 17).padding(.trailing, 8).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityLabel(session == nil ? "设置智能阅读" : "展开或收起智能阅读状态")
-                if store.isSmartReadingRunning {
-                    Button { store.pause() } label: { Image(systemName: "pause") }.buttonStyle(ReadingToolbarButtonStyle()).help("暂停分析，保留检查点").padding(.trailing, 7)
+      Group {
+        if minimized {
+            Button { minimized = false; expanded = true } label: {
+                Image(systemName: statusIcon).font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
+                    .frame(width: 52, height: 52).contentShape(Circle())
+            }.buttonStyle(.plain).readingGlass(radius: 26, interactive: true)
+                .help("\(title)；点击展开进度")
+                .accessibilityLabel("展开智能阅读进度")
+                .accessibilityValue(title + (countText.map { "，已处理 " + $0 } ?? ""))
+                .contextMenu {
+                    if store.isSmartReadingRunning { Button("暂停分析，保留检查点") { store.pause() } }
                 }
-            }
+        } else {
+        VStack(spacing: 0) {
+            compactHeader
             if expanded, let progress, session?.isPlanConfirmed == true {
                 Divider().opacity(0.3)
                 ScrollView {
                   VStack(alignment: .leading, spacing: 12) {
+                    if let scope = session?.scopeTitle { Text(scope).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                     statusRow("预读并确定阅读方案", completed: store.book?.plan != nil && !awaiting)
                     statusRow("逐段阅读 · \(progress.receiptCount)/\(progress.receiptTotal)", completed: progress.receiptTotal > 0 && progress.receiptCount == progress.receiptTotal)
                     if progress.excludedCount > 0 || progress.blankCount > 0 {
@@ -81,9 +87,32 @@ struct SmartReadingProgressPanel: View {
                     Button { store.requestedWorkspaceRoute = awaiting ? "book.scheme" : "workflow" } label: { Label(awaiting ? "查看并确认方案" : "重新设置范围", systemImage: "slider.horizontal.3") }.buttonStyle(ReadingToolbarButtonStyle())
                 }.padding(17)
             }
-        }.frame(width: 306).readingGlass(radius: 23)
-            .onChange(of: store.bookID) { _, _ in expanded = false }
+        }.frame(width: expanded ? 306 : 260).readingGlass(radius: expanded ? 23 : 26)
+        }
+      }
+            .onChange(of: store.bookID) { _, _ in expanded = false; minimized = false }
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: expanded)
+            .animation(ReadingMotion.animation(reduce: reduceMotion), value: minimized)
+    }
+    private var compactHeader: some View {
+        HStack(spacing: 0) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: statusIcon).font(.system(size: 18)).foregroundStyle(Palette.accent)
+                    Text(compactTitle).font(.system(size: 14, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
+                    Spacer(minLength: 0)
+                    if let countText { Text(countText).font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85).layoutPriority(1) }
+                }.padding(.leading, 15).padding(.trailing, 5).frame(maxWidth: .infinity, minHeight: 52).contentShape(Rectangle())
+            }.buttonStyle(.plain).help("\(title)；点击\(expanded ? "收起" : "展开")检查点")
+                .accessibilityLabel(expanded ? "收起智能阅读详情" : "展开智能阅读详情")
+                .accessibilityValue(title + (countText.map { "，已处理 " + $0 } ?? ""))
+            if store.isSmartReadingRunning {
+                Button { store.pause() } label: { Image(systemName: "pause") }
+                    .buttonStyle(ReadingToolbarButtonStyle()).help("暂停分析，保留检查点").accessibilityLabel("暂停分析")
+            }
+            Button { expanded = false; minimized = true } label: { Image(systemName: "minus") }
+                .buttonStyle(ReadingToolbarButtonStyle()).help("缩为悬浮图标，不影响分析").accessibilityLabel("缩为智能阅读图标")
+        }.padding(.trailing, 4).frame(height: 52)
     }
     private func statusRow(_ title: String, completed: Bool) -> some View {
         HStack(alignment: .top, spacing: 8) {

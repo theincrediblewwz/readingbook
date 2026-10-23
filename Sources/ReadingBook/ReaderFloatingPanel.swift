@@ -14,6 +14,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     var viewport: CGSize
     var memoryIDOverride: String? = nil
     var bottomReserve: CGFloat = 88
+    var avoidRects: [CGRect] = []
     var restoreNearTop = false
     var elevated = false
     var onExpansionChange: (Bool) -> Void = { _ in }
@@ -22,6 +23,8 @@ struct ReaderFloatingPanel<Content: View>: View {
     @State private var hasOpened = false
     @State private var savedOrigin: CGPoint?
     @State private var dragStart: CGPoint?
+    @State private var dragOrigin: CGPoint?
+    @State private var dragHeight: CGFloat?
     @State private var epoch = 0
     @State private var memoryScope: String?
     @State private var initialPresented: Bool?
@@ -30,11 +33,98 @@ struct ReaderFloatingPanel<Content: View>: View {
     private var memoryID: String { memoryIDOverride ?? (trailing ? "reader.companion" : "reader.outline") }
 
     private var panelWidth: CGFloat { min(width, max(240, viewport.width - 100)) }
-    private var panelHeight: CGFloat { collapsed ? (elevated ? 66 : 58) : min(height, max(120, viewport.height - 100 - bottomReserve)) }
-    private var origin: CGPoint { clamp(savedOrigin ?? CGPoint(x: trailing ? viewport.width - panelWidth - 24 : 24, y: 100)) }
-    private func clamp(_ point: CGPoint) -> CGPoint {
+    private var headerHeight: CGFloat { elevated ? 56 : 52 }
+    private var wantedHeight: CGFloat { collapsed ? headerHeight : min(height, max(headerHeight, viewport.height - 88 - bottomReserve)) }
+    private var panelHeight: CGFloat { presentationPlacement().height }
+    private var origin: CGPoint { presentationPlacement().origin }
+    private struct PanelPlacement { var origin: CGPoint; var height: CGFloat }
+    private func clamp(_ point: CGPoint, height: CGFloat) -> CGPoint {
         CGPoint(x: min(max(24, point.x), max(24, viewport.width - panelWidth - 24)),
-                y: min(max(88, point.y), max(88, viewport.height - panelHeight - bottomReserve)))
+                y: min(max(88, point.y), max(88, viewport.height - height - bottomReserve)))
+    }
+    /// Avoidance is presentation only. Keep the reader's saved position intact
+    /// so it returns when the other floating surface closes or moves away.
+    private func presentationPlacement() -> PanelPlacement {
+        if let dragOrigin { return PanelPlacement(origin: dragOrigin, height: dragHeight ?? wantedHeight) }
+        let proposed = savedOrigin ?? CGPoint(x: trailing ? viewport.width - panelWidth - 24 : 24, y: 100)
+        let start = clamp(proposed, height: wantedHeight)
+        let obstacles = avoidRects.filter {
+            !$0.isEmpty && !$0.isNull && $0.minX.isFinite && $0.maxX.isFinite && $0.minY.isFinite && $0.maxY.isFinite
+        }.map { $0.insetBy(dx: -8, dy: -8) }
+        func overlap(_ placement: PanelPlacement) -> CGFloat {
+            let frame = CGRect(origin: placement.origin, size: CGSize(width: panelWidth, height: placement.height))
+            return obstacles.reduce(0) { total, obstacle in
+                let intersection = frame.intersection(obstacle)
+                return total + (intersection.isNull ? 0 : intersection.width * intersection.height)
+            }
+        }
+        func distance(_ point: CGPoint) -> CGFloat { let dx = point.x - start.x, dy = point.y - start.y; return dx * dx + dy * dy }
+        let initial = PanelPlacement(origin: start, height: wantedHeight)
+        guard overlap(initial) > 0 else { return initial }
+        var candidates = [start, CGPoint(x: 24, y: 88), CGPoint(x: viewport.width - panelWidth - 24, y: 88),
+                          CGPoint(x: 24, y: viewport.height - wantedHeight - bottomReserve),
+                          CGPoint(x: viewport.width - panelWidth - 24, y: viewport.height - wantedHeight - bottomReserve)]
+        for obstacle in obstacles {
+            candidates += [CGPoint(x: obstacle.minX - panelWidth, y: start.y), CGPoint(x: obstacle.maxX, y: start.y),
+                           CGPoint(x: start.x, y: obstacle.minY - wantedHeight), CGPoint(x: start.x, y: obstacle.maxY)]
+        }
+        let full = candidates.map { PanelPlacement(origin: clamp($0, height: wantedHeight), height: wantedHeight) }
+        if let clear = full.filter({ overlap($0) == 0 }).min(by: { distance($0.origin) < distance($1.origin) }) { return clear }
+
+        // No full-height slot fits: examine free vertical bands at each useful
+        // horizontal position, keeping at least the closeable title handle.
+        var shorter: [PanelPlacement] = []
+        let lowerBound: CGFloat = 88, upperBound = max(88 + headerHeight, viewport.height - bottomReserve)
+        for candidate in candidates {
+            let x = clamp(candidate, height: headerHeight).x
+            let blockers = obstacles.filter { $0.maxX > x && $0.minX < x + panelWidth && $0.maxY > lowerBound && $0.minY < upperBound }
+                .sorted { $0.minY < $1.minY }
+            var cursor = lowerBound
+            func appendBand(_ top: CGFloat, _ bottom: CGFloat) {
+                guard bottom - top >= headerHeight else { return }
+                let availableHeight = min(wantedHeight, bottom - top)
+                let y = min(max(start.y, top), bottom - availableHeight)
+                shorter.append(PanelPlacement(origin: CGPoint(x: x, y: y), height: availableHeight))
+            }
+            for blocker in blockers {
+                let top = max(lowerBound, blocker.minY), bottom = min(upperBound, blocker.maxY)
+                if top > cursor { appendBand(cursor, top) }
+                cursor = max(cursor, bottom)
+            }
+            appendBand(cursor, upperBound)
+        }
+        if let clear = shorter.max(by: { lhs, rhs in
+            lhs.height == rhs.height ? distance(lhs.origin) > distance(rhs.origin) : lhs.height < rhs.height
+        }) { return clear }
+        // Extremely small windows may have no entirely clear title slot. Keep
+        // the header visible at the least obstructed candidate instead of hiding it.
+        return candidates.map { PanelPlacement(origin: clamp($0, height: headerHeight), height: headerHeight) }.min { lhs, rhs in
+            let a = overlap(lhs), b = overlap(rhs)
+            return a == b ? distance(lhs.origin) < distance(rhs.origin) : a < b
+        } ?? PanelPlacement(origin: start, height: headerHeight)
+    }
+    private var restoreButtonPosition: CGPoint {
+        let preferred = CGPoint(x: trailing ? viewport.width - 90 : 90,
+                                y: trailing && !restoreNearTop ? viewport.height - bottomReserve - 26 : 128)
+        func fit(_ point: CGPoint) -> CGPoint {
+            CGPoint(x: min(max(114, point.x), max(114, viewport.width - 114)),
+                    y: min(max(110, point.y), max(110, viewport.height - bottomReserve - 22)))
+        }
+        let points = [preferred, CGPoint(x: 114, y: 110), CGPoint(x: viewport.width - 114, y: 110),
+                      CGPoint(x: 114, y: viewport.height - bottomReserve - 22),
+                      CGPoint(x: viewport.width - 114, y: viewport.height - bottomReserve - 22)].map(fit)
+        func overlap(_ point: CGPoint) -> CGFloat {
+            let frame = CGRect(x: point.x - 90, y: point.y - 22, width: 180, height: 44)
+            return avoidRects.filter { !$0.isEmpty && !$0.isNull }.reduce(0) { total, obstacle in
+                let intersection = frame.intersection(obstacle.insetBy(dx: -8, dy: -8))
+                return total + (intersection.isNull ? 0 : intersection.width * intersection.height)
+            }
+        }
+        func distance(_ point: CGPoint) -> CGFloat { let dx = point.x - preferred.x, dy = point.y - preferred.y; return dx * dx + dy * dy }
+        return points.min { lhs, rhs in
+            let a = overlap(lhs), b = overlap(rhs)
+            return a == b ? distance(lhs) < distance(rhs) : a < b
+        } ?? fit(preferred)
     }
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -42,20 +132,27 @@ struct ReaderFloatingPanel<Content: View>: View {
                 // Frozen input scopes and unsaved adjustment fields survive a
                 // temporary hide; hidden surfaces never receive pointer input.
                 VStack(spacing: 0) {
-                    HStack(spacing: 6) {
-                        HStack(spacing: 10) { Image(systemName: "line.3.horizontal").font(.system(size: 11)).foregroundStyle(.tertiary); Label(title, systemImage: icon).font(.system(size: 17, weight: .semibold)); Spacer(minLength: 0) }
+                    HStack(spacing: 8) {
+                        Image(systemName: "line.3.horizontal").font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.secondary).frame(width: 44, height: 44).contentShape(Rectangle())
                             .overlay {
-                                FloatingPanelPointerInput(epoch: epoch, begin: { transientPresentation = nil; dragStart = origin }, drag: { delta, finished in
+                                FloatingPanelPointerInput(epoch: epoch, begin: {
+                                    transientPresentation = nil
+                                    let placement = presentationPlacement(); dragStart = placement.origin; dragOrigin = placement.origin; dragHeight = placement.height
+                                }, drag: { delta, finished in
                                     let start = dragStart ?? origin
-                                    savedOrigin = clamp(CGPoint(x: start.x + delta.width, y: start.y + delta.height))
-                                    if finished { dragStart = nil }
-                                }, cancel: { if let dragStart { savedOrigin = dragStart }; dragStart = nil })
+                                    dragOrigin = clamp(CGPoint(x: start.x + delta.width, y: start.y + delta.height), height: dragHeight ?? wantedHeight)
+                                    if finished { savedOrigin = dragOrigin; dragStart = nil; dragOrigin = nil; dragHeight = nil }
+                                }, cancel: { dragStart = nil; dragOrigin = nil; dragHeight = nil })
                             }
+                            .help("拖动\(title)面板").accessibilityLabel("拖动\(title)面板")
+                        Label(title, systemImage: icon).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                        Spacer(minLength: 0)
                         Button { transientPresentation = nil; collapsed.toggle() } label: { Image(systemName: collapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开\(title)" : "收起\(title)")
                         Button { transientPresentation = nil; isPresented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭\(title)")
-                    }.padding(.leading, elevated ? 24 : 16).padding(.trailing, 10).frame(height: elevated ? 66 : 58)
-                    content().frame(maxWidth: .infinity, maxHeight: collapsed ? 0 : .infinity)
-                        .opacity(collapsed ? 0 : 1).clipped().allowsHitTesting(!collapsed).accessibilityHidden(collapsed)
+                    }.padding(.leading, 16).padding(.trailing, 8).frame(height: headerHeight).layoutPriority(1)
+                    content().frame(maxWidth: .infinity).frame(minHeight: 0, maxHeight: collapsed ? 0 : .infinity)
+                        .opacity(collapsed ? 0 : 1).clipped().allowsHitTesting(!collapsed).accessibilityHidden(collapsed || panelHeight <= headerHeight)
                 }.frame(width: panelWidth, height: panelHeight).readingGlass(radius: 24)
                     .overlay {
                         RoundedRectangle(cornerRadius: 24).strokeBorder(Palette.accent.opacity(elevated ? 0.13 : 0), lineWidth: 0.7).allowsHitTesting(false)
@@ -64,9 +161,9 @@ struct ReaderFloatingPanel<Content: View>: View {
                     .opacity(isPresented ? 1 : 0).scaleEffect(isPresented || reduceMotion ? 1 : 0.97, anchor: trailing ? .topTrailing : .topLeading)
                     .allowsHitTesting(isPresented).accessibilityHidden(!isPresented)
             if !isPresented && hasOpened {
-                Button { transientPresentation = nil; collapsed = false; isPresented = true } label: { Label(title, systemImage: icon) }
+                Button { transientPresentation = nil; collapsed = false; isPresented = true } label: { Label(title, systemImage: icon).lineLimit(1).frame(maxWidth: 140) }
                     .buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 18)
-                    .position(x: trailing ? max(100, viewport.width - 90) : 90, y: trailing && !restoreNearTop ? max(100, viewport.height - bottomReserve - 26) : 128)
+                    .position(restoreButtonPosition)
                     .transition(.opacity)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -81,7 +178,7 @@ struct ReaderFloatingPanel<Content: View>: View {
             .onChange(of: savedOrigin) { _, _ in saveMemory() }
             .onDisappear { saveMemory() }
             .onChange(of: viewport) { old, value in
-                epoch += 1; dragStart = nil; savedOrigin = clamp(savedOrigin ?? origin)
+                epoch += 1; dragStart = nil; dragOrigin = nil; dragHeight = nil
                 if old.width >= 1050, value.width < 1050, trailing { isPresented = false }
             }
     }
@@ -90,7 +187,7 @@ struct ReaderFloatingPanel<Content: View>: View {
         memoryScope = store.workspaceMemoryKey
         let saved = store.workspaceMemory.panels[memoryID]
         collapsed = saved?.collapsed ?? false
-        savedOrigin = saved?.origin.map { clamp(CGPoint(x: $0.x, y: $0.y)) }
+        savedOrigin = saved?.origin.map { CGPoint(x: $0.x, y: $0.y) }
         isPresented = saved?.isPresented ?? initialPresented ?? false
         if isPresented || saved != nil { hasOpened = true }
         onExpansionChange(isPresented && !collapsed)

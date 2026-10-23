@@ -154,19 +154,19 @@ private struct GraphNodeDetails: View {
                     if let loadError { Text(loadError).font(.caption).foregroundStyle(.red) }
                     else if let markdown { MarkdownText(markdown: markdown) }
                     else { ProgressView().controlSize(.small).frame(maxWidth: .infinity) }
-                    if !document.evidence.isEmpty { DisclosureGroup("原文依据 · \(document.evidence.count)") { EvidenceList(evidence: document.evidence) }.font(.caption) }
+                    if !document.evidence.isEmpty { EvidenceDisclosure(evidence: document.evidence).id(document.id) }
                 } else if let entity = store.book?.entities.first(where: { $0.id == item.targetID }) {
                     Text(entity.summary).font(.subheadline).textSelection(.enabled)
                     ForEach(entity.properties.sorted(by: { $0.key < $1.key }), id: \.key) { field in
                         VStack(alignment: .leading, spacing: 3) { Text(field.key).font(.caption).foregroundStyle(.secondary); Text(field.value).font(.subheadline).textSelection(.enabled) }
                     }
-                    EvidenceList(evidence: entity.evidence)
+                    if !entity.evidence.isEmpty { EvidenceDisclosure(evidence: entity.evidence).id(entity.id) }
                 } else if let event = store.book?.events.first(where: { $0.id == item.targetID }) {
                     Text(event.dateText).font(.caption).foregroundStyle(Palette.accent)
                     Text(event.summary).font(.subheadline).textSelection(.enabled)
                     if !event.placeIDs.isEmpty { Text("地点：" + event.placeIDs.map(store.objectTitle).joined(separator: "、")).font(.subheadline) }
                     if !event.participantIDs.isEmpty { Text("参与者：" + event.participantIDs.map(store.objectTitle).joined(separator: "、")).font(.subheadline) }
-                    EvidenceList(evidence: event.evidence)
+                    if !event.evidence.isEmpty { EvidenceDisclosure(evidence: event.evidence).id(event.id) }
                 } else if let unit = store.book?.units.first(where: { $0.id == item.targetID }) {
                     Text(unit.locator).font(.caption).foregroundStyle(.secondary)
                     Text(unit.text).font(.system(size: 15)).textSelection(.enabled)

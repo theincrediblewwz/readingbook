@@ -7,51 +7,80 @@ struct FrostLibraryView: View {
     private var books: [BookProject] { store.books.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) } }
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                HStack(alignment: .bottom) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("每一本书，都留下理解。").font(.system(size: 30, weight: .semibold, design: .serif))
-                        Text("原文、AI 分析与你写下的 Markdown，分别保存在本机。").font(.system(size: 15)).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 20)
-                    TextField("搜索书名", text: $search).textFieldStyle(.roundedBorder).frame(maxWidth: 260).controlSize(.large)
+            VStack(alignment: .leading, spacing: 24) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 24) { libraryHeading; Spacer(minLength: 24); searchControl.frame(width: 280) }
+                    VStack(alignment: .leading, spacing: 16) { libraryHeading; searchControl }
                 }
                 if store.books.isEmpty {
-                    WelcomeView().frame(minHeight: 390)
+                    VStack(spacing: 14) {
+                        BrandGlyph(name: "mark").frame(width: 36, height: 36).foregroundStyle(Palette.accent)
+                        Text("从一本书开始").font(.system(size: 18, weight: .semibold))
+                        Text("点击右上角导入，或把书拖进窗口。")
+                            .font(.system(size: 15)).foregroundStyle(.secondary)
+                        Text("PDF · EPUB · Markdown · TXT").font(.system(size: 13)).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, minHeight: 250).padding(24).readingGlass(radius: 24)
                 } else if books.isEmpty {
                     EmptyState(title: "没有匹配的书", detail: "换一个关键词，或清空搜索查看全部书籍。", icon: "magnifyingglass")
                 } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 260, maximum: 360), spacing: 24)], spacing: 24) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 340), spacing: 20)], spacing: 20) {
                         ForEach(books) { book in
-                            VStack(alignment: .leading, spacing: 18) {
+                            VStack(alignment: .leading, spacing: 0) {
                                 Button { Task { await store.selectBook(book.id, preferredRoute: "reader") } } label: {
-                                    VStack(alignment: .leading, spacing: 22) {
-                                        Image(systemName: "book.closed.fill").font(.system(size: 36, weight: .light)).foregroundStyle(Palette.accent).frame(height: 90)
-                                        Text(book.title).font(.system(size: 21, weight: .semibold, design: .serif)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                                    VStack(alignment: .leading, spacing: 20) {
+                                        HStack(alignment: .top, spacing: 14) {
+                                            Image(systemName: "book.closed.fill").font(.system(size: 28, weight: .medium)).foregroundStyle(Palette.accent)
+                                                .frame(width: 52, height: 68).background(Palette.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+                                            VStack(alignment: .leading, spacing: 8) {
+                                                Text(book.title).font(.system(size: 18, weight: .semibold)).lineLimit(2)
+                                                    .frame(maxWidth: .infinity, alignment: .leading).padding(.trailing, 40)
+                                                Text(URL(fileURLWithPath: book.originalName).pathExtension.uppercased())
+                                                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                                            }.frame(maxWidth: .infinity, alignment: .leading)
+                                        }
                                         VStack(alignment: .leading, spacing: 8) {
                                             ProgressView(value: book.progress).tint(Palette.accent)
-                                            Text("处理覆盖 \(Int(book.progress * 100))% · \(book.activeDocuments.count) 篇理解").font(.system(size: 13)).foregroundStyle(.secondary)
+                                            HStack {
+                                                Text("已处理 \(Int(book.progress * 100))%")
+                                                Spacer(minLength: 0)
+                                                Label("\(book.activeDocuments.count)", systemImage: "square.and.pencil")
+                                            }.font(.system(size: 13)).foregroundStyle(.secondary)
+                                                .help("按已保存的逐段阅读记录计算处理覆盖；右侧为已保存笔记数。")
                                         }
-                                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                                    }.padding(16).frame(maxWidth: .infinity, minHeight: 168, alignment: .leading).contentShape(Rectangle())
                                 }.buttonStyle(.plain).disabled(store.isBusy)
-                                HStack {
-                                    Button("继续阅读") { Task { await store.selectBook(book.id, preferredRoute: "reader") } }.buttonStyle(.borderless).foregroundStyle(Palette.accent).frame(minHeight: 44).disabled(store.isBusy)
-                                    Spacer()
+                                    .help("打开\(book.title)继续阅读")
+                            }.readingGlass(radius: 20)
+                                .overlay(alignment: .topTrailing) {
                                     Menu {
-                                        Button("移入回收站", role: .destructive) { store.requestDeletion(.book, id: book.id, title: book.title) }
-                                    } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.menuStyle(.borderlessButton).disabled(store.isBusy)
+                                        Button(role: .destructive) { store.requestDeletion(.book, id: book.id, title: book.title) } label: { Label("移入回收站", systemImage: "trash") }
+                                    } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+                                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(6).disabled(store.isBusy).help("管理\(book.title)")
                                 }
-                            }.padding(24).background(Palette.paper, in: RoundedRectangle(cornerRadius: 22))
-                                .overlay(RoundedRectangle(cornerRadius: 22).stroke(Palette.line, lineWidth: 0.75))
                         }
                     }
                 }
                 HStack(spacing: 16) {
-                    Button { store.chooseBook() } label: { Label("导入一本书", systemImage: "plus") }.buttonStyle(.borderedProminent)
-                    Button { store.importProject() } label: { Label("导入书项目", systemImage: "square.and.arrow.down") }
-                    Button { store.route = "trash" } label: { Label("回收站", systemImage: "trash") }
+                    Button { store.importProject() } label: { Label("导入书项目", systemImage: "square.and.arrow.down") }.buttonStyle(ReadingToolbarButtonStyle())
+                    Button { store.route = "trash" } label: { Label("回收站", systemImage: "trash") }.buttonStyle(ReadingToolbarButtonStyle())
                 }.controlSize(.large).disabled(store.isBusy)
-            }.padding(.horizontal, 24).padding(.top, 112).padding(.bottom, 40)
+            }.padding(.horizontal, 24).padding(.top, 104).padding(.bottom, 32)
         }.background(Palette.canvas)
+    }
+    private var libraryHeading: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("书库").font(.system(size: 24, weight: .semibold))
+            Text("\(store.books.count) 本").font(.system(size: 13)).foregroundStyle(.secondary)
+        }.fixedSize()
+    }
+    private var searchControl: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("搜索书名", text: $search).textFieldStyle(.plain).font(.system(size: 15)).frame(minWidth: 80)
+            if !search.isEmpty {
+                Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).frame(width: 44, height: 44).accessibilityLabel("清空书库搜索")
+            }
+        }.padding(.leading, 16).padding(.trailing, search.isEmpty ? 16 : 0).frame(height: 44).readingGlass(radius: 16)
     }
 }

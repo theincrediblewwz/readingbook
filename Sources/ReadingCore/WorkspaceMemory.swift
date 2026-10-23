@@ -13,12 +13,21 @@ public struct WorkspaceGraphCamera: Codable, Equatable, Sendable {
     public init(center: WorkspacePoint, scale: Double) { self.center = center; self.scale = scale }
     public var isValid: Bool { center.isValid && scale.isFinite && (0.00001...4).contains(scale) }
 }
+public struct WorkspaceSize: Codable, Equatable, Sendable {
+    public var width: Double
+    public var height: Double
+    public init(width: Double, height: Double) { self.width = width; self.height = height }
+    public var isValid: Bool { width.isFinite && height.isFinite && width > 0 && height > 0 && width <= 100_000 && height <= 100_000 }
+}
 public struct WorkspacePanelMemory: Codable, Equatable, Sendable {
     public var origin: WorkspacePoint?
     public var isPresented: Bool
     public var collapsed: Bool
-    public init(origin: WorkspacePoint? = nil, isPresented: Bool = true, collapsed: Bool = false) {
+    public var size: WorkspaceSize?
+    public var dock: String?
+    public init(origin: WorkspacePoint? = nil, isPresented: Bool = true, collapsed: Bool = false, size: WorkspaceSize? = nil, dock: String? = nil) {
         self.origin = origin; self.isPresented = isPresented; self.collapsed = collapsed
+        self.size = size; self.dock = dock
     }
 }
 public struct WorkspacePDFMemory: Codable, Equatable, Sendable {
@@ -74,7 +83,12 @@ public struct BookWorkspaceMemory: Codable, Equatable, Sendable {
         if documentID?.count ?? 0 > 256 { value.documentID = nil }
         if pdf?.isValid == false { value.pdf = nil }
         value.graphs = graphs.filter { $0.key.count <= 256 && $0.value.isValid }
-        value.panels = panels.filter { $0.key.count <= 256 && ($0.value.origin == nil || $0.value.origin!.isValid) }
+        value.panels = panels.filter { $0.key.count <= 256 && ($0.value.origin == nil || $0.value.origin!.isValid) }.mapValues { panel in
+            var panel = panel
+            if panel.size?.isValid == false { panel.size = nil }
+            if let dock = panel.dock, FloatingPanelDock(rawValue: dock) == nil { panel.dock = nil }
+            return panel
+        }
         if map?.isValid == false { value.map = nil }
         if let from = timeFrom, let to = timeTo, from.isFinite, to.isFinite, from <= to, abs(from) <= 1e9, abs(to) <= 1e9 {} else { value.timeFrom = nil; value.timeTo = nil }
         if let cursor = timeCursor, !cursor.isFinite || abs(cursor) > 1e9 { value.timeCursor = nil }

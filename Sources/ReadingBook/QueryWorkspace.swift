@@ -72,23 +72,29 @@ import ReadingCore
 /// The reader chooses a scope. It is frozen again before the request starts.
 struct QueryScopeControl: View {
     @EnvironmentObject var store: AppStore
+    var compact = false
     var body: some View {
         Menu {
             ForEach(ReadingQueryScope.allCases, id: \.self) { scope in
                 Button { store.queryScope = scope } label: {
-                    Label(scope.title, systemImage: store.queryScope == scope ? "checkmark" : icon(scope))
+                    HStack {
+                        Label(scope.title, systemImage: icon(scope))
+                        Spacer(minLength: 16)
+                        if store.queryScope == scope { Image(systemName: "checkmark") }
+                    }
                 }.disabled(!store.canUseQueryScope(scope))
             }
             if store.queryScope == .notes {
                 Divider()
-                Button("选择全部笔记") { store.queryDocumentIDs = nil }
+                Button { store.queryDocumentIDs = nil } label: { Label("选择全部笔记", systemImage: "checkmark.circle") }
                 ForEach(store.book?.activeDocuments ?? []) { document in
                     Toggle(document.title, isOn: Binding(get: { store.queryDocumentIDs?.contains(document.id) ?? true },
                         set: { store.setQueryDocument(document.id, included: $0) }))
                 }
             }
         } label: {
-            Label(store.queryScope.title, systemImage: icon(store.queryScope)).frame(minHeight: 44)
+            Label(store.queryScope.title, systemImage: icon(store.queryScope))
+                .font(.system(size: compact ? 14 : 15, weight: .medium)).frame(minHeight: 44)
         }.menuStyle(.borderlessButton).fixedSize().disabled(store.isBusy).help("选择这次提问允许读取的内容")
     }
     private func icon(_ scope: ReadingQueryScope) -> String {

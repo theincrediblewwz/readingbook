@@ -20,6 +20,7 @@ struct EnhancedBookChatView: View {
     @State private var openTrashAfterSheet = false
     @State private var reviewingChanges = false
     @State private var showingMemory = false
+    @State private var showingComposerHelp = false
     @State private var memorySourceID: String?
 
     var body: some View {
@@ -29,7 +30,7 @@ struct EnhancedBookChatView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 20) {
                         if store.book?.chats.isEmpty != false {
-                            EmptyState(title: "顺着一个问题，读得更深", detail: "在回答的保存菜单中选片段或合并多条。公式可选择 Markdown 源文。", icon: "bubble.left.and.bubble.right").frame(minHeight: 200)
+                            questionEmptyState
                         }
                         ForEach(store.book?.chats ?? []) { message in answerCard(message).id(message.id) }
                     }.padding(.horizontal, 24).padding(.vertical, 20).frame(maxWidth: 940).frame(maxWidth: .infinity)
@@ -40,61 +41,7 @@ struct EnhancedBookChatView: View {
                     guard let id else { return }; withAnimation { proxy.scrollTo(id, anchor: .center) }; memorySourceID = nil
                 }
             }
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 12) {
-                    QueryScopeControl()
-                    QueryAttachmentsControl()
-                    Menu {
-                        Button("只读提问") { store.queryAllowsOrganizing = false }
-                        Button("允许本次整理、增添与修改") { store.queryAllowsOrganizing = true }
-                        Text("仅授权接下来这次发送。已有正文、移除和读法变化仍须审阅。")
-                        if store.latestAIChange != nil {
-                            Divider()
-                            Button("撤销最近一次 AI 整理") { Task { await store.undoLatestAIChange() } }
-                        }
-                    } label: {
-                        Label(store.queryAllowsOrganizing ? "这次整理内容" : "只读提问", systemImage: store.queryAllowsOrganizing ? "square.stack.3d.up" : "lock")
-                            .font(.system(size: 13)).frame(minHeight: 44)
-                    }.menuStyle(.borderlessButton).fixedSize().disabled(store.isBusy)
-                    Text(store.isBusy ? store.lastQuestionContext : store.queryScopePreview).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer(minLength: 0)
-                    Menu {
-                        Toggle("整理长对话记忆", isOn: $store.queryMemoryEnabled)
-                        Button("查看记忆与原消息来源") { showingMemory = true }
-                        Text("整理旧消息计入本次模型预算；原始对话保留。")
-                        Button("清除本范围的整理摘要") { store.clearCurrentQueryMemory() }
-                    } label: { Image(systemName: "brain.head.profile").frame(width: 40, height: 44) }
-                        .menuStyle(.borderlessButton).fixedSize().disabled(store.isBusy).help("对话记忆与预算")
-                    Button { store.requestedWorkspaceRoute = "reader" } label: { Image(systemName: "book.closed") }
-                        .buttonStyle(ReadingToolbarButtonStyle()).help("回到原文")
-                }
-                HStack(alignment: .bottom, spacing: 12) {
-                    TextField("围绕所选内容，问一个问题…", text: $question, axis: .vertical)
-                        .font(.system(size: 16)).lineLimit(1...5).textFieldStyle(.plain).onSubmit { send() }
-                        .frame(minHeight: ReadingLayout.controlHeight)
-                    Button { send() } label: { Image(systemName: "arrow.up").font(.system(size: 16, weight: .semibold)).frame(width: 28, height: 28) }
-                        .controlSize(.large)
-                        .buttonStyle(.borderedProminent).disabled(store.isBusy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canUseQueryScope(store.queryScope))
-                        .help("发送问题").accessibilityLabel("发送问题")
-                }
-                if store.isBusy {
-                    HStack(spacing: 8) { ProgressView().controlSize(.mini); Text("正在按所选范围查找和阅读…").font(.caption).foregroundStyle(.secondary) }
-                } else if let previous = store.queryRetryQuestion {
-                    Button("恢复上次未完成的问题") { question = previous; store.queryRetryQuestion = nil }
-                        .buttonStyle(.borderless).font(.caption)
-                }
-                if !store.queryDisclosure.isEmpty && !store.isBusy {
-                    DisclosureGroup("这次读取与对话整理") {
-                        Text(store.queryDisclosure).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    }.font(.caption).padding(.top, 4)
-                }
-                if !store.pendingCurrentBookChanges.isEmpty {
-                    Button { reviewingChanges = true } label: {
-                        Label("审阅 \(store.pendingCurrentBookChanges.count) 项待确认修改", systemImage: "doc.text.magnifyingglass")
-                            .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-                    }.buttonStyle(.plain).foregroundStyle(Palette.accent).disabled(store.isBusy)
-                }
-            }.padding(14).readingGlass(radius: 22).frame(maxWidth: 900).padding(.horizontal, 24).padding(.bottom, 22)
+            composer
         }.padding(.top, 82).background(Palette.canvas)
         .onChange(of: store.bookID) { _, _ in selectionMode = false; selectedAnswers.removeAll(); renderedSelections.removeAll(); saveRequest = nil }
         .sheet(item: $saveRequest, onDismiss: {
@@ -111,16 +58,94 @@ struct EnhancedBookChatView: View {
         }
     }
 
+    private var questionEmptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 24, weight: .medium)).foregroundStyle(Palette.accent)
+            Text("想从这本书里弄懂什么？").font(.system(size: 18, weight: .semibold))
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { suggestion("这一部分在讲什么？"); suggestion("有哪些重要概念？"); suggestion("这些线索如何联系？") }
+                VStack(spacing: 8) { suggestion("这一部分在讲什么？"); suggestion("有哪些重要概念？"); suggestion("这些线索如何联系？") }
+            }
+        }.padding(.vertical, 32).frame(maxWidth: .infinity, minHeight: 180)
+    }
+    private func suggestion(_ text: String) -> some View {
+        Button { question = text } label: { Text(text).font(.system(size: 13)).lineLimit(1).fixedSize().padding(.horizontal, 12).frame(minHeight: 44).contentShape(Capsule()) }
+            .buttonStyle(.plain).background(Palette.accent.opacity(0.055), in: Capsule()).disabled(store.isBusy)
+            .help("填入问题，确认后发送")
+    }
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("围绕所选内容，问一个问题…", text: $question, axis: .vertical)
+                .font(.system(size: 15)).lineLimit(1...5).textFieldStyle(.plain).onSubmit { send() }
+                .frame(minHeight: 44)
+            HStack(spacing: 10) {
+                QueryScopeControl().help(store.isBusy ? store.lastQuestionContext : store.queryScopePreview)
+                QueryAttachmentsControl()
+                Spacer(minLength: 0)
+                questionOptions
+                Button { send() } label: { Image(systemName: "arrow.up").font(.system(size: 17, weight: .semibold)).frame(width: 30, height: 32) }
+                    .controlSize(.large).buttonStyle(.borderedProminent)
+                    .disabled(store.isBusy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canUseQueryScope(store.queryScope))
+                    .help("发送问题").accessibilityLabel("发送问题")
+            }
+            if store.isBusy {
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在阅读所选内容…").font(.system(size: 13)).foregroundStyle(.secondary) }
+            } else if let previous = store.queryRetryQuestion {
+                Button { question = previous; store.queryRetryQuestion = nil } label: { Label("继续上次问题", systemImage: "arrow.clockwise") }
+                    .buttonStyle(.borderless).font(.system(size: 13))
+            }
+            if !store.queryDisclosure.isEmpty && !store.isBusy {
+                DisclosureGroup("这次查阅记录") {
+                    Text(store.queryDisclosure).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
+                }.font(.system(size: 13)).padding(.top, 4)
+            }
+            if !store.pendingCurrentBookChanges.isEmpty {
+                Button { reviewingChanges = true } label: {
+                    Label("审阅 \(store.pendingCurrentBookChanges.count) 项待确认修改", systemImage: "doc.text.magnifyingglass")
+                        .font(.system(size: 15)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundStyle(Palette.accent).disabled(store.isBusy)
+            }
+        }.padding(16).readingGlass(radius: 24).frame(maxWidth: 900).padding(.horizontal, 24).padding(.bottom, 22)
+            .popover(isPresented: $showingComposerHelp) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("范围、保存与公式").font(.system(size: 16, weight: .semibold))
+                    Text("左下选择本次允许阅读的范围，附加内容会一同提供给 AI。")
+                    Text("回答的保存菜单支持完整保存、选段和多条合并。保留公式与排版时，选择 Markdown 源文片段。")
+                    Text("整理授权仅用于接下来这次发送。修改正文、移除内容或改变读法仍会先请你审阅。对话记忆计入模型预算，原消息保留。")
+                }.font(.system(size: 13)).foregroundStyle(.secondary).lineSpacing(4).padding(20).frame(width: 320)
+            }
+    }
+    private var questionOptions: some View {
+        Menu {
+            Button { store.queryAllowsOrganizing = false } label: { Label("只读提问", systemImage: "lock") }
+            Button { store.queryAllowsOrganizing = true } label: { Label("允许本次整理、增添与修改", systemImage: "square.stack.3d.up") }
+            Divider()
+            Toggle(isOn: $store.queryMemoryEnabled) { Label("整理长对话记忆", systemImage: "brain.head.profile") }
+            Button { showingMemory = true } label: { Label("查看记忆与原消息", systemImage: "text.bubble") }
+            Button { store.clearCurrentQueryMemory() } label: { Label("清除本范围的整理摘要", systemImage: "eraser") }
+            if store.latestAIChange != nil {
+                Divider()
+                Button { Task { await store.undoLatestAIChange() } } label: { Label("撤销最近一次 AI 整理", systemImage: "arrow.uturn.backward") }
+            }
+            Divider()
+            Button { store.requestedWorkspaceRoute = "reader" } label: { Label("回到原文", systemImage: "book.closed") }
+            Button { showingComposerHelp = true } label: { Label("范围、保存与公式说明", systemImage: "info.circle") }
+        } label: {
+            Label(store.queryAllowsOrganizing ? "本次整理" : "只读", systemImage: store.queryAllowsOrganizing ? "square.stack.3d.up" : "lock")
+                .font(.system(size: 13, weight: .medium)).frame(minHeight: 44)
+        }.menuStyle(.borderlessButton).fixedSize().disabled(store.isBusy).help("本次权限、对话记忆与更多操作")
+    }
+
     private var selectionBar: some View {
         HStack(spacing: 12) {
             Label("已选 \(selectedAnswers.count) 条", systemImage: "checkmark.circle.fill").font(.system(size: 14, weight: .medium))
             Spacer()
-            Button("取消多选") { selectionMode = false; selectedAnswers.removeAll() }.buttonStyle(.borderless)
-            Button("合并保存…") {
+            Button { selectionMode = false; selectedAnswers.removeAll() } label: { Label("取消多选", systemImage: "xmark") }.buttonStyle(.borderless)
+            Button {
                 guard let book = store.book else { return }
                 let parts = book.chats.filter { $0.role == "assistant" && selectedAnswers.contains($0.id) }.map { SavedAnswerPart(answer: $0) }
                 saveRequest = AnswerSaveRequest(bookID: book.id, sourceAnswer: nil, parts: parts)
-            }.buttonStyle(.borderedProminent).disabled(store.isBusy || selectedAnswers.isEmpty)
+            } label: { Label("合并保存…", systemImage: "doc.on.doc") }.buttonStyle(.borderedProminent).disabled(store.isBusy || selectedAnswers.isEmpty)
         }.controlSize(.large).frame(minHeight: 44).padding(.horizontal, 16).padding(.vertical, 8)
             .background(Palette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 16)).frame(maxWidth: 900).padding(.horizontal, 24)
     }
@@ -138,7 +163,7 @@ struct EnhancedBookChatView: View {
                     if selectionMode {
                         Toggle("选择", isOn: Binding(get: { selectedAnswers.contains(message.id) }, set: { selected in
                             if selected { selectedAnswers.insert(message.id) } else { selectedAnswers.remove(message.id) }
-                        })).toggleStyle(.checkbox).font(.caption).help("将这条回答加入合并选择").disabled(store.isBusy)
+                        })).toggleStyle(.checkbox).font(.system(size: 13)).help("将这条回答加入合并选择").disabled(store.isBusy)
                     }
                     Menu {
                         answerActions(message, bookID: bookID, prepared: prepared)
@@ -185,32 +210,32 @@ struct EnhancedBookChatView: View {
 
     @ViewBuilder private func answerActions(_ message: ChatMessage, bookID: String, prepared: String) -> some View {
         if let selection = renderedSelections[message.id], selection.sourceMarkdown == prepared {
-            Button("保存选区为语义摘记…") { saveRenderedSelection(message, bookID: bookID, selection: selection) }.disabled(store.isBusy)
+            Button { saveRenderedSelection(message, bookID: bookID, selection: selection) } label: { Label("保存选中文字…", systemImage: "text.badge.plus") }.disabled(store.isBusy)
             Divider()
         }
-        Button("保存完整回答…") { request(parts: [SavedAnswerPart(answer: message)], bookID: bookID) }.disabled(store.isBusy)
-        Button("选择 Markdown 片段…") { requestSource(message, bookID: bookID) }.disabled(store.isBusy)
+        Button { request(parts: [SavedAnswerPart(answer: message)], bookID: bookID) } label: { Label("保存完整回答…", systemImage: "square.and.arrow.down") }.disabled(store.isBusy)
+        Button { requestSource(message, bookID: bookID) } label: { Label("选择 Markdown 片段…", systemImage: "text.cursor") }.disabled(store.isBusy)
         Divider()
-        Button(selectionMode ? "加入合并选择" : "多选合并…") {
+        Button {
             guard store.bookID == bookID else { return }
             selectedAnswers.insert(message.id); selectionMode = true
-        }.disabled(store.isBusy)
+        } label: { Label(selectionMode ? "加入合并选择" : "多选合并…", systemImage: "checklist") }.disabled(store.isBusy)
     }
 
     private func selectionSummary(_ selection: RenderedMarkdownSelection) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("语义摘录 · \(selection.text.count) 字").font(.caption.weight(.medium))
-            if selection.containsMath { Text("含公式，建议选源文").font(.caption).foregroundStyle(Palette.copper) }
+            Text("文字选区 · \(selection.text.count) 字").font(.system(size: 13, weight: .medium))
+            if selection.containsMath { Text("含公式，建议选源文").font(.system(size: 13)).foregroundStyle(Palette.copper) }
         }.help("渲染区只保存语义文本，不包含精确 Markdown / TeX。需要保留公式时请选择源文片段。")
     }
 
     private func selectionActions(_ message: ChatMessage, bookID: String, selection: RenderedMarkdownSelection) -> some View {
         HStack(spacing: 12) {
-            Button("选源文") { requestSource(message, bookID: bookID) }
+            Button { requestSource(message, bookID: bookID) } label: { Label("选源文", systemImage: "text.cursor") }
                 .buttonStyle(.borderless).help("从只读 Markdown 中选择连续原文，精确保留公式")
-            Button("保存选段…") {
+            Button {
                 saveRenderedSelection(message, bookID: bookID, selection: selection)
-            }.keyboardShortcut("s", modifiers: [.command, .shift]).help("保存语义摘录 · ⌘⇧S；公式建议选择源文")
+            } label: { Label("保存选段…", systemImage: "square.and.arrow.down") }.keyboardShortcut("s", modifiers: [.command, .shift]).help("保存语义摘录 · ⌘⇧S；公式建议选择源文")
         }.font(.system(size: 14)).controlSize(.large).fixedSize().disabled(store.isBusy)
     }
 
@@ -263,10 +288,10 @@ private struct AnswerSaveSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                Text("保存摘记").font(.system(size: 21, weight: .semibold))
+                Text("保存摘记").font(.system(size: 18, weight: .semibold))
                 Spacer()
-                Text(sourceAnswer != nil ? "Markdown 原文片段" : isSemanticExcerpt ? "渲染区语义摘录" : "\(parts.count) 条回答")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text(sourceAnswer != nil ? "Markdown 片段" : isSemanticExcerpt ? "选中文字" : "\(parts.count) 条回答")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
             }.padding(.horizontal, ReadingLayout.panelPadding).padding(.vertical, 16)
             Divider().opacity(0.5)
             VStack(alignment: .leading, spacing: 12) {
@@ -285,7 +310,7 @@ private struct AnswerSaveSheet: View {
                 }
                 if let localError {
                     ScrollView {
-                        Text(localError).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                        Text(localError).font(.system(size: 13)).foregroundStyle(.red).textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }.frame(height: localError.count > 100 ? 64 : 34)
                 }
@@ -312,23 +337,23 @@ private struct AnswerSaveSheet: View {
 
     @ViewBuilder private var sourceNotice: some View {
         if sourceAnswer != nil {
-            Text("选择只读源文中的连续片段；公式请选全分隔符。即时预览保留对应问题与原答引用。")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("选中连续的 Markdown 片段；公式请包含完整分隔符。下方可预览问题与出处。")
+                .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         } else if isSemanticExcerpt {
-            Text("语义文本不还原公式、图片或 Markdown 排版；需要精确保留时，请使用 Markdown 源文片段。")
-                .font(.caption).foregroundStyle(Palette.copper).fixedSize(horizontal: false, vertical: true)
+            Text("这里只保存选中的文字。需要保留公式、图片和排版时，请选择 Markdown 源文片段。")
+                .font(.system(size: 13)).foregroundStyle(Palette.copper).fixedSize(horizontal: false, vertical: true)
         } else {
-            Text("按会话顺序保留问题、消息 ID 与原答引用；确认后保存为 Markdown 与导图节点。")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("保留对应的问题与出处，保存到笔记并添加导图节点。")
+                .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func sourceWorkspace(_ answer: ChatMessage, height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("原回答 · 只读 Markdown").font(.caption.weight(.medium))
+                Label("原回答 · Markdown 源文", systemImage: "doc.text").font(.system(size: 13, weight: .medium))
                 Spacer(minLength: 0)
-                Text(selectedSource.isEmpty ? "拖动选择" : "已选 \(selectedSource.count) 字").font(.caption).foregroundStyle(.secondary)
+                Text(selectedSource.isEmpty ? "拖动选择" : "已选 \(selectedSource.count) 字").font(.system(size: 13)).foregroundStyle(.secondary)
             }
             MarkdownSourceSelector(source: answer.content) { source, text in
                 guard !saving else { return }
@@ -340,11 +365,11 @@ private struct AnswerSaveSheet: View {
                     if let composition { documentPreview(composition) }
                     else {
                         Text(selectedSource.isEmpty ? "选择后即时显示完整摘记，包含对应问题和原答的证据/文档引用。" : "正在核对连续原文与来源…")
-                            .font(.caption).foregroundStyle(.secondary).padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .font(.system(size: 13)).foregroundStyle(.secondary).padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     }
                 }.frame(height: max(40, min(220, (height - 40) * 0.40))).padding(.top, 5)
             } label: {
-                Text(readyComposition == nil && !selectedSource.isEmpty ? "正在更新选区预览…" : "即时预览 · 问题与来源").font(.caption.weight(.medium))
+                Text(readyComposition == nil && !selectedSource.isEmpty ? "正在更新选区预览…" : "即时预览 · 问题与来源").font(.system(size: 13, weight: .medium))
             }.tint(Palette.accent)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -358,13 +383,13 @@ private struct AnswerSaveSheet: View {
 
     private var saveBar: some View {
         HStack(spacing: 12) {
-            Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
+            Button { dismiss() } label: { Label("取消", systemImage: "xmark") }.keyboardShortcut(.cancelAction).disabled(saving)
             Spacer(minLength: 0)
             if let composition = readyComposition,
                store.book?.documents.first(where: { $0.id == composition.documentID })?.trashedAt != nil {
-                Button("回收站恢复") { showTrash() }.help("恢复已保存的原摘记，不另建副本").disabled(saving)
+                Button { showTrash() } label: { Label("回收站恢复", systemImage: "arrow.uturn.backward") }.help("恢复已保存的原摘记，不另建副本").disabled(saving)
             }
-            Button(saving ? "保存中…" : "保存摘记") { save() }
+            Button { save() } label: { Label(saving ? "保存中…" : "保存摘记", systemImage: "square.and.arrow.down") }
                 .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 .disabled(readyComposition == nil || saving || store.isBusy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.bookID != bookID)
         }.controlSize(.large).frame(minHeight: ReadingLayout.controlHeight)

@@ -534,7 +534,9 @@ import ReadingCore
         selectedObjectID = unit.id; newDocument(); editorTitle = "关于\(unit.chapter)的理解"
         let quote = String(unit.text.prefix(240))
         draftEvidence = quote.isEmpty ? [] : [Evidence(unitID: unit.id, quote: quote)]
-        editorMarkdown = "# \(editorTitle)\n\n> \(quote.replacingOccurrences(of: "\n", with: "\n> "))\n\n[回到原文](readingbook://book/\(bookID ?? "")/unit/\(unit.id))\n\n## 我的理解\n\n"
+        // Source evidence remains attached and can be opened from the note header.
+        // Start with a clean writing surface; never rewrite an existing note.
+        editorMarkdown = "# \(editorTitle)\n\n"
     }
     func saveInsight(_ insight: ReadingInsight) async {
         guard var current = book, !isBusy else { return }

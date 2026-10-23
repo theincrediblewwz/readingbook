@@ -143,7 +143,8 @@ final class ModelCatalogTests: XCTestCase {
         var settings = ProviderSettings(baseURL: "https://opencode.ai/inference/go/openai/v1", model: "glm-5.3", maxOutputTokens: 4096, contextWindowTokens: 128_000)
         settings.transportSessionID = "readingbook-synthetic-conversation"
         let prepared = try ProviderClient.prepare(messages: [["role": "user", "content": "test"]], tools: [], settings: settings, apiKey: "synthetic", remainingTokens: 128_000)
-        XCTAssertEqual(prepared.request.value(forHTTPHeaderField: "User-Agent"), "ReadingBook/0.16")
+        let clientName = try XCTUnwrap(prepared.request.value(forHTTPHeaderField: "User-Agent"))
+        XCTAssertNotNil(clientName.range(of: "^ReadingBook/[0-9]+\\.[0-9]+$", options: .regularExpression), "客户端应标识自己，不能伪装成其他产品。")
         XCTAssertEqual(prepared.request.value(forHTTPHeaderField: "x-opencode-session"), settings.transportSessionID)
         let saved = try JSONEncoder().encode(settings)
         XCTAssertFalse(String(decoding: saved, as: UTF8.self).contains("readingbook-synthetic-conversation"))
