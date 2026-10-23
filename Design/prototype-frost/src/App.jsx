@@ -10,6 +10,7 @@ import {LayersPage} from './pages/ReadingExperience.jsx';
 import './styles.css';
 import './fidelity.css';
 import './floating.css';
+import './polish.css';
 const routes={library:'书库',reader:'原文阅读',parallel:'译注对照',layers:'已有伴读',workflow:'智能阅读',chat:'与书对话',notes:'我的笔记',map:'时间与地图',mindmap:'思维导图',relations:'关系图谱',knowledge:'知识库',atlas:'全书总览',cards:'要素卡片',plugins:'插件与组件',models:'模型设置',trash:'回收站'};
 const componentForRoute={map:'spatial',mindmap:'mindmap',relations:'relations',knowledge:'knowledge',cards:'cards',atlas:'atlas'};
 const pages={library:LibraryPage,reader:ReaderPage,parallel:ParallelPage,layers:LayersPage,workflow:WorkflowPage,chat:ChatPage,notes:NotesPage,map:MapPage,mindmap:MindmapPage,relations:RelationsPage,knowledge:KnowledgePage,atlas:ObjectsPage,cards:ObjectsPage,plugins:PluginsPage,models:ModelsPage,trash:TrashPage};
