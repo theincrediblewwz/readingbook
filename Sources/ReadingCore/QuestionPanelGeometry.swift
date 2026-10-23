@@ -32,7 +32,7 @@ public enum QuestionPanelGeometry {
     }
 
     public static func frame(at dock: FloatingPanelDock, in bounds: CGRect, panel: CGSize) -> CGRect {
-        let size = fittedSize(requested: panel, in: bounds, minimum: .zero, maximum: CGSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude))
+        let size = fittedSize(requested: panel, in: bounds, minimum: .zero, maximum: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
         let right = bounds.maxX - size.width, bottom = bounds.maxY - size.height
         let origin: CGPoint
         switch dock {
@@ -46,7 +46,7 @@ public enum QuestionPanelGeometry {
     }
 
     public static func clampedFrame(_ requested: CGRect, in bounds: CGRect) -> CGRect {
-        let size = fittedSize(requested: requested.size, in: bounds, minimum: .zero, maximum: CGSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude))
+        let size = fittedSize(requested: requested.size, in: bounds, minimum: .zero, maximum: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
         let x = requested.minX.isFinite ? requested.minX : bounds.minX
         let y = requested.minY.isFinite ? requested.minY : bounds.minY
         return CGRect(x: min(max(bounds.minX, x), bounds.maxX - size.width),
