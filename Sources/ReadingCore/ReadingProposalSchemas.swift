@@ -103,7 +103,7 @@ enum ReadingProposalSchemas {
     static var bookScheme: [String: Any] {
         let execution = object(["stepIndex": integer, "actionID": text(128), "configuration": strings, "maxAttempts": integer], required: ["stepIndex", "actionID"])
         let method = object(["id": id, "name": text(400), "goal": text(), "steps": array(text(), maximum: 24), "executions": array(execution, maximum: 24)], required: ["id", "name", "goal", "steps"])
-        let view = object(["id": id, "title": text(400), "kind": ["type": "string", "enum": ComponentKind.allCases.map(\.rawValue)], "typeIDs": array(id), "rendererID": text(128), "scope": text(80), "configuration": strings], required: ["id", "title", "kind"])
+        let view = object(["id": id, "title": text(400), "kind": ["type": "string", "enum": ComponentKind.allCases.map(\.rawValue)], "typeIDs": array(id), "rendererID": text(128), "scope": text(80), "configuration": strings, "composition": CompositionSchema.definition], required: ["id", "title", "kind"])
         let profile = object(["genres": array(["type": "string", "enum": BookGenre.allCases.map(\.rawValue)]), "customGenres": array(text(80)), "entityTypeIDs": array(id), "locationTypeIDs": array(id), "methodIDs": array(id), "rendererIDs": array(id), "timeSystem": text(80), "avoidsSpoilers": ["type": "boolean"]], required: ["genres", "customGenres", "entityTypeIDs", "locationTypeIDs", "methodIDs", "rendererIDs", "avoidsSpoilers"])
         return object(["types": array(type), "methods": array(method), "views": array(view), "plan": object(["methodIDs": array(id), "rationale": text(8000), "focus": array(text(400))]), "profile": profile], required: [])
     }

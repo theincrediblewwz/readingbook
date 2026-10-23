@@ -14,6 +14,7 @@ struct ProviderSettingsView: View {
     @State private var configuredWidth = false
     @State private var confirmingClose = false
     @State private var showingCatalog = false
+    @State private var showingGuide = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -62,6 +63,7 @@ struct ProviderSettingsView: View {
         .onAppear { store.serviceProfileDraft.settingsPresentationCount += 1 }
         .onDisappear { store.serviceProfileDraft.settingsPresentationCount = max(0, store.serviceProfileDraft.settingsPresentationCount - 1) }
         .sheet(isPresented: $showingCatalog) { ModelCatalogManagerView(onClose: { showingCatalog = false }).environmentObject(store) }
+        .sheet(isPresented: $showingGuide) { ReadingGuideView(onClose: { showingGuide = false }) }
     }
 
     private var serviceList: some View {
@@ -106,6 +108,8 @@ struct ProviderSettingsView: View {
                             newServiceMenu
                         }
                         Spacer(minLength: 0)
+                        Button { showingGuide = true } label: { Image(systemName: "questionmark.circle") }
+                            .buttonStyle(ReadingToolbarButtonStyle()).help("使用指南 · 导入、智能阅读与 AI 整理").accessibilityLabel("打开使用指南")
                         Button { deletingService = true } label: { Image(systemName: "trash") }
                             .buttonStyle(ReadingToolbarButtonStyle()).help("删除当前服务配置及密钥").disabled(store.selectedServiceID == nil || store.isBusy)
                     }
@@ -254,7 +258,7 @@ struct PluginLibraryView: View {
     @State private var pendingAddition: String?
 
     private var available: [WorkspaceComponentDescriptor] {
-        WorkspaceComponentRegistry.shared.components.filter { !$0.permanent && store.savedComponent(for: $0) == nil && matches($0.title) }
+        WorkspaceComponentRegistry.shared.components.filter { !$0.permanent && !$0.requiresDefinition && store.savedComponent(for: $0) == nil && matches($0.title) }
     }
     private func matches(_ text: String) -> Bool { search.isEmpty || text.localizedCaseInsensitiveContains(search) }
 
@@ -273,7 +277,7 @@ struct PluginLibraryView: View {
                     pluginList
                 }
                 if withAside {
-                    SettingsFloatingCard(title: detailTab == "types" ? "本书卡片类型" : "可执行读书法", subtitle: "定义随书保存", icon: detailTab == "types" ? "square.stack" : "checklist", viewport: canvas,
+                    SettingsFloatingCard(title: detailTab == "types" ? "本书卡片类型" : "智能阅读 · 方法定义", subtitle: "定义随书保存", icon: detailTab == "types" ? "square.stack" : "checklist", viewport: canvas,
                                          width: asideWidth, height: canvas.height, initial: CGPoint(x: canvas.width - asideWidth, y: 0), onClose: { showDetails = false }) {
                         PluginDefinitionPanel(selectedTab: $detailTab)
                     }
@@ -283,7 +287,7 @@ struct PluginLibraryView: View {
                 .onChange(of: wide) { _, value in if !value { showDetails = false } }
                 .sheet(isPresented: Binding(get: { configuredWidth && showDetails && !wide }, set: { if !$0 { showDetails = false } })) {
                     VStack(spacing: 0) {
-                        HStack { Text("本书类型与读书法").font(.system(size: 20, weight: .semibold)); Spacer(); Button("完成") { showDetails = false }.buttonStyle(ReadingToolbarButtonStyle()) }.padding(18)
+                        HStack { Text("本书类型与阅读方法").font(.system(size: 20, weight: .semibold)); Spacer(); Button("完成") { showDetails = false }.buttonStyle(ReadingToolbarButtonStyle()) }.padding(18)
                         PluginDefinitionPanel(selectedTab: $detailTab)
                     }.frame(width: 540, height: 660).onExitCommand { showDetails = false }
                 }
@@ -318,7 +322,7 @@ struct PluginLibraryView: View {
                         ForEach(available) { component in capabilityRow(component, addOnly: true) }
                         if available.isEmpty { ContentUnavailableView(search.isEmpty ? "本书组件已经齐全" : "没有匹配的组件", systemImage: "checkmark.circle", description: Text("已添加的组件不会重复出现在这里。")) }
                     } else {
-                        ForEach(WorkspaceComponentRegistry.shared.components.filter { matches($0.title) }) { component in capabilityRow(component, addOnly: false) }
+                        ForEach(WorkspaceComponentRegistry.shared.components.filter { !$0.requiresDefinition && matches($0.title) }) { component in capabilityRow(component, addOnly: false) }
                         ForEach((store.book?.plugins ?? []).filter { matches($0.name + $0.description) }) { plugin in
                             CompactPluginRow(plugin: plugin)
                         }
@@ -357,7 +361,7 @@ struct PluginLibraryView: View {
         HStack(spacing: 4) {
             Button { store.showingPlugins = false; store.openBookScheme(); if !embedded { dismiss() } } label: { Label("书本方案", systemImage: "slider.horizontal.3") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || store.isBusy)
             Button { detailTab = "types"; showDetails = true } label: { Label("类型", systemImage: "square.stack") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil)
-            Button { detailTab = "methods"; showDetails = true } label: { Label("读书法", systemImage: "checklist") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil)
+            Button { detailTab = "methods"; showDetails = true } label: { Label("方法定义", systemImage: "checklist") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil)
         }
     }
     private var importButton: some View {
@@ -451,13 +455,13 @@ private struct PluginDefinitionPanel: View {
     @State private var notice = ""
     @State private var showExecutions = false
     private var selectedType: EntityType? { store.book?.types.first { $0.id == selectedID } }
-    private var methods: [ReadingMethod] { store.book.map { PluginEngine.activeMethods(in: $0) } ?? [] }
+    private var methods: [ReadingMethod] { store.book.map { PluginEngine.recommendedMethods(in: $0) } ?? [] }
     private var selectedMethod: ReadingMethod? { methods.first { $0.id == selectedID } }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Picker("定义类型", selection: $selectedTab) { Text("卡片类型").tag("types"); Text("读书法").tag("methods") }.pickerStyle(.segmented).labelsHidden()
+                Picker("定义类型", selection: $selectedTab) { Text("卡片类型").tag("types"); Text("方法定义").tag("methods") }.pickerStyle(.segmented).labelsHidden()
                 Text(store.book?.title ?? "先选择一本书").font(.system(size: 15, weight: .medium)).lineLimit(2)
                 Picker(selectedTab == "types" ? "选择类型" : "选择方法", selection: $selectedID) {
                     Text("＋ 新建定义").tag("")
@@ -516,7 +520,7 @@ private struct PluginDefinitionPanel: View {
         let lines = detail.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !cleanedName.isEmpty, !lines.isEmpty else { error = "请填写名称，以及至少一个字段或步骤。"; return }
         let suffix = UUID().uuidString.lowercased()
-        var manifest = PluginManifest(id: "user-definition-\(suffix)", name: cleanedName, description: "用户在本书保存的\(selectedTab == "types" ? "卡片类型" : "可执行读书法")。")
+        var manifest = PluginManifest(id: "user-definition-\(suffix)", name: cleanedName, description: "用户在本书保存的\(selectedTab == "types" ? "卡片类型" : "智能阅读 · 方法定义")。")
         if selectedTab == "types" {
             let original = selectedType
             var used = Set<String>()

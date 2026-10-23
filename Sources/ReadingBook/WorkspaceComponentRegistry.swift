@@ -9,6 +9,7 @@ struct WorkspaceComponentDescriptor: Identifiable {
     var aliases: Set<ComponentKind>
     var permanent = false
     var rendererID: String?
+    var requiresDefinition = false
     init(kind: ComponentKind, title: String, icon: String, aliases: Set<ComponentKind> = [], permanent: Bool = false, rendererID: String? = nil) {
         self.kind = kind; self.title = title; self.icon = icon; self.aliases = aliases
         self.permanent = permanent; self.rendererID = rendererID
@@ -79,7 +80,12 @@ struct WorkspaceComponentDescriptor: Identifiable {
     }
     func equivalent(_ lhs: ViewDefinition, _ rhs: ViewDefinition) -> Bool { rendererIdentity(lhs) == rendererIdentity(rhs) }
     func equivalent(_ view: ViewDefinition, _ descriptor: WorkspaceComponentDescriptor) -> Bool { rendererIdentity(view) == descriptor.id }
-    private func rendererIdentity(_ view: ViewDefinition) -> String { view.rendererID ?? aliases[view.kind] ?? view.kind.rawValue }
+    private func rendererIdentity(_ view: ViewDefinition) -> String {
+        // Each AI-composed page has its own layout and data bindings. It is not
+        // an alias for every other page handled by the composition renderer.
+        if view.rendererID == "reading.composition" { return "reading.composition:" + view.id }
+        return view.rendererID ?? aliases[view.kind] ?? view.kind.rawValue
+    }
     func removalIDs(for view: ViewDefinition, in views: [ViewDefinition]) -> Set<String> {
         // Navigation coalesces book-wide renderers. Remove the same group so an
         // old hidden alias cannot reappear immediately after removing its entry.
@@ -94,7 +100,7 @@ struct WorkspaceComponentDescriptor: Identifiable {
             // Card collections may intentionally filter different types. Other
             // current renderers share book-wide state and need one navigation entry.
             if rendererIdentity(view) == aliases[.cards] { return true }
-            return seen.insert(descriptor.id).inserted
+            return seen.insert(rendererIdentity(view)).inserted
         }
     }
 }
@@ -111,6 +117,9 @@ struct WorkspaceComponentDescriptor: Identifiable {
     func register(in registry: inout WorkspaceComponentRegistry) throws {
         try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "多层伴读", icon: "text.book.closed", rendererID: "reading.layers")) { AnyView(ReadingExperienceWorkspaceView(section: "layers", definition: $0)) }
         try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "全书总览", icon: "chart.bar.xaxis", rendererID: "reading.atlas")) { AnyView(ReadingAtlasView(definition: $0)) }
+        var composed = WorkspaceComponentDescriptor(kind: .knowledge, title: "本书专属组件", icon: "square.grid.2x2", rendererID: "reading.composition")
+        composed.requiresDefinition = true
+        try registry.register(composed) { AnyView(CompositionWorkspaceView(definition: $0)) }
     }
 }
 
@@ -124,6 +133,6 @@ struct WorkspaceComponentDescriptor: Identifiable {
         try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "知识库", icon: ComponentKind.knowledge.icon, aliases: [])) { _ in AnyView(KnowledgeLibraryView()) }
         try registry.register(WorkspaceComponentDescriptor(kind: .editor, title: "我的笔记", icon: ComponentKind.editor.icon, aliases: [], permanent: true)) { _ in AnyView(DocumentEditorView()) }
         try registry.register(WorkspaceComponentDescriptor(kind: .query, title: "与书对话", icon: ComponentKind.query.icon, aliases: [], permanent: true)) { _ in AnyView(EnhancedBookChatView()) }
-        try registry.register(WorkspaceComponentDescriptor(kind: .workflow, title: "读书方法", icon: ComponentKind.workflow.icon, aliases: [], permanent: true)) { _ in AnyView(ReaderMethodView()) }
+        try registry.register(WorkspaceComponentDescriptor(kind: .workflow, title: "智能阅读", icon: ComponentKind.workflow.icon, aliases: [], permanent: true)) { _ in AnyView(ReaderMethodView()) }
     }
 }

@@ -1,211 +1,223 @@
 import SwiftUI
 import ReadingCore
 
+/// Reader-facing setup; detailed processing receipts remain an on-demand view.
 struct ReaderMethodView: View {
     @EnvironmentObject private var store: AppStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var adjusting = false
+    @State private var automatic = true
+    @State private var methodIDs = Set<String>()
+    @State private var scope: SmartReadingScope = .wholeBook
+    @State private var pageStart = 1
+    @State private var pageEnd = 1
     @State private var details = false
-    @State private var draft = BookProfile()
+    @State private var guide = false
+    @State private var profileDraft = BookProfile()
     @State private var customGenre = ""
-    @State private var discardChanges = false
-    @State private var profileBookID: String?
-    @State private var profileLoaded = false
-
-    private var profile: BookProfile { store.book?.temporalKnowledge?.profile ?? BookProfile() }
-    private var activeMethods: [ReadingMethod] {
-        guard let book = store.book, let plan = book.plan else { return [] }
-        let methods = PluginEngine.activeMethods(in: book)
-        return plan.methodIDs.compactMap { id in methods.first { $0.id == id } }
+    private var pending: Bool { store.book?.bookSchemes?.pending != nil }
+    private var selection: SmartReadingSelection {
+        SmartReadingSelection(scope: scope, pageStart: scope == .pageRange ? pageStart : nil,
+                              pageEnd: scope == .pageRange ? pageEnd : nil,
+                              preferredMethodIDs: automatic ? [] : methodIDs.sorted())
     }
-    private var profileDirty: Bool { draft.genres != profile.genres || draft.customGenres != profile.customGenres || draft.avoidsSpoilers != profile.avoidsSpoilers }
-    private var canPause: Bool { !store.isSavingDocument && !store.isExportingProject && !store.isImportingBookCommit && !store.isCommittingLocalWrite }
-
+    private var activeMethods: [ReadingMethod] {
+        guard let book = store.book else { return [] }
+        return (book.plan?.methodIDs ?? []).compactMap { id in book.methods.first { $0.id == id } }
+    }
+    private var customMethods: [ReadingMethod] {
+        guard let book = store.book else { return [] }
+        let defaults = Set(PluginEngine.recommendedMethods.map(\.id))
+        return PluginEngine.recommendedMethods(in: book).filter { !defaults.contains($0.id) }
+    }
     var body: some View {
         GeometryReader { geometry in
-            ZStack(alignment: .topLeading) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 28) {
-                        introduction
-                        methodSteps
-                        HStack {
-                            Button { details = true } label: { Label("处理详情", systemImage: "chevron.down").font(.subheadline) }
-                                .buttonStyle(.borderless).help("需要时查看逐段回执、覆盖与调用记录")
-                            Spacer()
-                            Button { store.openBookScheme() } label: { Label("查看实际方案", systemImage: "slider.horizontal.3").font(.subheadline) }
-                                .buttonStyle(.borderless).disabled(store.book == nil)
-                        }
-                    }.frame(maxWidth: 820).padding(.horizontal, geometry.size.width < 800 ? 28 : 60)
-                        .padding(.top, 116).padding(.bottom, 150).frame(maxWidth: .infinity)
-                }
-                taskState.padding(.horizontal, geometry.size.width < 800 ? 20 : 56).padding(.bottom, 26)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                ReaderFloatingPanel(title: "调整读法", icon: "slider.horizontal.3", width: 370, height: 520,
-                    isPresented: adjustmentBinding, viewport: geometry.size, memoryIDOverride: "methods.adjust", bottomReserve: 140) {
-                    adjustmentContent
-                }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    introduction
+                    stages
+                    if geometry.size.width >= 1040 {
+                        HStack(alignment: .top, spacing: 36) { setup.frame(maxWidth: .infinity); journey.frame(width: 280) }
+                    } else { setup }
+                    if pending { pendingCard } else if !activeMethods.isEmpty { activePlan }
+                    readingPreferences
+                    HStack(spacing: 14) {
+                        Button { guide = true } label: { Label("使用指南", systemImage: "questionmark.circle") }
+                        Button { details = true } label: { Label("查看处理详情", systemImage: "checklist") }
+                        Spacer(minLength: 0)
+                        Button { store.requestedWorkspaceRoute = "reader" } label: { Label("回原文阅读", systemImage: "book.pages") }
+                    }.font(.system(size: 13)).buttonStyle(.borderless).foregroundStyle(.secondary)
+                }.frame(maxWidth: 1060).padding(.horizontal, geometry.size.width < 800 ? 32 : 60)
+                    .padding(.top, 116).padding(.bottom, 220).frame(maxWidth: .infinity, alignment: .top)
             }.background(Palette.canvas)
         }
-        .onAppear { loadProfile() }
-        .onChange(of: store.bookID) { _, _ in adjusting = false; loadProfile() }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ReadingBookAdjustReaderMethod"))) { _ in
-            if !adjusting { loadProfile() }
-            withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { adjustmentBinding.wrappedValue = !adjusting }
-        }
-        .confirmationDialog("读书偏好尚未保存", isPresented: $discardChanges) {
-            Button("保存并收起") { saveProfile(close: true) }.disabled(store.isBusy)
-            Button("放弃本次调整", role: .destructive) { loadProfile(); adjusting = false }
-            Button("继续调整", role: .cancel) { }
-        } message: { Text("实际执行方案不受这次未保存偏好的影响。") }
+        .onAppear(perform: load).onChange(of: store.bookID) { _, _ in load() }
+        .sheet(isPresented: $guide) { ReadingGuideView(onClose: { guide = false }) }
         .sheet(isPresented: $details) {
             VStack(spacing: 0) {
                 HStack { Label("阅读处理详情", systemImage: "checklist").font(.headline); Spacer(); Button { details = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction).help("关闭处理详情") }.padding(14)
-                Divider()
-                ReadingProcessingDetailsView().environmentObject(store)
+                Divider(); ReadingProcessingDetailsView().environmentObject(store)
             }.frame(minWidth: 660, idealWidth: 920, minHeight: 500, idealHeight: 700)
         }
     }
-
     private var introduction: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("怎样读这本书").font(.system(size: 32, weight: .semibold, design: .rounded))
-            Text("先看清原文，再把线索连起来，留下自己的理解。")
-                .font(.system(size: 16)).foregroundStyle(.secondary)
-            if profile.genres.isEmpty && profile.customGenres.isEmpty {
-                Button { adjusting = true } label: { Label("选择书型 · 可以多选", systemImage: "plus") }.buttonStyle(ReadingToolbarButtonStyle())
-            } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], alignment: .leading, spacing: 8) {
-                    ForEach(profile.genres, id: \.self) { genre in genrePill(genre.readerTitle, icon: genre.readerIcon) }
-                    ForEach(profile.customGenres, id: \.self) { value in genrePill(value, icon: "tag") }
-                }.frame(maxWidth: 640, alignment: .leading)
-            }
-            if store.book?.bookSchemes?.pending != nil {
-                Button { store.openBookScheme() } label: { Label("预读方案已准备好，查看并确认", systemImage: "checkmark.circle") }
-                    .buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 16)
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            Label("智能阅读", systemImage: "sparkles").font(.system(size: 14, weight: .semibold)).foregroundStyle(Palette.accent)
+            Text("安心读，线索会慢慢连起来。").font(.system(size: 33, weight: .semibold, design: .rounded)).fixedSize(horizontal: false, vertical: true)
+            Text("你决定读哪些内容，AI 为这本书选择合适的方法。\n分析在后台进行，原书始终在你手里。")
+                .font(.system(size: 16)).foregroundStyle(.secondary).lineSpacing(7)
         }
     }
-    private var methodSteps: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if activeMethods.isEmpty {
-                direction("先读原文", detail: "逐页展开，按段核对内容；识别不清的地方先留待核对。", icon: "book.pages", number: 1)
-                direction("建立联系", detail: "按这本书的内容选择对象、概念、事件和合适的组件。", icon: "point.3.connected.trianglepath.dotted", number: 2)
-                direction("留下理解", detail: "回看上下文，把有用的解释和自己的想法写进笔记。", icon: "square.and.pencil", number: 3)
-                Text("这是阅读方向。预读后会提出本书的实际执行方法，确认后开始。")
-                    .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
-            } else {
-                ForEach(Array(activeMethods.enumerated()), id: \.element.id) { index, method in
-                    VStack(alignment: .leading, spacing: 14) {
-                        direction(method.name, detail: method.goal, icon: index == 0 ? "book.pages" : "point.3.connected.trianglepath.dotted", number: index + 1)
-                        if !method.steps.isEmpty {
-                            VStack(alignment: .leading, spacing: 9) {
-                                ForEach(Array(method.steps.enumerated()), id: \.offset) { _, step in
-                                    HStack(alignment: .top, spacing: 10) { Circle().fill(Palette.accent.opacity(0.55)).frame(width: 4, height: 4).padding(.top, 7); Text(step).font(.system(size: 14)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-                                }
-                            }.padding(.leading, 66)
-                        }
-                    }.padding(.bottom, 12)
-                }
-            }
-        }
-    }
-    private func direction(_ title: String, detail: String, icon: String, number: Int) -> some View {
-        HStack(alignment: .top, spacing: 18) {
-            Image(systemName: icon).font(.system(size: 23, weight: .regular)).foregroundStyle(Palette.accent)
-                .frame(width: 48, height: 48).background(Palette.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 15))
-            VStack(alignment: .leading, spacing: 7) {
-                Text(title).font(.system(size: 20, weight: .semibold))
-                Text(detail).font(.system(size: 15)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).lineSpacing(4)
-            }.padding(.top, 3)
-            Spacer(minLength: 0)
-            Text(String(format: "%02d", number)).font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.tertiary).padding(.top, 9)
-        }.padding(.vertical, 12)
-    }
-    private var taskState: some View {
+    private var stages: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 18) { taskDescription; Spacer(minLength: 12); taskAction }
-            VStack(alignment: .leading, spacing: 10) { taskDescription; taskAction }
-        }.padding(18).frame(maxWidth: 860).readingGlass(radius: 23)
+            HStack(spacing: 14) { stage("1 选择方式与范围", active: true); Rectangle().fill(.secondary.opacity(0.2)).frame(width: 24, height: 1); stage("2 看一眼阅读方案", active: pending); Rectangle().fill(.secondary.opacity(0.2)).frame(width: 24, height: 1); stage("3 边读边分析", active: store.isSmartReadingRunning) }
+            Text("选择方式与范围  →  确认方案  →  边读边分析").font(.caption).foregroundStyle(.secondary)
+        }.padding(.top, 4)
     }
-    private var taskDescription: some View {
-        HStack(spacing: 12) {
-            if store.isBusy { ProgressView().controlSize(.small) }
-            else { Image(systemName: store.book?.isFullyProcessed == true ? "checkmark.circle" : "book.pages").foregroundStyle(Palette.accent) }
-            VStack(alignment: .leading, spacing: 5) {
-                Text(store.isBusy ? "正在阅读与整理" : store.book?.plan == nil ? "从预读开始" : store.book?.isFullyProcessed == true ? "这一轮阅读已完成" : "准备继续阅读")
-                    .font(.subheadline.weight(.semibold))
-                Text(store.isBusy ? store.activity : store.book?.plan == nil ? "AI 先看简介和目录，再建议适合这本书的方法。" : "阅读会接着已保存的位置继续；细节可在处理详情查看。")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+    private func stage(_ title: String, active: Bool) -> some View { Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(active ? Palette.accent : Color.secondary) }
+    private var setup: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Label("怎样读这本书", systemImage: "book.pages").font(.system(size: 17, weight: .semibold))
+            Button { automatic = true; methodIDs = [] } label: {
+                HStack(spacing: 15) {
+                    Image(systemName: "sparkles").font(.system(size: 26)).foregroundStyle(Palette.accent)
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("AI 自己决定").font(.system(size: 17, weight: .semibold))
+                        Text("先看书名、目录和开头，选用或制定专属方法").font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: automatic ? "checkmark.circle.fill" : "circle").foregroundStyle(automatic ? Palette.accent : Color.secondary.opacity(0.35))
+                }.padding(18).frame(maxWidth: .infinity, minHeight: 94, alignment: .leading)
+                    .background(Palette.accent.opacity(automatic ? 0.07 : 0.015), in: RoundedRectangle(cornerRadius: 17))
+                    .overlay(RoundedRectangle(cornerRadius: 17).strokeBorder(Palette.accent.opacity(automatic ? 0.5 : 0.1))).contentShape(RoundedRectangle(cornerRadius: 17))
+            }.buttonStyle(.plain)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) { ForEach(PluginEngine.recommendedMethods) { methodChoice($0) } }
+            Text("也可以组合书型。历史小说能同时关注人物、时空与叙事。").font(.system(size: 13)).foregroundStyle(.secondary).lineSpacing(4)
+            if !customMethods.isEmpty {
+                DisclosureGroup("本书的自定义方法") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 8)], spacing: 8) { ForEach(customMethods) { methodChoice($0) } }.padding(.top, 12)
+                }.font(.system(size: 13))
             }
+            Divider().opacity(0.35)
+            Label("分析多少", systemImage: "scope").font(.system(size: 17, weight: .semibold))
+            Picker("分析范围", selection: $scope) { ForEach(SmartReadingScope.allCases, id: \.self) { Text($0.displayTitle).tag($0) } }.pickerStyle(.segmented).controlSize(.large)
+            if scope == .currentChapter, Set(store.book?.units.map(\.chapter) ?? []).count <= 1 {
+                Text("这本书尚未分章；当前章可能覆盖整本书，请先核对范围。")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            if scope == .pageRange {
+                HStack(spacing: 10) {
+                    Text("从第"); TextField("开始页", value: $pageStart, format: .number).textFieldStyle(.roundedBorder).frame(width: 72)
+                    Text("到第"); TextField("结束页", value: $pageEnd, format: .number).textFieldStyle(.roundedBorder).frame(width: 72); Text("页"); Spacer(minLength: 0)
+                }.font(.system(size: 14))
+                if store.book?.units.contains(where: { $0.page != nil }) != true { Text("这本书没有原书页码，请选择当前章或全书。").font(.caption).foregroundStyle(.secondary) }
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 14) { rangeHint; Spacer(minLength: 0); prepareButton }
+                VStack(alignment: .leading, spacing: 12) { rangeHint; prepareButton }
+            }
+        }.padding(27).readingGlass(radius: 25).disabled(store.isBusy)
+    }
+    private var rangeHint: some View { Text("发送后范围固定，不随翻页改变").font(.system(size: 12)).foregroundStyle(.secondary) }
+    private var prepareButton: some View {
+        Button { store.prepareSmartReading(selection) } label: { Label(activeMethods.isEmpty ? "预读并制定方案" : "预读新方案", systemImage: "sparkles") }
+            .buttonStyle(ReadingActionButtonStyle(prominent: true)).disabled(store.book == nil || (!automatic && methodIDs.isEmpty) || pending)
+    }
+    private func methodChoice(_ method: ReadingMethod) -> some View {
+        let label = ["genre.history": "历史", "genre.war": "战争", "genre.fiction": "小说", "genre.argument": "论述", "genre.textbook": "教材"][method.id] ?? method.name
+        let icon = ["genre.history": "clock", "genre.war": "flag", "genre.fiction": "book.closed", "genre.argument": "text.alignleft", "genre.textbook": "graduationcap"][method.id] ?? "book.closed"
+        return Button {
+            automatic = false
+            if methodIDs.contains(method.id) { methodIDs.remove(method.id) } else { methodIDs.insert(method.id) }
+        } label: {
+            HStack(spacing: 7) { Image(systemName: methodIDs.contains(method.id) && !automatic ? "checkmark.circle.fill" : icon); Text(label).lineLimit(2) }
+                .font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(ReadingToolbarButtonStyle(selected: !automatic && methodIDs.contains(method.id)))
+    }
+    private var journey: some View {
+        VStack(alignment: .leading, spacing: 27) {
+            Text("接下来会发生什么").font(.system(size: 12)).foregroundStyle(.tertiary)
+            journeyStep("01", "先了解这本书", "预读只用于选方法，还没有读完整本书。")
+            journeyStep("02", "逐段读，再整理", "每段留下简短复述，再保存有出处的要素和联系。")
+            journeyStep("03", "在组件里看见结果", "人物、战役与地点使用同一对象；适用时，地图、时间和关系同步呈现。")
+            Button { store.requestedWorkspaceRoute = "reader" } label: { Label("先回原文，稍后再分析", systemImage: "book.pages") }.buttonStyle(.borderless).font(.system(size: 13))
+        }.padding(.top, 20)
+    }
+    private func journeyStep(_ number: String, _ title: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Text(number).font(.system(size: 12).monospacedDigit()).foregroundStyle(Palette.accent.opacity(0.6)).padding(.top, 4)
+            VStack(alignment: .leading, spacing: 9) { Text(title).font(.system(size: 16, weight: .medium)); Text(text).font(.system(size: 14)).foregroundStyle(.secondary).lineSpacing(5).fixedSize(horizontal: false, vertical: true) }
         }
     }
-    @ViewBuilder private var taskAction: some View {
-        if store.isBusy {
-            Button { store.pause() } label: { Label("暂停", systemImage: "pause.fill") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(!canPause)
-        } else if store.book?.bookSchemes?.pending != nil {
-            Button("确认方案") { store.openBookScheme() }.buttonStyle(.borderedProminent).controlSize(.large)
-        } else {
-            Button { store.book?.plan == nil ? store.makePlan() : store.startReading() } label: {
-                Label(store.book?.plan == nil ? "预读并建议读法" : "继续精读", systemImage: "sparkles").frame(minHeight: 32)
-            }.buttonStyle(.borderedProminent).controlSize(.large).disabled(store.book == nil)
-        }
+    private var pendingCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("预读方案已准备好", systemImage: "checkmark.circle").font(.system(size: 19, weight: .semibold)).foregroundStyle(Palette.accent)
+            Text("看一眼 AI 选择的方法、类型和组件，确认后开始分析所选范围。").font(.system(size: 15)).foregroundStyle(.secondary)
+            Button { store.openBookScheme() } label: { Label("查看并确认方案", systemImage: "arrow.right") }.buttonStyle(ReadingActionButtonStyle(prominent: true))
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(26).readingGlass(radius: 24)
     }
-    private var adjustmentBinding: Binding<Bool> {
-        Binding(get: { adjusting }, set: { value in
-            if profileLoaded && !value && adjusting && profileDirty { discardChanges = true }
-            else { adjusting = value }
-        })
+    private var activePlan: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack { Label("正在使用的阅读方案", systemImage: "checkmark.seal").font(.system(size: 17, weight: .semibold)); Spacer(); Button { store.openBookScheme() } label: { Image(systemName: "slider.horizontal.3") }.buttonStyle(ReadingToolbarButtonStyle()).help("查看完整方案") }
+            Text(store.book?.plan?.rationale ?? "").font(.system(size: 15)).foregroundStyle(.secondary).lineSpacing(5)
+            ForEach(activeMethods) { method in
+                DisclosureGroup(method.name) {
+                    Text(method.goal).font(.system(size: 14)).foregroundStyle(.secondary).padding(.top, 8)
+                    ForEach(Array(method.steps.enumerated()), id: \.offset) { _, step in Text("· " + step).font(.system(size: 14)).foregroundStyle(.secondary).padding(.top, 5) }
+                }.font(.system(size: 15, weight: .medium))
+            }
+            HStack {
+                Text(store.book?.smartReading?.scopeTitle ?? "继续前，先确认本轮分析范围。").font(.system(size: 12)).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                if store.isSmartReadingRunning { Button { store.pause() } label: { Label("暂停分析", systemImage: "pause") }.buttonStyle(ReadingToolbarButtonStyle()) }
+                else if store.book?.smartReading != nil { Button { store.startReading() } label: { Label("继续分析", systemImage: "play") }.buttonStyle(ReadingActionButtonStyle(prominent: true)).disabled(store.isBusy) }
+                else { Button { store.startSmartReadingWithExistingPlan(selection) } label: { Label("沿用此方案分析所选范围", systemImage: "play") }.buttonStyle(ReadingActionButtonStyle(prominent: true)).disabled(store.isBusy) }
+            }
+        }.padding(26).readingGlass(radius: 24)
     }
-    private var adjustmentContent: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("这本书可以属于几种类型").font(.subheadline.weight(.medium))
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), spacing: 8)], spacing: 8) {
-                        ForEach(BookGenre.allCases, id: \.self) { genre in
-                            Button {
-                                if draft.genres.contains(genre) { draft.genres.removeAll { $0 == genre } }
-                                else { draft.genres.append(genre) }
-                            } label: { Label(genre.readerTitle, systemImage: draft.genres.contains(genre) ? "checkmark.circle.fill" : genre.readerIcon).frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle()) }
-                                .buttonStyle(ReadingToolbarButtonStyle(selected: draft.genres.contains(genre)))
-                        }
+    private var readingPreferences: some View {
+        DisclosureGroup("阅读偏好与自定义书型") {
+            VStack(alignment: .leading, spacing: 16) {
+                Toggle("避免提前揭示后文", isOn: $profileDraft.avoidsSpoilers).font(.system(size: 14))
+                Text("开启后，时空与专属组件随当前阅读位置展示；关闭后可查看本书已生成的完整结果。").font(.system(size: 12)).foregroundStyle(.secondary).lineSpacing(4)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 108))], alignment: .leading, spacing: 8) {
+                    ForEach(BookGenre.allCases, id: \.self) { genre in
+                        Button {
+                            if profileDraft.genres.contains(genre) { profileDraft.genres.removeAll { $0 == genre } } else { profileDraft.genres.append(genre) }
+                        } label: { Label(genre.readerTitle, systemImage: profileDraft.genres.contains(genre) ? "checkmark.circle.fill" : genre.readerIcon).frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle()) }
+                            .buttonStyle(ReadingToolbarButtonStyle(selected: profileDraft.genres.contains(genre)))
                     }
-                    ForEach(draft.customGenres, id: \.self) { value in
-                        HStack { Label(value, systemImage: "tag"); Spacer(); Button { draft.customGenres.removeAll { $0 == value } } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("移除这个自定义书型") }
-                    }
-                    HStack(spacing: 6) {
-                        TextField("自定义书型", text: $customGenre).textFieldStyle(.roundedBorder).onSubmit(addCustomGenre)
-                        Button(action: addCustomGenre) { Image(systemName: "plus") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(customGenre.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.customGenres.count >= 16)
-                    }
-                    Toggle("阅读时尽量不提前揭示后文", isOn: $draft.avoidsSpoilers).font(.subheadline)
-                    Divider()
-                    Text("书型帮助 AI 选方法。若要改变正在执行的步骤，请调整实际方案并确认。")
-                        .font(.caption).foregroundStyle(.secondary).lineSpacing(4)
-                    Button { store.openBookScheme() } label: { Label("调整实际执行方法", systemImage: "slider.horizontal.3") }.buttonStyle(ReadingToolbarButtonStyle())
-                    Button { store.requestedWorkspaceRoute = "plugins" } label: { Label("自定义读书方法", systemImage: "puzzlepiece.extension") }.buttonStyle(ReadingToolbarButtonStyle())
-                }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
-            }.disabled(store.isBusy)
-            Divider().opacity(0.4)
-            HStack { Text(profileDirty ? "有未保存调整" : "已与本书同步").font(.caption).foregroundStyle(.secondary); Spacer(); Button("保存偏好") { saveProfile(close: false) }.buttonStyle(.borderedProminent).controlSize(.large).disabled(!profileDirty || store.isBusy) }.padding(14)
-        }
+                }
+                ForEach(profileDraft.customGenres, id: \.self) { genre in
+                    HStack { Label(genre, systemImage: "tag"); Spacer(); Button { profileDraft.customGenres.removeAll { $0 == genre } } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("移除这个书型偏好") }
+                }
+                HStack {
+                    TextField("例如：传记、哲学、科学史", text: $customGenre).textFieldStyle(.roundedBorder).onSubmit(addGenre)
+                    Button(action: addGenre) { Image(systemName: "plus") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(customGenre.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || profileDraft.customGenres.count >= 16)
+                }
+                HStack {
+                    Text("偏好在保存后生效；实际方法仍以已确认方案为准。").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Button("保存偏好") {
+                        guard let id = store.bookID else { return }
+                        let captured = profileDraft
+                        Task { _ = await store.saveReaderBookProfile(captured, inBook: id) }
+                    }.buttonStyle(ReadingToolbarButtonStyle(selected: true)).disabled(profileDraft == (store.book?.temporalKnowledge?.profile ?? BookProfile()))
+                }
+            }.padding(.top, 18).disabled(store.isBusy)
+        }.font(.system(size: 14)).padding(22).readingGlass(radius: 22)
     }
-    private func genrePill(_ title: String, icon: String) -> some View {
-        Label(title, systemImage: icon).font(.system(size: 13, weight: .medium)).padding(.horizontal, 13).frame(minHeight: 34)
-            .foregroundStyle(Palette.accent).background(Palette.accent.opacity(0.075), in: Capsule())
-    }
-    private func loadProfile() { profileBookID = store.bookID; draft = profile; customGenre = ""; profileLoaded = true }
-    private func addCustomGenre() {
+    private func addGenre() {
         let value = String(customGenre.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
-        guard !value.isEmpty, draft.customGenres.count < 16, !draft.customGenres.contains(where: { $0.caseInsensitiveCompare(value) == .orderedSame }) else { return }
-        draft.customGenres.append(value); customGenre = ""
+        guard !value.isEmpty, profileDraft.customGenres.count < 16, !profileDraft.customGenres.contains(where: { $0.caseInsensitiveCompare(value) == .orderedSame }) else { return }
+        profileDraft.customGenres.append(value); customGenre = ""
     }
-    private func saveProfile(close: Bool) {
-        guard let bookID = profileBookID else { return }
-        let captured = draft
-        Task {
-            if await store.saveReaderBookProfile(captured, inBook: bookID), store.bookID == bookID {
-                loadProfile(); if close { adjusting = false }
-            }
+    private func load() {
+        profileDraft = store.book?.temporalKnowledge?.profile ?? BookProfile(); customGenre = ""
+        if let saved = store.book?.smartReading?.selection {
+            scope = saved.scope; pageStart = saved.pageStart ?? 1; pageEnd = saved.pageEnd ?? pageStart
+            methodIDs = Set(saved.preferredMethodIDs); automatic = methodIDs.isEmpty
+        } else {
+            scope = .wholeBook; methodIDs = []; automatic = true; pageStart = store.selectedUnit?.page ?? 1
+            pageEnd = min(pageStart + 9, store.book?.units.compactMap(\.page).max() ?? pageStart)
         }
     }
 }

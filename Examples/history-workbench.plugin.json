@@ -1,0 +1,176 @@
+{
+  "id": "example-history-workbench",
+  "name": "人物与时空工作台",
+  "version": 1,
+  "description": "用共享实体、时间与原文依据组合页面；不附带人物、事件、坐标或书籍事实。",
+  "types": [],
+  "methods": [],
+  "views": [
+    {
+      "id": "history-workbench",
+      "title": "人物与时空",
+      "kind": "knowledge",
+      "rendererID": "reading.composition",
+      "scope": "book",
+      "typeIDs": [],
+      "composition": {
+        "version": 1,
+        "sources": [
+          {
+            "id": "people",
+            "collection": "objects",
+            "scope": "book",
+            "typeIDs": [
+              "person"
+            ],
+            "limit": 100
+          },
+          {
+            "id": "selected",
+            "collection": "objects",
+            "scope": "book",
+            "relation": "selected",
+            "limit": 20
+          },
+          {
+            "id": "events",
+            "collection": "events",
+            "scope": "book",
+            "sort": "time",
+            "limit": 100
+          },
+          {
+            "id": "places",
+            "collection": "objects",
+            "scope": "book",
+            "relation": "places",
+            "typeIDs": [
+              "place"
+            ],
+            "limit": 100
+          },
+          {
+            "id": "links",
+            "collection": "relations",
+            "scope": "book",
+            "relation": "neighbors",
+            "limit": 100
+          },
+          {
+            "id": "quotes",
+            "collection": "evidence",
+            "scope": "book",
+            "relation": "selected",
+            "limit": 20
+          }
+        ],
+        "parts": [
+          {
+            "id": "people-card",
+            "sourceID": "people",
+            "primitive": "object.list",
+            "title": "人物"
+          },
+          {
+            "id": "details",
+            "sourceID": "selected",
+            "primitive": "object.detail",
+            "title": "此时与此人"
+          },
+          {
+            "id": "clock",
+            "sourceID": "events",
+            "primitive": "time.axis",
+            "title": "时间"
+          },
+          {
+            "id": "map",
+            "sourceID": "places",
+            "primitive": "geo.map",
+            "title": "行动地点"
+          },
+          {
+            "id": "relations",
+            "sourceID": "links",
+            "primitive": "relation.graph",
+            "title": "相关人物"
+          },
+          {
+            "id": "quotes-card",
+            "sourceID": "quotes",
+            "primitive": "source.excerpt",
+            "title": "回到原书"
+          }
+        ],
+        "layout": [
+          {
+            "id": "leaf-people-card",
+            "kind": "part",
+            "partID": "people-card"
+          },
+          {
+            "id": "leaf-details",
+            "kind": "part",
+            "partID": "details"
+          },
+          {
+            "id": "leaf-clock",
+            "kind": "part",
+            "partID": "clock"
+          },
+          {
+            "id": "leaf-map",
+            "kind": "part",
+            "partID": "map"
+          },
+          {
+            "id": "leaf-relations",
+            "kind": "part",
+            "partID": "relations"
+          },
+          {
+            "id": "leaf-quotes-card",
+            "kind": "part",
+            "partID": "quotes-card"
+          },
+          {
+            "id": "side",
+            "kind": "column",
+            "children": [
+              "leaf-people-card",
+              "leaf-details"
+            ],
+            "fraction": 0.3
+          },
+          {
+            "id": "main",
+            "kind": "column",
+            "children": [
+              "leaf-clock",
+              "views",
+              "leaf-quotes-card"
+            ],
+            "fraction": 0.7
+          },
+          {
+            "id": "views",
+            "kind": "tabs",
+            "children": [
+              "leaf-map",
+              "leaf-relations"
+            ]
+          },
+          {
+            "id": "root",
+            "kind": "row",
+            "children": [
+              "side",
+              "main"
+            ]
+          }
+        ],
+        "rootID": "root"
+      }
+    }
+  ]
+}

@@ -484,6 +484,7 @@ public actor LibraryRepository {
         try MathVerificationTools.validateStoredRecords(in: project, cache: &mathValidationCache)
         try ReadingLedger.validateStoredRecords(in: project, mathCache: &mathValidationCache)
         try BookSchemeRuntime.validateStoredState(in: project)
+        try SmartReadingRuntime.validateStoredState(in: project)
         if let experience = project.readingExperience {
             try ReadingExperienceRuntime.validateStoredState(experience, in: project)
         }

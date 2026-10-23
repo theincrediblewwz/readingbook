@@ -215,7 +215,7 @@ extension AppStore {
                 }
                 activity = runPages.count < candidates.count
                     ? "本轮 \(runPages.count) 页已识别并保存，另有 \(candidates.count - runPages.count) 页可续跑；请在识别面板选择剩余页。"
-                    : "所选页面已逐页识别并保存；请对照 PDF 核对，再预读与精读。"
+                    : "所选页面已逐页识别并保存；请对照 PDF 核对，再预读与分析。"
             } catch { handle(error) }
             requestsUsed = await pdfOCRReader.requestCount
         }

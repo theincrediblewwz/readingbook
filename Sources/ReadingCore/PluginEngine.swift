@@ -9,7 +9,7 @@ public enum PluginEngine {
     /// Unknown renderer metadata may be archived by declaration packs, but AI
     /// cannot claim an uninstalled renderer is executable.
     public static let modelRendererKinds: [String: ComponentKind] = [
-        "reading.layers": .knowledge, "reading.atlas": .knowledge, "book.scheme": .workflow
+        "reading.layers": .knowledge, "reading.atlas": .knowledge, "reading.composition": .knowledge, "book.scheme": .workflow
     ]
     /// Retirement affects discovery and new execution, never archive decoding.
     public static func isRetiredRenderer(_ id: String) -> Bool {
@@ -21,6 +21,28 @@ public enum PluginEngine {
     }
     public static func activeMethods(in project: BookProject) -> [ReadingMethod] {
         project.methods.filter { isActiveMethod($0) && !isDisabledMethod($0.id, in: project) }
+    }
+    /// Kept executable for archived plans, but no longer offered for new planning.
+    public static let legacyStarterMethodIDs: Set<String> = ["narrative", "analytical", "textbook", "research", "active-retelling", "layered-reading-v2"]
+    public static var recommendedMethods: [ReadingMethod] {
+        let definitions: [(String, String, String, [String])] = [
+            ("genre.history", "历史阅读", "按原书证据理解时代、人物、事件与因果，区分史料陈述和推断。", ["识别本段时代背景、叙述立场与不确定之处", "复用实体并保存有来源的事件、年代、地点、关系及人物时态；地图与时间轴共享对象", "按本段需要保存词语解释、译文及原文锚点", "回顾变化、因果与尚待回查的问题"]),
+            ("genre.war", "战争阅读", "联系战役阶段、地理、参与者、决策与结果，不推造行军路线。", ["辨明本段战争背景、决策与叙述层次", "保存战役阶段、实际出现地点、参与者及有证据的时态；不把参与等同于全程在场", "为适用地点、人物和术语建立可回到原文的解释", "比较目标、条件、行动与结果，保留来源疑点"]),
+            ("genre.fiction", "小说阅读", "理解作品人物、叙事、关系和主题；小说情节不作为已证实史实。", ["沿本段叙事识别视角、情节和人物变化，遵守避免剧透偏好", "复用作品内实体，保存情节事件、关系及文本明确的时空；标明作品叙事性质", "按需保存称谓、典故和词句解释并锚定原文", "回顾动机、伏笔与主题，只使用已读证据"]),
+            ("genre.argument", "论述阅读", "厘清问题、概念、主张、证据、推理与反例。", ["辨明本段的问题、主张与论证结构", "保存概念、前提、论据和结论及它们有证据的依赖关系", "解释关键术语、条件和推理转折，连接原文依据", "回查适用边界、反例、矛盾和待解问题"]),
+            ("genre.textbook", "教材阅读", "联系定义、条件、原理、证明、例题与先修依赖，不强行使用人物地图。", ["逐段辨明定义、公式、条件与本段学习目标", "保存适用的概念、定理、方法与先修依赖；保留完整条件和不确定之处", "解释本段符号、术语及证明或例题线索并锚定原文", "回顾条件、推导依赖、易混概念与理解问题"])
+        ]
+        return definitions.map { id, name, goal, steps in
+            let actions = ["ai.analyze", "facts.extract", "reading.enrich", "reading.review", "citations.verify"]
+            return ReadingMethod(id: id, name: name, goal: goal,
+                                 steps: steps + ["核验本段保存的引文和对象关联，保留仍需读者核对的疑点。"],
+                                 executions: actions.enumerated().map { ReadingStepExecution(stepIndex: $0.offset, actionID: $0.element) })
+        }
+    }
+    public static func recommendedMethods(in project: BookProject) -> [ReadingMethod] {
+        // Seeding is additive: old declarations and their hashes never change.
+        var candidate = project; seed(&candidate)
+        return activeMethods(in: candidate).filter { !legacyStarterMethodIDs.contains($0.id) }
     }
     public static var activeWorkflowActions: [ReadingWorkflowActionDescriptor] {
         ReadingWorkflowRuntime.actions.filter { !isRetiredAction($0.id) }.map { value in
@@ -74,6 +96,7 @@ public enum PluginEngine {
             executable.executions = actions.enumerated().map { ReadingStepExecution(stepIndex: $0.offset, actionID: $0.element) }
             project.methods.append(executable)
         }
+        for method in recommendedMethods where !project.methods.contains(where: { $0.id == method.id }) { project.methods.append(method) }
         for unit in project.units where project.coverage[unit.id] == nil { project.coverage[unit.id] = CoverageEntry() }
         // Views are selected by the reading plan, rather than forcing person cards onto every book.
     }
@@ -90,7 +113,8 @@ public enum PluginEngine {
         let view = object(["id": id, "title": text, "kind": ["type": "string", "enum": ComponentKind.allCases.map(\.rawValue)], "typeIDs": array(id, maximum: 128),
                            "rendererID": ["type": "string", "enum": modelRendererKinds.keys.sorted(), "description": "选择实际编译注册的增强阅读渲染器；不提供则使用kind对应默认组件。"],
                            "scope": ["type": "string", "enum": ["current", "book"]],
-                           "configuration": ["type": "object", "additionalProperties": ["type": "string", "maxLength": 4000], "maxProperties": 16]], required: ["id", "title", "kind"])
+                           "configuration": ["type": "object", "additionalProperties": ["type": "string", "maxLength": 4000], "maxProperties": 16],
+                           "composition": CompositionSchema.definition], required: ["id", "title", "kind"])
         let execution = object(["stepIndex": ["type": "integer", "minimum": 0, "maximum": 23], "actionID": ["type": "string", "enum": activeWorkflowActions.map(\.id)], "configuration": ["type": "object", "additionalProperties": ["type": "string", "maxLength": 4000], "maxProperties": 16], "maxAttempts": ["type": "integer", "minimum": 1, "maximum": 8]], required: ["stepIndex", "actionID"])
         let method = object(["id": id, "name": text, "goal": ["type": "string", "minLength": 1, "maxLength": 4_000], "steps": array(["type": "string", "minLength": 1, "maxLength": 4_000], minimum: 1, maximum: 24), "executions": array(execution, minimum: 1, maximum: 24)], required: ["id", "name", "goal", "steps"])
         let entity = object([
@@ -111,12 +135,12 @@ public enum PluginEngine {
         let receipt = object(["paragraphID": id, "textHash": id, "summary": ["type": "string", "minLength": 1, "maxLength": 1200], "startQuote": ["type": "string", "maxLength": 96], "endQuote": ["type": "string", "maxLength": 96], "issues": array(text, maximum: 12)], required: ["paragraphID", "textHash", "summary", "startQuote", "endQuote", "issues"])
         let stepResult = object(["stepID": id, "result": ["type": "string", "minLength": 1, "maxLength": 2000], "paragraphIDs": array(id, minimum: 1, maximum: 512)], required: ["stepID", "result", "paragraphIDs"])
         return [
-            function("knowledge_search", "只读查询本书已经保存的实体、事件与文档标题，按名称、别名和概述匹配。创建对象前用它查找索引样本之外的既有对象，避免重复。不会读取未提供的 Markdown 正文，不增加阅读覆盖。", object(["query": ["type": "string", "minLength": 1, "maxLength": 400], "limit": ["type": "integer", "minimum": 1, "maximum": 12]], required: ["query"])),
+            function("knowledge_search", "只读查询当前获准原文相关的已保存实体与事件；跨页聚合信息会隐藏。当前正文出现的已有名称/称谓可返回仅身份候选，核对同名后复用稳定ID，不能当作范围外事实。不会自动附加用户笔记标题或正文，不增加阅读覆盖。", object(["query": ["type": "string", "minLength": 1, "maxLength": 400], "limit": ["type": "integer", "minimum": 1, "maximum": 12]], required: ["query"])),
             function("types_define", "定义通用卡片类型。人物只是默认类型之一；可自定义概念、定理等类型。相同 ID 的既有类型不能被不同定义覆盖。", object(["types": array(type, minimum: 1, maximum: 64)], required: ["types"])),
             function("cards_upsert", "依据当前源单元证据创建或合并实体卡。typeID 必须已存在，properties 的键须已在该类型 fields 声明；坐标必须成对并有依据。重用同一稳定 ID，保留旧证据和信息。", object(["entities": array(entity, minimum: 1, maximum: 128)], required: ["entities"])),
             function("events_upsert", "创建或合并同一知识事件；placeIDs 和 participantIDs 引用既有实体 ID。地图与时间轴共用这个事件 ID。未知年份省略，dateText 保留原文及不确定性。", object(["events": array(event, minimum: 1, maximum: 128)], required: ["events"])),
             function("relations_link", "以证据连接已经存在的实体、事件或文档，不创建悬空引用，不编辑文档正文。", object(["relations": array(relation, minimum: 1, maximum: 128)], required: ["relations"])),
-            function("views_configure", "添加或配置当前书适用的组件视图。kind选择默认组件；rendererID可选reading.layers、reading.atlas或book.scheme，使用共享原文、对象和阅读层，不创建独有知识副本。增强插件scope默认current，可选book；configuration为受限声明数据，不执行代码。typeIDs只引用已有类型。", object(["views": array(view, minimum: 1, maximum: 32)], required: ["views"])),
+            function("views_configure", "添加或配置当前书适用的组件视图。reading.composition使用composition将8种原生元件组合为专用界面（kind=knowledge），共享真实对象、选择和时间；不同id可建立多个组合。reading.layers/reading.atlas/book.scheme保留。scope默认current；book也不越过读者剧透边界。声明不写正文、不执行代码、不凭空补事实。", object(["views": array(view, minimum: 1, maximum: 32)], required: ["views"])),
             function("methods_define", "定义读书法的目标、步骤及可执行动作绑定。executions按stepIndex逐项覆盖步骤，actionID从宿主动作注册表选择；未提供时按兼容AI分析动作执行。每步有输入输出、校验与检查点，不能跳过逐段回执。", object(["methods": array(method, minimum: 1, maximum: 32)], required: ["methods"])),
             function("reading_plan", "预读后选择已有读书法，可先自定义；正文阶段只允许增加方法，不能减少现有步骤。正文阶段成功后返回当前全部宿主stepID，finish须完整交齐。该操作不增加正文覆盖。", object(["methodIDs": array(id, minimum: 1, maximum: 16), "rationale": ["type": "string", "minLength": 1, "maxLength": 8_000], "focus": array(text, maximum: 32)], required: ["methodIDs", "rationale", "focus"])),
             function("read_receipt", "仅提交宿主当前batchID清单内的全部片段回执；不得自编清单、遗漏、重复或加入片段。summary用自己的话极简复述本段，保留关键条件、公式和注释；空白段写空白分隔。textHash原样复制，startQuote/endQuote精确复制宿主给出的首尾锚点，issues明确疑点。回执验证齐全后才开放知识抽取。", object(["batchID": id, "receipts": array(receipt, minimum: 1, maximum: 24)], required: ["batchID", "receipts"])),
@@ -208,11 +232,64 @@ public enum PluginEngine {
         }
     }
 
-    private static func search(_ input: [String: Any], project: BookProject) throws -> String {
+    /// Read capability for an analysis request. Historical receipts do not widen
+    /// this set, and a source-only request never silently attaches user notes.
+    static func analysisContextProject(_ project: BookProject, allowedUnitIDs: Set<String>) throws -> BookProject {
+        guard allowedUnitIDs.isSubset(of: Set(project.units.map(\.id))) else { throw invalid("知识目录读取范围引用了不存在的原文。") }
+        var input = project
+        input.units = input.units.filter { allowedUnitIDs.contains($0.id) }
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: input)
+        let session = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: input)
+        var scoped = session.scopedKnowledgeProject() ?? input
+        let knownIDs = Set(scoped.entities.map(\.id) + scoped.events.map(\.id) + analysisIdentityCandidates(project, allowedUnitIDs: allowedUnitIDs).map(\.id))
+        scoped.events = scoped.events.map { original in
+            var event = original
+            event.placeIDs = event.placeIDs.filter(knownIDs.contains); event.participantIDs = event.participantIDs.filter(knownIDs.contains)
+            return event
+        }
+        if var experience = scoped.readingExperience {
+            let anchors = experience.anchors.filter { snapshot.admits(Evidence(unitID: $0.unitID, quote: $0.quote)) }
+            let ids = Set(anchors.map(\.id))
+            experience.anchors = anchors
+            experience.mentions = experience.mentions.filter { ids.contains($0.anchorID) }
+            experience.layers = experience.layers.filter { !$0.sourceAnchorIDs.isEmpty && Set($0.sourceAnchorIDs).isSubset(of: ids) }
+            experience.alignments = experience.alignments.filter { !$0.sourceAnchorIDs.isEmpty && Set($0.sourceAnchorIDs).isSubset(of: ids) }
+            experience.decisions = experience.decisions.filter { !$0.sourceAnchorIDs.isEmpty && Set($0.sourceAnchorIDs).isSubset(of: ids) }
+            scoped.readingExperience = experience
+        }
+        return scoped
+    }
+    struct AnalysisIdentityCandidate {
+        var id: String; var kind: String; var typeID: String; var name: String; var aliases: [String]
+    }
+    /// A literal occurrence permits offering a stable ID for deduplication,
+    /// without revealing its other names or any facts learned on other pages.
+    /// These are explicitly candidates, not an assertion that two names coincide.
+    static func analysisIdentityCandidates(_ project: BookProject, allowedUnitIDs: Set<String>) -> [AnalysisIdentityCandidate] {
+        let texts = project.units.filter { allowedUnitIDs.contains($0.id) }.map(\.text)
+        func local(_ names: [String]) -> [String] {
+            var seen = Set<String>()
+            return names.filter { name in !name.isEmpty && seen.insert(name).inserted && texts.contains(where: { $0.contains(name) }) }
+        }
+        var result: [AnalysisIdentityCandidate] = []
+        for entity in project.entities {
+            let names = local([entity.name] + entity.aliases)
+            guard let name = names.first else { continue }
+            result.append(AnalysisIdentityCandidate(id: entity.id, kind: "entity", typeID: entity.typeID, name: name, aliases: Array(names.dropFirst())))
+        }
+        for event in project.events {
+            guard let name = local([event.name]).first else { continue }
+            result.append(AnalysisIdentityCandidate(id: event.id, kind: "event", typeID: "event", name: name, aliases: []))
+        }
+        return result
+    }
+
+    private static func search(_ input: [String: Any], project original: BookProject, allowed: Set<String>) throws -> String {
         try keys(input, allowed: ["query", "limit"])
         let query = try string(input, key: "query", maximum: 400)
         let limit = try integer(input, key: "limit") ?? 8
         guard (1...12).contains(limit) else { throw invalid("查询 limit 必须在 1–12 之间。") }
+        let project = try analysisContextProject(original, allowedUnitIDs: allowed)
         var matches: [[String: Any]] = []
         for entity in project.entities where matches.count < limit {
             guard ([entity.name, entity.summary] + entity.aliases).contains(where: { $0.localizedCaseInsensitiveContains(query) }) else { continue }
@@ -222,8 +299,12 @@ public enum PluginEngine {
             guard [event.name, event.summary].contains(where: { $0.localizedCaseInsensitiveContains(query) }) else { continue }
             matches.append(["kind": "event", "id": event.id, "name": String(event.name.prefix(120)), "summary": String(event.summary.prefix(180)), "dateText": String(event.dateText.prefix(120)), "placeIDs": Array(event.placeIDs.prefix(3)), "participantIDs": Array(event.participantIDs.prefix(3))])
         }
-        for document in project.activeDocuments where matches.count < limit {
-            if document.title.localizedCaseInsensitiveContains(query) { matches.append(["kind": "document-metadata", "id": document.id, "title": String(document.title.prefix(160))]) }
+        let returnedIDs = Set(matches.compactMap { $0["id"] as? String })
+        for candidate in analysisIdentityCandidates(original, allowedUnitIDs: allowed) where matches.count < limit && !returnedIDs.contains(candidate.id) {
+            guard ([candidate.name] + candidate.aliases).contains(where: { $0.localizedCaseInsensitiveContains(query) }) else { continue }
+            matches.append(["kind": candidate.kind, "id": candidate.id, "typeID": candidate.typeID, "name": String(candidate.name.prefix(120)),
+                "aliases": candidate.aliases.prefix(3).map { String($0.prefix(60)) }, "summary": "", "identityOnly": true,
+                "notice": "仅供核对同名/称谓并复用ID；不代表确认身份，不能引用范围外事实。"])
         }
         var bounded = false
         while true {
@@ -264,7 +345,7 @@ public enum PluginEngine {
         }
         var registry = PluginToolRegistry()
         try registry.install(BuiltInPlugin(info: ReadingPluginInfo(id: "builtin.knowledge", name: "知识要素"), tools: [
-            try RegisteredReadingTool(pluginID: "builtin.knowledge", schema: index["knowledge_search"]!, phases: [.reading, .workflow], requiresReceipts: false, readOnly: true) { data, project, allowed in try search(input(data), project: project) },
+            try RegisteredReadingTool(pluginID: "builtin.knowledge", schema: index["knowledge_search"]!, phases: [.reading, .workflow], requiresReceipts: false, readOnly: true) { data, project, allowed in try search(input(data), project: project, allowed: allowed) },
             try RegisteredReadingTool(pluginID: "builtin.knowledge", schema: index["types_define"]!, phases: [.planning, .reading, .workflow], requiresReceipts: false, readOnly: false) { data, project, allowed in try defineTypesTool(input(data), project: &project, allowed: allowed) },
             try RegisteredReadingTool(pluginID: "builtin.knowledge", schema: index["cards_upsert"]!, phases: [.reading, .workflow], requiresReceipts: true, readOnly: false) { data, project, allowed in try cardsTool(input(data), project: &project, allowed: allowed) },
             try RegisteredReadingTool(pluginID: "builtin.knowledge", schema: index["events_upsert"]!, phases: [.reading, .workflow], requiresReceipts: true, readOnly: false) { data, project, allowed in try eventsTool(input(data), project: &project, allowed: allowed) },
@@ -619,7 +700,7 @@ public enum PluginEngine {
     }
 
     private static func parseView(_ input: [String: Any]) throws -> ViewDefinition {
-        try keys(input, allowed: ["id", "title", "kind", "typeIDs", "rendererID", "scope", "configuration"])
+        try keys(input, allowed: ["id", "title", "kind", "typeIDs", "rendererID", "scope", "configuration", "composition"])
         guard !isRetiredRenderer(try identifier(input, key: "id")) else { throw invalid("该组件已停用，不能重新添加。") }
         let raw = try string(input, key: "kind", maximum: 128)
         guard let kind = ComponentKind(rawValue: raw) else { throw invalid("未知组件类型：\(raw)") }
@@ -633,7 +714,12 @@ public enum PluginEngine {
         let configuration: [String: String]?
         if input["configuration"] == nil { configuration = nil }
         else { configuration = try stringMap(input, key: "configuration") }
-        return ViewDefinition(id: try identifier(input, key: "id"), title: try string(input, key: "title", maximum: 400), kind: kind, typeIDs: try strings(input, key: "typeIDs", maximum: 128), rendererID: rendererID, scope: scope, configuration: configuration)
+        let composition: CompositionDefinition?
+        if let raw = input["composition"] {
+            guard raw is [String: Any] else { throw invalid("composition必须是声明式对象。") }
+            composition = try JSONDecoder().decode(CompositionDefinition.self, from: JSONSerialization.data(withJSONObject: raw))
+        } else { composition = nil }
+        return ViewDefinition(id: try identifier(input, key: "id"), title: try string(input, key: "title", maximum: 400), kind: kind, typeIDs: try strings(input, key: "typeIDs", maximum: 128), rendererID: rendererID, scope: scope, configuration: configuration, composition: composition)
     }
 
     private static func validate(_ type: EntityType) throws {
@@ -668,6 +754,11 @@ public enum PluginEngine {
         if let configuration = view.configuration {
             guard configuration.count <= 16, configuration.allSatisfy({ !$0.key.isEmpty && $0.key.count <= 128 && $0.value.count <= 4000 }) else { throw invalid("组件声明配置超过数量或长度上限。") }
         }
+        if view.rendererID == "reading.composition" {
+            guard let definition = view.composition else { throw invalid("组合组件需要实际可执行的composition定义。") }
+            guard !definition.sources.flatMap(\.typeIDs).contains(where: { isDisabledType($0, in: project) }) else { throw invalid("组合组件不能新选用已停用声明包提供的类型。") }
+            try CompositionRuntime.validate(definition, in: project)
+        } else if view.composition != nil { throw invalid("只有reading.composition渲染器能够使用组合定义。") }
     }
 
     private static func upsertView(_ view: ViewDefinition, project: inout BookProject) throws {

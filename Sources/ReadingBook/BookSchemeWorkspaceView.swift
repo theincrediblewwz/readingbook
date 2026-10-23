@@ -193,7 +193,10 @@ struct BookSchemeWorkspaceView: View {
         HStack(spacing: 10) {
             Button("放弃") { confirmation = "discard" }.buttonStyle(ReadingToolbarButtonStyle())
             Button("保存调整") { if let selection { store.saveBookSchemeSelection(selection) } }.buttonStyle(ReadingToolbarButtonStyle())
-            Button { if let selection { store.applyBookScheme(selection) } } label: { Label("采纳方案", systemImage: "checkmark") }.buttonStyle(ReadingToolbarButtonStyle(selected: true))
+            Button { if let selection { store.applyBookScheme(selection) } } label: { Label("仅采纳方案", systemImage: "checkmark") }.buttonStyle(ReadingToolbarButtonStyle(selected: true))
+            if pending?.origin == "ai", store.book?.smartReading != nil {
+                Button { if let selection { store.confirmSmartReading(selection) } } label: { Label("确认并开始分析", systemImage: "sparkles") }.buttonStyle(ReadingActionButtonStyle(prominent: true))
+            }
         }.disabled(store.isBusy)
     }
     private var templates: some View {

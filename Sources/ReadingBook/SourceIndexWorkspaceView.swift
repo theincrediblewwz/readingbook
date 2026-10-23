@@ -99,7 +99,7 @@ struct SourceIndexWorkspaceView: View {
             }
             Divider()
             Button("增强当前片段") { store.enhanceCurrentSource() }.disabled(store.isBusy || store.selectedUnit == nil)
-            Button("打开阅读流程") { store.route = "workflow" }
+            Button("打开智能阅读") { store.route = "workflow" }
             let removed = store.book?.readingExperience?.trash ?? []
             Menu("恢复已移除伴读 · \(removed.count)") {
                 ForEach(removed) { item in Button(item.title) { Task { await store.restoreReadingItem(item.id) } }.disabled(store.isBusy) }

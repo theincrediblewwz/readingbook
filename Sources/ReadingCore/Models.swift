@@ -89,7 +89,7 @@ public enum ComponentKind: String, Codable, CaseIterable, Sendable {
         switch self {
         case .cards: return "要素卡片"; case .timeline: return "时间轴"; case .map: return "地图"
         case .mindmap: return "思维导图"; case .relations: return "关系图谱"; case .knowledge: return "知识库"
-        case .editor: return "写下理解"; case .query: return "与书对话"; case .workflow: return "阅读流程"
+        case .editor: return "写下理解"; case .query: return "与书对话"; case .workflow: return "智能阅读"
         }
     }
     public var icon: String {
@@ -110,11 +110,12 @@ public struct ViewDefinition: Codable, Identifiable, Hashable, Sendable {
     public var rendererID: String? = nil
     public var scope: String? = nil
     public var configuration: [String: String]? = nil
-    public init(id: String, title: String, kind: ComponentKind, typeIDs: [String] = [], rendererID: String? = nil, scope: String? = nil, configuration: [String: String]? = nil) {
+    public var composition: CompositionDefinition? = nil
+    public init(id: String, title: String, kind: ComponentKind, typeIDs: [String] = [], rendererID: String? = nil, scope: String? = nil, configuration: [String: String]? = nil, composition: CompositionDefinition? = nil) {
         self.id = id; self.title = title; self.kind = kind; self.typeIDs = typeIDs
-        self.rendererID = rendererID; self.scope = scope; self.configuration = configuration
+        self.rendererID = rendererID; self.scope = scope; self.configuration = configuration; self.composition = composition
     }
-    private enum CodingKeys: String, CodingKey { case id, title, kind, typeIDs, rendererID, scope, configuration }
+    private enum CodingKeys: String, CodingKey { case id, title, kind, typeIDs, rendererID, scope, configuration, composition }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id); title = try values.decode(String.self, forKey: .title)
@@ -125,6 +126,7 @@ public struct ViewDefinition: Codable, Identifiable, Hashable, Sendable {
         if ComponentKind(rawValue: rawKind) == nil, rendererID == nil { rendererID = rawKind }
         scope = try values.decodeIfPresent(String.self, forKey: .scope)
         configuration = try values.decodeIfPresent([String: String].self, forKey: .configuration)
+        composition = try values.decodeIfPresent(CompositionDefinition.self, forKey: .composition)
     }
 }
 public struct ReadingMethod: Codable, Identifiable, Hashable, Sendable {
@@ -257,6 +259,8 @@ public struct BookProject: Codable, Identifiable, Sendable {
     /// Real action checkpoints are never synthesized for historical completion.
     public var workflowRuns: [ReadingWorkflowStepRun]? = nil
     public var receiptBatch: ReadingReceiptBatch? = nil
+    /// Frozen user-selected analysis scope; absent in older libraries.
+    public var smartReading: SmartReadingSession? = nil
     public var readerAnnotations: [ReaderAnnotation]? = nil
     /// Optional additive metadata; older books are not rewritten or backfilled.
     public var readingExperience: ReadingExperienceState? = nil

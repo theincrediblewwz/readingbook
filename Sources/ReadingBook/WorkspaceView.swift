@@ -41,12 +41,20 @@ struct WorkspaceView: View {
                         }
                     }
                     .clipped()
-                if store.isBusy && !viewingWorkflow && !viewingGraph && !viewingSpatial && store.route != "reader" {
+                if store.isBusy && !store.isSmartReadingRunning && !viewingWorkflow && !viewingGraph && !viewingSpatial && store.route != "reader" {
                     footer.frame(maxWidth: 310).readingGlass(radius: 16)
                         .padding(.trailing, 24).padding(.bottom, 86).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
                 topIslands(width: geometry.size.width).padding(.top, 14).padding(.leading, 104).padding(.trailing, 24)
                     .allowsHitTesting(managementRoute == nil)
+                if store.book != nil && managementRoute == nil && !navigationExpanded && store.route != "library" && (store.route != "workflow" || store.book?.smartReading != nil) {
+                    SmartReadingProgressPanel().environmentObject(store)
+                        .workspaceChromeBounds("smart-progress")
+                        .padding(.leading, geometry.size.width < 700 ? 68 : 80)
+                        .padding(.bottom, store.route == "reader" ? 103 : 26)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .zIndex(6)
+                }
                 if let managementRoute {
                     managementOverlay(managementRoute)
                         .transition(.opacity.combined(with: .scale(scale: 0.985))).zIndex(8)
@@ -155,7 +163,7 @@ struct WorkspaceView: View {
                     if store.book != nil {
                         Divider().padding(.vertical, 8)
                         routeButton("原文阅读", icon: "book.pages", route: "reader")
-                        routeButton("读书方法", icon: "point.3.connected.trianglepath.dotted", route: "workflow")
+                        routeButton("智能阅读", icon: "sparkles", route: "workflow")
                         routeButton("与书对话", icon: "bubble.left.and.bubble.right", route: "query")
                         routeButton("我的笔记", icon: "square.and.pencil", route: "editor")
                         if !componentViews.isEmpty {
@@ -196,7 +204,7 @@ struct WorkspaceView: View {
         guard store.book != nil else { return [] }
         let registry = WorkspaceComponentRegistry.shared
         return registry.components.filter { component in
-            !component.permanent && store.savedComponent(for: component) == nil
+            !component.permanent && !component.requiresDefinition && store.savedComponent(for: component) == nil
         }
     }
     private func routeButton(_ title: String, icon: String, route: String) -> some View {
@@ -296,11 +304,7 @@ struct WorkspaceView: View {
                 Button { Task { await store.saveCurrentDocument() } } label: { Label(store.isSavingDocument ? "保存中…" : "保存", systemImage: "square.and.arrow.down").padding(.horizontal, 8).frame(minHeight: 34) }
                     .buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(!store.editorDirty || store.isBusy).fixedSize().workspaceChromeBounds("primary")
             } else if store.route == "reader", store.book != nil {
-                Button { navigate("workflow") } label: { Label(store.isBusy ? "查看精读" : (store.book?.plan == nil ? "预读与精读" : "继续精读"), systemImage: "sparkles").padding(.horizontal, 5).frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).fixedSize().workspaceChromeBounds("primary")
-            } else if store.route == "workflow", store.book != nil {
-                Button { NotificationCenter.default.post(name: Notification.Name("ReadingBookAdjustReaderMethod"), object: nil) } label: {
-                    Label("调整读法", systemImage: "slider.horizontal.3").padding(.horizontal, 5).frame(minHeight: 34)
-                }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).fixedSize().workspaceChromeBounds("primary")
+                Button { navigate("workflow") } label: { Label(store.isSmartReadingRunning ? "查看分析" : "智能阅读", systemImage: "sparkles").padding(.horizontal, 5).frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).fixedSize().workspaceChromeBounds("primary")
             } else if store.route == "library" || store.book == nil {
                 Button { store.chooseBook() } label: { Label("导入书籍", systemImage: "plus").frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(store.isBusy).fixedSize().workspaceChromeBounds("primary")
             }

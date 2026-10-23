@@ -61,7 +61,7 @@ final class PluginEngineTests: XCTestCase {
         var value = try project()
         try command("cards_upsert", ["entities": [["id": "zhou-yu", "typeID": "person", "name": "周瑜", "evidence": evidence()]]], project: &value)
         let before = try snapshot(value)
-        let response = try command("knowledge_search", ["query": "周瑜"], project: &value, allowed: [])
+        let response = try command("knowledge_search", ["query": "周瑜"], project: &value, allowed: ["u1"])
         XCTAssertTrue(response.contains("zhou-yu"))
         XCTAssertEqual(try snapshot(value), before)
     }

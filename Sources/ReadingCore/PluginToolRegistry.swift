@@ -94,6 +94,9 @@ public struct PluginToolRegistry: Sendable {
         guard try encoder.encode(candidate.bookSchemes) == encoder.encode(project.bookSchemes) else {
             throw ReadingError.invalid("插件不能直接改写书本方案的预览、应用和撤销记录；请由用户在宿主界面确认。")
         }
+        guard try encoder.encode(candidate.smartReading) == encoder.encode(project.smartReading) else {
+            throw ReadingError.invalid("插件不能改写宿主冻结的智能阅读范围、确认状态或进度任务。")
+        }
         if candidate.mathVerifications != project.mathVerifications {
             guard tool.pluginID == "builtin.math-verification", name == "math_verify", tool.requiresReceipts,
                   phase == nil || phase == .reading || phase == .workflow, !allowedUnitIDs.isEmpty else {

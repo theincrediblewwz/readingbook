@@ -78,7 +78,7 @@ struct ReadingLedgerView: View {
             }.padding(18).readingGlass(radius: 20)
                 .confirmationDialog("重置此步骤的重试预算？", isPresented: Binding(get: { retryStepID != nil }, set: { if !$0 { retryStepID = nil } })) {
                     if let id = retryStepID { Button("重置预算，保留已完成步骤") { Task { await store.resetWorkflowRetry(id, inBook: book.id); retryStepID = nil } } }
-                } message: { Text("只清零失败步骤的尝试次数。已完成输出、原书与笔记保留；点击继续精读才会发出新请求。") }
+                } message: { Text("只清零失败步骤的尝试次数。已完成输出、原书与笔记保留；点击继续分析才会发出新请求。") }
                 .popover(isPresented: $showingUnits, arrowEdge: .bottom) { unitPicker(book) }
                 .onChange(of: store.bookID) { _, _ in chosenUnitID = ""; expanded = false; showSteps = false; showingUnits = false; unitSearch = "" }
         }

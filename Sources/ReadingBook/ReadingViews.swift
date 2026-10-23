@@ -165,7 +165,7 @@ struct ReadingProcessingDetailsView: View {
                     HStack(spacing: 8) { preReadButton; executionButton }
                     Menu {
                         Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.disabled(store.isBusy)
-                        Button(store.isBusy ? "暂停任务" : "开始 / 继续精读") { store.isBusy ? store.pause() : store.startReading() }.disabled(cannotPause)
+                        Button(store.isBusy ? "暂停任务" : "开始 / 继续分析") { store.isBusy ? store.pause() : store.startReading() }.disabled(cannotPause)
                     } label: { Image(systemName: "play.circle") }.help("预读、精读与暂停")
                 }
             }
@@ -190,7 +190,7 @@ struct ReadingProcessingDetailsView: View {
                                         }.font(.subheadline.weight(.medium))
                                     }
                                     if !plan.focus.isEmpty { Text("关注：" + plan.focus.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
-                                    Button { dismiss(); store.requestedWorkspaceRoute = "plugins" } label: { Label("管理读书法", systemImage: "slider.horizontal.3").frame(minHeight: 44) }.buttonStyle(ReadingToolbarButtonStyle()).help("查看或编辑可执行的读书方法")
+                                    Button { dismiss(); store.requestedWorkspaceRoute = "plugins" } label: { Label("管理方法定义", systemImage: "slider.horizontal.3").frame(minHeight: 44) }.buttonStyle(ReadingToolbarButtonStyle()).help("查看或编辑可执行的读书方法")
                                 }.padding(.top, 12)
                             } label: {
                                 HStack { Text("读书方案").font(.subheadline.weight(.medium)); Spacer(); Text(book.methods.filter { plan.methodIDs.contains($0.id) }.map(\.name).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
@@ -226,7 +226,7 @@ struct ReadingProcessingDetailsView: View {
     private var preReadButton: some View { Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy) }
     private var executionButton: some View {
         Button { store.isBusy ? store.pause() : store.startReading() } label: {
-            Label(store.isBusy ? (cannotPause ? "处理中" : "暂停") : (store.book?.insights.isEmpty == false ? "继续精读" : "开始精读"), systemImage: store.isBusy ? "pause.fill" : "play.fill")
+            Label(store.isBusy ? (cannotPause ? "处理中" : "暂停") : (store.book?.insights.isEmpty == false ? "继续分析" : "开始分析"), systemImage: store.isBusy ? "pause.fill" : "play.fill")
         }.buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44).disabled(cannotPause)
     }
     private func overview(_ book: BookProject) -> some View {

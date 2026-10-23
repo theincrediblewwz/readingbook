@@ -10,13 +10,30 @@ import ReadingCore
     }
 
     func applyBookScheme(_ selection: BookSchemeSelection) {
-        mutateBookScheme("书本方案已采纳；已有原文、知识和文档保留，可继续精读。") { try BookSchemeRuntime.applyPending(selection: selection, in: &$0) }
+        mutateBookScheme("书本方案已采纳；已有原文、知识和文档保留，可主动继续智能阅读。", onSaved: { self.smartReadingPlanReady = false }) { project in
+            try BookSchemeRuntime.applyPending(selection: selection, in: &project)
+            if project.smartReading != nil {
+                project.smartReading?.status = .ready; project.smartReading?.isPlanConfirmed = true
+                project.smartReading?.updatedAt = Date(); project.smartReading?.lastMessage = "方案已确认；点击继续才开始新的请求。"
+            }
+        }
     }
     func saveBookSchemeSelection(_ selection: BookSchemeSelection) {
         mutateBookScheme("方案调整已保存，尚未启用。") { try BookSchemeRuntime.updateSelection(selection, in: &$0) }
     }
     func discardBookScheme() {
-        mutateBookScheme("待确认方案已放弃，继续使用原来的配置。") { BookSchemeRuntime.discardPending(in: &$0) }
+        mutateBookScheme("待确认方案已放弃，继续使用原来的配置。", onSaved: { self.smartReadingPlanReady = false }) { project in
+            let unconfirmed = project.smartReading?.isPlanConfirmed == false
+            BookSchemeRuntime.discardPending(in: &project)
+            if unconfirmed {
+                if project.plan == nil { project.smartReading = nil }
+                else {
+                    project.smartReading?.status = .ready; project.smartReading?.isPlanConfirmed = true
+                    project.smartReading?.updatedAt = Date()
+                    project.smartReading?.lastMessage = "已放弃新方案。可沿用此前方案分析已选范围，或重新选择方法和范围；不会自动请求。"
+                }
+            }
+        }
     }
     func revertBookScheme() {
         mutateBookScheme("最近一次方案更新已撤销；用户 Markdown、知识对象和阅读记录保留。") { try BookSchemeRuntime.revertLatest(in: &$0) }
@@ -75,13 +92,13 @@ import ReadingCore
         } catch { errorMessage = error.localizedDescription }
     }
 
-    private func mutateBookScheme(_ message: String, change: (inout BookProject) throws -> Void) {
+    private func mutateBookScheme(_ message: String, onSaved: (() -> Void)? = nil, change: (inout BookProject) throws -> Void) {
         guard var current = book, !isBusy, !isSavingDocument else { return }
         do {
             try change(&current); isBusy = true; isCommittingLocalWrite = true
             Task {
                 defer { isBusy = false; isCommittingLocalWrite = false }
-                do { try await repository.save(current); publish(current); activity = message }
+                do { try await repository.save(current); publish(current); activity = message; onSaved?() }
                 catch { errorMessage = error.localizedDescription }
             }
         } catch { errorMessage = error.localizedDescription }

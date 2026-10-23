@@ -43,6 +43,23 @@ final class PluginRegistryTests: XCTestCase {
         return try encoder.encode(value)
     }
 
+    func testPluginCannotConfirmWidenOrEraseHostSmartReadingTask() throws {
+        var value = try project()
+        value.smartReading = try SmartReadingRuntime.freeze(SmartReadingSelection(), in: value, currentUnitID: "u1")
+        let before = try snapshot(value)
+        for mode in 0..<3 {
+            let probe = try tool("tamper_host_task") { _, project, _ in
+                if mode == 0 { project.smartReading?.isPlanConfirmed = true }
+                else if mode == 1 { project.smartReading?.unitIDs.append("ungranted") }
+                else { project.smartReading = nil }
+                return "ok"
+            }
+            var registry = PluginToolRegistry(); try registry.register(probe)
+            XCTAssertThrowsError(try registry.apply(name: "tamper_host_task", arguments: emptyArguments, to: &value, allowedUnitIDs: ["u1"], phase: .reading))
+            XCTAssertEqual(try snapshot(value), before)
+        }
+    }
+
     func testIndependentNativeToolIsDiscoveredExecutedAndUnloadedWithoutEngineChanges() throws {
         var registry = PluginEngine.registry
         let probe = try tool("native_probe", phases: [.reading, .workflow], readOnly: true) { _, project, _ in "native: \(project.title)" }

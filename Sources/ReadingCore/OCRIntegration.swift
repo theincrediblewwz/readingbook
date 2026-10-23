@@ -59,6 +59,7 @@ public enum OCRIntegration {
         updated.ocrPages = (updated.ocrPages ?? []).filter { $0.page != result.page }
         updated.ocrPages?.append(OCRPageProvenance(page: result.page, model: result.model, createdAt: result.createdAt, issues: result.issues, unitIDs: replacements.map(\.id)))
         updated.plan = nil // Previews based on the old extraction must be redone.
+        updated.smartReading = nil // Frozen unit IDs/hashes no longer describe the new text layer.
         updated.bookSchemes?.pending = nil
         updated.audit.append(ToolAudit(name: "pdf_ocr", summary: "第 \(result.page) 页使用 \(result.model) 逐页转录，保留原 PDF；待人工核对，阅读覆盖尚未增加。"))
         return updated

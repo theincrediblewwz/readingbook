@@ -21,12 +21,12 @@ struct ReadingBookApp: App {
             }
             CommandMenu("阅读") {
                 Button("预读并制定计划") { store.makePlan() }.disabled(store.book == nil || store.isBusy)
-                Button("开始 / 继续精读") { store.startReading() }.disabled(store.book == nil || store.isBusy)
+                Button("开始 / 继续分析") { store.startReading() }.disabled(store.book == nil || store.isBusy)
                 Button("暂停任务") { store.pause() }.keyboardShortcut(".").disabled(!store.isBusy)
             }
             CommandMenu("工作台") {
                 Button("原文阅读") { store.requestedWorkspaceRoute = "reader" }.keyboardShortcut("1")
-                Button("阅读流程") { store.requestedWorkspaceRoute = "workflow" }.keyboardShortcut("2")
+                Button("智能阅读") { store.requestedWorkspaceRoute = "workflow" }.keyboardShortcut("2")
                 Button("与书对话") { store.requestedWorkspaceRoute = "query" }.keyboardShortcut("3")
                 Button("我的笔记") { store.requestedWorkspaceRoute = "editor" }.keyboardShortcut("4")
             }

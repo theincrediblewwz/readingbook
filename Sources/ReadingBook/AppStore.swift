@@ -13,6 +13,7 @@ import ReadingCore
                 queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []
                 queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil
                 queryAllowsOrganizing = false; renderedWorkspaceVisibility = nil; renderedSelectedNodeIDs = []
+                smartReadingPlanReady = false
                 if queryScope == .selection { queryScope = .page }
             }
         }
@@ -63,6 +64,11 @@ import ReadingCore
     @Published var projectRevision = 0
     @Published var pdfNavigationToken = 0
     @Published var activeReadingUnitID: String?
+    @Published var isSmartReadingRunning = false
+    @Published var smartReadingPlanReady = false
+    var smartReadingProgressCacheKey: String?
+    var smartReadingProgressCache: SmartReadingProgress?
+    var smartReadingUnitProgressCache = SmartReadingProgressCache()
     @Published var search = ""
     @Published var selectedDocumentID: String? { didSet { rememberWorkspaceNavigation() } }
     @Published var editorTitle = "" { didSet { if editorDirty { persistDraft() } } }
@@ -197,77 +203,10 @@ import ReadingCore
         if panel.runModal() == .OK, let url = panel.url { importBook(url) }
     }
     func importBook(_ url: URL) { startBookImport(url) }
-    func makePlan() {
-        guard let project = book, !isBusy, providerReady else { return }
-        guard !requiresPDFRecognition else { showingOCR = true; activity = "请先识别扫描页，或在对照原页后确认空白内容。"; return }
-        var requestSettings = settings
-        requestSettings.transportSessionID = "readingbook-" + project.id + "-reading"
-        let requestKey = apiKey
-        isBusy = true; activity = "AI 正在预读与选择方法、类型和组件…"
-        task = Task {
-            do {
-                await reader.resetBudget()
-                let result = try await reader.plan(project: project, settings: requestSettings, apiKey: requestKey)
-                try Task.checkCancellation(); try await repository.save(result); publish(result)
-                requestsUsed = await reader.requestCount; isBusy = false; openBookScheme(); activity = "预读方案已生成，请确认后开始精读；全文覆盖尚未增加。"
-            } catch { handle(error) }
-            isBusy = false
-        }
-    }
-    func startReading() {
-        if book?.bookSchemes?.pending != nil { openBookScheme(); return }
-        guard let readingBookID = bookID, book != nil, !isBusy, providerReady else { return }
-        guard !requiresPDFRecognition else { showingOCR = true; activity = "扫描页尚未识别；请先 OCR，避免把空提取结果当成已读。"; return }
-        var requestSettings = settings
-        requestSettings.transportSessionID = "readingbook-" + readingBookID + "-reading"
-        let requestKey = apiKey
-        isBusy = true; activity = "准备顺序精读…"
-        task = Task {
-            await reader.resetBudget()
-            do {
-                if let current = book, current.plan == nil {
-                    let planned = try await reader.plan(project: current, settings: requestSettings, apiKey: requestKey)
-                    try Task.checkCancellation(); try await repository.save(planned); publish(planned)
-                    if planned.bookSchemes?.pending != nil {
-                        isBusy = false; openBookScheme(); requestsUsed = await reader.requestCount
-                        activity = "请确认方案后开始精读。"; return
-                    }
-                }
-                while let current = book {
-                    try Task.checkCancellation()
-                    guard current.id == readingBookID else { throw CancellationError() }
-                    let pending = current.units.first { unit in
-                        let status = current.coverage[unit.id]?.status ?? .pending
-                        return !ReadingLedger.isDeferred(unitID: unit.id, in: current) && status != .completed && !(status == .needsReview && ReadingLedger.hasReadingAnalysis(unitID: unit.id, in: current))
-                    }
-                    guard let unit = pending else { break }
-                    activity = "正在精读：\(unit.locator)"
-                    activeReadingUnitID = unit.id
-                    let result = try await reader.readNext(project: current, settings: requestSettings, apiKey: requestKey)
-                    try Task.checkCancellation(); try await repository.save(result); publish(result)
-                    if let failure = ReadingWorkflowRuntime.failureMessage(in: result, unitID: unit.id) { throw ReadingError.invalid(failure) }
-                    requestsUsed = await reader.requestCount
-                }
-                while let current = book, !(await reader.synthesisComplete(project: current)) {
-                    try Task.checkCancellation(); activity = "正在做章节复盘与全书综合…"
-                    guard current.id == readingBookID else { throw CancellationError() }
-                    let result = try await reader.synthesizeNext(project: current, settings: requestSettings, apiKey: requestKey)
-                    try Task.checkCancellation(); try await repository.save(result); publish(result); requestsUsed = await reader.requestCount
-                }
-                if let current = book { activity = current.isFullyProcessed ? "全部登记单元已处理并通过核对。" : "本轮顺序处理结束，仍有 \(current.reviewCount) 个单元待核对。" }
-            } catch { handle(error) }
-            requestsUsed = await reader.requestCount; isBusy = false
-        }
-    }
-    func pause() { guard !restoringWorkspaceMemory, !isSavingDocument, !isExportingProject, !isImportingBookCommit, !isCommittingLocalWrite else { return }; task?.cancel(); activity = "正在暂停，已保存结果可以继续阅读。" }
-    private var requiresPDFRecognition: Bool {
-        guard let book, book.originalName.lowercased().hasSuffix(".pdf") else { return false }
-        return book.units.contains { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (book.coverage[$0.id]?.status ?? .pending) == .pending }
-    }
     func resetWorkflowRetry(_ stepID: String, inBook expectedBookID: String) async {
         guard var current = book, current.id == expectedBookID, !isBusy else { return }
         isBusy = true; defer { isBusy = false }
-        do { try ReadingWorkflowRuntime.resetRetry(stepID: stepID, in: &current); try await repository.save(current); publish(current); activity = "已重置此步骤的重试预算，点击继续精读可重试。" }
+        do { try ReadingWorkflowRuntime.resetRetry(stepID: stepID, in: &current); try await repository.save(current); publish(current); activity = "已重置此步骤的重试预算，点击继续分析可重试。" }
         catch { errorMessage = error.localizedDescription }
     }
     var providerReady: Bool {

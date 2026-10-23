@@ -126,7 +126,7 @@ enum ProviderClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("ReadingBook/0.15", forHTTPHeaderField: "User-Agent")
+        request.setValue("ReadingBook/0.16", forHTTPHeaderField: "User-Agent")
         if url.host?.lowercased() == "opencode.ai" {
             let sessionID = settings.transportSessionID ?? fallbackSessionID
             guard sessionID.range(of: "^[a-zA-Z0-9._:-]{1,180}$", options: .regularExpression) != nil else { throw ReadingError.invalid("模型会话标识无效。") }
