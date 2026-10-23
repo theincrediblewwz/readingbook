@@ -32,11 +32,15 @@ final class TemporalKnowledgeToolTests: XCTestCase {
         XCTAssertNil(missing.temporalKnowledge)
         var project = try fixture(receipts: true)
         let originalDocuments = project.documents
+        let coverageEncoder = JSONEncoder(); coverageEncoder.outputFormatting = [.sortedKeys]
+        let originalCoverage = try coverageEncoder.encode(project.coverage)
         _ = try PluginEngine.apply(name: "knowledge_temporal", arguments: data, to: &project, allowedUnitIDs: ["u1"], phase: .workflow)
         let presence = try XCTUnwrap(project.temporalKnowledge?.presences.first)
         XCTAssertNotEqual(presence.id, "presence"); XCTAssertNotEqual(presence.sourceAnchorIDs, ["anchor"])
         XCTAssertEqual(presence.placeID, "jiangling")
-        XCTAssertEqual(project.documents, originalDocuments); XCTAssertTrue(project.coverage.isEmpty)
+        XCTAssertEqual(project.documents, originalDocuments)
+        XCTAssertEqual(try coverageEncoder.encode(project.coverage), originalCoverage, "时态知识不能改变已存在的pending覆盖、重试次数或时间戳")
+        XCTAssertEqual(project.coverage["u1"]?.status, .pending)
         let old = project.temporalKnowledge
         _ = try PluginEngine.apply(name: "knowledge_temporal", arguments: data, to: &project, allowedUnitIDs: ["u1"], phase: .workflow)
         XCTAssertEqual(project.temporalKnowledge, old, "相同来源和批次重试不能重复创建")
