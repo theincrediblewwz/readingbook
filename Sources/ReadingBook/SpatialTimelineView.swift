@@ -183,7 +183,7 @@ struct SpatialTimelineView: View {
         return dockFrame(dock)
     }
 
-    var body: some View {
+    private var mapWorkspace: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
                 bookMap
@@ -225,7 +225,10 @@ struct SpatialTimelineView: View {
                 }
             }
         }
-        .onAppear {
+    }
+
+    private var observedWorkspace: some View {
+        mapWorkspace.onAppear {
             if FloatingPanelDock(rawValue: dockRaw) == nil { dockRaw = FloatingPanelDock.bottomLeading.rawValue }
             normalizeRange()
             restoreMapMemory()
@@ -241,6 +244,10 @@ struct SpatialTimelineView: View {
         .onChange(of: store.temporalAxis) { _, _ in saveMapPanelMemory() }
         .onChange(of: store.selectedTemporalEntityID) { _, id in if id != nil { showsPerson = true }; saveMapPanelMemory() }
         .onChange(of: store.showUndated) { _, _ in saveMapPanelMemory() }
+    }
+
+    var body: some View {
+        observedWorkspace
         .onChange(of: store.workspaceAICommand) { _, command in handleViewCommand(command) }
         .onExitCommand { cancelPanelDrag() }
         .onChange(of: measuredPanelSize) { _, _ in
@@ -252,18 +259,7 @@ struct SpatialTimelineView: View {
         .popover(isPresented: Binding(get: { inspectedObjectID != nil }, set: { if !$0 { inspectedObjectID = nil } })) {
             if let id = inspectedObjectID { ObjectInspector(id: id, onClose: { inspectedObjectID = nil }).environmentObject(store).frame(width: 330, height: 500) }
         }
-        .onChange(of: store.selectedObjectID) { _, id in
-            guard let id else { return }
-            if store.book?.events.contains(where: { $0.id == id }) == true { expand(id) }
-            else if admittedEntities.contains(where: { $0.id == id && $0.latitude == nil && $0.longitude == nil }) {
-                store.selectedTemporalEntityID = id; showsPerson = true
-                if store.temporalAxis == "legacy" {
-                    if let calendar = store.temporalCalendars.first { selectAxis("calendar:" + calendar) }
-                    else if store.hasNarrativeTime { selectAxis("narrative") }
-                }
-            }
-            locateSelection(id)
-        }
+        .onChange(of: store.selectedObjectID) { _, id in handleObjectSelection(id) }
         .onChange(of: store.selectedUnitID) { _, _ in
             if let id = store.selectedTemporalEntityID, !admittedEntities.contains(where: { $0.id == id }) { store.selectedTemporalEntityID = nil }
         }
@@ -279,6 +275,22 @@ struct SpatialTimelineView: View {
             if store.timeFrom == previous.lowerBound, store.timeTo == previous.upperBound { fitTime() }
             else { normalizeRange() }
         }
+    }
+
+    private func handleObjectSelection(_ selectedID: String?) {
+        guard let id = selectedID else { return }
+        if store.book?.events.contains(where: { $0.id == id }) == true {
+            expand(id)
+        } else if let entity = admittedEntities.first(where: { $0.id == id }),
+                  entity.latitude == nil, entity.longitude == nil {
+            store.selectedTemporalEntityID = id
+            showsPerson = true
+            if store.temporalAxis == "legacy" {
+                if let calendar = store.temporalCalendars.first { selectAxis("calendar:" + calendar) }
+                else if store.hasNarrativeTime { selectAxis("narrative") }
+            }
+        }
+        locateSelection(id)
     }
 
     private var bookMap: some View {
