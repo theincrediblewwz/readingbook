@@ -181,6 +181,9 @@ public struct CanvasNode: Codable, Identifiable, Hashable, Sendable {
     public var targetID: String
     public var x: Double
     public var y: Double
+    public var title: String? = nil
+    public var documentIDs: [String]? = nil
+    public var isStandalone: Bool? = nil
     public init(id: String = UUID().uuidString, targetID: String, x: Double = 0, y: Double = 0) { self.id = id; self.targetID = targetID; self.x = x; self.y = y }
 }
 public struct CanvasEdge: Codable, Identifiable, Hashable, Sendable {
@@ -261,6 +264,10 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var bookSchemes: BookSchemeState? = nil
     /// Deterministic calculations are kept separate from AI prose and source text.
     public var mathVerifications: [MathVerificationRecord]? = nil
+    /// Optional temporal sidecar; legacy object IDs and original JSON arrays remain canonical.
+    public var temporalKnowledge: TemporalKnowledgeState? = nil
+    public var graphGroups: [CanvasGroup]? = nil
+    public var controlledChanges: ControlledChangeState? = nil
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units
     }

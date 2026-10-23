@@ -37,7 +37,12 @@ public enum GraphConnections {
         let validTargets = Set(project.activeDocuments.map(\.id))
             .union(project.entities.map(\.id)).union(project.events.map(\.id))
             .union(project.units.map(\.id)).union(project.insights.map(\.id))
-        guard [sources[0], destinations[0]].allSatisfy({ !hiddenDocuments.contains($0.targetID) && validTargets.contains($0.targetID) }) else {
+        let activeDocuments = Set(project.activeDocuments.map(\.id)), registeredTargets = validTargets.union(hiddenDocuments)
+        guard [sources[0], destinations[0]].allSatisfy({ node in
+            (node.isStandalone == true && node.targetID == node.id) ||
+            (!hiddenDocuments.contains(node.targetID) && validTargets.contains(node.targetID)) ||
+            (registeredTargets.contains(node.targetID) && !(Set(node.documentIDs ?? []).intersection(activeDocuments)).isEmpty)
+        }) else {
             throw ReadingError.invalid("连线节点的文档已回收，或引用的内容已失效。请恢复文档或重新选择节点。")
         }
     }

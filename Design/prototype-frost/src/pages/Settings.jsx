@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp, Icon, Button, Panel, Modal, Empty } from '../shared.jsx';
 import './settings.css';
+import './reader-next.css';
 
 const PLUGINS = [
   { id: 'reader', name: '原文阅读', icon: 'reader', description: '保留原始 PDF 与文字，连接页码、批注和原文依据。', fixed: true, type: '内置插件' },
@@ -362,7 +363,7 @@ function parseMethodSteps(value) {
 export function WorkflowPage() {
   const { state, update, navigate, notify, book } = useApp();
   const width = useWindowWidth();
-  const workflow = state.workflow || { status: 'idle', receipts: [], pluginLog: [], methodId: 'close', cursor: 0 };
+  const workflow = state.workflow?.bookId && state.workflow.bookId !== book.id ? {status:'idle',receipts:[],pluginLog:[],methodId:book.id==='math'?'proof':'close',cursor:0} : state.workflow || { status: 'idle', receipts: [], pluginLog: [], methodId: 'close', cursor: 0 };
   const methods = state.readingMethods || [];
   const [methodOpen, setMethodOpen] = useState(() => window.innerWidth >= 1100);
   const [methodVisible, setMethodVisible] = useState(() => window.innerWidth >= 1100);
@@ -374,8 +375,12 @@ export function WorkflowPage() {
   const [simulateFailure, setSimulateFailure] = useState(false);
   const [expandedReceipt, setExpandedReceipt] = useState('');
   const [showLog, setShowLog] = useState(false);
+  const [processingOpen, setProcessingOpen] = useState(false);
+  const [customType, setCustomType] = useState('');
   const [planReady, setPlanReady] = useState(!!workflow.planReady);
   const kind = book.id === 'math' ? 'math' : 'history';
+  const bookTypes = state.bookProfiles?.[book.id]?.types || (kind === 'math' ? ['教材'] : ['历史','战争','小说']);
+  const toggleBookType = type => update(prev => { const before = prev.bookProfiles?.[book.id]?.types || (kind === 'math' ? ['教材'] : ['历史','战争','小说']); return {...prev,bookProfiles:{...prev.bookProfiles,[book.id]:{types:before.includes(type)?before.filter(t=>t!==type):[...before,type]}}}; });
   const segments = SEGMENTS[kind];
   const receipts = workflow.bookId === book.id || !workflow.bookId ? workflow.receipts || [] : [];
   const completed = receipts.filter(r => r.status === 'done').length;
@@ -457,8 +462,10 @@ export function WorkflowPage() {
   actionRef.current = () => running ? update(prev => ({ ...prev, workflow: { ...prev.workflow, status: 'paused' } })) : startOrResume();
   useEffect(() => {
     const primary = () => actionRef.current?.();
+    const openMethod = () => { setMethodOpen(true); setMethodVisible(true); requestAnimationFrame(()=>window.dispatchEvent(new CustomEvent('prototype-panel-open',{detail:{id:'reading-method'}}))); };
     window.addEventListener('prototype-primary', primary);
-    return () => window.removeEventListener('prototype-primary', primary);
+    window.addEventListener('prototype-method-open', openMethod);
+    return () => { window.removeEventListener('prototype-primary', primary); window.removeEventListener('prototype-method-open', openMethod); };
   }, []);
 
   function selectMethod(id) {
@@ -486,7 +493,7 @@ export function WorkflowPage() {
   function suggestMethod() {
     if (running) return;
     setEditingMethodId('new');
-    setMethodName(kind === 'math' ? '逐步验算与反例' : '人物·事件·证据链');
+    setMethodName(kind === 'math' ? '前提·推理·反例' : '人物·事件·证据链');
     setMethodDescription(kind === 'math' ? '把每个推导拆成可核对的小步，再寻找边界情况。' : '先核对叙事中的对象、时间和地点，再整理关联。');
     setMethodSteps(kind === 'math' ? '逐段概括前提与结论\n核对每次变换的理由\n记录反例或边界条件\n关联定理与原文出处' : '逐段概括叙事\n提取人物、地点和事件\n核对时间与原文依据\n调用地图与关系组件');
     setMethodError('');
@@ -495,11 +502,21 @@ export function WorkflowPage() {
 
   const statusLabel = running ? '正在逐段精读' : workflow.status === 'paused' ? '已暂停，可继续' : workflow.status === 'error' ? '有一段需要重试' : workflow.status === 'completed' ? '本轮回执已齐全' : planReady ? '方案就绪' : '先看看这本书';
 
-  return <section className="settings-page ps-workflow" aria-label="阅读流程交互稿"><div className={`ps-workspace ${methodVisible && width >= 1100 ? 'ps-with-aside' : ''}`}><div className="ps-main-surface ps-workflow-main"><div className="ps-workflow-heading"><div><span className="ps-eyebrow">READING WORKFLOW</span><h1>{statusLabel}</h1><p>{book.title} · 示例范围第 1–3 页，共 {segments.length} 段</p></div><Button icon="workflow" onClick={() => { setMethodOpen(true); setMethodVisible(true); window.dispatchEvent(new CustomEvent('prototype-panel-open', { detail: { id: 'reading-method' } })); }}>阅读方法</Button></div><div className="ps-workflow-progress"><div><strong>{completed}<span> / {segments.length} 段</span></strong><span>{currentMethod?.name || '未选方法'}</span></div><progress max={segments.length} value={completed} aria-label="已取得段落回执的覆盖数" /></div><div className="ps-workflow-actions"><Button icon="sparkle" disabled={running} onClick={makePlan}>{planReady ? '重新预读选法' : '预读并选择方法'}</Button><Button variant="primary" icon={running ? 'pause' : 'play'} disabled={!planReady} onClick={() => actionRef.current()}>{running ? '暂停精读' : workflow.status === 'error' ? '重试这一段' : workflow.status === 'paused' ? '继续精读' : workflow.status === 'completed' ? '再演示一轮' : '开始逐段精读'}</Button><label className="ps-simulation-option"><input type="checkbox" checked={simulateFailure} disabled={running} onChange={e => setSimulateFailure(e.target.checked)} />演示一次失败</label></div>{workflow.status === 'error' && <div className="ps-error ps-workflow-error" role="alert"><Icon name="warning" size={20} /><span>{workflow.error} 已完成的回执保留，不跳过失败段。</span></div>}<div className="ps-coverage-explainer"><Icon name="info" size={18} /><p>每段都有独立编号、原文和一句回执；缺失段不能算完成。这能检查处理覆盖，不能证明 AI 理解无遗漏。离开流程页会暂停本地演示，回来可继续。</p></div><div className="ps-ledger-heading"><h2>逐页逐段清单</h2><span>先逐段，再整理关联</span></div><div className="ps-receipt-list">{segments.map(([page, paragraph, text], index) => {
-      const id = `${book.id}-p${page}-${paragraph}`;
-      const receipt = receipts.find(r => r.id === id);
-      const isCurrent = running && index === (workflow.cursor || 0);
-      const expanded = expandedReceipt === id;
-      return <article key={id} className={`ps-receipt ${isCurrent ? 'is-current' : ''} ${receipt?.status === 'failed' ? 'is-failed' : ''}`}><button className="ps-receipt-row" aria-expanded={expanded} onClick={() => setExpandedReceipt(expanded ? '' : id)}><span className={`ps-receipt-check ${receipt?.status === 'done' ? 'is-done' : ''}`}><Icon name={receipt?.status === 'done' ? 'check' : receipt?.status === 'failed' ? 'warning' : isCurrent ? 'refresh' : 'clock'} size={18} /></span><span className="ps-receipt-location">第 {page} 页 · 第 {paragraph} 段</span><span className="ps-receipt-summary">{receipt?.summary || (receipt?.status === 'failed' ? '回执失败，待重试' : isCurrent ? '正在读取这一段…' : '等待按顺序读取')}</span><Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={17} /></button>{expanded && <div className="ps-receipt-detail"><blockquote>{text}</blockquote>{receipt?.summary && <p><strong>简短回执</strong>{receipt.summary}</p>}<Button icon="return" variant="quiet" onClick={() => navigate('reader', { source: { page: Number(page), paragraph: Number(paragraph), text } })}>回到第 {page} 页原段</Button></div>}</article>;
-    })}</div><div className="ps-workflow-bottom"><button className="ps-disclosure" aria-expanded={showLog} onClick={() => setShowLog(!showLog)}><Icon name={showLog ? 'chevronDown' : 'chevronRight'} size={18} />插件调用记录 <span>{workflow.pluginLog?.length || 0}</span></button>{showLog && <div className="ps-plugin-log">{workflow.pluginLog?.length ? workflow.pluginLog.map(log => <div key={log.id}><Icon name="check" size={16} /><p><strong>{log.plugin}</strong>{log.action}</p></div>) : <p className="ps-helper">先取得所有段落回执，再模拟提取要素和调用插件。停用的插件不会参与。</p>}</div>}<p className="ps-caption">本书可选类型：{activeTypeNames.join('、') || '尚未定义，可到插件页新建'}。数学书不会自动生成人物卡。</p></div></div></div>{methodOpen && <Panel id="reading-method" title="阅读方法" width={360} dock="right" initial={{ x: Math.max(76, width - 390), y: 110 }} onVisibilityChange={setMethodVisible}><div className="ps-method-form"><label>当前方法<select value={editingMethodId} disabled={running} onChange={e => { selectMethod(e.target.value); if (e.target.value === 'new') { setMethodName(''); setMethodDescription(''); setMethodSteps(''); } }}>{methods.map(method => <option key={method.id} value={method.id}>{method.name}</option>)}<option value="new">＋ 自定义方法</option></select></label><Button icon="sparkle" variant="quiet" disabled={running} onClick={suggestMethod}>让 AI 建议一种 · 演示</Button><div className="ps-form-rule" /><label>名称<input value={methodName} disabled={running} onChange={e => setMethodName(e.target.value)} /></label><label>目标<textarea rows={2} value={methodDescription} disabled={running} onChange={e => setMethodDescription(e.target.value)} /></label><label>执行步骤<textarea rows={6} value={methodSteps} disabled={running} onChange={e => setMethodSteps(e.target.value)} /></label><p className="ps-helper">每行一步。所有方法都先核对段落回执，再执行这些整理动作。</p>{methodError && <p className="ps-error" role="alert">{methodError}</p>}<Button icon="save" variant="primary" disabled={running} onClick={saveMethod}>保存并用于本轮</Button></div></Panel>}</section>;
+  const readingSteps = kind === 'math' ? [
+    ['cards','厘清概念与条件','区分定义、前提与结论，把符号条件留在原文旁。'],
+    ['relations','连接推理的每一步','沿证明与例题梳理依赖，不把解释当作专用验算。'],
+    ['notes','形成自己的理解与问题','保留没读懂的地方，连接原句、笔记与概念导图。']
+  ] : [
+    ['relations','梳理人物与阵营','认识主要人物，理清各方势力的关系、立场与变化。'],
+    ['map','标记战役的时间和地点','沿事件先后看清行动与条件；原文未写明的地点不补造。'],
+    ['notes','连接前因后果与阅读笔记','把人物、事件与主题串联起来，留下自己的思考与出处。']
+  ];
+  return <section className="settings-page method-next-page" aria-label="读书方法交互稿">
+    <div className="method-next-scroll"><header className="method-next-heading"><p className="method-eyebrow">为这本书，找到合适的读法</p><h1>怎样读这本书</h1><p className="method-book-types">{bookTypes.length?bookTypes.join(' · '):'选择这本书的类型'}</p><p className="method-introduction">{kind==='math'?'沿概念、条件与推理，慢慢读出自己的理解。':'跟随人物与战役，沿时间和地点读懂故事。'}</p></header>
+    <div className="method-reading-steps">{readingSteps.map(([icon,title,detail],i)=><article key={title}><span className="method-step-icon"><Icon name={icon} size={32}/></span><span className="method-step-number">0{i+1}</span><div><h2>{title}</h2><p>{detail}</p></div></article>)}</div>
+    <div className="method-output-links">{(kind==='math'?[['mindmap','概念导图'],['relations','推理关联'],['notes','我的笔记']]:[['map','时间与地图'],['mindmap','思维导图'],['relations','关系图谱']]).map(([route,title])=><Button icon={route} variant="quiet" key={route} onClick={()=>navigate(route)}>{title}</Button>)}</div>
+    <details className="method-processing glass" open={processingOpen} onToggle={e=>setProcessingOpen(e.currentTarget.open)}><summary><Icon name="info" size={18}/><span>处理详情</span><small>按需查看原文覆盖、疑点与工具记录</small><Icon name="chevronDown" size={17}/></summary><div className="method-processing-body"><p className="ps-helper">后台仍按原文清单逐段处理。回执只能检查处理覆盖，不能证明理解绝无遗漏；这里是本地示例队列。</p><div className="ps-workflow-actions"><Button icon="sparkle" disabled={running} onClick={makePlan}>{planReady?'重新建议读法 · 演示':'预读并建议读法 · 演示'}</Button><label className="ps-simulation-option"><input type="checkbox" checked={simulateFailure} disabled={running} onChange={e=>setSimulateFailure(e.target.checked)}/>演示一次中断</label></div><div className="ps-receipt-list">{segments.map(([page,paragraph,text],index)=>{const id=`${book.id}-p${page}-${paragraph}`,receipt=receipts.find(r=>r.id===id),isCurrent=running&&index===(workflow.cursor||0),expanded=expandedReceipt===id;return <article key={id} className={'ps-receipt '+(isCurrent?'is-current':'')}><button className="ps-receipt-row" aria-expanded={expanded} onClick={()=>setExpandedReceipt(expanded?'':id)}><span className={'ps-receipt-check '+(receipt?.status==='done'?'is-done':'')}><Icon name={receipt?.status==='done'?'check':receipt?.status==='failed'?'warning':'clock'} size={18}/></span><span className="ps-receipt-location">第 {page} 页 · 第 {paragraph} 段</span><span className="ps-receipt-summary">{receipt?.summary||(receipt?.status==='failed'?'待重试':isCurrent?'正在阅读…':'等待顺序处理')}</span><Icon name={expanded?'chevronDown':'chevronRight'} size={17}/></button>{expanded?<div className="ps-receipt-detail"><blockquote>{text}</blockquote>{receipt?.summary?<p>{receipt.summary}</p>:null}<Button icon="return" variant="quiet" onClick={()=>navigate('reader',{page:Number(page),source:{page:Number(page),paragraph:Number(paragraph),text}})}>回到这一段</Button></div>:null}</article>;})}</div><button className="ps-disclosure" aria-expanded={showLog} onClick={()=>setShowLog(v=>!v)}><Icon name="chevronDown" size={18}/>工具记录 · {workflow.pluginLog?.length||0}</button>{showLog?<div className="ps-plugin-log">{workflow.pluginLog?.length?workflow.pluginLog.map(log=><div key={log.id}><Icon name="check" size={16}/><p><strong>{log.plugin}</strong>{log.action}</p></div>):<p>完成这轮原文处理后，才会在这里显示示例产物回执。</p>}</div>:null}</div></details></div>
+    <div className="method-status-dock glass" role="status"><div className="method-status-copy"><Icon name={running?'refresh':workflow.status==='error'?'warning':'book'}/><span>{running?'正在读':workflow.status==='paused'?'已暂停':workflow.status==='error'?'这一处需要重试':workflow.status==='completed'?'这一轮已读完':'读法已准备好'}</span><b>{running?`第 ${segments[Math.min(workflow.cursor||0,segments.length-1)][0]} 页`:book.title}</b></div><progress max={segments.length} value={completed} aria-label="当前处理进度"/><span className="method-status-percent">{Math.round(completed/segments.length*100)}%</span><Button icon={running?'pause':'play'} onClick={()=>actionRef.current()}>{running?'暂停':!planReady?'采用建议读法':workflow.status==='error'?'重试':'开始 / 继续'}</Button><Button icon="book" variant="primary" onClick={()=>navigate('reader')}>继续阅读</Button></div>
+    {methodOpen?<Panel id="reading-method" title="调整读法" width={360} dock="right" initial={{x:Math.max(76,width-390),y:106}} onVisibilityChange={setMethodVisible} className="method-adjust-panel"><p className="method-adjust-intro">选择这本书的类型，可以组合。AI 会据此建议合适的理解方向与组件。</p><div className="method-type-options">{[...new Set(['历史','战争','小说','论述/研究','教材',...bookTypes])].map(type=><label className={bookTypes.includes(type)?'is-selected':''} key={type}><input type="checkbox" checked={bookTypes.includes(type)} disabled={running} onChange={()=>toggleBookType(type)}/><span>{type}</span></label>)}</div><form className="method-custom-type" onSubmit={e=>{e.preventDefault();const name=customType.trim();if(name&&!bookTypes.includes(name)){toggleBookType(name);setCustomType('');}}}><input aria-label="自定义书型" placeholder="自定义书型…" value={customType} disabled={running} onChange={e=>setCustomType(e.target.value)}/><Button type="submit" icon="plus" aria-label="添加自定义书型" disabled={!customType.trim()||running}/></form><details className="method-custom-details"><summary>选择或自定义具体读法<Icon name="chevronDown" size={16}/></summary><div className="ps-method-form"><label>当前方法<select value={editingMethodId} disabled={running} onChange={e=>{selectMethod(e.target.value);if(e.target.value==='new'){setMethodName('');setMethodDescription('');setMethodSteps('');}}}>{methods.map(method=><option key={method.id} value={method.id}>{method.name}</option>)}<option value="new">＋ 自定义方法</option></select></label><Button icon="sparkle" variant="quiet" disabled={running} onClick={suggestMethod}>建议另一种读法 · 演示</Button><label>名称<input value={methodName} disabled={running} onChange={e=>setMethodName(e.target.value)}/></label><label>目标<textarea rows={2} value={methodDescription} disabled={running} onChange={e=>setMethodDescription(e.target.value)}/></label><label>步骤 · 每行一项<textarea rows={5} value={methodSteps} disabled={running} onChange={e=>setMethodSteps(e.target.value)}/></label>{methodError?<p className="ps-error" role="alert">{methodError}</p>:null}<Button icon="save" variant="primary" disabled={running} onClick={saveMethod}>保存并用于本轮</Button></div></details><p className="method-adjust-note">{running?'正在处理时先暂停，再调整读法。':'变化仅保存在本次交互稿；不调用真实 AI。'}</p></Panel>:null}
+  </section>;
 }

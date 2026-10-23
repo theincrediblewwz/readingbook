@@ -53,6 +53,8 @@ import ReadingCore
         guard let book, book.id == expectedBookID, generation == navigationGeneration else { return }
         let memory = workspaceMemory
         if let from = memory.timeFrom, let to = memory.timeTo { timeFrom = from; timeTo = to }
+        temporalAxis = memory.temporalAxis ?? "legacy"; timeCursor = memory.timeCursor ?? timeFrom
+        selectedTemporalEntityID = memory.temporalEntityID.flatMap { id in book.entities.contains { $0.id == id } ? id : nil }
         showUndated = memory.showUndated
         readingSourceMode = memory.readingSourceMode
         // An unsaved draft always wins. Restoration never discards or overwrites its Markdown.

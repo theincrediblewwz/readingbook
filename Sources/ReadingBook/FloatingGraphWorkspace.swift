@@ -72,6 +72,18 @@ struct FloatingGraphWorkspace<Surface: View>: View {
             .onChange(of: shown) { _, _ in saveMemory() }
             .onChange(of: collapsed) { _, _ in saveMemory() }
             .onChange(of: savedOrigin) { _, _ in saveMemory() }
+            .onChange(of: store.workspaceAICommand) { _, command in
+                guard let command, command.name == "panel_present",
+                      let args = try? JSONSerialization.jsonObject(with: command.arguments) as? [String: Any], args["panelID"] as? String == memoryID else { return }
+                guard dragOrigin == nil else { store.acknowledgeViewCommand(command, status: "busy", message: "节点面板正在拖动。"); return }
+                switch args["state"] as? String {
+                case "open": animate { shown = true; collapsed = false }
+                case "collapse": animate { shown = true; collapsed = true }
+                case "close": animate { shown = false }
+                default: store.acknowledgeViewCommand(command, status: "unsupported", message: "面板状态无效。"); return
+                }
+                store.acknowledgeViewCommand(command, message: "节点面板状态已更新。")
+            }
     }
     @ViewBuilder private var browserOverlay: some View {
         if shown {

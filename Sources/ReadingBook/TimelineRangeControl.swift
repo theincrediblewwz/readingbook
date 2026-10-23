@@ -10,6 +10,9 @@ struct TimelineRangeControl: View {
     let events: [KnowledgeEvent]
     let selectedID: String?
     let select: (String) -> Void
+    var cursor: Binding<Double>? = nil
+    var label: (Double) -> String = { TimelineRangeControl.yearLabel(Int($0)) }
+    @State private var cursorOrigin: Double?
     @State private var interaction: DragSnapshot?
     @State private var pointerEpoch = 0
     @FocusState private var focused: Endpoint?
@@ -65,10 +68,29 @@ struct TimelineRangeControl: View {
                 thumb(.upper, at: endX, crowded: abs(startX - endX) < 24)
                 ForEach(0...4, id: \.self) { index in
                     let year = bounds.lowerBound + mapping.span * Double(index) / 4
-                    Text(Self.yearLabel(Int(year.rounded())))
+                    Text(label(year.rounded()))
                         .font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
                         .fixedSize().frame(width: 0, alignment: index == 0 ? .leading : index == 4 ? .trailing : .center)
                         .position(x: inset + mapping.width * CGFloat(index) / 4, y: 51)
+                }
+                if let cursor {
+                    let x = mapping.x(cursor.wrappedValue)
+                    Rectangle().fill(Palette.copper).frame(width: 2, height: 37).offset(x: x - 1, y: axisY)
+                        .allowsHitTesting(false)
+                    Text(label(cursor.wrappedValue)).font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                        .padding(.horizontal, 9).padding(.vertical, 6).background(Palette.surface, in: Capsule())
+                        .overlay(Capsule().stroke(Palette.copper.opacity(0.6)))
+                        .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                            if cursorOrigin == nil { cursorOrigin = cursor.wrappedValue }
+                            let next = (cursorOrigin ?? cursor.wrappedValue) + Double(value.translation.width / max(1, mapping.width)) * mapping.span
+                            cursor.wrappedValue = min(upper, max(lower, next.rounded()))
+                        }.onEnded { _ in cursorOrigin = nil })
+                        .accessibilityRepresentation {
+                            Slider(value: cursor, in: lower...max(lower, upper), step: 1) { Text("当前时间") }
+                                .accessibilityValue(label(cursor.wrappedValue))
+                        }.help("拖动当前时间；人物卡、地图与关系同步更新")
+                        .position(x: x, y: 79)
                 }
             }
             .overlay(alignment: .topLeading) {
@@ -81,8 +103,8 @@ struct TimelineRangeControl: View {
                     .help("拖动两个端点调整时间范围，点击事件点定位；端点也可用方向键调整，Esc 结束拖动。")
             }
             .transaction { $0.animation = nil }
-            .onChange(of: geometry.size.width) { _, _ in cancelInteraction() }
-        }.frame(height: 68)
+            .onChange(of: geometry.size.width) { _, _ in cancelInteraction(); cursorOrigin = nil }
+        }.frame(height: cursor == nil ? 68 : 105)
             .onChange(of: bounds) { _, _ in cancelInteraction() }
             .onChange(of: focused) { _, next in
                 if let interaction, next != interaction.endpoint { cancelInteraction() }

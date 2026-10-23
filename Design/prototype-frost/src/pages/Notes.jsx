@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useApp, Icon, Button, Panel, Toolbar, Modal, Markdown, Empty } from '../shared.jsx';
 import { books } from '../data.js';
 import { SPATIAL_EVENTS } from './Spatial.jsx';
+import {ScopePicker, FrozenScope, readingScopeSnapshot} from './ReadingScope.jsx';
 import './notes.css';
 
 const uid = (prefix = 'note') => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -170,25 +171,29 @@ export function ChatPage() {
   const requestSave = (text, mode = 'whole') => { setSaveRequest({ markdown: text, mode, title: book.id === 'history' ? '赤壁战局中的因果与选择' : '为什么行变换不改变解集' }); setMenuId(null); };
   const send = async () => {
     if (!question.trim() || busy) return;
-    const q = question.trim(); setQuestion(''); setBusy(true);
-    update(prev => ({ ...prev, messages: [...prev.messages, { id: uid('q'), role: 'user', text: q, bookId: state.currentBookId }] }));
+    const q = question.trim(), snapshot = readingScopeSnapshot(state, book);
+    if (!snapshot.valid) { notify(snapshot.kind === 'notes' ? '请先勾选允许使用的笔记。' : '请先在原文中选择文字。'); return; }
+    const requestSource = snapshot.kind === 'selection' ? {page: snapshot.page, text: snapshot.selection} : {...sourceFor(book), page:snapshot.page};
+    setQuestion(''); setBusy(true);
+    update(prev => ({ ...prev, messages: [...prev.messages, { id: uid('q'), role: 'user', text: q, bookId: snapshot.bookId, scope: snapshot, source: requestSource }] }));
     await new Promise(r => setTimeout(r, 650));
     const answer = book.id === 'history'
       ? `### 从原文出发\n\n火攻奏效并不只是“有风”。连船、军队适应程度与部署共同构成了条件。\n\n1. **观察条件**：船舰首尾相接。\n2. **提出方案**：黄盖建议以火攻破局。\n3. **追问证据**：哪些细节是原文明说，哪些是我们的推断？\n\n> 这是交互稿的示例回答，没有调用 AI。`
       : `### 保持解集的关键是可逆\n\n例如，将第二行替换为\n\n$$R_2 \\leftarrow R_2 - 2R_1$$\n\n这一步可以用 $R_2 \\leftarrow R_2 + 2R_1$ 逆转，所以没有引入或丢掉约束。\n\n**再想一步**：把某一行乘以零，为什么不属于合法的初等行变换？\n\n> 这是交互稿的示例回答，没有调用 AI。`;
-    update(prev => ({ ...prev, messages: [...prev.messages, { id: uid('a'), role: 'assistant', text: answer, bookId: state.currentBookId }] })); setBusy(false);
+    update(prev => ({ ...prev, messages: [...prev.messages, { id: uid('a'), role: 'assistant', text: (snapshot.kind==='notes'?'### 从选定笔记出发\n\n本次只演示整理你勾选的笔记，用户理解与原书事实分别标注。可以继续选择范围，或回读完整笔记。\n\n> 本地交互示例，没有调用 AI。':answer), bookId: snapshot.bookId, scope: snapshot, source: requestSource }] })); setBusy(false);
   };
   const captureSelection = (id) => { const text = window.getSelection()?.toString().trim(); if (text) setSemanticSelection({ id, text }); };
   const merged = messages.filter(m => m.role === 'assistant' && selected.includes(m.id)).map((m, i) => `## 回答 ${i + 1}\n\n${m.text}`).join('\n\n---\n\n');
   return <section className="nt-page nt-chat-page" aria-label="与书对话">
-    <div className="nt-chat-context"><Icon name="quote" size={19}/><span>围绕当前原文 · 第 {state.source?.page || state.page || 1} 页</span><Button icon="return" variant="quiet" onClick={() => navigate('reader')}>回到原文</Button></div>
+    <div className="nt-chat-context"><Icon name="quote" size={19}/><ScopePicker label="对话范围"/><span>发送时固定范围</span><Button icon="return" variant="quiet" onClick={() => navigate('reader')}>回到原文</Button></div>
     <main className="nt-conversation">{!messages.length && <Empty icon="chat" title="从一个问题开始">可以问“这一段为什么成立？”或比较原文中的不同选择。回答不会自动保存为笔记。</Empty>}{messages.map(m => <article key={m.id} className={`nt-message ${m.role}`}>
       <div className="nt-message-heading"><span>{m.role === 'user' ? '我' : 'AI · 示例回答'}</span>{m.role === 'assistant' && <div className="nt-answer-actions">{multi && <label className="nt-check"><input type="checkbox" aria-label={`选择回答 ${excerpt(m.text, 20)}`} checked={selected.includes(m.id)} onChange={e => setSelected(s => e.target.checked ? [...s, m.id] : s.filter(id => id !== m.id))}/>合并</label>}<Button icon="save" variant="quiet" aria-label="保存此回答" onClick={() => setMenuId(menuId === m.id ? null : m.id)}>保存</Button>{menuId === m.id && <div className="nt-answer-menu nt-menu"><button onClick={() => requestSave(m.text)}>完整回答</button><button onClick={() => requestSave(m.text, 'source')}>选择 Markdown 片段</button><button onClick={() => { setMulti(true); setSelected(s => s.includes(m.id) ? s : [...s, m.id]); setMenuId(null); }}>选择多条回答</button></div>}</div>}</div>
+      {m.scope?<FrozenScope snapshot={m.scope} compact/>:null}
       <div onMouseUp={() => m.role === 'assistant' && captureSelection(m.id)}><Markdown text={m.text}/></div>
       {semanticSelection?.id === m.id && <div className="nt-selection-tools"><span>已选 {semanticSelection.text.length} 字 · 渲染文本</span><Button icon="save" variant="quiet" onClick={() => requestSave(semanticSelection.text, 'selection')}>保存选段</Button><Button icon="file" variant="quiet" onClick={() => requestSave(m.text, 'source')}>含公式？选源文</Button><Button icon="close" variant="quiet" aria-label="关闭回答选段工具" onClick={() => setSemanticSelection(null)}/></div>}
-      {m.role === 'assistant' && <details className="nt-citation"><summary>原文依据 · 第 {sourceFor(book).page} 页</summary><p>{sourceFor(book).text}</p><Button icon="return" variant="quiet" onClick={() => navigate('reader', { source: sourceFor(book) })}>返回原句</Button></details>}
+      {m.role === 'assistant' && (m.scope?.kind==='notes'?<details className="nt-citation"><summary>本次笔记来源 · {m.scope.noteTitles.length} 篇</summary>{m.scope.noteTitles.map((title,i)=><Button key={m.scope.noteIds[i]} icon="notes" variant="quiet" onClick={()=>navigate('notes',{selectedDocId:m.scope.noteIds[i]})}>{title}</Button>)}</details>:<details className="nt-citation"><summary>原文依据 · 第 {(m.source||sourceFor(book)).page} 页</summary><p>{(m.source||sourceFor(book)).text}</p><Button icon="return" variant="quiet" onClick={()=>navigate('reader',{page:(m.source||sourceFor(book)).page,source:m.source||sourceFor(book)})}>返回原句</Button></details>)}
     </article>)}{busy && <p className="nt-status" role="status"><Icon name="sparkle"/>正在准备示例回答…</p>}</main>
-    <div className="nt-chat-bottom">{multi && <div className="nt-merge-bar"><span>已选 {selected.length} 条回答 · 按会话顺序合并</span><Button variant="quiet" onClick={() => { setMulti(false); setSelected([]); }}>取消</Button><Button icon="save" variant="primary" disabled={!selected.length} onClick={() => requestSave(merged, 'merge')}>合并保存</Button></div>}<form className="nt-composer" onSubmit={e => { e.preventDefault(); send(); }}><textarea aria-label="向这本书提问" placeholder="问一个与这段原文有关的问题…" rows={2} value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}/><Button type="submit" variant="primary" icon="arrowRight" disabled={!question.trim() || busy} aria-label="发送问题">{busy ? '等待中' : '发送'}</Button></form><p className="nt-prototype-note">本地交互演示 · 不调用模型，不消耗额度</p></div>
+    <div className="nt-chat-bottom">{multi && <div className="nt-merge-bar"><span>已选 {selected.length} 条回答 · 按会话顺序合并</span><Button variant="quiet" onClick={() => { setMulti(false); setSelected([]); }}>取消</Button><Button icon="save" variant="primary" disabled={!selected.length} onClick={() => requestSave(merged, 'merge')}>合并保存</Button></div>}<form className="nt-composer" onSubmit={e => { e.preventDefault(); send(); }}><textarea aria-label="向这本书提问" placeholder="问一个与这段原文有关的问题…" rows={2} value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}/><Button type="submit" variant="primary" icon="arrowRight" disabled={!question.trim() || busy} aria-label="发送问题">{busy ? '等待中' : '发送'}</Button></form><div className="chat-scope-footer"><ScopePicker label="提问范围"/><small>翻页不会改变已发送的问题</small></div><p className="nt-prototype-note">本地交互演示 · 不调用模型，不消耗额度</p></div>
     {saveRequest && <SaveAnswerModal request={saveRequest} onClose={() => setSaveRequest(null)} onSaved={id => update({ selectedDocId: id })}/>}
   </section>;
 }

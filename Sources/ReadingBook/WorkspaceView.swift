@@ -143,7 +143,7 @@ struct WorkspaceView: View {
                     if store.book != nil {
                         Divider().padding(.vertical, 8)
                         routeButton("原文阅读", icon: "book.pages", route: "reader")
-                        routeButton("阅读流程", icon: "point.3.connected.trianglepath.dotted", route: "workflow")
+                        routeButton("读书方法", icon: "point.3.connected.trianglepath.dotted", route: "workflow")
                         routeButton("与书对话", icon: "bubble.left.and.bubble.right", route: "query")
                         routeButton("我的笔记", icon: "square.and.pencil", route: "editor")
                         if !componentViews.isEmpty {
@@ -239,7 +239,7 @@ struct WorkspaceView: View {
     }
     private func topIslands(width: CGFloat) -> some View {
         let compact = width < 1050
-        let hasPrimaryAction = store.route == "editor" || store.route == "reader" || store.route == "library" || store.book == nil
+        let hasPrimaryAction = store.route == "editor" || store.route == "reader" || store.route == "workflow" || store.route == "library" || store.book == nil
         let titleLimit: CGFloat = compact ? (hasPrimaryAction ? (showsObjectInspector ? 140 : 188) : 240) : 360
         let serviceLimit: CGFloat = compact ? 108 : 170
         return HStack(spacing: 10) {
@@ -285,6 +285,10 @@ struct WorkspaceView: View {
                     .buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(!store.editorDirty || store.isBusy).fixedSize().workspaceChromeBounds("primary")
             } else if store.route == "reader", store.book != nil {
                 Button { navigate("workflow") } label: { Label(store.isBusy ? "查看精读" : (store.book?.plan == nil ? "预读与精读" : "继续精读"), systemImage: "sparkles").padding(.horizontal, 5).frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).fixedSize().workspaceChromeBounds("primary")
+            } else if store.route == "workflow", store.book != nil {
+                Button { NotificationCenter.default.post(name: Notification.Name("ReadingBookAdjustReaderMethod"), object: nil) } label: {
+                    Label("调整读法", systemImage: "slider.horizontal.3").padding(.horizontal, 5).frame(minHeight: 34)
+                }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).fixedSize().workspaceChromeBounds("primary")
             } else if store.route == "library" || store.book == nil {
                 Button { store.chooseBook() } label: { Label("导入书籍", systemImage: "plus").frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(store.isBusy).fixedSize().workspaceChromeBounds("primary")
             }

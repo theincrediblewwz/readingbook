@@ -123,7 +123,7 @@ public struct ReadingWorkflowActionRegistry: Sendable {
     public static var builtIn: ReadingWorkflowActionRegistry {
         var registry = ReadingWorkflowActionRegistry()
         let common = ["knowledge_search", "methods_define", "reading_plan", "workflow_step_complete"]
-        let knowledge = ["types_define", "cards_upsert", "events_upsert", "relations_link", "views_configure", "map_attach", "timeline_attach", "reading_enrich"]
+        let knowledge = ["types_define", "cards_upsert", "events_upsert", "relations_link", "views_configure", "map_attach", "timeline_attach", "reading_enrich", "knowledge_temporal"]
         let descriptors = [
             ReadingWorkflowActionDescriptor(id: "ai.analyze", title: "原文分析", detail: "依据当前原文执行这一条阅读步骤，提交可核对的分析与引用；需要时实际调用知识工具保存适用对象。旧自然语言方法通过此受控动作执行。", allowedTools: common + knowledge),
             ReadingWorkflowActionDescriptor(id: "facts.extract", title: "知识抽取", detail: "实际调用知识工具创建或补充适用对象和关联，再提交抽取结果；没有适用对象须明确解释，不强造人物或事件。", allowedTools: common + knowledge),
@@ -245,7 +245,7 @@ public enum ReadingWorkflowRuntime {
     public static func recordTool(_ name: String, in project: inout BookProject, previous: BookProject? = nil) {
         guard let index = project.workflowRuns?.firstIndex(where: { $0.status == .running }) else { return }
         if !(project.workflowRuns?[index].toolNames.contains(name) ?? true) { project.workflowRuns?[index].toolNames.append(name) }
-        if let previous, previous.entities != project.entities || previous.events != project.events || previous.relations != project.relations || previous.readingExperience != project.readingExperience {
+        if let previous, previous.entities != project.entities || previous.events != project.events || previous.relations != project.relations || previous.readingExperience != project.readingExperience || previous.temporalKnowledge != project.temporalKnowledge {
             var writes = project.workflowRuns?[index].knowledgeWriteTools ?? []
             if !writes.contains(name) { writes.append(name) }
             project.workflowRuns?[index].knowledgeWriteTools = writes

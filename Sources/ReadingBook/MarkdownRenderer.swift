@@ -31,6 +31,7 @@ struct SourceReadingSelection: Equatable, Sendable {
     var rangeLength: Int? = nil
     var isExact: Bool = false
     var page: Int? = nil
+    var endPage: Int? = nil
 }
 
 /// Offline Markdown + KaTeX. The surrounding SwiftUI ScrollView owns vertical scrolling.

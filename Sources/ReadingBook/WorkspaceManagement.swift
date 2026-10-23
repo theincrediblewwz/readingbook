@@ -46,6 +46,7 @@ extension AppStore {
                     }
                     publish(updated)
                     if bookID == project.id && selectedObjectID == request.id { selectedObjectID = nil }
+                    if bookID == project.id && selectedTemporalEntityID == request.id { selectedTemporalEntityID = nil }
                     if bookID == project.id && selectedDocumentID == request.id { selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; UserDefaults.standard.removeObject(forKey: "draft-\(project.id)") }
                     activity = request.kind == .document ? "文档已移入回收站，可以恢复。" : "派生对象及结构化关联已移除。"
                 }
@@ -68,9 +69,8 @@ extension AppStore {
         catch { errorMessage = error.localizedDescription }
     }
     func removeCanvasNode(_ id: String) async {
-        guard var project = book, !isBusy else { return }; isBusy = true; defer { isBusy = false }
-        project.nodes.removeAll { $0.id == id }; project.edges.removeAll { $0.fromID == id || $0.toID == id }
-        do { try await repository.save(project); publish(project); activity = "已移除画布节点，文档仍在知识库中。" }
+        guard let project = book, !isBusy else { return }; isBusy = true; defer { isBusy = false }
+        do { let updated = try KnowledgeDeletion.removingCanvasNode(id: id, from: project); try await repository.save(updated); publish(updated); activity = "已移除画布节点，文档仍在知识库中。" }
         catch { errorMessage = error.localizedDescription }
     }
     func addDocumentToGraph(_ document: DocumentRecord) async {
@@ -83,9 +83,13 @@ extension AppStore {
     }
     @discardableResult
     func removeConnection(_ id: String, relation: Bool = false, onError: ((String) -> Void)? = nil) async -> Bool {
-        guard var project = book, !isBusy else { return false }; isBusy = true; defer { isBusy = false }
-        if relation { project.relations.removeAll { $0.id == id } } else { project.edges.removeAll { $0.id == id } }
-        do { try await repository.save(project); publish(project); activity = "连线已移除，节点内容保留。"; return true }
+        guard let project = book, !isBusy else { return false }; isBusy = true; defer { isBusy = false }
+        do {
+            let updated: BookProject
+            if relation { updated = try KnowledgeDeletion.removingRelation(id: id, from: project) }
+            else { updated = try KnowledgeDeletion.removingCanvasEdge(id: id, from: project) }
+            try await repository.save(updated); publish(updated); activity = "连线已移除，节点内容保留。"; return true
+        }
         catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription }; return false }
     }
     func removeView(_ id: String) async {

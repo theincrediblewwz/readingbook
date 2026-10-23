@@ -112,6 +112,17 @@ public struct PluginToolRegistry: Sendable {
             try ReadingExperienceTools.validateTransition(from: project.readingExperience, to: candidate.readingExperience,
                                                           allowedUnitIDs: allowedUnitIDs, in: candidate)
         }
+        if candidate.temporalKnowledge != project.temporalKnowledge {
+            guard tool.pluginID == "builtin.temporal-knowledge", name == "knowledge_temporal", tool.requiresReceipts,
+                  phase == nil || phase == .reading || phase == .workflow, !allowedUnitIDs.isEmpty else {
+                throw ReadingError.invalid("时态知识只能通过宿主当前逐段回执与来源门禁追加，不能从预读、只读查询或任意插件改写。")
+            }
+            try TemporalKnowledgeToolPlugin.validateTransition(from: project.temporalKnowledge, to: candidate.temporalKnowledge,
+                                                               allowedUnitIDs: allowedUnitIDs, in: candidate)
+        }
+        guard try encoder.encode(candidate.controlledChanges) == encoder.encode(project.controlledChanges), candidate.graphGroups == project.graphGroups else {
+            throw ReadingError.invalid("阅读插件不能伪造受控变更凭据或修改用户画布分组。")
+        }
         let hostReadingTool = tool.pluginID == "builtin.reading"
         let finish = hostReadingTool && name == "reading_finish"
         let receipt = hostReadingTool && name == "read_receipt"

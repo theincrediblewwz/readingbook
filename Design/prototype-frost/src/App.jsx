@@ -5,12 +5,12 @@ import {ReaderPage,LibraryPage,ObjectsPage,ParallelPage,PrintSample} from './pag
 import {MapPage,MindmapPage,RelationsPage} from './pages/Spatial.jsx';
 import {NotesPage,ChatPage,KnowledgePage,SearchPanel,TrashPage} from './pages/Notes.jsx';
 import {PluginsPage,ModelsPage,WorkflowPage} from './pages/Settings.jsx';
-import {LayersPage,SourceIndexPage} from './pages/ReadingExperience.jsx';
+import {LayersPage} from './pages/ReadingExperience.jsx';
 import './styles.css';
 import './fidelity.css';
-const routes={library:'书库',reader:'原文阅读',parallel:'译注对照',layers:'多层伴读','source-index':'原文索引',workflow:'阅读流程',chat:'与书对话',notes:'我的理解',map:'时间与地图',mindmap:'思维导图',relations:'关系图谱',knowledge:'知识库',atlas:'全书总览',cards:'要素卡片',plugins:'插件与组件',models:'模型设置',trash:'回收站'};
+const routes={library:'书库',reader:'原文阅读',parallel:'译注对照',layers:'已有伴读',workflow:'读书方法',chat:'与书对话',notes:'我的笔记',map:'时间与地图',mindmap:'思维导图',relations:'关系图谱',knowledge:'知识库',atlas:'全书总览',cards:'要素卡片',plugins:'插件与组件',models:'模型设置',trash:'回收站'};
 const componentForRoute={map:'spatial',mindmap:'mindmap',relations:'relations',knowledge:'knowledge',cards:'cards',atlas:'atlas'};
-const pages={library:LibraryPage,reader:ReaderPage,parallel:ParallelPage,layers:LayersPage,'source-index':SourceIndexPage,workflow:WorkflowPage,chat:ChatPage,notes:NotesPage,map:MapPage,mindmap:MindmapPage,relations:RelationsPage,knowledge:KnowledgePage,atlas:ObjectsPage,cards:ObjectsPage,plugins:PluginsPage,models:ModelsPage,trash:TrashPage};
+const pages={library:LibraryPage,reader:ReaderPage,parallel:ParallelPage,layers:LayersPage,workflow:WorkflowPage,chat:ChatPage,notes:NotesPage,map:MapPage,mindmap:MindmapPage,relations:RelationsPage,knowledge:KnowledgePage,atlas:ObjectsPage,cards:ObjectsPage,plugins:PluginsPage,models:ModelsPage,trash:TrashPage};
 function NavigationHandle({onOpen}){
   const [dock,setDock]=useState(()=>sessionStorage.getItem('prototype-nav-dock')||'bottom'),[dragY,setDragY]=useState(null),[height,setHeight]=useState(innerHeight),gesture=useRef(null);
   useEffect(()=>{sessionStorage.setItem('prototype-nav-dock',dock);document.documentElement.dataset.navigationDock=dock;},[dock]);
@@ -36,8 +36,9 @@ export function App(){
   const value=useMemo(()=>({state,update,navigate,notify,confirm,registerGuard,book}),[state,update,navigate,notify,confirm,registerGuard,book]);
   if(new URL(location.href).searchParams.has('print'))return <PrintSample/>;
   const Page=pages[state.route]||ReaderPage;
-  const primaryLabel={reader:state.workflow.status==='running'?'查看精读':'继续精读',library:'导入一本书',workflow:(!state.workflow.planReady||state.workflow.bookId!==state.currentBookId)?'预读并选法':state.workflow.status==='running'?'暂停':state.workflow.status==='paused'?'继续精读':'开始精读',notes:'保存',map:'回到原文',parallel:'回到原文',relations:'回到原文',mindmap:'新建笔记',chat:'新建对话',knowledge:'新建笔记',plugins:'导入插件',models:'保存配置',trash:'返回书库',cards:'添加要素',atlas:'回到原文'}[state.route];
+  const primaryLabel={reader:state.workflow.status==='running'?'查看精读':'继续精读',library:'导入一本书',workflow:'调整读法',notes:'保存',map:'回到原文',parallel:'回到原文',relations:'回到原文',mindmap:'新建笔记',chat:'新建对话',knowledge:'新建笔记',plugins:'导入插件',models:'保存配置',trash:'返回书库',cards:'添加要素',atlas:'回到原文'}[state.route];
   async function primary(){
+    if(state.route==='workflow'){window.dispatchEvent(new CustomEvent('prototype-method-open'));return;}
     if(state.route==='reader'){await navigate('workflow');return;}
     if(['map','relations','atlas','parallel'].includes(state.route)){navigate('reader');return;}
     if(state.route==='trash'){navigate('library');return;}

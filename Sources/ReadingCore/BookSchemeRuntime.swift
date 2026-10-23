@@ -120,6 +120,7 @@ public enum BookSchemeRuntime {
         }
         // Templates describe the next workspace; unselected old views remain in history.
         next.views = template.configuration.views; next.plan = template.configuration.plan
+        next.profile = template.configuration.profile
         for plugin in template.configuration.plugins {
             if let old = next.plugins.first(where: { $0.id == plugin.id }) {
                 guard try encoded(old) == encoded(plugin) else { throw ReadingError.invalid("模板声明包版本与本书冲突，请单独预览该插件升级。") }

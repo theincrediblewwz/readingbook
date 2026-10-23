@@ -79,4 +79,19 @@ final class GraphConnectionsTests: XCTestCase {
         XCTAssertThrowsError(try GraphConnections.renaming(edgeID: "first", label: "新名称", in: initial))
         XCTAssertEqual(initial.edges, oldEdges)
     }
+
+    func testVisibleSecondaryAttachmentAndStandaloneNodeCanConnect() throws {
+        var initial = project()
+        initial.documents[0].trashedAt = Date()
+        initial.nodes[0].documentIDs = ["doc-a", "doc-b"]
+        var standalone = CanvasNode(id: "standalone", targetID: "standalone")
+        standalone.title = "独立主题"; standalone.documentIDs = []; standalone.isStandalone = true
+        initial.nodes.append(standalone)
+        let connected = try GraphConnections.connecting(from: "a-first", to: "standalone", label: "整理", in: initial)
+        XCTAssertEqual(connected.edges.count, 1)
+        let renamed = try GraphConnections.renaming(edgeID: connected.edges[0].id, label: "归纳", in: connected)
+        XCTAssertEqual(renamed.edges[0].label, "归纳")
+        initial.documents[1].trashedAt = Date()
+        XCTAssertThrowsError(try GraphConnections.connecting(from: "a-first", to: "standalone", label: "整理", in: initial))
+    }
 }

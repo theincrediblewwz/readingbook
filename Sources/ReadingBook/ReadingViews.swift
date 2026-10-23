@@ -4,6 +4,7 @@ import ReadingCore
 
 struct ReaderWorkspaceView: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var showPDF: Bool
     @Binding var showOutline: Bool
     @EnvironmentObject var pdfController: PDFReaderController
@@ -46,12 +47,18 @@ struct ReaderWorkspaceView: View {
                     }
                 }.padding(.trailing, reserve).padding(.top, store.readingSourceMode == "original" ? 78 : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
-                ReaderFloatingPanel(title: "目录与原文", icon: "list.bullet", width: 330, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size) { outline }
-                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 560, isPresented: $store.readingCompanionVisible, viewport: geometry.size, onExpansionChange: { companionExpanded = $0 }) {
+                ReaderFloatingPanel(title: "目录与原文", icon: "list.bullet", width: 330, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 230) { outline }
+                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 560, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: 230, onExpansionChange: { companionExpanded = $0 }) {
                     ReadingCompanionPanel(showsHeader: false)
                 }
+                ReaderQuestionComposer(compact: geometry.size.height < 680)
+                    .padding(.horizontal, geometry.size.width < 900 ? 24 : 58).padding(.bottom, 96)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }.onChange(of: showOutline) { _, value in if value && geometry.size.width < 1050 { store.readingCompanionVisible = false } }
                 .onChange(of: store.readingCompanionVisible) { _, value in if value && geometry.size.width < 1050 { showOutline = false } }
+                .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.readingCompanionVisible)
+                .animation(ReadingMotion.animation(reduce: reduceMotion), value: companionExpanded)
         }
     }
     private var outline: some View {
@@ -142,7 +149,9 @@ struct ReaderWorkspaceView: View {
     }
 }
 
-struct ReadingWorkflowView: View {
+/// The receipt ledger and developer-facing execution detail stay available on
+/// demand; they no longer form the reader's default method screen.
+struct ReadingProcessingDetailsView: View {
     @EnvironmentObject var store: AppStore
     @State private var showMethods = false
     @State private var showReview = false
@@ -150,7 +159,7 @@ struct ReadingWorkflowView: View {
     @State private var showSynthesis = false
     var body: some View {
         VStack(spacing: 0) {
-            CompactWorkspaceHeader("阅读流程") {
+            CompactWorkspaceHeader("处理详情") {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 8) { preReadButton; executionButton }
                     Menu {
@@ -210,7 +219,7 @@ struct ReadingWorkflowView: View {
                     }.padding(24).frame(maxWidth: 1080).frame(maxWidth: .infinity)
                 }
             }
-        }.padding(.top, 96).background(Palette.canvas)
+        }.background(Palette.canvas)
     }
     private var cannotPause: Bool { store.isSavingDocument || store.isExportingProject || store.isImportingBookCommit || store.isCommittingLocalWrite }
     private var preReadButton: some View { Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy) }

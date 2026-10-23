@@ -18,14 +18,10 @@ struct EnhancedBookChatView: View {
     @State private var renderedSelections: [String: RenderedMarkdownSelection] = [:]
     @State private var saveRequest: AnswerSaveRequest?
     @State private var openTrashAfterSheet = false
+    @State private var reviewingChanges = false
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Label(store.readingContextDescription, systemImage: "text.quote").font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(2)
-                Spacer()
-                Button { store.route = "reader" } label: { Label("原文", systemImage: "arrow.uturn.backward") }.buttonStyle(ReadingToolbarButtonStyle())
-            }.padding(.leading, 16).padding(.trailing, 6).padding(.vertical, 4).readingGlass(radius: 17).frame(maxWidth: 900).padding(.horizontal, 24).padding(.bottom, 6)
             if selectionMode { selectionBar }
             ScrollViewReader { proxy in
                 ScrollView {
@@ -39,16 +35,60 @@ struct EnhancedBookChatView: View {
                     if let last = store.book?.chats.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
             }
-            HStack(alignment: .bottom, spacing: 12) {
-                TextField("从这本书出发，问一个问题…", text: $question, axis: .vertical)
-                    .font(.system(size: 16)).lineLimit(1...5).textFieldStyle(.plain).onSubmit { send() }
-                    .frame(minHeight: ReadingLayout.controlHeight)
-                Button { send() } label: { Image(systemName: "arrow.up").font(.system(size: 16, weight: .semibold)).frame(width: 28, height: 28) }
-                    .controlSize(.large)
-                    .buttonStyle(.borderedProminent).disabled(store.isBusy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .help("发送问题").accessibilityLabel("发送问题")
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 12) {
+                    QueryScopeControl()
+                    Menu {
+                        Button("只读提问") { store.queryAllowsOrganizing = false }
+                        Button("允许本次新增笔记、导图与知识") { store.queryAllowsOrganizing = true }
+                        Text("仅授权接下来这次发送。已有正文、移除和读法变化仍须审阅。")
+                        if store.latestAIChange != nil {
+                            Divider()
+                            Button("撤销最近一次 AI 整理") { Task { await store.undoLatestAIChange() } }
+                        }
+                    } label: {
+                        Label(store.queryAllowsOrganizing ? "这次整理内容" : "只读提问", systemImage: store.queryAllowsOrganizing ? "square.stack.3d.up" : "lock")
+                            .font(.system(size: 13)).frame(minHeight: 44)
+                    }.menuStyle(.borderlessButton).fixedSize().disabled(store.isBusy)
+                    Text(store.isBusy ? store.lastQuestionContext : store.queryScopePreview).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Menu {
+                        Toggle("整理长对话记忆", isOn: $store.queryMemoryEnabled)
+                        Text("整理旧消息计入本次模型预算；原始对话保留。")
+                        Button("清除本范围的整理摘要") { store.clearCurrentQueryMemory() }
+                    } label: { Image(systemName: "brain.head.profile").frame(width: 40, height: 44) }
+                        .menuStyle(.borderlessButton).fixedSize().disabled(store.isBusy).help("对话记忆与预算")
+                    Button { store.requestedWorkspaceRoute = "reader" } label: { Image(systemName: "book.closed") }
+                        .buttonStyle(ReadingToolbarButtonStyle()).help("回到原文")
+                }
+                HStack(alignment: .bottom, spacing: 12) {
+                    TextField("围绕所选内容，问一个问题…", text: $question, axis: .vertical)
+                        .font(.system(size: 16)).lineLimit(1...5).textFieldStyle(.plain).onSubmit { send() }
+                        .frame(minHeight: ReadingLayout.controlHeight)
+                    Button { send() } label: { Image(systemName: "arrow.up").font(.system(size: 16, weight: .semibold)).frame(width: 28, height: 28) }
+                        .controlSize(.large)
+                        .buttonStyle(.borderedProminent).disabled(store.isBusy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canUseQueryScope(store.queryScope))
+                        .help("发送问题").accessibilityLabel("发送问题")
+                }
+                if store.isBusy {
+                    HStack(spacing: 8) { ProgressView().controlSize(.mini); Text("正在按所选范围查找和阅读…").font(.caption).foregroundStyle(.secondary) }
+                } else if let previous = store.queryRetryQuestion {
+                    Button("恢复上次未完成的问题") { question = previous; store.queryRetryQuestion = nil }
+                        .buttonStyle(.borderless).font(.caption)
+                }
+                if !store.queryDisclosure.isEmpty && !store.isBusy {
+                    DisclosureGroup("这次读取与对话整理") {
+                        Text(store.queryDisclosure).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    }.font(.caption).padding(.top, 4)
+                }
+                if !store.pendingCurrentBookChanges.isEmpty {
+                    Button { reviewingChanges = true } label: {
+                        Label("审阅 \(store.pendingCurrentBookChanges.count) 项待确认修改", systemImage: "doc.text.magnifyingglass")
+                            .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                    }.buttonStyle(.plain).foregroundStyle(Palette.accent).disabled(store.isBusy)
+                }
             }.padding(14).readingGlass(radius: 22).frame(maxWidth: 900).padding(.horizontal, 24).padding(.bottom, 22)
-        }.padding(.top, 98).background(Palette.canvas)
+        }.padding(.top, 82).background(Palette.canvas)
         .onChange(of: store.bookID) { _, _ in selectionMode = false; selectedAnswers.removeAll(); renderedSelections.removeAll(); saveRequest = nil }
         .sheet(item: $saveRequest, onDismiss: {
             if openTrashAfterSheet { openTrashAfterSheet = false; store.showingTrash = true }
@@ -58,6 +98,7 @@ struct EnhancedBookChatView: View {
                             onSaved: { selectionMode = false; selectedAnswers.removeAll() })
                 .environmentObject(store).frame(minWidth: 520, idealWidth: 680, minHeight: 440, idealHeight: 600)
         }
+        .sheet(isPresented: $reviewingChanges) { AIChangeReview(close: { reviewingChanges = false }).environmentObject(store) }
     }
 
     private var selectionBar: some View {
@@ -122,11 +163,7 @@ struct EnhancedBookChatView: View {
                     .background(Palette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
             }
             if assistant, !message.evidence.isEmpty {
-                DisclosureGroup {
-                    EvidenceList(evidence: message.evidence).padding(.top, 5)
-                } label: {
-                    Text("原文依据 · \(message.evidence.count) 处").font(.caption).foregroundStyle(.secondary)
-                }.tint(Palette.accent)
+                EvidenceDisclosure(evidence: message.evidence)
             }
         }.padding(24).background(assistant ? Palette.surface.opacity(0.94) : Palette.accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
             .overlay(RoundedRectangle(cornerRadius: 18).stroke(Palette.line.opacity(0.65), lineWidth: 0.65))
@@ -185,7 +222,7 @@ struct EnhancedBookChatView: View {
     }
     private func send() {
         guard !store.isBusy, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let input = question; store.ask(input)
+        let input = question; store.ask(input, allowsOrganizing: store.queryAllowsOrganizing)
         if store.isBusy { question = "" }
     }
 }

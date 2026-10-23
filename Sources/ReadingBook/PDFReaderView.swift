@@ -848,7 +848,9 @@ struct PDFReaderView: NSViewRepresentable {
         let pages = selected.pages
         let index = pages.first.map { document.index(for: $0) }
         let pageNumber = index.flatMap { $0 == NSNotFound ? nil : $0 + 1 }
-        deliver(SourceReadingSelection(text: text, isExact: false, page: pageNumber))
+        let lastIndex = pages.last.map { document.index(for: $0) }
+        let endPage = lastIndex.flatMap { $0 == NSNotFound ? nil : $0 + 1 }
+        deliver(SourceReadingSelection(text: text, isExact: false, page: pageNumber, endPage: endPage))
     }
 
     private func nativeQuoteRange(_ quote: String, prefix: String? = nil, suffix: String? = nil, on page: PDFPage) -> NSRange? {

@@ -99,7 +99,7 @@ private struct GraphNodeBrowserRow: View {
 
     private var label: some View {
         HStack(spacing: 9) {
-            Image(systemName: item.subtitle == "Markdown" ? "doc.text" : "circle.hexagongrid")
+            Image(systemName: !item.documentIDs.isEmpty || item.subtitle == "Markdown" ? "doc.text" : "circle.hexagongrid")
                 .font(.system(size: 23, weight: .regular)).foregroundStyle(Palette.accent).frame(width: 30)
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.title).font(.system(size: 16, weight: selected ? .semibold : .medium)).foregroundStyle(selected ? Palette.accent : Palette.ink).lineLimit(2)
@@ -131,13 +131,24 @@ private struct GraphNodeDetails: View {
     var item: GraphItem
     @State private var markdown: String?
     @State private var loadError: String?
-    private var document: DocumentRecord? { store.book?.activeDocuments.first { $0.id == item.targetID } }
-    private var revision: String { "\(store.bookID ?? "")|\(item.targetID)|\(document?.updatedAt.timeIntervalSince1970 ?? 0)" }
+    @State private var previewDocumentID: String?
+    private var documents: [DocumentRecord] {
+        let ids = Set(item.documentIDs + [item.targetID])
+        return store.book?.activeDocuments.filter { ids.contains($0.id) } ?? []
+    }
+    private var document: DocumentRecord? { documents.first { $0.id == previewDocumentID } ?? documents.first }
+    private var revision: String { "\(store.bookID ?? "")|\(item.targetID)|\(document?.id ?? "")|\(document?.updatedAt.timeIntervalSince1970 ?? 0)" }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text(item.title).font(.system(size: 20, weight: .semibold)).textSelection(.enabled)
+                if documents.count > 1 {
+                    Menu {
+                        ForEach(documents) { document in Button(document.title) { previewDocumentID = document.id } }
+                    } label: { Label(document?.title ?? "挂载的笔记", systemImage: "doc.on.doc").frame(minHeight: 44) }
+                        .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
+                }
                 if let document {
                     Text(document.origin == "user" ? "我的笔记 · 已保存内容" : "主动保存的 AI 摘记").font(.caption).foregroundStyle(.secondary)
                     if let loadError { Text(loadError).font(.caption).foregroundStyle(.red) }

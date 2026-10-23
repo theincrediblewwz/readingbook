@@ -35,20 +35,85 @@ struct SpatialTimelineView: View {
     @State private var pointerEpoch = 0
     @State private var memoryScope: String?
     @State private var selectionLayoutToken: UUID?
+    @State private var showsPerson = true
+    @State private var showsFootprintSequence = false
+
+    private var temporalMode: Bool { store.temporalAxis != "legacy" }
+    private var temporalEventIDs: Set<String> {
+        Set(store.temporalEvents.filter { store.selectedTemporalEntityID == nil || $0.match == .matches }.map(\.object.id))
+    }
+    private var visibleEvents: [KnowledgeEvent] {
+        guard let book = store.book else { return [] }
+        let admitted = Dictionary(store.temporalEvents.map { ($0.object.id, $0.object) }, uniquingKeysWith: { first, _ in first })
+        let scoped = (store.readingScopeCurrent ? store.readingContextItems.events : book.events).compactMap { event -> KnowledgeEvent? in
+            guard let object = admitted[event.id] else { return nil }
+            var safe = event; safe.summary = object.summary
+            safe.participantIDs = object.references["participants"] ?? []; safe.placeIDs = object.references["places"] ?? []
+            return safe
+        }
+        if !temporalMode { return scoped.filter { event in
+            guard let year = event.startYear else { return store.showUndated }
+            return Double(event.endYear ?? year) >= store.timeFrom && Double(year) <= store.timeTo
+        } }
+        return scoped.filter { event in
+            guard temporalEventIDs.contains(event.id), let item = store.temporalEvents.first(where: { $0.object.id == event.id }) else { return false }
+            if store.selectedTemporalEntityID != nil { return item.match == .matches }
+            let start = axisValue(item.extent), end = axisEnd(item.extent)
+            guard let start else { return store.showUndated }
+            return (end ?? start) >= store.timeFrom && start <= store.timeTo
+        }
+    }
+    private var axisEvents: [KnowledgeEvent] {
+        guard temporalMode else {
+            let ids = Set(store.temporalEvents.map(\.object.id))
+            return (store.readingScopeCurrent ? store.readingContextItems.events : (store.book?.events ?? [])).filter { ids.contains($0.id) }
+        }
+        return store.temporalEvents.compactMap { item in
+            guard var event = store.book?.events.first(where: { $0.id == item.object.id }), let value = axisValue(item.extent) else { return nil }
+            event.startYear = Int(value); event.endYear = axisEnd(item.extent).map(Int.init); return event
+        }
+    }
+    private func axisValue(_ extent: TemporalExtent) -> Double? {
+        if store.temporalAxis == "narrative" { return extent.narrativeStart.map(Double.init) }
+        guard store.temporalAxis == "calendar:" + (extent.calendar ?? "") else { return nil }
+        return extent.start.map { Double($0.year) }
+    }
+    private func axisEnd(_ extent: TemporalExtent) -> Double? {
+        store.temporalAxis == "narrative" ? extent.narrativeEnd.map(Double.init) : extent.end.map { Double($0.year) }
+    }
+    private func axisLabel(_ value: Double) -> String {
+        store.temporalAxis == "narrative" ? "叙事 \(Int(value))" : TimelineRangeControl.yearLabel(Int(value))
+    }
 
     private var filteredEvents: [KnowledgeEvent] {
-        store.visibleEvents.filter { eventQuery.isEmpty || $0.name.localizedCaseInsensitiveContains(eventQuery) || $0.dateText.localizedCaseInsensitiveContains(eventQuery) || $0.participantIDs.contains(where: { store.objectTitle($0).localizedCaseInsensitiveContains(eventQuery) }) }
+        visibleEvents.filter { eventQuery.isEmpty || $0.name.localizedCaseInsensitiveContains(eventQuery) || $0.dateText.localizedCaseInsensitiveContains(eventQuery) || $0.participantIDs.contains(where: { store.objectTitle($0).localizedCaseInsensitiveContains(eventQuery) }) }
     }
-    private var expandedEvent: KnowledgeEvent? { store.book?.events.first { $0.id == expandedEventID } }
+    private var expandedEvent: KnowledgeEvent? {
+        guard let book = store.book, var event = book.events.first(where: { $0.id == expandedEventID }),
+              let object = try? TemporalKnowledgeRuntime.object(id: event.id, in: book, boundary: store.temporalBoundary) else { return nil }
+        event.summary = object.summary; event.participantIDs = object.references["participants"] ?? []; event.placeIDs = object.references["places"] ?? []
+        return event
+    }
+    private var admittedEntities: [KnowledgeEntity] {
+        guard let book = store.book else { return [] }
+        let ids = Set(((try? TemporalKnowledgeRuntime.objects(in: book, boundary: store.temporalBoundary)) ?? []).filter { $0.kind == .entity }.map(\.id))
+        return book.entities.filter { ids.contains($0.id) }
+    }
     private var expandedEventIsVisible: Bool {
         guard let expandedEventID else { return false }
-        return store.visibleEvents.contains { $0.id == expandedEventID }
+        return visibleEvents.contains { $0.id == expandedEventID }
     }
     private var points: [ReadingMapPoint] {
         guard let book = store.book else { return [] }
         let places = Dictionary(uniqueKeysWithValues: book.entities.map { ($0.id, $0) })
+        if temporalMode, let id = store.selectedTemporalEntityID {
+            return (store.temporalSnapshot(id)?.footprints ?? []).compactMap { presence in
+                guard let placeID = presence.placeID, let place = places[placeID], let lat = place.latitude, let lon = place.longitude else { return nil }
+                return ReadingMapPoint(id: presence.id, targetID: presence.eventID ?? id, title: store.objectTitle(id), subtitle: presence.action + " · " + place.name, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon))
+            }
+        }
         var result: [ReadingMapPoint] = []
-        for event in store.visibleEvents {
+        for event in visibleEvents {
             for id in event.placeIDs {
                 if let place = places[id], let lat = place.latitude, let lon = place.longitude {
                     result.append(ReadingMapPoint(id: "\(event.id)|\(place.id)", targetID: event.id, title: event.name, subtitle: "\(event.dateText) · \(place.name)", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
@@ -56,7 +121,8 @@ struct SpatialTimelineView: View {
             }
         }
         if book.events.isEmpty {
-            result = (store.readingScopeCurrent ? store.readingContextItems.entities : book.entities).compactMap { place in
+            let admitted = Set(admittedEntities.map(\.id))
+            result = (store.readingScopeCurrent ? store.readingContextItems.entities : book.entities).filter { admitted.contains($0.id) }.compactMap { place in
                 guard let lat = place.latitude, let lon = place.longitude else { return nil }
                 return ReadingMapPoint(id: place.id, targetID: place.id, title: place.name, subtitle: place.locationNote ?? "书中地点", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon))
             }
@@ -64,9 +130,31 @@ struct SpatialTimelineView: View {
         return result
     }
     private var bounds: ClosedRange<Double> {
-        let years = store.book?.events.flatMap { [$0.startYear, $0.endYear].compactMap { $0 } } ?? []
+        if temporalMode {
+            let extents = store.availableTemporalExtents
+            let values = extents.flatMap { [axisValue($0), axisEnd($0)].compactMap { $0 } }
+            if let first = values.min(), let last = values.max() { return (first - 1)...(last + 1) }
+            return 0...1
+        }
+        let years = axisEvents.flatMap { [$0.startYear, $0.endYear].compactMap { $0 } }
         guard let first = years.min(), let last = years.max() else { return -5000...3000 }
         return (Double(first) - 5)...(Double(last) + 5)
+    }
+    private var footprintSequence: [CLLocationCoordinate2D] {
+        guard showsFootprintSequence, temporalMode, let book = store.book, let id = store.selectedTemporalEntityID,
+              let snapshot = try? TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: book, boundary: store.temporalBoundary) else { return [] }
+        let candidates = snapshot.footprints.filter { item in
+            guard let value = axisValue(item.extent) else { return false }
+            return item.extent.uncertainty == .exact && item.extent.kind == .point && value >= store.timeFrom && value <= min(store.timeCursor, store.timeTo)
+        }
+        // The visible axis is year/narrative precision. Tied or uncertain times
+        // do not establish an order, so never invent a segment between them.
+        let grouped = Dictionary(grouping: candidates, by: { axisValue($0.extent) ?? 0 })
+        return candidates.filter { grouped[axisValue($0.extent) ?? 0]?.count == 1 }
+            .sorted { (axisValue($0.extent) ?? 0) < (axisValue($1.extent) ?? 0) }.compactMap { item in
+            guard let place = book.entities.first(where: { $0.id == item.placeID }), let lat = place.latitude, let lon = place.longitude else { return nil }
+            return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
     }
     // Keep distinct upper-corner targets even while reserving MapKit's controls.
     private var topReserve: CGFloat { 96 }
@@ -99,6 +187,12 @@ struct SpatialTimelineView: View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
                 bookMap
+                if let id = store.selectedTemporalEntityID {
+                    ReaderFloatingPanel(title: store.objectTitle(id), icon: "person.crop.rectangle", width: 340, height: 490,
+                        isPresented: $showsPerson, viewport: geometry.size, memoryIDOverride: "map.person") {
+                        TemporalPersonContents(entityID: id)
+                    }
+                }
                 if showsTimeline {
                 timelineCard.frame(width: panelWidth).fixedSize(horizontal: false, vertical: true)
                     .background {
@@ -141,9 +235,13 @@ struct SpatialTimelineView: View {
         .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreMapMemory() }
         .onChange(of: showsTimeline) { _, _ in saveMapPanelMemory() }
         .onChange(of: timelineCollapsed) { _, _ in saveMapPanelMemory() }
-        .onChange(of: store.timeFrom) { _, _ in saveMapPanelMemory() }
-        .onChange(of: store.timeTo) { _, _ in saveMapPanelMemory() }
+        .onChange(of: store.timeFrom) { _, _ in store.timeCursor = min(store.timeTo, max(store.timeFrom, store.timeCursor)); saveMapPanelMemory() }
+        .onChange(of: store.timeTo) { _, _ in store.timeCursor = min(store.timeTo, max(store.timeFrom, store.timeCursor)); saveMapPanelMemory() }
+        .onChange(of: store.timeCursor) { _, _ in saveMapPanelMemory() }
+        .onChange(of: store.temporalAxis) { _, _ in saveMapPanelMemory() }
+        .onChange(of: store.selectedTemporalEntityID) { _, id in if id != nil { showsPerson = true }; saveMapPanelMemory() }
         .onChange(of: store.showUndated) { _, _ in saveMapPanelMemory() }
+        .onChange(of: store.workspaceAICommand) { _, command in handleViewCommand(command) }
         .onExitCommand { cancelPanelDrag() }
         .onChange(of: measuredPanelSize) { _, _ in
             // Only settle a newly selected event's expanding detail card.
@@ -157,7 +255,17 @@ struct SpatialTimelineView: View {
         .onChange(of: store.selectedObjectID) { _, id in
             guard let id else { return }
             if store.book?.events.contains(where: { $0.id == id }) == true { expand(id) }
+            else if admittedEntities.contains(where: { $0.id == id && $0.latitude == nil && $0.longitude == nil }) {
+                store.selectedTemporalEntityID = id; showsPerson = true
+                if store.temporalAxis == "legacy" {
+                    if let calendar = store.temporalCalendars.first { selectAxis("calendar:" + calendar) }
+                    else if store.hasNarrativeTime { selectAxis("narrative") }
+                }
+            }
             locateSelection(id)
+        }
+        .onChange(of: store.selectedUnitID) { _, _ in
+            if let id = store.selectedTemporalEntityID, !admittedEntities.contains(where: { $0.id == id }) { store.selectedTemporalEntityID = nil }
         }
         .onChange(of: store.bookID) { _, _ in
             cancelPanelDrag()
@@ -176,6 +284,9 @@ struct SpatialTimelineView: View {
     private var bookMap: some View {
         let expectedKey = store.workspaceMemoryKey
         return Map(position: $camera) {
+            if footprintSequence.count > 1 {
+                MapPolyline(coordinates: footprintSequence).stroke(Palette.copper.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
+            }
             ForEach(points) { point in
                 Annotation("", coordinate: point.coordinate) { mapMarker(point) }
             }
@@ -199,12 +310,16 @@ struct SpatialTimelineView: View {
         let panel = saved.panels["map.timeline"]
         showsTimeline = panel?.isPresented ?? true; timelineCollapsed = panel?.collapsed ?? (viewport.width < 900 || viewport.height < 700)
         dockRaw = saved.timelineDock.flatMap { FloatingPanelDock(rawValue: $0)?.rawValue } ?? FloatingPanelDock.bottomLeading.rawValue
+        store.temporalAxis = saved.temporalAxis ?? "legacy"
+        store.timeCursor = saved.timeCursor ?? store.timeFrom
+        store.selectedTemporalEntityID = saved.temporalEntityID.flatMap { id in store.book?.entities.contains(where: { $0.id == id }) == true ? id : nil }
     }
     private func saveMapPanelMemory() {
         guard let memoryScope else { return }
         store.updateWorkspaceMemory({ memory in
             memory.panels["map.timeline"] = WorkspacePanelMemory(isPresented: showsTimeline, collapsed: timelineCollapsed)
             memory.timelineDock = dockRaw; memory.timeFrom = store.timeFrom; memory.timeTo = store.timeTo; memory.showUndated = store.showUndated
+            memory.temporalAxis = store.temporalAxis; memory.timeCursor = store.timeCursor; memory.temporalEntityID = store.selectedTemporalEntityID
         }, expectedKey: memoryScope)
     }
 
@@ -214,7 +329,8 @@ struct SpatialTimelineView: View {
             if !timelineCollapsed {
             timeRangeBar
             TimelineRangeControl(lower: $store.timeFrom, upper: $store.timeTo, bounds: bounds,
-                                   events: store.readingScopeCurrent ? store.readingContextItems.events : (store.book?.events ?? []), selectedID: store.selectedObjectID, select: selectEvent)
+                                   events: axisEvents, selectedID: store.selectedObjectID, select: selectEvent,
+                                   cursor: temporalMode ? $store.timeCursor : nil, label: axisLabel)
                 .id(store.bookID)
             if let event = expandedEvent {
                 Divider().opacity(0.5)
@@ -223,7 +339,7 @@ struct SpatialTimelineView: View {
                 eventDetails(event).frame(height: detailHeight).transition(.opacity)
             } else {
                 Text(points.isEmpty
-                     ? (store.visibleEvents.isEmpty ? "当前范围没有事件；可调整端点或显示全部时间。" : "暂无可定位坐标，事件详情仍可从清单阅读。")
+                     ? (visibleEvents.isEmpty ? "当前范围没有事件；可调整端点或显示全部时间。" : "暂无可定位坐标，事件详情仍可从清单阅读。")
                      : "\(points.count) 个地图标记 · 点事件查看详情")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).frame(height: 18, alignment: .leading)
                     .padding(.horizontal, 7).padding(.bottom, 3)
@@ -245,7 +361,14 @@ struct SpatialTimelineView: View {
                 .help("拖动此处移动时间卡片；松手后吸附到最近的角或下方中央，Esc 取消")
                 .accessibilityLabel("时间与地图，可在选项菜单更改停靠位置")
             Menu {
-                Button("浏览事件清单（\(store.visibleEvents.count)）") { showingEvents = true }
+                Button("浏览事件清单（\(visibleEvents.count)）") { showingEvents = true }
+                Menu("时间体系") {
+                    Button("原书纪年标签（历法未统一）") { selectAxis("legacy") }
+                    ForEach(store.temporalCalendars, id: \.self) { calendar in Button(calendar) { selectAxis("calendar:" + calendar) } }
+                    if store.hasNarrativeTime { Button("叙事顺序") { selectAxis("narrative") } }
+                }
+                Toggle("显示出现次序虚线", isOn: $showsFootprintSequence).disabled(store.selectedTemporalEntityID == nil || !temporalMode)
+                Text("虚线连接有出处的出现点，不代表真实路线。")
                 Toggle("只看当前原文相关事件", isOn: $store.readingScopeCurrent)
                 Toggle("保留时间待考事件", isOn: $store.showUndated)
                 Button("地图适合全部标记") { camera = .automatic }
@@ -278,14 +401,21 @@ struct SpatialTimelineView: View {
                 fromText = String(Int(store.timeFrom)); toText = String(Int(store.timeTo)); rangeError = ""; editingRange = true
             } label: {
                 HStack(spacing: 5) {
-                    Text("\(TimelineRangeControl.yearLabel(Int(store.timeFrom))) — \(TimelineRangeControl.yearLabel(Int(store.timeTo)))")
+                    Text("\(axisLabel(store.timeFrom)) — \(axisLabel(store.timeTo))")
                         .monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
                     Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
                 }
             }.buttonStyle(ReadingToolbarButtonStyle(selected: editingRange)).help("输入精确起止年份")
                 .popover(isPresented: $editingRange) { rangeEditor }
             Spacer(minLength: 0)
-            Button { showingEvents.toggle() } label: { Label("事件 \(store.visibleEvents.count)", systemImage: "list.bullet") }
+            Menu {
+                Button("全部人物与事件") { store.selectedTemporalEntityID = nil }
+                ForEach(admittedEntities.filter { $0.latitude == nil && $0.longitude == nil }) { entity in
+                    Button(entity.name) { store.selectedTemporalEntityID = entity.id; showsPerson = true }
+                }
+            } label: { Label(store.selectedTemporalEntityID.map(store.objectTitle) ?? "跟随人物", systemImage: "person.crop.circle") }
+                .menuStyle(.borderlessButton).fixedSize().frame(minHeight: 44)
+            Button { showingEvents.toggle() } label: { Label("事件 \(visibleEvents.count)", systemImage: "list.bullet") }
                 .buttonStyle(ReadingToolbarButtonStyle(selected: showingEvents)).help("浏览事件清单")
         }.padding(.horizontal, 4).background(Palette.accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 10))
     }
@@ -345,7 +475,11 @@ struct SpatialTimelineView: View {
             Label(title, systemImage: symbol).font(.caption).foregroundStyle(.secondary)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 6)], alignment: .leading, spacing: 4) {
                 ForEach(ids, id: \.self) { id in
-                    Button { store.focus(id); inspectedObjectID = id } label: {
+                    Button {
+                        store.focus(id)
+                        if title == "参与者" { store.selectedTemporalEntityID = id; showsPerson = true }
+                        else { inspectedObjectID = id }
+                    } label: {
                         HStack(spacing: 5) {
                             Text(store.objectTitle(id)).lineLimit(2)
                             Spacer(minLength: 0)
@@ -423,7 +557,7 @@ struct SpatialTimelineView: View {
                                     .contentShape(Rectangle())
                             }.buttonStyle(.plain).id(event.id)
                         }
-                        if store.visibleEvents.isEmpty { Text("当前范围没有事件。调整端点或显示全部时间。").font(.caption).foregroundStyle(.secondary).padding(16) }
+                        if visibleEvents.isEmpty { Text("当前范围没有事件。调整端点或显示全部时间。").font(.caption).foregroundStyle(.secondary).padding(16) }
                         else if filteredEvents.isEmpty { Text("没有匹配的事件。请调整搜索词。").font(.caption).foregroundStyle(.secondary).padding(16) }
                     }.frame(maxWidth: .infinity)
                 }.onAppear { if let id = store.selectedObjectID { proxy.scrollTo(id, anchor: .center) } }
@@ -435,6 +569,33 @@ struct SpatialTimelineView: View {
     private func normalizeRange() {
         store.timeFrom = min(bounds.upperBound, max(bounds.lowerBound, store.timeFrom))
         store.timeTo = max(store.timeFrom, min(bounds.upperBound, max(bounds.lowerBound, store.timeTo)))
+        store.timeCursor = min(store.timeTo, max(store.timeFrom, store.timeCursor))
+    }
+    private func handleViewCommand(_ command: WorkspaceAICommand?) {
+        guard let command, let args = try? JSONSerialization.jsonObject(with: command.arguments) as? [String: Any] else { return }
+        guard dragOrigin == nil else { store.acknowledgeViewCommand(command, status: "busy", message: "时间面板正在拖动。"); return }
+        if command.name == "panel_present", args["panelID"] as? String == "map.timeline" {
+            switch args["state"] as? String {
+            case "open": restoreTimeline()
+            case "collapse": showsTimeline = true; timelineCollapsed = true
+            case "close": showsTimeline = false
+            default: store.acknowledgeViewCommand(command, status: "unsupported", message: "面板状态无效。"); return
+            }
+            store.acknowledgeViewCommand(command, message: "时间面板状态已更新。")
+        } else if command.name == "map_fit_objects" {
+            let ids = Set(args["objectIDs"] as? [String] ?? [])
+            let matches = points.filter { ids.contains($0.targetID) }
+            guard !matches.isEmpty else { store.acknowledgeViewCommand(command, status: "unsupported", message: "当前快照没有这些对象的可靠坐标。"); return }
+            let latitudes = matches.map { $0.coordinate.latitude }, longitudes = matches.map { $0.coordinate.longitude }
+            guard let south = latitudes.min(), let north = latitudes.max(), let west = longitudes.min(), let east = longitudes.max() else { return }
+            camera = .region(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: (north + south) / 2, longitude: (west + east) / 2),
+                span: MKCoordinateSpan(latitudeDelta: min(170, max(0.3, (north - south) * 1.5)), longitudeDelta: min(350, max(0.3, (east - west) * 1.5)))))
+            store.acknowledgeViewCommand(command, message: "已按有证据的位置调整地图；没有创建坐标。")
+        }
+    }
+    private func selectAxis(_ axis: String) {
+        store.temporalAxis = axis; fitTime(); store.timeCursor = store.timeFrom
+        if let first = axisEvents.compactMap(\.startYear).min() { store.timeCursor = Double(first) }
     }
     private func expand(_ id: String) {
         restoreTimeline()

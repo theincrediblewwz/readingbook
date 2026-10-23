@@ -169,6 +169,9 @@ public enum PluginEngine {
     /// disabled declarations may be archived; only a new plan must use enabled methods.
     public static func validateSchemeConfiguration(_ configuration: BookSchemeConfiguration, in project: BookProject) throws {
         var candidate = project; configuration.assign(to: &candidate)
+        if let profile = configuration.profile {
+            try TemporalKnowledgeRuntime.validateProfile(profile, typeIDs: Set(candidate.types.map(\.id)), methodIDs: Set(candidate.methods.map(\.id)))
+        }
         try validateDefinitionCounts(candidate)
         try uniqueIDs(candidate.types.map(\.id)); try uniqueIDs(candidate.methods.map(\.id)); try uniqueIDs(candidate.views.map(\.id))
         guard candidate.plugins.count <= 64 else { throw invalid("声明包数量达到上限。") }
@@ -280,7 +283,20 @@ public enum PluginEngine {
             try RegisteredReadingTool(pluginID: "builtin.reading", schema: ReadingWorkflowRuntime.completionTool, phases: [.workflow], requiresReceipts: true) { data, project, allowed in try ReadingWorkflowRuntime.complete(arguments: data, to: &project, allowedUnitIDs: allowed) }
         ]))
         try registry.install(ReadingExperienceToolPlugin())
+        try registry.install(TemporalKnowledgeToolPlugin())
         return registry
+    }
+
+    static func validateKnowledgeTypeTransition(from previous: BookProject, to candidate: BookProject) throws {
+        try validateDefinitionCounts(candidate)
+        for type in candidate.types where !previous.types.contains(type) {
+            try validate(type)
+            guard !isDisabledType(type.id, in: previous) else { throw invalid("已停用声明包的类型不能由阅读工具改写。") }
+        }
+        let existing = Set(previous.entities.map(\.id))
+        for entity in candidate.entities where !existing.contains(entity.id) {
+            guard !isDisabledType(entity.typeID, in: previous) else { throw invalid("不能使用已停用类型新建实体。") }
+        }
     }
 
     private static func recordReceiptsTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {

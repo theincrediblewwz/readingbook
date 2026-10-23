@@ -134,6 +134,7 @@ private enum StoredExtensionValidation {
         try ids(value.plugins.map(\.id), maximum: 1000)
         try ids(value.disabledPluginIDs, maximum: 1000)
         let types = Set(value.types.map(\.id)), methods = Set(value.methods.map(\.id)), plugins = Set(value.plugins.map(\.id))
+        if let profile = value.profile { try TemporalKnowledgeRuntime.validateProfile(profile, typeIDs: types, methodIDs: methods) }
         guard Set(value.disabledPluginIDs).isSubset(of: plugins) else { throw invalid("方案停用标识引用了不存在的声明包。") }
         for type in value.types { try typeDefinition(type) }
         for method in value.methods { try methodDefinition(method) }

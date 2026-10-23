@@ -56,6 +56,9 @@ public struct BookWorkspaceMemory: Codable, Equatable, Sendable {
     public var map: WorkspaceMapMemory?
     public var timeFrom: Double?
     public var timeTo: Double?
+    public var timeCursor: Double?
+    public var temporalAxis: String?
+    public var temporalEntityID: String?
     public var showUndated = true
     public var timelineDock: String?
     public var readerShowsPDF = true
@@ -74,6 +77,9 @@ public struct BookWorkspaceMemory: Codable, Equatable, Sendable {
         value.panels = panels.filter { $0.key.count <= 256 && ($0.value.origin == nil || $0.value.origin!.isValid) }
         if map?.isValid == false { value.map = nil }
         if let from = timeFrom, let to = timeTo, from.isFinite, to.isFinite, from <= to, abs(from) <= 1e9, abs(to) <= 1e9 {} else { value.timeFrom = nil; value.timeTo = nil }
+        if let cursor = timeCursor, !cursor.isFinite || abs(cursor) > 1e9 { value.timeCursor = nil }
+        if (temporalAxis?.count ?? 0) > 256 { value.temporalAxis = nil }
+        if (temporalEntityID?.count ?? 0) > 256 { value.temporalEntityID = nil }
         if !["original", "stacked", "parallel", "layers"].contains(readingSourceMode) { value.readingSourceMode = "original" }
         return value
     }

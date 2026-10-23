@@ -168,3 +168,15 @@
 .spatial-node-copy small{font-size:13px;line-height:1.45}
 @media(max-width:1050px){.spatial-node-panel .spatial-node-list{max-height:330px}.spatial-node-panel .spatial-node-preview{min-height:145px}.spatial-time-panel .spatial-person-links{width:145px}.spatial-event-content{gap:16px}}
 @media(max-width:820px){.spatial-node-panel .spatial-node-list{max-height:260px}.spatial-node-panel .spatial-node-preview{min-height:130px}.spatial-time-panel .spatial-event-detail h2{font-size:23px}.spatial-time-panel .spatial-event-detail p{font-size:14px}.spatial-time-panel .spatial-person-links{width:140px}.spatial-event-content{gap:12px}.spatial-time-panel .spatial-source-row{font-size:13px}}
+
+/* One axis: range endpoints and the independently movable current-time cursor. */
+.spatial-time-cursor{position:absolute;top:28px;transform:translateX(-50%);border:0;border-radius:10px;background:transparent;color:#ac743a;width:44px;height:38px;cursor:ew-resize;touch-action:none;z-index:4}
+.spatial-time-cursor::before{content:"";position:absolute;left:20px;top:-22px;width:3px;height:25px;background:currentColor;border-radius:3px}
+.spatial-time-cursor span{font-size:12px;background:var(--glass,#f7faff);padding:3px 5px;border:1px solid #cbd9ef;border-radius:6px;white-space:nowrap}
+.spatial-axis-wrap{padding-bottom:18px}
+.spatial-person-select{display:flex;align-items:center;gap:12px;font-size:13px;color:#69778b}
+.spatial-person-select select{flex:1;min-width:0;padding:10px;border:1px solid #dae2ef;border-radius:10px;background:#fff;color:#26354a;font:inherit}
+.spatial-person-panel p{line-height:1.7;font-size:14px}
+.spatial-person-panel h3{font-size:14px}
+.spatial-person-event{display:flex;flex-direction:column;gap:5px;text-align:left;width:100%;padding:12px;margin:7px 0;border:1px solid #dde5f1;border-radius:12px;background:#f7faff;color:#233c61;cursor:pointer}
+.spatial-person-event small{color:#6c7c91}

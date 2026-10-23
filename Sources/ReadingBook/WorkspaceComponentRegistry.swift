@@ -124,6 +124,6 @@ struct WorkspaceComponentDescriptor: Identifiable {
         try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "知识库", icon: ComponentKind.knowledge.icon, aliases: [])) { _ in AnyView(KnowledgeLibraryView()) }
         try registry.register(WorkspaceComponentDescriptor(kind: .editor, title: "我的笔记", icon: ComponentKind.editor.icon, aliases: [], permanent: true)) { _ in AnyView(DocumentEditorView()) }
         try registry.register(WorkspaceComponentDescriptor(kind: .query, title: "与书对话", icon: ComponentKind.query.icon, aliases: [], permanent: true)) { _ in AnyView(EnhancedBookChatView()) }
-        try registry.register(WorkspaceComponentDescriptor(kind: .workflow, title: "阅读流程", icon: ComponentKind.workflow.icon, aliases: [], permanent: true)) { _ in AnyView(ReadingWorkflowView()) }
+        try registry.register(WorkspaceComponentDescriptor(kind: .workflow, title: "读书方法", icon: ComponentKind.workflow.icon, aliases: [], permanent: true)) { _ in AnyView(ReaderMethodView()) }
     }
 }

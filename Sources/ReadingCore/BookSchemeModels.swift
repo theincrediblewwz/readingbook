@@ -8,10 +8,12 @@ public struct BookSchemeConfiguration: Codable, Sendable {
     public var plan: ReadingPlan?
     public var plugins: [PluginManifest]
     public var disabledPluginIDs: [String]
+    public var profile: BookProfile? = nil
     public init(project: BookProject) {
         types = project.types; methods = project.methods
         views = project.views.filter { $0.rendererID != "book.scheme" }
         plan = project.plan; plugins = project.plugins; disabledPluginIDs = project.disabledPluginIDs
+        profile = project.temporalKnowledge?.profile
     }
     public func fingerprint() throws -> String {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -21,6 +23,9 @@ public struct BookSchemeConfiguration: Codable, Sendable {
         let management = project.views.filter { $0.rendererID == "book.scheme" }
         project.types = types; project.methods = methods; project.views = views + management
         project.plan = plan; project.plugins = plugins; project.disabledPluginIDs = disabledPluginIDs
+        if project.temporalKnowledge != nil || profile != nil {
+            var metadata = project.temporalKnowledge ?? TemporalKnowledgeState(); metadata.profile = profile; project.temporalKnowledge = metadata
+        }
     }
 }
 
@@ -31,6 +36,13 @@ public struct BookSchemeSelection: Codable, Sendable {
     public init(configuration: BookSchemeConfiguration) {
         typeIDs = Set(configuration.types.map(\.id)); methodIDs = Set(configuration.plan?.methodIDs ?? [])
         viewIDs = Set(configuration.views.map(\.id))
+    }
+    private enum CodingKeys: String, CodingKey { case typeIDs, methodIDs, viewIDs }
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(typeIDs.sorted(), forKey: .typeIDs)
+        try values.encode(methodIDs.sorted(), forKey: .methodIDs)
+        try values.encode(viewIDs.sorted(), forKey: .viewIDs)
     }
 }
 

@@ -149,11 +149,14 @@ public struct ReadingContext: Codable, Hashable, Sendable {
     public var endYear: Int?
     public var timeFrom: Double?
     public var timeTo: Double?
-    public init(sourceHash: String? = nil, unitID: String? = nil, selectedAnchorID: String? = nil, selectedText: String? = nil, selectedPrefix: String? = nil, selectedSuffix: String? = nil, objectID: String? = nil, documentID: String? = nil, page: Int? = nil, startYear: Int? = nil, endYear: Int? = nil, timeFrom: Double? = nil, timeTo: Double? = nil) {
+    /// Only a query selection may span pages; source anchors remain unit-local.
+    public var selectionEndPage: Int? = nil
+    public init(sourceHash: String? = nil, unitID: String? = nil, selectedAnchorID: String? = nil, selectedText: String? = nil, selectedPrefix: String? = nil, selectedSuffix: String? = nil, objectID: String? = nil, documentID: String? = nil, page: Int? = nil, startYear: Int? = nil, endYear: Int? = nil, timeFrom: Double? = nil, timeTo: Double? = nil, selectionEndPage: Int? = nil) {
         self.sourceHash = sourceHash; self.unitID = unitID; self.selectedAnchorID = selectedAnchorID
         self.selectedText = selectedText; self.objectID = objectID; self.documentID = documentID; self.page = page
         self.selectedPrefix = selectedPrefix; self.selectedSuffix = selectedSuffix
         self.startYear = startYear; self.endYear = endYear; self.timeFrom = timeFrom; self.timeTo = timeTo
+        self.selectionEndPage = selectionEndPage
     }
 }
 

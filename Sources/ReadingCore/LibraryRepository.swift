@@ -35,6 +35,12 @@ public actor LibraryRepository {
     }
     private var documentValidationCache: [String: DocumentValidationStamp] = [:]
     private var mathValidationCache = MathVerificationValidationCache()
+    private struct ChangeGrantSession { var grant: ControlledWriteGrant; var latestRevision: String }
+    private var changeGrants: [String: ChangeGrantSession] = [:]
+    private var changeProposals: [String: PreparedControlledChange] = [:]
+    private var changeProposalGrants: [String: String] = [:]
+    private var changeApprovals: [String: String] = [:]
+    private var changeCommitRevisions: [String: String] = [:]
 
     private struct DocumentJournal: Codable {
         var version: Int = 1
@@ -102,6 +108,7 @@ public actor LibraryRepository {
         try recoverDocument(in: directory)
         try validate(project)
         let existing = try readProject(in: directory)
+        try requireCurrentChangeHistory(project, existing: existing)
         guard existing.id == project.id, existing.originalName == project.originalName, existing.sourceHash == project.sourceHash else {
             throw ReadingError.invalid("保存不能替换项目身份或原书。")
         }
@@ -141,6 +148,7 @@ public actor LibraryRepository {
         let directory = try bookDirectory(project.id, mustExist: true)
         try recoverDocument(in: directory)
         let existing = try readProject(in: directory)
+        try requireCurrentChangeHistory(project, existing: existing)
         guard project.originalName == existing.originalName, project.sourceHash == existing.sourceHash else { throw ReadingError.invalid("文档保存时书籍身份发生变化。") }
         let data = Data(markdown.utf8)
         guard data.count <= Self.documentLimit else { throw ReadingError.invalid("单篇 Markdown 超过 16 MiB。") }
@@ -390,6 +398,7 @@ public actor LibraryRepository {
     // MARK: Recoverable document commit
 
     private func recoverDocument(in directory: URL) throws {
+        try recoverControlledChanges(in: directory)
         let journalDirectory = try child(directory, ".journal")
         guard files.fileExists(atPath: journalDirectory.path) else { return }
         try requireDirectory(journalDirectory)
@@ -413,6 +422,7 @@ public actor LibraryRepository {
               Set(existing.documents.map(\.id)).isSubset(of: Set(journal.project.documents.map(\.id))) else {
             throw ReadingError.invalid("恢复日志与现有书籍冲突，未覆盖现有资料。")
         }
+        try requireCurrentChangeHistory(journal.project, existing: existing)
         try validatePackageFiles(journal.project, in: directory, strictContents: false, verifySourceHash: false, pendingDocumentID: document.id, pendingDocumentBytes: body.count)
         let destination = try documentURL(document, in: directory)
         if files.fileExists(atPath: destination.path) {
@@ -476,6 +486,9 @@ public actor LibraryRepository {
         if let experience = project.readingExperience {
             try ReadingExperienceRuntime.validateStoredState(experience, in: project)
         }
+        try TemporalKnowledgeRuntime.validateStoredState(in: project)
+        try ControlledGraphRuntime.validate(in: project)
+        try ControlledChangeRecords.validate(in: project)
         let recognizedPages = project.ocrPages ?? []
         guard recognizedPages.count <= 20_000, Set(recognizedPages.map(\.page)).count == recognizedPages.count else { throw ReadingError.invalid("OCR 页记录重复或超过上限。") }
         for page in recognizedPages {
@@ -528,7 +541,7 @@ public actor LibraryRepository {
             try validateEvidence(document.evidence, units: sourceUnits)
         }
         for node in project.nodes {
-            guard targets.contains(node.targetID), node.x.isFinite, node.y.isFinite,
+            guard targets.contains(node.targetID) || (node.isStandalone == true && node.targetID == node.id), node.x.isFinite, node.y.isFinite,
                   abs(node.x) <= 10_000_000, abs(node.y) <= 10_000_000 else { throw ReadingError.invalid("导图节点目标或位置无效。") }
         }
         for edge in project.edges where !nodeIDs.contains(edge.fromID) || !nodeIDs.contains(edge.toID) { throw ReadingError.invalid("导图连线引用了不存在的画布节点。") }
@@ -597,7 +610,7 @@ public actor LibraryRepository {
 
     private func validatePackageFiles(_ project: BookProject, in directory: URL, strictContents: Bool,
                                       verifySourceHash: Bool, pendingDocumentID: String? = nil, pendingDocumentBytes: Int = 0,
-                                      encodedMetadataSize: Int? = nil, reuseDocumentValidation: Bool = false) throws {
+                                      encodedMetadataSize: Int? = nil, reuseDocumentValidation: Bool = false, pendingDocumentSizes: [String: Int] = [:]) throws {
         try requireDirectory(directory)
         let source = try child(try child(directory, "source"), project.originalName)
         try requireDirectory(try child(directory, "source"))
@@ -607,10 +620,11 @@ public actor LibraryRepository {
         var storedSize = 0
         if files.fileExists(atPath: storedMetadata.path) { storedSize = try regularFileSize(storedMetadata, limit: Self.metadataLimit) }
         let metadataSize = try encodedMetadataSize ?? encode(project).count
-        total += max(storedSize, metadataSize) + pendingDocumentBytes
+        guard pendingDocumentSizes.values.allSatisfy({ (0...Self.documentLimit).contains($0) }) else { throw ReadingError.invalid("待写文档大小无效。") }
+        total += max(storedSize, metadataSize) + pendingDocumentBytes + pendingDocumentSizes.values.reduce(0, +)
         guard total <= Self.packageLimit else { throw ReadingError.invalid("书籍与文档总大小超过 512 MiB。") }
         if verifySourceHash { try verifyOriginal(at: source, expectedHash: project.sourceHash) }
-        for document in project.documents where document.id != pendingDocumentID {
+        for document in project.documents where document.id != pendingDocumentID && pendingDocumentSizes[document.id] == nil {
             let url = try documentURL(document, in: directory)
             total += try validateDocumentFile(url, reuseValidation: reuseDocumentValidation)
             guard total <= Self.packageLimit else { throw ReadingError.invalid("书籍与文档总大小超过 512 MiB。") }
@@ -812,5 +826,286 @@ public actor LibraryRepository {
         guard url.isFileURL, url.pathExtension.lowercased() == "readingbook", Self.isSafeFilename(url.lastPathComponent) else {
             throw ReadingError.invalid("请选择以 .readingbook 结尾的本地文件夹包。")
         }
+    }
+}
+
+// The actor owns authorization, prepared bytes and confirmation tokens. None of
+// these entry points accepts paths, model-supplied operation IDs or body mirrors.
+extension LibraryRepository {
+    public func issueChangeGrant(bookID: String, permissions: Set<ControlledChangeGroup>, allowedUnitIDs: Set<String>, editableDocumentIDs: Set<String> = [], requiresReceipts: Bool = true, reason: String) throws -> ControlledWriteGrant {
+        let directory = try bookDirectory(bookID, mustExist: true)
+        try recoverDocument(in: directory)
+        let project = try readProject(in: directory)
+        try validate(project)
+        guard project.id == bookID, !permissions.isEmpty,
+              allowedUnitIDs.isSubset(of: Set(project.units.map(\.id))),
+              editableDocumentIDs.isSubset(of: Set(project.activeDocuments.map(\.id))) else { throw ControlledChangeError.denied("整理授权的书籍、原文范围或可编辑文档无效。") }
+        try ControlledChangeCoding.text(reason, maximum: 4000)
+        if requiresReceipts, !allowedUnitIDs.isEmpty { try ReadingLedger.requireComplete(unitIDs: allowedUnitIDs, in: project) }
+        let revision = try ControlledChangeRecords.revision(project)
+        let grant = ControlledWriteGrant(id: UUID().uuidString, bookID: project.id, sourceHash: project.sourceHash, baseRevision: revision, grantRevision: 1,
+            permissions: permissions, allowedUnitIDs: allowedUnitIDs, editableDocumentIDs: editableDocumentIDs, requiresReceipts: requiresReceipts, reason: reason, expiresAt: Date().addingTimeInterval(7200))
+        for expired in changeGrants.values.filter({ $0.grant.expiresAt < Date() }).map({ $0.grant.id }) { revokeChangeGrant(expired) }
+        guard changeGrants.count < 32 else { throw ControlledChangeError.denied("待审阅的整理任务过多，请先应用或放弃。") }
+        changeGrants[grant.id] = ChangeGrantSession(grant: grant, latestRevision: revision)
+        return grant
+    }
+
+    public func prepareChanges(_ batch: ControlledChangeBatch, grant: ControlledWriteGrant) throws -> ControlledChangeProposal {
+        let session = try requireChangeGrant(grant)
+        let directory = try bookDirectory(grant.bookID, mustExist: true)
+        try recoverDocument(in: directory)
+        let project = try readProject(in: directory)
+        let digest = try ControlledChangeCoding.hash(batch)
+        if let prepared = changeProposals.values.first(where: { changeProposalGrants[$0.proposal.id] == grant.id && $0.proposal.digest == digest }) {
+            if let receipt = project.controlledChanges?.receipts.first(where: { $0.operationID == prepared.proposal.operationID }) {
+                try requireActiveChange(receipt, proposal: prepared.proposal, grant: grant, project: project, directory: directory)
+                let revision = try ControlledChangeRecords.revision(project)
+                if changeCommitRevisions[prepared.proposal.id] == revision { changeGrants[grant.id]?.latestRevision = revision }
+                return prepared.proposal
+            }
+            try requireChangeRevision(project, session: session)
+            return prepared.proposal // Stable operation ID and exact reviewed bytes.
+        }
+        try requireChangeRevision(project, session: session)
+        guard changeProposals.count < 128 else { throw ControlledChangeError.denied("待处理提案过多，请先应用或放弃。") }
+        let sessionProposals = changeProposals.values.filter { changeProposalGrants[$0.proposal.id] == grant.id }
+        guard sessionProposals.count < 16 else { throw ControlledChangeError.denied("本次整理最多16批提案，请结束本次任务后再继续。") }
+        var documentBodies: [String: Data] = [:]
+        for id in Set((batch.documents?.edits ?? []).map(\.documentID)) {
+            guard grant.editableDocumentIDs.contains(id), let document = project.activeDocuments.first(where: { $0.id == id }) else { throw ControlledChangeError.denied("本次未获准编辑此笔记。") }
+            documentBodies[id] = try readLimited(try documentURL(document, in: directory), limit: Self.documentLimit)
+        }
+        let prepared = try ControlledChangeBuilder.prepare(batch, grant: grant, project: project, documents: documentBodies,
+            proposalID: UUID().uuidString, operationID: UUID().uuidString, baseRevision: session.latestRevision)
+        guard sessionProposals.reduce(prepared.patches.count, { $0 + $1.patches.count }) <= 512,
+              sessionProposals.reduce(prepared.bodies.count, { $0 + $1.bodies.count }) <= 32,
+              sessionProposals.reduce(prepared.bodies.values.reduce(0, { $0 + $1.count }), { total, value in total + value.bodies.values.reduce(0, { $0 + $1.count }) }) <= 2_097_152 else { throw ControlledChangeError.denied("本次整理累计超过512项记录、32篇文档或2 MiB正文，未追加提案。") }
+        try validate(prepared.project)
+        try validatePackageFiles(prepared.project, in: directory, strictContents: false, verifySourceHash: false, pendingDocumentSizes: prepared.bodies.mapValues(\.count))
+        changeProposals[prepared.proposal.id] = prepared; changeProposalGrants[prepared.proposal.id] = grant.id
+        return prepared.proposal
+    }
+
+    public func approveChanges(proposalID: String, digest: String) throws -> ControlledChangeApproval {
+        guard let prepared = changeProposals[proposalID], prepared.proposal.digest == digest,
+              let grantID = changeProposalGrants[proposalID], let session = changeGrants[grantID] else { throw ControlledChangeError.denied("此提案不存在、已失效或摘要不同，请重新审阅。") }
+        _ = try requireChangeGrant(session.grant)
+        let token = UUID().uuidString; changeApprovals[proposalID] = token
+        return ControlledChangeApproval(proposalID: proposalID, digest: digest, token: token)
+    }
+
+    public func commitChanges(proposalID: String, grant: ControlledWriteGrant, approval: ControlledChangeApproval? = nil) throws -> ControlledChangeCommitResult {
+        let session = try requireChangeGrant(grant)
+        guard let prepared = changeProposals[proposalID], changeProposalGrants[proposalID] == grant.id else { throw ControlledChangeError.denied("提案不属于此整理授权，或已撤销。") }
+        let directory = try bookDirectory(grant.bookID, mustExist: true)
+        try recoverDocument(in: directory)
+        let canonical = try readProject(in: directory), proposal = prepared.proposal
+        if let prior = canonical.controlledChanges?.receipts.first(where: { $0.operationID == proposal.operationID }) {
+            try requireActiveChange(prior, proposal: proposal, grant: grant, project: canonical, directory: directory)
+            // A recovery may have completed this exact operation before returning
+            // from an interrupted call. Do not replay its writes.
+            let revision = try ControlledChangeRecords.revision(canonical)
+            if changeCommitRevisions[proposal.id] == revision { changeGrants[grant.id]?.latestRevision = revision }
+            return ControlledChangeCommitResult(project: canonical, receipt: prior, replayed: true)
+        }
+        try requireChangeRevision(canonical, session: session)
+        if proposal.requiresConfirmation {
+            guard let approval, approval.proposalID == proposal.id, approval.digest == proposal.digest,
+                  changeApprovals[proposal.id] == approval.token else { throw ControlledChangeError.denied("此提案必须先审阅具体差异再确认。") }
+        }
+        var candidate = try ControlledChangeRecords.applying(prepared.patches, to: canonical, undo: false)
+        var bodies = prepared.bodies, expected: [String: String] = [:], receipts: [ControlledDocumentReceipt] = []
+        for (id, body) in prepared.bodies.sorted(by: { $0.key < $1.key }) {
+            guard let document = candidate.documents.first(where: { $0.id == id }) else { throw ControlledChangeError.invalid("待写正文没有登记文档。") }
+            let path = try documentURL(document, in: directory), afterHash = try BookImporter.sha256(body)
+            if let before = prepared.beforeBodies[id] {
+                let beforeHash = try BookImporter.sha256(before)
+                guard files.fileExists(atPath: path.path), try BookImporter.sha256(readLimited(path, limit: Self.documentLimit)) == beforeHash else { throw ControlledChangeError.conflict("审阅后磁盘 Markdown 已改变；原稿和提案均保留。") }
+                let backupID = "backup-" + UUID().uuidString
+                var backup = DocumentRecord(id: backupID, title: document.title + " · 整理前版本", origin: "change-recovery", linkedIDs: [], evidence: [])
+                backup.trashedAt = Date(); candidate.documents.append(backup); bodies[backupID] = before
+                expected[id] = beforeHash
+                receipts.append(ControlledDocumentReceipt(documentID: id, afterHash: afterHash, beforeHash: beforeHash, backupDocumentID: backupID))
+            } else {
+                guard !files.fileExists(atPath: path.path) else { throw ControlledChangeError.conflict("新笔记路径已有文件，已保留该文件。") }
+                receipts.append(ControlledDocumentReceipt(documentID: id, afterHash: afterHash, beforeHash: nil, backupDocumentID: nil))
+            }
+        }
+        let receipt = ControlledChangeReceipt(operationID: proposal.operationID, originBookID: canonical.id, digest: proposal.digest, grantID: grant.id, createdAt: Date(), undoneAt: nil,
+            idMap: proposal.idMap, groups: proposal.groups, patches: prepared.patches, documents: receipts)
+        var state = candidate.controlledChanges ?? ControlledChangeState()
+        guard state.receipts.count < 1_000 else { throw ControlledChangeError.denied("此书整理历史已达安全上限；未丢弃任何旧回执。") }
+        state.receipts.append(receipt); candidate.controlledChanges = state
+        candidate.audit.append(ToolAudit(name: "controlled_changes", summary: "已应用获准整理 \(receipt.operationID)，\(prepared.patches.count) 项记录变更。"))
+        changeCommitRevisions[proposal.id] = try ControlledChangeRecords.revision(candidate)
+        try writeControlledTransaction(candidate, bodies: bodies, expectedHashes: expected, operationID: receipt.operationID, proofOperationID: receipt.operationID, in: directory)
+        let committed = try readProject(in: directory)
+        changeGrants[grant.id]?.latestRevision = try ControlledChangeRecords.revision(committed)
+        return ControlledChangeCommitResult(project: committed, receipt: receipt, replayed: false)
+    }
+
+    public func undoChanges(bookID: String, operationID: String) throws -> ControlledChangeCommitResult {
+        let directory = try bookDirectory(bookID, mustExist: true)
+        try recoverDocument(in: directory)
+        let canonical = try readProject(in: directory)
+        guard let index = canonical.controlledChanges?.receipts.firstIndex(where: { $0.operationID == operationID }),
+              let receipt = canonical.controlledChanges?.receipts[index], receipt.originBookID == bookID else { throw ControlledChangeError.denied("此回执不属于当前书籍；导入副本中的历史回执只供查看。") }
+        if receipt.undoneAt != nil { return ControlledChangeCommitResult(project: canonical, receipt: receipt, replayed: true) }
+        var bodies: [String: Data] = [:], expected: [String: String] = [:]
+        // Check every body before making any metadata or file change.
+        for item in receipt.documents {
+            guard let document = canonical.documents.first(where: { $0.id == item.documentID }) else { throw ControlledChangeError.conflict("整理后的笔记引用已改变，未自动撤销。") }
+            let body = try readLimited(try documentURL(document, in: directory), limit: Self.documentLimit)
+            guard try BookImporter.sha256(body) == item.afterHash else { throw ControlledChangeError.conflict("笔记在整理后已有新编辑，撤销停止并保留当前内容。") }
+            if let backupID = item.backupDocumentID, let beforeHash = item.beforeHash {
+                guard let backup = canonical.documents.first(where: { $0.id == backupID }), backup.origin == "change-recovery" else { throw ControlledChangeError.conflict("整理前版本缺失；未覆盖当前笔记。") }
+                let previous = try readLimited(try documentURL(backup, in: directory), limit: Self.documentLimit)
+                guard try BookImporter.sha256(previous) == beforeHash else { throw ControlledChangeError.conflict("整理前备份已变化；未覆盖当前笔记。") }
+                bodies[item.documentID] = previous; expected[item.documentID] = item.afterHash
+            }
+        }
+        var candidate = try ControlledChangeRecords.applying(receipt.patches, to: canonical, undo: true)
+        candidate.controlledChanges?.receipts[index].undoneAt = Date()
+        candidate.audit.append(ToolAudit(name: "controlled_changes_undo", summary: "已撤销整理 \(operationID)，新增笔记保留在回收站。"))
+        try writeControlledTransaction(candidate, bodies: bodies, expectedHashes: expected, operationID: "undo-" + UUID().uuidString, proofOperationID: receipt.operationID, in: directory)
+        let committed = try readProject(in: directory)
+        return ControlledChangeCommitResult(project: committed, receipt: committed.controlledChanges!.receipts[index], replayed: false)
+    }
+
+    public func revokeChangeGrant(_ grantID: String) {
+        changeGrants.removeValue(forKey: grantID)
+        let proposals = changeProposalGrants.filter { $0.value == grantID }.map(\.key)
+        for id in proposals { changeProposals.removeValue(forKey: id); changeProposalGrants.removeValue(forKey: id); changeApprovals.removeValue(forKey: id); changeCommitRevisions.removeValue(forKey: id) }
+    }
+
+    private func requireActiveChange(_ receipt: ControlledChangeReceipt, proposal: ControlledChangeProposal, grant: ControlledWriteGrant, project: BookProject, directory: URL) throws {
+        guard receipt.digest == proposal.digest, receipt.grantID == grant.id, receipt.originBookID == project.id,
+              receipt.undoneAt == nil else { throw ControlledChangeError.conflict("同一操作内容不同、已撤销或来自另一书籍，不能再报告为已应用。") }
+        _ = try ControlledChangeRecords.applying(receipt.patches, to: project, undo: true)
+        for item in receipt.documents {
+            guard let document = project.documents.first(where: { $0.id == item.documentID }), document.trashedAt == nil,
+                  try BookImporter.sha256(readLimited(try documentURL(document, in: directory), limit: Self.documentLimit)) == item.afterHash else { throw ControlledChangeError.conflict("这次整理的笔记后来已改变或回收，历史回执保留，但不能重放为当前成功。") }
+        }
+    }
+
+    private func requireChangeGrant(_ grant: ControlledWriteGrant) throws -> ChangeGrantSession {
+        guard let session = changeGrants[grant.id], session.grant == grant, grant.expiresAt >= Date() else { throw ControlledChangeError.denied("本次整理授权已失效或已撤销，请重新发起。") }
+        return session
+    }
+    private func requireChangeRevision(_ project: BookProject, session: ChangeGrantSession) throws {
+        guard project.id == session.grant.bookID, project.sourceHash == session.grant.sourceHash,
+              try ControlledChangeRecords.revision(project) == session.latestRevision else { throw ControlledChangeError.conflict("等待整理期间书籍、笔记、布局或配置已变化；没有覆盖后来的修改，请重新发起整理。") }
+    }
+    private func requireCurrentChangeHistory(_ project: BookProject, existing: BookProject) throws {
+        guard try project.controlledChanges.map(ControlledChangeCoding.data) == existing.controlledChanges.map(ControlledChangeCoding.data) else { throw ControlledChangeError.conflict("磁盘上已有更新的整理回执；当前窗口未覆盖该结果，请重新载入后保存。") }
+    }
+
+    private struct ControlledBodyJournal: Codable {
+        var documentID: String; var beforeHash: String?; var afterHash: String
+    }
+    private struct ControlledJournal: Codable {
+        var version: Int = 1; var operationID: String; var bookID: String
+        var beforeMetadataHash: String; var afterMetadataHash: String
+        var bodies: [ControlledBodyJournal]; var project: BookProject
+        var proofOperationID: String? = nil; var proofReceiptHash: String? = nil
+    }
+    private func writeControlledTransaction(_ project: BookProject, bodies: [String: Data], expectedHashes: [String: String], operationID: String, proofOperationID: String, in directory: URL) throws {
+        try ControlledChangeCoding.requireID(operationID)
+        try validate(project)
+        let metadata = try encode(project)
+        try validatePackageFiles(project, in: directory, strictContents: false, verifySourceHash: false, encodedMetadataSize: metadata.count, pendingDocumentSizes: bodies.mapValues(\.count))
+        let before = try readLimited(try child(directory, "project.json"), limit: Self.metadataLimit)
+        let journals = try ensureDirectory(try child(directory, ".changes-journal")), staging = try child(journals, operationID)
+        try requireVacant(staging); _ = try ensureDirectory(staging)
+        var changes: [ControlledBodyJournal] = []
+        for (id, data) in bodies.sorted(by: { $0.key < $1.key }) {
+            guard let document = project.documents.first(where: { $0.id == id }), data.count <= Self.documentLimit, String(data: data, encoding: .utf8) != nil else { throw ControlledChangeError.invalid("待写文档引用、大小或 UTF-8 无效。") }
+            let destination = try documentURL(document, in: directory)
+            if let hash = expectedHashes[id] {
+                guard try BookImporter.sha256(readLimited(destination, limit: Self.documentLimit)) == hash else { throw ControlledChangeError.conflict("写入前 Markdown 已改变，未覆盖。") }
+            } else { try requireVacant(destination) }
+            try atomicWrite(data, to: try child(staging, "\(id).md"))
+            changes.append(ControlledBodyJournal(documentID: id, beforeHash: expectedHashes[id], afterHash: try BookImporter.sha256(data)))
+        }
+        guard let proof = project.controlledChanges?.receipts.first(where: { $0.operationID == proofOperationID }) else { throw ControlledChangeError.invalid("事务缺少持久提交回执。") }
+        let journal = ControlledJournal(operationID: operationID, bookID: project.id, beforeMetadataHash: try BookImporter.sha256(before), afterMetadataHash: try BookImporter.sha256(metadata), bodies: changes, project: project,
+            proofOperationID: proofOperationID, proofReceiptHash: try ControlledChangeCoding.hash(proof))
+        // Only this final marker makes staged files recoverable committed intent.
+        try atomicWrite(encode(journal), to: try child(staging, "transaction.json"))
+        try recoverControlledChanges(in: directory)
+    }
+    private func recoverControlledChanges(in directory: URL) throws {
+        let journals = try child(directory, ".changes-journal")
+        guard files.fileExists(atPath: journals.path) else { return }
+        try requireDirectory(journals)
+        let entries = try files.contentsOfDirectory(atPath: journals.path).filter { $0 != ".DS_Store" }.sorted()
+        guard entries.count <= 4_000 else { throw ControlledChangeError.invalid("整理恢复目录过多，已保留现场。") }
+        for name in entries {
+            try ControlledChangeCoding.requireID(name)
+            let staging = try child(journals, name); try requireDirectory(staging)
+            let marker = try child(staging, "transaction.json")
+            guard files.fileExists(atPath: marker.path) else { continue }
+            let journal: ControlledJournal = try decode(readLimited(marker, limit: Self.metadataLimit))
+            guard journal.version == 1, journal.operationID == name, journal.bookID == directory.lastPathComponent, journal.project.id == journal.bookID,
+                  journal.bodies.count <= 64, Set(journal.bodies.map(\.documentID)).count == journal.bodies.count,
+                  ControlledChangeRecords.hash(journal.beforeMetadataHash), ControlledChangeRecords.hash(journal.afterMetadataHash) else { throw ControlledChangeError.invalid("整理恢复标记的版本或身份无效，已保留现场。") }
+            try validate(journal.project)
+            let metadata = try encode(journal.project), metadataURL = try child(directory, "project.json")
+            let currentMetadata = try readLimited(metadataURL, limit: Self.metadataLimit)
+            let current: BookProject = try decode(currentMetadata)
+            guard current.id == journal.bookID, current.sourceHash == journal.project.sourceHash, current.originalName == journal.project.originalName,
+                  try BookImporter.sha256(metadata) == journal.afterMetadataHash else { throw ControlledChangeError.conflict("整理恢复与当前书籍身份或文档登记冲突，保留现场。") }
+            if try controlledJournalIsCommitted(journal, current: current) {
+                // Metadata carrying this exact receipt can only follow all body
+                // replacements. Cleanup failure must never replay old bytes over
+                // a later answer, note edit or layout change.
+                cleanupControlledJournal(journal, staging: staging, marker: marker)
+                continue
+            }
+            guard Set(current.documents.map(\.id)).isSubset(of: Set(journal.project.documents.map(\.id))) else { throw ControlledChangeError.conflict("整理恢复缺少后来的文档登记，保留现场。") }
+            let currentHash = try BookImporter.sha256(currentMetadata)
+            guard currentHash == journal.beforeMetadataHash || currentHash == journal.afterMetadataHash else { throw ControlledChangeError.conflict("恢复期间项目元数据已有外部修改；磁盘及待恢复资料均保留。") }
+            var staged: [(URL, URL, Data)] = [], sizes: [String: Int] = [:]
+            for item in journal.bodies {
+                guard let document = journal.project.documents.first(where: { $0.id == item.documentID }), ControlledChangeRecords.hash(item.afterHash), item.beforeHash.map(ControlledChangeRecords.hash) ?? true else { throw ControlledChangeError.invalid("整理恢复正文的引用或散列无效。") }
+                let source = try child(staging, "\(item.documentID).md"), destination = try documentURL(document, in: directory)
+                let body = try readLimited(source, limit: Self.documentLimit)
+                guard String(data: body, encoding: .utf8) != nil, try BookImporter.sha256(body) == item.afterHash else { throw ControlledChangeError.invalid("整理恢复正文校验失败，已保留现场。") }
+                if files.fileExists(atPath: destination.path) {
+                    let actual = try BookImporter.sha256(readLimited(destination, limit: Self.documentLimit))
+                    guard actual == item.beforeHash || actual == item.afterHash else { throw ControlledChangeError.conflict("恢复期间 Markdown 已被外部编辑，未自动覆盖任何冲突内容。") }
+                } else if item.beforeHash != nil { throw ControlledChangeError.conflict("恢复所需的旧 Markdown 已移除，未自动重建。") }
+                staged.append((source, destination, body)); sizes[item.documentID] = body.count
+            }
+            try validatePackageFiles(journal.project, in: directory, strictContents: false, verifySourceHash: false, encodedMetadataSize: metadata.count, pendingDocumentSizes: sizes)
+            // All file and metadata preconditions have passed. Replacements are
+            // idempotent and a crash can continue from either old or new bytes.
+            for (_, destination, body) in staged { try atomicWrite(body, to: destination) }
+            try atomicWrite(metadata, to: metadataURL)
+            cleanupControlledJournal(journal, staging: staging, marker: marker)
+        }
+    }
+    private func cleanupControlledJournal(_ journal: ControlledJournal, staging: URL, marker: URL) {
+        // Visible data and receipt are already durable. Best-effort cleanup of
+        // exact verified owned files must not turn success into an apparent fail.
+        for item in journal.bodies {
+            guard let source = try? child(staging, "\(item.documentID).md"),
+                  let bytes = try? readLimited(source, limit: Self.documentLimit),
+                  (try? BookImporter.sha256(bytes)) == item.afterHash else { continue }
+            try? files.removeItem(at: source)
+        }
+        try? files.removeItem(at: marker)
+        if (try? files.contentsOfDirectory(atPath: staging.path).isEmpty) == true { try? files.removeItem(at: staging) }
+    }
+    private func controlledJournalIsCommitted(_ journal: ControlledJournal, current: BookProject) throws -> Bool {
+        guard let proofID = journal.proofOperationID, let proofHash = journal.proofReceiptHash,
+              let expected = journal.project.controlledChanges?.receipts.first(where: { $0.operationID == proofID }),
+              try ControlledChangeCoding.hash(expected) == proofHash,
+              var actual = current.controlledChanges?.receipts.first(where: { $0.operationID == proofID }) else { return false }
+        // An original commit remains known committed after its later explicit
+        // undo. The stale cleanup marker must not block reopening that book.
+        if expected.undoneAt == nil { actual.undoneAt = nil }
+        return try ControlledChangeCoding.hash(actual) == proofHash
     }
 }

@@ -58,18 +58,18 @@ function useViewport(ref) {
   return size;
 }
 
-function TimeAxis({ range, onChange, events, selectedId, onSelect }) {
+function TimeAxis({ range, onChange, cursor, onCursor, events, selectedId, onSelect }) {
   const axisRef = useRef(null);
   const dragRef = useRef(null);
   const [active, setActive] = useState(null);
   const crowded = range[1] - range[0] < 0.12;
   const percent = (year) => ((year - MIN_YEAR) / (MAX_YEAR - MIN_YEAR)) * 100;
-  const adjust = (endpoint, value) => onChange(endpoint === 0 ? [clamp(value, MIN_YEAR, range[1]), range[1]] : [range[0], clamp(value, range[0], MAX_YEAR)]);
+  const adjust = (endpoint, value) => endpoint === 2 ? onCursor(clamp(value, range[0], range[1])) : onChange(endpoint === 0 ? [clamp(value, MIN_YEAR, range[1]), range[1]] : [range[0], clamp(value, range[0], MAX_YEAR)]);
   const start = (event, endpoint) => {
     event.preventDefault();
     event.stopPropagation();
     const rect = axisRef.current.getBoundingClientRect();
-    dragRef.current = { endpoint, x: event.clientX, origin: range[endpoint], range: [...range], width: rect.width };
+    dragRef.current = { endpoint, x: event.clientX, origin: endpoint === 2 ? cursor : range[endpoint], range: [...range], width: rect.width };
     event.currentTarget.setPointerCapture(event.pointerId);
     setActive(endpoint);
   };
@@ -77,6 +77,7 @@ function TimeAxis({ range, onChange, events, selectedId, onSelect }) {
     const drag = dragRef.current;
     if (!drag) return;
     const value = Math.round(drag.origin + (event.clientX - drag.x) / drag.width * (MAX_YEAR - MIN_YEAR));
+    if (drag.endpoint === 2) { onCursor(clamp(value, range[0], range[1])); return; }
     const next = [...drag.range];
     next[drag.endpoint] = drag.endpoint === 0 ? clamp(value, MIN_YEAR, next[1]) : clamp(value, next[0], MAX_YEAR);
     onChange(next);
@@ -100,6 +101,9 @@ function TimeAxis({ range, onChange, events, selectedId, onSelect }) {
         if (event.key === 'Home') { event.preventDefault(); adjust(endpoint, MIN_YEAR); }
         if (event.key === 'End') { event.preventDefault(); adjust(endpoint, MAX_YEAR); }
       }} />)}
+      <button className="spatial-time-cursor" style={{ left: `${percent(cursor)}%` }} role="slider" aria-label="当前时间" aria-valuemin={range[0]} aria-valuemax={range[1]} aria-valuenow={cursor} aria-valuetext={`${cursor}年`} onPointerDown={(event) => start(event, 2)} onPointerMove={move} onPointerUp={finish} onPointerCancel={finish} onKeyDown={(event) => {
+        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); adjust(2, event.key === 'Home' ? range[0] : event.key === 'End' ? range[1] : cursor + (event.key === 'ArrowRight' ? 1 : -1)); }
+      }}><span>{cursor}年</span></button>
     </div>
   </div>;
 }
@@ -121,6 +125,10 @@ export function MapPage() {
   const [showUndated, setShowUndated] = useState(true);
   const [inspectedPerson, setInspectedPerson] = useState(null);
   const range = state.timeRange || [208, 209];
+  const cursor = clamp(state.timeCursor ?? 208, range[0], range[1]);
+  const personEvents = inspectedPerson ? EVENTS.filter((event) => event.people.includes(inspectedPerson) && event.year === cursor) : [];
+  // Independently authored example presences, never every participant × place.
+  const explicitPresenceIds = { '曹操': ['h-redcliff', 'h-retreat'], '周瑜': ['h-redcliff', 'h-jiangling'], '刘备': ['h-jiangxia', 'h-jingzhou'], '关羽': ['h-retreat'] };
   const scopedEvents = state.readingScope === 'current' ? EVENTS.filter((event) => event.id === 'h-redcliff' || event.id === 'h-uncertain') : EVENTS;
   const filteredEvents = scopedEvents.filter((event) => event.year === null ? showUndated : event.year >= range[0] && event.year <= range[1]);
   const visibleEventIds = new Set(filteredEvents.map((event) => event.id));
@@ -131,7 +139,8 @@ export function MapPage() {
     return [{ id: `${fromId}-${id}`, from, to }];
   });
   const selected = EVENTS.find((event) => event.id === selectedId);
-  const selectedVisible = filteredEvents.some((event) => event.id === selectedId);
+  const plottedEvents = inspectedPerson ? personEvents.filter((event) => (explicitPresenceIds[inspectedPerson] || []).includes(event.id)) : filteredEvents;
+  const selectedVisible = (inspectedPerson ? personEvents : filteredEvents).some((event) => event.id === selectedId);
   const fitMap = useCallback(() => { if (size.width > 0 && size.height > 0) setCamera({ x: 720, y: 512, scale: Math.max(size.width / 1440, size.height / 1024) }); }, [size.width, size.height]);
   useEffect(() => { fitMap(); }, [fitMap]);
   useEffect(() => {
@@ -169,20 +178,20 @@ export function MapPage() {
     }}>
       <div className="spatial-map-world" style={{ transform: `translate(${size.width / 2 - camera.x * camera.scale}px,${size.height / 2 - camera.y * camera.scale}px) scale(${camera.scale})` }}>
         <img className="spatial-terrain" src="/assets/map-terrain.png" alt="浅石色地形与浅蓝水系，仅供空间布局示意" draggable="false" />
-        <svg className="spatial-map-narrative" width="1440" height="1024" aria-hidden="true">{narrativeSegments.map(({ id, from, to }) => {
+        <svg className="spatial-map-narrative" width="1440" height="1024" aria-hidden="true">{(inspectedPerson ? [] : narrativeSegments).map(({ id, from, to }) => {
           const bend = (to.x - from.x) * 0.4;
           return <path key={id} d={`M ${from.x} ${from.y} C ${from.x + bend} ${from.y + 22}, ${to.x - bend} ${to.y - 16}, ${to.x} ${to.y}`} />;
         })}</svg>
         <span className="spatial-place-region" style={{ left: 360, top: 200 }}>荆 州</span><span className="spatial-place-region" style={{ left: 1000, top: 170 }}>江 夏</span><span className="spatial-water-name" style={{ left: 690, top: 520 }}>长　江</span><span className="spatial-water-name" style={{ left: 1050, top: 740 }}>洞庭湖</span>
-        {filteredEvents.filter((event) => event.x !== null).map((event) => <button key={event.id} className={`spatial-map-marker ${selectedId === event.id ? 'is-selected' : ''}`} style={{ left: event.x, top: event.y }} onClick={() => selectEvent(event)} aria-label={`${event.name}，${event.year}年，${event.place}`}><span className="spatial-marker-dot"><Icon name={selectedId === event.id ? 'map' : 'clock'} size={selectedId === event.id ? 22 : 14} /></span><span className="spatial-marker-caption">{event.place}</span>{selectedId === event.id && <span className="spatial-marker-event">{event.name}</span>}</button>)}
+        {plottedEvents.filter((event) => event.x !== null).map((event) => <button key={event.id} className={`spatial-map-marker ${selectedId === event.id ? 'is-selected' : ''}`} style={{ left: event.x, top: event.y }} onClick={() => selectEvent(event)} aria-label={`${event.name}，${event.year}年，${event.place}`}><span className="spatial-marker-dot"><Icon name={selectedId === event.id ? 'map' : 'clock'} size={selectedId === event.id ? 22 : 14} /></span><span className="spatial-marker-caption">{event.place}</span>{selectedId === event.id && <span className="spatial-marker-event">{event.name}</span>}</button>)}
       </div>
     </div>
     <div className="spatial-map-evidence">示例地形，非测绘依据<br />虚线为示例叙事顺序，非考证路线</div>
     <Panel id="map-time" title="时间与地图" autoCollapseBelow={900} width={Math.min(740,Math.max(300,size.width-144))} dock="bottom-left" initial={{ x: 80, y: Math.max(96, window.innerHeight - 410) }} snap className="spatial-time-panel" actions={<Button icon="more" variant="quiet" aria-label="时间与地图选项" onClick={() => setOptionsOpen(true)} />} footer={selected && detailOpen ? <div className="spatial-source-row"><span>{selected.chapter}</span><Button icon="book" onClick={() => navigate('reader', { page: selected.page, source: selected.source })}>回到原句</Button></div> : null}>
       <div className="spatial-time-summary"><button className="spatial-range-label" onClick={() => { setRangeDraft(range.map(String)); setRangeError(''); setRangeEditor(true); }}>{range[0]}年 — {range[1]}年 <Icon name="chevronDown" size={15} /></button><button className="spatial-text-button" onClick={() => setEventListOpen(true)}>{state.readingScope === 'current' ? '当前原文' : '全书'} · {filteredEvents.length} 个事件 <Icon name="chevronRight" size={15} /></button></div>
-      <TimeAxis range={range} onChange={(next) => update({ timeRange: next })} events={scopedEvents} selectedId={selectedId} onSelect={selectEvent} />
+      <TimeAxis range={range} cursor={cursor} onCursor={(next) => update({ timeCursor: next })} onChange={(next) => update({ timeRange: next, timeCursor: clamp(cursor, next[0], next[1]) })} events={scopedEvents} selectedId={selectedId} onSelect={selectEvent} />
       {selected && detailOpen && <section className="spatial-event-detail"><div className="spatial-detail-kicker"><span>{selected.year ? `${selected.year}年` : '年代待考'} · {selected.place}</span><Button icon="collapse" variant="quiet" aria-label="收起事件详情" onClick={() => setDetailOpen(false)} /></div><div className="spatial-event-content"><div className="spatial-event-copy"><h2>{selected.name}</h2><p>{selected.text}</p>
-        {!selectedVisible && <div className="spatial-inline-warning"><Icon name="filter" size={18} /><span>此事件不在当前范围。</span><button className="spatial-text-button" onClick={() => { update({ readingScope: 'book', ...(selected.year ? { timeRange: [selected.year, selected.year] } : {}) }); setShowUndated(true); }}>显示此事件</button></div>}
+        {!selectedVisible && <div className="spatial-inline-warning"><Icon name="filter" size={18} /><span>此事件不在当前范围。</span><button className="spatial-text-button" onClick={() => { update({ readingScope: 'book', ...(selected.year ? { timeRange: [selected.year, selected.year], timeCursor: selected.year } : {}) }); setShowUndated(true); }}>显示此事件</button></div>}
         {selected.x === null && <p className="spatial-muted">尚未确认坐标，未在地图上标点。</p>}
         </div><div className="spatial-person-links">{selected.people.map((person) => <button key={person} onClick={() => setInspectedPerson(person)}>{person}</button>)}</div></div>
       </section>}
@@ -192,7 +201,10 @@ export function MapPage() {
     {eventListOpen && <Modal title="当前时间范围的事件" onClose={() => setEventListOpen(false)}><label className="spatial-search"><Icon name="search" size={20} /><input autoFocus placeholder="搜索事件、人物或地点" aria-label="搜索事件" value={query} onChange={(event) => setQuery(event.target.value)} />{query && <Button icon="close" variant="quiet" aria-label="清空事件搜索" onClick={() => setQuery('')} />}</label><div className="spatial-modal-list">{filteredEvents.filter((event) => `${event.name}${event.people.join('')}${event.place}`.includes(query)).map((event) => <button className="spatial-event-row" key={event.id} onClick={() => selectEvent(event)}><Icon name="clock" /><span><strong>{event.name}</strong><small>{event.year ? `${event.year}年` : '年代待考'} · {event.place}</small></span><Icon name="chevronRight" size={18} /></button>)}{!filteredEvents.some((event) => `${event.name}${event.people.join('')}${event.place}`.includes(query)) && <Empty icon="search" title="没有匹配的事件">调整搜索词或时间范围。</Empty>}</div></Modal>}
     {rangeEditor && <Modal title="精确时间范围" onClose={() => setRangeEditor(false)} footer={<><Button onClick={() => setRangeEditor(false)}>取消</Button><Button variant="primary" onClick={() => { const from = Number(rangeDraft[0]); const to = Number(rangeDraft[1]); if (!rangeDraft.every((value) => value.trim()) || !Number.isInteger(from) || !Number.isInteger(to) || from < MIN_YEAR || to > MAX_YEAR || from > to) { setRangeError('请输入 207–211 范围内的整数年份，起点不能晚于终点。'); return; } update({ timeRange: [from, to] }); setRangeEditor(false); }}>应用</Button></>}><p className="spatial-muted">这里编辑的仍是同一根时间轴上的两个端点。</p><div className="spatial-range-fields"><label>起点年份<input value={rangeDraft[0]} inputMode="numeric" onChange={(event) => setRangeDraft([event.target.value, rangeDraft[1]])} /></label><span>至</span><label>终点年份<input value={rangeDraft[1]} inputMode="numeric" onChange={(event) => setRangeDraft([rangeDraft[0], event.target.value])} /></label></div>{rangeError && <p className="spatial-error" role="alert">{rangeError}</p>}</Modal>}
     {optionsOpen && <Modal title="时间与地图选项" onClose={() => setOptionsOpen(false)}><div className="spatial-option-list"><label><input type="checkbox" checked={state.readingScope === 'current'} onChange={(event) => update({ readingScope: event.target.checked ? 'current' : 'book' })} /><span>只看当前原文相关事件<small>关系图谱同步使用这一范围</small></span></label><label><input type="checkbox" checked={showUndated} onChange={(event) => setShowUndated(event.target.checked)} /><span>保留年代待考的事件<small>未知坐标的事件只在清单中展示</small></span></label><Button icon="expand" onClick={() => { update({ timeRange: [MIN_YEAR, MAX_YEAR] }); setOptionsOpen(false); }}>显示全部时间</Button><Button icon="target" onClick={() => { fitMap(); setOptionsOpen(false); }}>地图适合全部标记</Button></div><p className="spatial-muted">从时间框标题拖动，松手可吸附四个角或下方中间。</p></Modal>}
-    {inspectedPerson && <Modal title={inspectedPerson} onClose={() => setInspectedPerson(null)}><span className="spatial-type-tag">人物 · 共享要素</span><p>{PEOPLE[inspectedPerson]}</p><p className="spatial-muted">关联事件：{EVENTS.filter((event) => event.people.includes(inspectedPerson)).map((event) => event.name).join('、')}</p><Button icon="book" onClick={() => { setInspectedPerson(null); navigate('reader', { page: selected?.page || 1, source: selected?.source || EVENTS[2].source }); }}>查看原文依据</Button></Modal>}
+    <Panel id="map-person" title={inspectedPerson || '人物与时间'} width={340} initial={{ x: Math.max(24, window.innerWidth - 364), y: 106 }} dock="top-right" className="spatial-person-panel">
+      <label className="spatial-person-select">跟随人物<select aria-label="跟随人物" value={inspectedPerson || ''} onChange={(event) => setInspectedPerson(event.target.value || null)}><option value="">全部人物</option>{Object.keys(PEOPLE).map((person) => <option key={person}>{person}</option>)}</select></label>
+      {inspectedPerson ? <><p className="spatial-type-tag">{inspectedPerson} · {cursor}年</p><p>{PEOPLE[inspectedPerson]}</p><h3>此时的线索</h3>{personEvents.length ? personEvents.map((event) => <button key={event.id} className="spatial-person-event" onClick={() => selectEvent(event)}><strong>{event.name}</strong><small>{(explicitPresenceIds[inspectedPerson] || []).includes(event.id) ? `示例出现记录 · ${event.place}` : '有参与记录，位置尚待核对'}</small></button>) : <p className="spatial-muted">此时没有已记录的行动或位置；不会沿用其他年份的位置。</p>}<p className="spatial-muted">拖动同一时间轴上的指针，卡片与地图一起更新。示例记录用于交互设计。</p></> : <p className="spatial-muted">选一位人物，沿时间查看他的事件、出现地点与出处。</p>}
+    </Panel>
   </div>;
 }
 
@@ -347,7 +359,7 @@ function GraphPage({ editable }) {
     setMenu(null);
     if (!await confirm({ title: '移除节点？', body: `“${node.title}”的 Markdown 文档会保留。这里只移除该节点及其连线，以后可从“新建节点”重新加入。`, confirmLabel: '移除节点' })) return;
     update((previous) => ({ ...previous, graphNodes: previous.graphNodes.filter((item) => item.id !== node.id), graphEdges: previous.graphEdges.filter((edge) => edge.from !== node.id && edge.to !== node.id) }));
-    if (selectedId === node.id) setSelectedId(null); notify('已移除节点，文档仍在“我的理解”中。');
+    if (selectedId === node.id) setSelectedId(null); notify('已移除节点，文档仍在“我的笔记”中。');
   };
   const trashDocument = async (node) => {
     setMenu(null);
