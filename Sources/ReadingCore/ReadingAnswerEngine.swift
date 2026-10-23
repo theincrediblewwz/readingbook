@@ -144,7 +144,7 @@ enum ReadingAnswerEngine {
                 finalText = content; break
             }
             guard !finalOnly, response.finishReason == "tool_calls", (1...8).contains(calls.count),
-                  Set(calls.map(\.id)).count == calls.count, calls.allSatisfy({ $0.type == "function" && !$0.id.isEmpty && $0.id.count <= 200 }) else { throw ReadingError.invalid("模型未在只读工具额度内返回完整结论；没有修改原书或笔记。") }
+                  Set(calls.map(\.id)).count == calls.count, calls.allSatisfy({ $0.type == "function" && !$0.id.isEmpty && $0.id.count <= 200 }) else { throw ReadingError.invalid("模型未在工具额度内返回完整结论。已经保存的整理结果以软件回执为准，可在界面查看或撤销。") }
             messages.append(response.message.conversationValue)
             for (index, call) in calls.enumerated() {
                 try Task.checkCancellation()
