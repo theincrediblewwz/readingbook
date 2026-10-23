@@ -1,5 +1,19 @@
 # 插件与 AI 工具
 
+## 0.16：智能阅读与可组合页面
+
+导入不发起模型调用。`SmartReadingSelection` 冻结为 `SmartReadingSession`，选择页、章、全书或页码范围；空方法偏好表示AI自己决定。推荐方法改为历史、战争、小说、论述、教材，未退役的旧定义/哈希仍可执行但不再推荐；含已退役动作的旧方案须重新预读。预读只保存待确认方案，用户确认后逐段回执→实际动作→引用核验→所选范围综合；预算结束等待主动继续。范围、确认与任务状态由宿主维护，插件不能改写。
+
+后台`reading_graph`经同一注册接口开放给reading/workflow阶段，要求当前段落回执齐全。`targetIDs`选择当前真实证据支持的既有实体/事件，创建或复用持久导图节点；`relationIDs`只沿现存同端点、同标签且有本段依据的关系连线，不能凭身份候选、参与关系或任意坐标造事实。稳定ID与原子提交保证重试不重复，旧节点标题、坐标、文档挂载及真实Markdown不改；回复提供节点/边ID映射，过大批次原子拒绝。普通问答仍须本次显式授权走受控提案，不能借后台工具写入。
+
+`views_configure` 和现有受控书本方案可声明 `rendererID: reading.composition`、`kind: knowledge`、`composition`。同一渲染器下各页面按viewID独立导航/移除。布局只支持row/column/tabs/overlay/part，使用有限节点ID引用；宿主拒绝环、多父、未使用或不可达节点。元件为object.list、object.detail、source.excerpt、document.markdown、time.axis、geo.map、relation.graph、document.graph。
+
+数据源指定objects/events/relations/documents/evidence、current/book范围、已声明类型和字段、有限筛选、顺序及limit；选择组与时间组共享真实对象和时点。book仍服从宿主剧透边界，current服从实际选段/页，不能用伪选择扩大范围。人物时点行动、地点与参与分别查询，不把参加战役推为人物位置；文档图的物理画布连线标明是布局关联。Markdown正文由原生元件按需读取获准真实文件，配置中不携带正文。
+
+初版最多12数据源、24元件、48布局节点、6层、64KB；每数据源最多200项，地图点/图边另有诚实截断提示。配置不能携带脚本、任意表达式、外部请求或自动模型调用。点击选择、切时间、原文跳转不会申请新增写权限；修改知识/笔记继续走原工具的范围、证据、差异和回执。协议结构见 `CompositionModels/CompositionSchema`，可导入示例见 [history-workbench.plugin.json](Examples/history-workbench.plugin.json)。
+
+分析阶段的已有知识索引、阅读层与knowledge_search均使用宿主获准原文；范围外仅允许当前原文确实出现的身份候选ID用于去重，不提供后文摘要、属性、其他称谓或未附加笔记。前序派生分析要求全部来源处于所选已到达范围，仍不充当原书证据；原始聊天和真实Markdown继续独立保存。
+
 ## 0.15：公共模型目录、有界上下文与本次授权
 
 模型目录新增 OpenCode Go、OpenCode Console、OpenRouter 和 MiMo 的 Chat 协议预设；不同网关分别核对型号与限额，未确认的上限保持空缺。运行期目录由内置基线与独立覆盖文件合成，供服务选择和 Max 推荐读取。用户主动点击“AI 检查官网”后，独立助手使用当前模型的请求额度，只获得公共目录、更新要求和本次实际读取的资料；没有读取连接配置、Key、原书、笔记或聊天的工具，也没有保存权限。仅开放 `catalog_read`、`catalog_public_feed`；额外官网链接由用户明确添加，AI 不能修改允许读取的地址范围。
