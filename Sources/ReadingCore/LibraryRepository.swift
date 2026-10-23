@@ -26,6 +26,7 @@ public actor LibraryRepository {
     private static let metadataLimit = 64 * 1_024 * 1_024
     private static let documentLimit = 16 * 1_024 * 1_024
     private static let packageLimit = 512 * 1_024 * 1_024
+    private static let changePreviewLimit = 8 * 1_024 * 1_024
     private struct DocumentValidationStamp: Equatable {
         var size: Int
         var modified: Date
@@ -871,16 +872,34 @@ extension LibraryRepository {
         guard changeProposals.count < 128 else { throw ControlledChangeError.denied("待处理提案过多，请先应用或放弃。") }
         let sessionProposals = changeProposals.values.filter { changeProposalGrants[$0.proposal.id] == grant.id }
         guard sessionProposals.count < 16 else { throw ControlledChangeError.denied("本次整理最多16批提案，请结束本次任务后再继续。") }
+        let edits = batch.documents?.edits ?? [], creates = batch.documents?.create ?? []
+        guard edits.count <= 16, creates.count <= 16, Set(edits.map(\.documentID)).count == edits.count else { throw ControlledChangeError.invalid("文档批次过大或重复编辑同一文档。") }
+        let retainedBytes = sessionProposals.reduce(0) { total, proposal in
+            total + proposal.bodies.values.reduce(0, { $0 + $1.count }) + proposal.beforeBodies.values.reduce(0, { $0 + $1.count })
+        }
+        var projectedBytes = retainedBytes + creates.reduce(0) { $0 + $1.markdown.utf8.count }
+        var documentFiles: [String: (url: URL, size: Int)] = [:]
+        // Inspect every size before reading any old body. Long notes replaced by
+        // tiny output still occupy complete before/diff previews in this grant.
+        for edit in edits {
+            guard grant.editableDocumentIDs.contains(edit.documentID), let document = project.activeDocuments.first(where: { $0.id == edit.documentID }) else { throw ControlledChangeError.denied("本次未获准编辑此笔记。") }
+            let url = try documentURL(document, in: directory), size = try regularFileSize(url, limit: Self.documentLimit)
+            documentFiles[edit.documentID] = (url, size)
+            projectedBytes += size + edit.markdown.utf8.count + (edit.mode == .append ? size : 0)
+        }
+        guard projectedBytes <= Self.changePreviewLimit else { throw ControlledChangeError.denied("本次整理的完整原文与修改后预览累计超过8 MiB。请缩小到更少或更短的笔记后重新整理；未读取超额正文，也未截断差异内容。") }
         var documentBodies: [String: Data] = [:]
-        for id in Set((batch.documents?.edits ?? []).map(\.documentID)) {
-            guard grant.editableDocumentIDs.contains(id), let document = project.activeDocuments.first(where: { $0.id == id }) else { throw ControlledChangeError.denied("本次未获准编辑此笔记。") }
-            documentBodies[id] = try readLimited(try documentURL(document, in: directory), limit: Self.documentLimit)
+        for (id, file) in documentFiles {
+            // A concurrent growth cannot turn the admitted size into a larger
+            // allocation. A shrink remains safe and is still checked by hash.
+            documentBodies[id] = try readLimited(file.url, limit: file.size)
         }
         let prepared = try ControlledChangeBuilder.prepare(batch, grant: grant, project: project, documents: documentBodies,
             proposalID: UUID().uuidString, operationID: UUID().uuidString, baseRevision: session.latestRevision)
         guard sessionProposals.reduce(prepared.patches.count, { $0 + $1.patches.count }) <= 512,
               sessionProposals.reduce(prepared.bodies.count, { $0 + $1.bodies.count }) <= 32,
               sessionProposals.reduce(prepared.bodies.values.reduce(0, { $0 + $1.count }), { total, value in total + value.bodies.values.reduce(0, { $0 + $1.count }) }) <= 2_097_152 else { throw ControlledChangeError.denied("本次整理累计超过512项记录、32篇文档或2 MiB正文，未追加提案。") }
+        guard retainedBytes + prepared.bodies.values.reduce(0, { $0 + $1.count }) + prepared.beforeBodies.values.reduce(0, { $0 + $1.count }) <= Self.changePreviewLimit else { throw ControlledChangeError.denied("本次整理的完整原文与修改后预览累计超过8 MiB，请缩小任务；差异内容未截断。") }
         try validate(prepared.project)
         try validatePackageFiles(prepared.project, in: directory, strictContents: false, verifySourceHash: false, pendingDocumentSizes: prepared.bodies.mapValues(\.count))
         changeProposals[prepared.proposal.id] = prepared; changeProposalGrants[prepared.proposal.id] = grant.id

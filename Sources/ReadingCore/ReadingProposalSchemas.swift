@@ -189,9 +189,13 @@ extension ReadingQuerySession {
         if let knowledge = batch.knowledge {
             let proposed = Set((knowledge.anchors ?? []).map(\.clientID))
             let anchors = (project.readingExperience?.anchors ?? []) + (project.temporalKnowledge?.anchors ?? [])
-            let refs = (knowledge.presences ?? []).flatMap(\.sourceAnchorIDs) + (knowledge.participations ?? []).flatMap(\.sourceAnchorIDs)
-                + (knowledge.eventMetadata ?? []).flatMap(\.sourceAnchorIDs) + (knowledge.relationMetadata ?? []).flatMap(\.sourceAnchorIDs)
-                + (knowledge.layers ?? []).flatMap(\.sourceAnchorIDs) + (knowledge.alignments ?? []).flatMap(\.sourceAnchorIDs)
+            var refs: [String] = []
+            for value in knowledge.presences ?? [] { refs.append(contentsOf: value.sourceAnchorIDs) }
+            for value in knowledge.participations ?? [] { refs.append(contentsOf: value.sourceAnchorIDs) }
+            for value in knowledge.eventMetadata ?? [] { refs.append(contentsOf: value.sourceAnchorIDs) }
+            for value in knowledge.relationMetadata ?? [] { refs.append(contentsOf: value.sourceAnchorIDs) }
+            for value in knowledge.layers ?? [] { refs.append(contentsOf: value.sourceAnchorIDs) }
+            for value in knowledge.alignments ?? [] { refs.append(contentsOf: value.sourceAnchorIDs) }
             for id in refs where !proposed.contains(id) {
                 guard let anchor = anchors.first(where: { $0.id == id }), read(anchor.unitID, anchor.quote) else { throw invalid("提案锚点超出本次实际读取范围。") }
             }

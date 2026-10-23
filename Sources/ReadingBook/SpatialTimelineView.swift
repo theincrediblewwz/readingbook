@@ -189,7 +189,7 @@ struct SpatialTimelineView: View {
                 bookMap
                 if let id = store.selectedTemporalEntityID {
                     ReaderFloatingPanel(title: store.objectTitle(id), icon: "person.crop.rectangle", width: 340, height: 490,
-                        isPresented: $showsPerson, viewport: geometry.size, memoryIDOverride: "map.person") {
+                        isPresented: $showsPerson, viewport: geometry.size, memoryIDOverride: "map.person", restoreNearTop: true) {
                         TemporalPersonContents(entityID: id)
                     }
                 }

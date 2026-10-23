@@ -14,6 +14,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     var viewport: CGSize
     var memoryIDOverride: String? = nil
     var bottomReserve: CGFloat = 88
+    var restoreNearTop = false
     var onExpansionChange: (Bool) -> Void = { _ in }
     @ViewBuilder var content: () -> Content
     @State private var collapsed = false
@@ -61,7 +62,7 @@ struct ReaderFloatingPanel<Content: View>: View {
             if !isPresented && hasOpened {
                 Button { transientPresentation = nil; collapsed = false; isPresented = true } label: { Label(title, systemImage: icon) }
                     .buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 18)
-                    .position(x: trailing ? max(100, viewport.width - 90) : 90, y: trailing ? max(100, viewport.height - bottomReserve - 26) : 128)
+                    .position(x: trailing ? max(100, viewport.width - 90) : 90, y: trailing && !restoreNearTop ? max(100, viewport.height - bottomReserve - 26) : 128)
                     .transition(.opacity)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

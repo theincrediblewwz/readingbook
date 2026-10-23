@@ -189,4 +189,30 @@ final class ControlledChangesTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
         do { _ = try await repository.commitChanges(proposalID: proposal.id, grant: grant); XCTFail("changed body cannot be replayed as active success") } catch {}
     }
+
+    func testCompleteBeforeAndAfterPreviewBytesAreBoundedAcrossOneGrant() async throws {
+        let (root, source, book, repository) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        try await repository.create(book, sourceURL: source)
+        let first = DocumentRecord(id: "long-first", title: "第一篇长笔记"), second = DocumentRecord(id: "long-second", title: "第二篇长笔记")
+        let original = String(repeating: "a", count: 4 * 1_024 * 1_024), replacement = "短替换"
+        var saved = try await repository.saveDocument(project: book, document: first, markdown: original)
+        saved = try await repository.saveDocument(project: saved, document: second, markdown: original)
+        let grant = try await repository.issueChangeGrant(bookID: book.id, permissions: [.documents], allowedUnitIDs: [], editableDocumentIDs: [first.id, second.id], requiresReceipts: false, reason: "审阅完整原文")
+        func batch(_ document: DocumentRecord) throws -> ControlledChangeBatch {
+            ControlledChangeBatch(documents: ControlledDocumentChanges(edits: [ControlledDocumentEdit(documentID: document.id, expectedHash: try BookImporter.sha256(Data(original.utf8)), mode: .replace, markdown: replacement)]))
+        }
+        let preview = try await repository.prepareChanges(batch(first), grant: grant)
+        XCTAssertEqual(preview.documents.first?.before?.utf8.count, original.utf8.count, "允许的审阅必须保留完整原文。")
+        do {
+            _ = try await repository.prepareChanges(batch(second), grant: grant)
+            XCTFail("Two 4 MiB originals plus their replacements exceed the per-grant preview budget.")
+        } catch ControlledChangeError.denied(let message) { XCTAssertTrue(message.contains("8 MiB")) }
+        let unchanged = try await repository.loadAll()
+        XCTAssertNil(unchanged[0].controlledChanges)
+        XCTAssertEqual(try Data(contentsOf: package(root, book).appendingPathComponent(second.relativePath)).count, original.utf8.count)
+        await repository.revokeChangeGrant(grant.id)
+        let next = try await repository.issueChangeGrant(bookID: book.id, permissions: [.documents], allowedUnitIDs: [], editableDocumentIDs: [second.id], requiresReceipts: false, reason: "缩小任务")
+        let narrower = try await repository.prepareChanges(batch(second), grant: next)
+        XCTAssertEqual(narrower.documents.first?.before?.utf8.count, original.utf8.count)
+    }
 }
