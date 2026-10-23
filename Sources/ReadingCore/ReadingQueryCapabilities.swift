@@ -70,10 +70,11 @@ enum ReadingQueryToolCatalog {
     static let integer: [String: Any] = ["type": "integer", "minimum": 0, "maximum": 1_000_000_000]
     static let paging: [String: Any] = ["offset": integer, "limit": ["type": "integer", "minimum": 1, "maximum": 20]]
     static func schemas(snapshot: ReadingQuerySnapshot, host: ReadingHostToolAccess?, proposals: ReadingProposalToolAccess?) -> [[String: Any]] {
-        let notes = snapshot.scope == .notes
         let base = ReadingQuerySession.tools.filter { tool in
             let name = (tool["function"] as? [String: Any])?["name"] as? String ?? ""
-            return notes ? !name.hasPrefix("source_") : !["documents_list", "documents_search", "document_read"].contains(name)
+            if name.hasPrefix("source_") { return !snapshot.sources.isEmpty }
+            if ["documents_list", "documents_search", "document_read"].contains(name) { return !snapshot.documents.isEmpty }
+            return true
         }
         var query = paging; query["query"] = string; query["typeIDs"] = ids
         var object = ["id": string]; object["expectedHash"] = string
@@ -90,7 +91,7 @@ enum ReadingQueryToolCatalog {
             function("workspace_context_get", "读取宿主真实界面快照。没有接入时明确unsupported；不根据项目数据猜屏幕。"),
             function("visible_objects_list", "仅返回渲染器给出的真实可见对象ID；范围外对象隐藏，可见不等于正文已读。", paging)
         ]
-        if !notes {
+        if !snapshot.sources.isEmpty {
             result += [function("reading_coverage_get", "本次范围的实际处理状态/缺口；查询不增加覆盖，不证明理解无遗漏。", paging),
                 function("objects_search", "按名称/别名/概述和类型检索范围内对象；索引不是独立证据。", query),
                 function("object_get", "读取一个范围内统一对象，返回版本、字段、来源；不自动读取挂载Markdown。", object, required: ["id"]),
@@ -113,17 +114,51 @@ enum ReadingQueryToolCatalog {
 }
 
 extension ReadingQuerySession {
+    /// Identity can be reused when this scope has a genuine appearance. Aggregate
+    /// descriptions and attributes backed by other scopes are withheld.
+    func isIdentityStub(_ id: String) -> Bool {
+        guard let project else { return false }
+        let evidence = project.entities.first(where: { $0.id == id })?.evidence
+            ?? project.events.first(where: { $0.id == id })?.evidence ?? []
+        return evidence.contains(where: snapshot.admits) && !evidence.allSatisfy(snapshot.admits)
+    }
+    func identityStubIDs() -> Set<String> {
+        guard let project else { return [] }
+        var result = Set<String>()
+        for entity in project.entities where entity.evidence.contains(where: snapshot.admits) && !entity.evidence.allSatisfy(snapshot.admits) { result.insert(entity.id) }
+        for event in project.events where event.evidence.contains(where: snapshot.admits) && !event.evidence.allSatisfy(snapshot.admits) { result.insert(event.id) }
+        return result
+    }
     func scopedKnowledgeProject() -> BookProject? {
         guard var project else { return nil }
-        let sources = Dictionary(uniqueKeysWithValues: snapshot.sources.map { ($0.unitID, $0.text) })
         func permitted(_ evidence: [Evidence]) -> Bool {
-            !evidence.isEmpty && evidence.allSatisfy { evidence in
-                guard !evidence.quote.isEmpty, let text = sources[evidence.unitID], let range = text.range(of: evidence.quote, options: .literal) else { return false }
-                return text[range].utf8.elementsEqual(evidence.quote.utf8)
-            }
+            !evidence.isEmpty && evidence.allSatisfy(snapshot.admits)
         }
-        project.entities = project.entities.filter { permitted($0.evidence) }
-        project.events = project.events.filter { permitted($0.evidence) }
+        project.entities = project.entities.compactMap { original in
+            let local = original.evidence.filter(snapshot.admits)
+            guard !local.isEmpty else { return nil }
+            var value = original
+            if local.count != original.evidence.count {
+                value.summary = ""; value.properties = [:]
+                value.latitude = nil; value.longitude = nil; value.locationNote = nil
+                value.aliases = value.aliases.filter { alias in local.contains { $0.quote.contains(alias) } }
+                if !local.contains(where: { $0.quote.contains(value.name) }) { value.name = value.aliases.first ?? "本段关联实体" }
+            }
+            value.evidence = local
+            return value
+        }
+        project.events = project.events.compactMap { original in
+            let local = original.evidence.filter(snapshot.admits)
+            guard !local.isEmpty else { return nil }
+            var value = original
+            if local.count != original.evidence.count {
+                value.summary = ""; value.dateText = "时间待考"; value.startYear = nil; value.endYear = nil
+                value.placeIDs = []; value.participantIDs = []
+                if !local.contains(where: { $0.quote.contains(value.name) }) { value.name = "本段关联事件" }
+            }
+            value.evidence = local
+            return value
+        }
         project.relations = project.relations.filter { permitted($0.evidence) }
         project.documents = snapshot.documents
         let anchors = ((project.readingExperience?.anchors ?? []) + (project.temporalKnowledge?.anchors ?? [])).filter {
@@ -207,15 +242,19 @@ extension ReadingQuerySession {
         case "objects_search":
             let query = arguments["query"] as? String ?? "", types = Set(arguments["typeIDs"] as? [String] ?? [])
             guard query.count <= 400 else { throw invalid("检索词过长。") }
+            let identityStubs = identityStubIDs()
             let objects = try TemporalKnowledgeRuntime.objects(in: scoped, boundary: boundary).filter {
-                (types.isEmpty || types.contains($0.typeID)) && (query.isEmpty || ([$0.name, $0.summary] + $0.aliases).contains { $0.localizedCaseInsensitiveContains(query) })
+                let named = ([$0.name, $0.summary] + $0.aliases).contains { $0.localizedCaseInsensitiveContains(query) }
+                let localMention = identityStubs.contains($0.id) && $0.evidence.contains { $0.quote.localizedCaseInsensitiveContains(query) }
+                return (types.isEmpty || types.contains($0.typeID)) && (query.isEmpty || named || localMention)
             }
-            return try page(objects.map { ["id": $0.id, "typeID": $0.typeID, "kind": $0.kind.rawValue, "name": $0.name, "summary": String($0.summary.prefix(400)), "version": $0.version,
+            return try page(objects.map { ["id": $0.id, "typeID": $0.typeID, "kind": $0.kind.rawValue, "name": $0.name, "summary": String($0.summary.prefix(400)), "version": $0.version, "identityOnly": identityStubs.contains($0.id),
                 "sourceUnitIDs": Array(Set($0.evidence.map(\.unitID))).sorted()] as [String: Any] }, arguments, maximumBytes)
         case "object_get":
             guard let object = try TemporalKnowledgeRuntime.object(id: identifier(arguments), in: scoped, boundary: boundary) else { throw invalid("对象不在本次原文范围内。") }
             try checkHash(arguments, actual: object.version)
-            return try json(["ok": true, "object": try encoded(object), "documentBodiesProvided": false])
+            return try json(["ok": true, "object": try encoded(object), "documentBodiesProvided": false,
+                "identityOnly": isIdentityStub(object.id), "note": "稳定id可复用关联；跨范围概述/属性已隐藏。通用占位名称不是原书姓名或新增别名。只有返回的本范围证据可用于内容判断。"])
         case "relations_list":
             guard let id = arguments["objectID"] as? String else { throw invalid("缺少objectID。") }
             let rows = try TemporalKnowledgeRuntime.relations(objectID: id, in: scoped, at: timePoint(arguments), boundary: boundary)
@@ -254,7 +293,8 @@ extension ReadingQuerySession {
     private func encoded<T: Encodable>(_ value: T) throws -> Any { try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) }
     func admitsNode(_ id: String, admitted: Set<String>, project: BookProject) -> Bool {
         guard let node = project.nodes.first(where: { $0.id == id }) else { return false }
-        return admitted.contains(node.targetID) || !(Set(node.documentIDs ?? []).intersection(admitted)).isEmpty || taskCreatedNodeIDs.contains(id)
+        return admitted.contains(node.targetID) || !(Set(node.documentIDs ?? []).intersection(admitted)).isEmpty
+            || snapshot.authorizedNodeIDs.contains(id) || taskCreatedNodeIDs.contains(id)
     }
     private mutating func refreshTaskCreatedNodes(in project: BookProject) {
         let operations = Set(hostReceipts.compactMap { value -> String? in
@@ -288,7 +328,16 @@ extension ReadingQuerySession {
         case "graph":
             let admitted = Set(try TemporalKnowledgeRuntime.objects(in: scoped, boundary: KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs))).map(\.id)).union(snapshot.documentIDs)
             let nodes = project.nodes.filter { admitsNode($0.id, admitted: admitted, project: project) }, nodeIDs = Set(nodes.map(\.id))
-            rows = try nodes.map { ["kind": "node", "value": try encoded($0)] }
+            rows = try nodes.map { node in
+                var value = try encoded(node) as? [String: Any] ?? [:]
+                let targetShared = admitted.contains(node.targetID) || node.isStandalone == true && node.targetID == node.id || node.targetID.isEmpty
+                let documents = node.documentIDs ?? []
+                let sharedDocuments = documents.filter { snapshot.documentIDs.contains($0) }
+                if !targetShared { value.removeValue(forKey: "targetID") }
+                if sharedDocuments.count != documents.count { value["documentIDs"] = sharedDocuments }
+                return ["kind": "node", "value": value, "contentRestricted": !targetShared || sharedDocuments.count != documents.count,
+                    "note": "布局授权不共享范围外目标或文档正文。"] as [String: Any]
+            }
             rows += try project.edges.filter { nodeIDs.contains($0.fromID) && nodeIDs.contains($0.toID) }.map { ["kind": "edge", "value": try encoded($0)] }
             // Group titles can reveal unrelated contents; only fully admitted groups are returned.
             rows += try (project.graphGroups ?? []).filter { !$0.nodeIDs.isEmpty && Set($0.nodeIDs).isSubset(of: nodeIDs) && $0.childGroupIDs.isEmpty }.map { ["kind": "group", "value": try encoded($0)] }

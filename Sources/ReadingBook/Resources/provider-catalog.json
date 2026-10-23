@@ -2,6 +2,53 @@
   "verifiedAt": "2026-10-14",
   "providers": [
     {
+      "id": "opencode-go",
+      "name": "OpenCode Go · 订阅",
+      "baseURL": "https://opencode.ai/inference/go/openai/v1/chat/completions",
+      "documentationURL": "https://opencode.ai/v2/docs/console/go/",
+      "note": "2026-10-23核对。Go面向编程代理流量，通用阅读用途未获服务商保证，请确认订阅适用范围。这里只列Chat协议型号；额度来源为Models.dev的Go专属条目，不套用厂商直连上限。",
+      "models": [
+        {"id":"deepseek-v4.1-flash","name":"DeepSeek V4.1 Flash · Go","contextTokens":1000000,"maxOutputTokens":384000,"vision":true,"tools":true,"tokenParameter":"max_tokens","documentationURL":"https://opencode.ai/v2/docs/console/go/","limitSourceURL":"https://models.dev/api.json","note":"Go专属参考额度；可用性、图像支持与账户限制以网关为准。"},
+        {"id":"glm-5.3","name":"GLM-5.3 · Go","contextTokens":1000000,"maxOutputTokens":131072,"vision":false,"tools":true,"tokenParameter":"max_tokens","documentationURL":"https://opencode.ai/v2/docs/console/go/","limitSourceURL":"https://models.dev/api.json"},
+        {"id":"kimi-k3","name":"Kimi K3 · Go","contextTokens":1048576,"maxOutputTokens":131072,"vision":true,"tools":true,"tokenParameter":"max_tokens","documentationURL":"https://opencode.ai/v2/docs/console/go/","limitSourceURL":"https://models.dev/api.json"},
+        {"id":"mimo-v2.6-flash","name":"MiMo V2.6 Flash · Go","contextTokens":1048576,"maxOutputTokens":131072,"vision":true,"tools":true,"tokenParameter":"max_tokens","documentationURL":"https://opencode.ai/v2/docs/console/go/","limitSourceURL":"https://models.dev/api.json"}
+      ]
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode Console · 按量",
+      "baseURL": "https://opencode.ai/inference/openai/v1/chat/completions",
+      "documentationURL": "https://opencode.ai/v2/docs/console/models/",
+      "note": "2026-10-23核对。按量账户与Go订阅分开；只列已实现Chat协议型号。限额参考Models.dev的Console专属条目。",
+      "models": [
+        {"id":"deepseek-v4.1-flash","name":"DeepSeek V4.1 Flash · Console","contextTokens":1000000,"maxOutputTokens":384000,"vision":true,"tools":true,"tokenParameter":"max_tokens","documentationURL":"https://opencode.ai/v2/docs/console/models/","limitSourceURL":"https://models.dev/api.json"},
+        {"id":"glm-5.3","name":"GLM-5.3 · Console","contextTokens":1000000,"maxOutputTokens":131072,"vision":false,"tools":true,"tokenParameter":"max_tokens","documentationURL":"https://opencode.ai/v2/docs/console/models/","limitSourceURL":"https://models.dev/api.json"},
+        {"id":"kimi-k3","name":"Kimi K3 · Console","contextTokens":1048576,"maxOutputTokens":131072,"vision":true,"tools":true,"tokenParameter":"max_tokens","documentationURL":"https://opencode.ai/v2/docs/console/models/","limitSourceURL":"https://models.dev/api.json"}
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "baseURL": "https://openrouter.ai/api/v1/chat/completions",
+      "documentationURL": "https://openrouter.ai/docs/api/api-reference/models/get-models",
+      "note": "2026-10-23核对公开models元数据；总窗口由输入与输出共用，实际路由上限仍取决于上游。",
+      "models": [
+        {"id":"deepseek/deepseek-v4.1-flash","name":"DeepSeek V4.1 Flash · OpenRouter","contextTokens":1048576,"maxOutputTokens":943718,"vision":true,"tools":true,"tokenParameter":"max_tokens","documentationURL":"https://openrouter.ai/docs/api/api-reference/models/get-models","limitSourceURL":"https://openrouter.ai/api/v1/models"},
+        {"id":"deepseek/deepseek-v4-pro","name":"DeepSeek V4 Pro · OpenRouter","contextTokens":1024000,"maxOutputTokens":384000,"vision":false,"tools":true,"tokenParameter":"max_tokens","documentationURL":"https://openrouter.ai/docs/api/api-reference/models/get-models","limitSourceURL":"https://openrouter.ai/api/v1/models"}
+      ]
+    },
+    {
+      "id": "mimo",
+      "name": "小米 MiMo",
+      "baseURL": "https://api.xiaomimimo.com/v1/chat/completions",
+      "documentationURL": "https://mimo.mi.com/docs/api/text-generation/openai-api",
+      "note": "2026-10-23核对官方API与OpenCode集成规格，支持文本/图像与工具调用。",
+      "models": [
+        {"id":"mimo-v2.6-flash","name":"MiMo V2.6 Flash","contextTokens":1048576,"maxOutputTokens":131072,"vision":true,"tools":true,"tokenParameter":"max_completion_tokens","documentationURL":"https://mimo.mi.com/docs/api/text-generation/openai-api","limitSourceURL":"https://mimo.mi.com/docs/tokenplan/integration/opencode"},
+        {"id":"mimo-v2.6-pro","name":"MiMo V2.6 Pro","contextTokens":1048576,"maxOutputTokens":131072,"vision":true,"tools":true,"tokenParameter":"max_completion_tokens","documentationURL":"https://mimo.mi.com/docs/api/text-generation/openai-api","limitSourceURL":"https://mimo.mi.com/docs/tokenplan/integration/opencode"}
+      ]
+    },
+    {
       "id": "deepseek",
       "name": "DeepSeek",
       "baseURL": "https://api.deepseek.com/v1/chat/completions",

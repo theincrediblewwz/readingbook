@@ -346,11 +346,13 @@ public actor AIReader {
                        documents: [String: String] = [:], readingContext: ReadingContext? = nil,
                        queryScope: ReadingQueryScope? = nil, history: [ChatMessage] = [], memory: ConversationMemory? = nil,
                        memoryEnabled: Bool = true, documentIDs: [String]? = nil,
-                       documentLoader: ReadingDocumentLoader? = nil, workspace: ReadingWorkspaceSnapshot? = nil,
+                       documentLoader: ReadingDocumentLoader? = nil, appendedDocumentIDs: [String] = [], authorizedNodeIDs: [String] = [],
+                       hostOperationContext: String? = nil, workspace: ReadingWorkspaceSnapshot? = nil,
                        hostTools: ReadingHostToolAccess? = nil, proposalAccess: ReadingProposalToolAccess? = nil) async throws -> ChatMessage {
         try await answerDetailed(question: question, project: project, settings: settings, apiKey: apiKey,
             documents: documents, readingContext: readingContext, queryScope: queryScope, history: history,
             memory: memory, memoryEnabled: memoryEnabled, documentIDs: documentIDs, documentLoader: documentLoader,
+            appendedDocumentIDs: appendedDocumentIDs, authorizedNodeIDs: authorizedNodeIDs, hostOperationContext: hostOperationContext,
             workspace: workspace, hostTools: hostTools, proposalAccess: proposalAccess).message
     }
 
@@ -358,14 +360,16 @@ public actor AIReader {
                                documents: [String: String] = [:], readingContext: ReadingContext? = nil,
                                queryScope: ReadingQueryScope? = nil, history: [ChatMessage] = [], memory: ConversationMemory? = nil,
                                memoryEnabled: Bool = true, documentIDs: [String]? = nil,
-                               documentLoader: ReadingDocumentLoader? = nil, workspace: ReadingWorkspaceSnapshot? = nil,
+                               documentLoader: ReadingDocumentLoader? = nil, appendedDocumentIDs: [String] = [], authorizedNodeIDs: [String] = [],
+                               hostOperationContext: String? = nil, workspace: ReadingWorkspaceSnapshot? = nil,
                                hostTools: ReadingHostToolAccess? = nil, proposalAccess: ReadingProposalToolAccess? = nil) async throws -> ReadingAnswerResult {
         try beginOperation(settings: settings)
         defer { operationActive = false }
         return try await ReadingAnswerEngine.run(question: question, project: project, settings: settings, documents: documents,
             context: readingContext, scope: queryScope, history: history, memory: memory, memoryEnabled: memoryEnabled,
             documentIDs: documentIDs, loader: documentLoader, operationLimit: operationTokenLimit,
-            remainingRequests: max(0, settings.maxRequestsPerRun - requestCount), workspace: workspace,
+            remainingRequests: max(0, settings.maxRequestsPerRun - requestCount), appendedDocumentIDs: appendedDocumentIDs,
+            authorizedNodeIDs: authorizedNodeIDs, hostOperationContext: hostOperationContext, workspace: workspace,
             hostTools: hostTools, proposalAccess: proposalAccess) { messages, tools, remaining, finalOnly in
                 try await self.queryRequest(messages: messages, tools: tools, settings: settings, apiKey: apiKey,
                                             remainingTokens: remaining, finalOnly: finalOnly)

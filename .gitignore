@@ -12,6 +12,7 @@ xcuserdata/
 *.mobileprovision
 *.readingbook/
 private-books/
+/Design/2026-10-reader-redesign/evidence-0.15/
 node_modules/
 /PLAN.md
 /AGENTS.md

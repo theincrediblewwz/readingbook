@@ -15,6 +15,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     var memoryIDOverride: String? = nil
     var bottomReserve: CGFloat = 88
     var restoreNearTop = false
+    var elevated = false
     var onExpansionChange: (Bool) -> Void = { _ in }
     @ViewBuilder var content: () -> Content
     @State private var collapsed = false
@@ -29,7 +30,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     private var memoryID: String { memoryIDOverride ?? (trailing ? "reader.companion" : "reader.outline") }
 
     private var panelWidth: CGFloat { min(width, max(240, viewport.width - 100)) }
-    private var panelHeight: CGFloat { collapsed ? 58 : min(height, max(120, viewport.height - 100 - bottomReserve)) }
+    private var panelHeight: CGFloat { collapsed ? (elevated ? 66 : 58) : min(height, max(120, viewport.height - 100 - bottomReserve)) }
     private var origin: CGPoint { clamp(savedOrigin ?? CGPoint(x: trailing ? viewport.width - panelWidth - 24 : 24, y: 100)) }
     private func clamp(_ point: CGPoint) -> CGPoint {
         CGPoint(x: min(max(24, point.x), max(24, viewport.width - panelWidth - 24)),
@@ -52,11 +53,14 @@ struct ReaderFloatingPanel<Content: View>: View {
                             }
                         Button { transientPresentation = nil; collapsed.toggle() } label: { Image(systemName: collapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开\(title)" : "收起\(title)")
                         Button { transientPresentation = nil; isPresented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭\(title)")
-                    }.padding(.leading, 16).padding(.trailing, 6).frame(height: 58)
+                    }.padding(.leading, elevated ? 24 : 16).padding(.trailing, 10).frame(height: elevated ? 66 : 58)
                     content().frame(maxWidth: .infinity, maxHeight: collapsed ? 0 : .infinity)
                         .opacity(collapsed ? 0 : 1).clipped().allowsHitTesting(!collapsed).accessibilityHidden(collapsed)
-                }.frame(width: panelWidth, height: panelHeight).readingGlass(radius: 22)
-                    .clipShape(RoundedRectangle(cornerRadius: 22)).position(x: origin.x + panelWidth / 2, y: origin.y + panelHeight / 2)
+                }.frame(width: panelWidth, height: panelHeight).readingGlass(radius: 24)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 24).strokeBorder(Palette.accent.opacity(elevated ? 0.13 : 0), lineWidth: 0.7).allowsHitTesting(false)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 24)).position(x: origin.x + panelWidth / 2, y: origin.y + panelHeight / 2)
                     .opacity(isPresented ? 1 : 0).scaleEffect(isPresented || reduceMotion ? 1 : 0.97, anchor: trailing ? .topTrailing : .topLeading)
                     .allowsHitTesting(isPresented).accessibilityHidden(!isPresented)
             if !isPresented && hasOpened {

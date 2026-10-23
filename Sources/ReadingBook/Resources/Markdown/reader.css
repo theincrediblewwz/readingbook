@@ -11,6 +11,7 @@
 }
 :root[data-theme="dark"] { --ink: #E6EDF9; --muted: #A3B1CB; --line: #36445C; --soft: #202A3B; --accent: #8BAEFF; --code: #202B40; --danger: #eeb6a3; --danger-bg: #392c27; }
 * { box-sizing: border-box; }
+:root[data-reading-style="companion"] { font-family: "Songti SC", "STSong", Georgia, serif; font-size: 18px; line-height: 1.95; }
 html, body { padding: 0; margin: 0; width: 100%; overflow-x: hidden; overflow-y: hidden; background: transparent; color: var(--ink); }
 .markdown-body { width: 100%; padding: 2px 1px 8px; overflow-wrap: anywhere; }
 .markdown-body { -webkit-user-select: text; user-select: text; }

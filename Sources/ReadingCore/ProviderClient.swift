@@ -6,6 +6,7 @@ import FoundationNetworking
 /// This transport has no file, browsing, or arbitrary network tools. Its only
 /// destination is the provider endpoint explicitly configured by the user.
 enum ProviderClient {
+    private static let fallbackSessionID = "readingbook-" + UUID().uuidString
     struct ToolCall: Decodable, Sendable {
         struct Function: Decodable, Sendable { let name: String; let arguments: String }
         let id: String
@@ -125,6 +126,12 @@ enum ProviderClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("ReadingBook/0.15", forHTTPHeaderField: "User-Agent")
+        if url.host?.lowercased() == "opencode.ai" {
+            let sessionID = settings.transportSessionID ?? fallbackSessionID
+            guard sessionID.range(of: "^[a-zA-Z0-9._:-]{1,180}$", options: .regularExpression) != nil else { throw ReadingError.invalid("模型会话标识无效。") }
+            request.setValue(sessionID, forHTTPHeaderField: "x-opencode-session")
+        }
         if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         return Prepared(request: request, estimatedInputTokens: estimate)

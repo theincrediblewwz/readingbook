@@ -247,6 +247,106 @@ final class ReadingQueryTests: XCTestCase {
         XCTAssertTrue(graph.contains("created-free")); XCTAssertFalse(graph.contains("old-free"))
         XCTAssertTrue(snapshot.documentIDs.isEmpty, "没有扩大新笔记正文授权")
     }
+
+    func testExplicitAttachedNoteCanBeEditedAlongsideExactSourceWithoutSharingOthers() async throws {
+        let project = book(), context = ReadingContext(unitID: "u1", selectedText: "刘备在此。", page: 1)
+        let original = try ReadingQuerySnapshot.freeze(scope: .selection, in: project, context: context)
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .selection, in: project, context: context, appendedDocumentIDs: ["d1"])
+        XCTAssertEqual(snapshot.documentIDs, ["d1"]); XCTAssertEqual(snapshot.sources.map(\.text), ["刘备在此。"])
+        XCTAssertNotEqual(original.scopeFingerprint, snapshot.scopeFingerprint)
+        XCTAssertThrowsError(try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: context, appendedDocumentIDs: ["missing"]))
+        XCTAssertThrowsError(try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: context, appendedDocumentIDs: ["d1", "d1"]))
+        let names = ReadingQueryToolCatalog.schemas(snapshot: snapshot, host: nil, proposals: nil).compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
+        XCTAssertTrue(names.contains("source_read")); XCTAssertTrue(names.contains("document_read"))
+        var session = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: ["d1": "原笔记 $x^2$", "d2": "未分享笔记"], project: project)
+        _ = try await session.execute(name: "source_read", arguments: ["id": "u1"], maximumBytes: 4000)
+        _ = try await session.execute(name: "document_read", arguments: ["id": "d1"], maximumBytes: 4000)
+        do { _ = try await session.execute(name: "document_read", arguments: ["id": "d2"], maximumBytes: 4000); XCTFail("附加一篇不能分享全部笔记") } catch {}
+        let hash = try XCTUnwrap(session.documentHashes["d1"])
+        let edits = ControlledDocumentChanges(edits: [ControlledDocumentEdit(documentID: "d1", expectedHash: hash, mode: .append, markdown: "补充 [unit:u1]")])
+        XCTAssertNoThrow(try session.validateProposal(name: "document_changes_propose", data: JSONEncoder().encode(edits)))
+        let unshared = ControlledDocumentChanges(edits: [ControlledDocumentEdit(documentID: "d2", expectedHash: hash, mode: .replace, markdown: "不得写")])
+        XCTAssertThrowsError(try session.validateProposal(name: "document_changes_propose", data: JSONEncoder().encode(unshared)))
+        XCTAssertFalse(snapshot.admits(Evidence(unitID: "u1", quote: "甲地战役。")))
+    }
+
+    func testExplicitLayoutNodeDoesNotAuthorizeItsTargetOrMountedDocument() async throws {
+        var project = book()
+        project.entities = [KnowledgeEntity(id: "outside", typeID: "person", name: "孙权", evidence: [Evidence(unitID: "u2", quote: "孙权守城。")])]
+        var node = CanvasNode(id: "physical", targetID: "outside"); node.title = "我选中的布局"; node.documentIDs = ["d2"]
+        project.nodes = [node]
+        let context = ReadingContext(unitID: "u1", page: 1)
+        let original = try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: context)
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: context, authorizedNodeIDs: ["physical"])
+        XCTAssertEqual(snapshot.authorizedNodeIDs, ["physical"]); XCTAssertNotEqual(snapshot.scopeFingerprint, original.scopeFingerprint)
+        XCTAssertThrowsError(try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: context, authorizedNodeIDs: ["guessed"]))
+        XCTAssertThrowsError(try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: context, authorizedNodeIDs: ["physical", "physical"]))
+        var session = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: ["d2": "不该读到"], project: project)
+        let graph = try await session.execute(name: "book_schema_get", arguments: ["section": "graph"], maximumBytes: 4000)
+        let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(graph.utf8)) as? [String: Any])
+        let item = try XCTUnwrap((root["items"] as? [[String: Any]])?.first)
+        let layout = try XCTUnwrap(item["value"] as? [String: Any])
+        XCTAssertEqual(layout["id"] as? String, "physical"); XCTAssertNil(layout["targetID"])
+        XCTAssertEqual(layout["documentIDs"] as? [String], []); XCTAssertEqual(item["contentRestricted"] as? Bool, true)
+        do { _ = try await session.execute(name: "object_get", arguments: ["id": "outside"], maximumBytes: 4000); XCTFail("节点授权不是目标事实授权") } catch {}
+        do { _ = try await session.execute(name: "document_read", arguments: ["id": "d2"], maximumBytes: 4000); XCTFail("节点授权不是挂载正文授权") } catch {}
+        XCTAssertNoThrow(try session.validateProposal(name: "graph_changes_propose", data: Data(#"{"batch":{"graph":{"renames":[{"nodeID":"physical","title":"新标题"}]}}}"#.utf8)))
+        var unshared = ReadingQuerySession(snapshot: original, history: [], loader: nil, providedDocuments: [:], project: project)
+        XCTAssertFalse(unshared.admitsNode("physical", admitted: [], project: project))
+        _ = try await unshared.execute(name: "source_outline", arguments: [:], maximumBytes: 2000)
+    }
+
+    func testSharedIdentityKeepsLocalEvidenceButWithholdsCrossScopeFacts() async throws {
+        var project = book()
+        project.entities = [KnowledgeEntity(id: "liu", typeID: "person", name: "刘备", summary: "后文秘密总结", properties: ["后文": "秘密属性"], aliases: ["先主"], latitude: 1, longitude: 2, locationNote: "后文位置", evidence: [Evidence(unitID: "u1", quote: "刘备在此。"), Evidence(unitID: "u3", quote: "第三页秘密。")])]
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .selection, in: project, context: ReadingContext(unitID: "u1", selectedText: "刘备在此。", page: 1))
+        var session = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: project)
+        let response = try await session.execute(name: "object_get", arguments: ["id": "liu"], maximumBytes: 5000)
+        let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let object = try XCTUnwrap(root["object"] as? [String: Any])
+        XCTAssertEqual(object["id"] as? String, "liu"); XCTAssertEqual(root["identityOnly"] as? Bool, true)
+        XCTAssertEqual(object["summary"] as? String, ""); XCTAssertEqual(object["fields"] as? [String: String], [:])
+        XCTAssertNil(object["latitude"]); XCTAssertFalse(response.contains("第三页秘密")); XCTAssertFalse(response.contains("秘密属性")); XCTAssertFalse(response.contains("先主"))
+        XCTAssertEqual(session.sourceExcerpts.map { $0.0 }, ["u1"])
+        XCTAssertThrowsError(try ReadingAnswerEngine.citations("未共享的内容[unit:u3]", session: session))
+        project.entities[0].name = "后文才揭示的身份"; project.entities[0].aliases = ["刘备", "先主"]
+        var concealed = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: project)
+        let hiddenName = try await concealed.execute(name: "object_get", arguments: ["id": "liu"], maximumBytes: 5000)
+        let concealedRoot = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(hiddenName.utf8)) as? [String: Any])
+        let concealedObject = try XCTUnwrap(concealedRoot["object"] as? [String: Any])
+        XCTAssertEqual(concealedObject["name"] as? String, "刘备")
+        XCTAssertFalse(hiddenName.contains("后文才揭示的身份")); XCTAssertFalse(hiddenName.contains("先主"))
+        project.entities[0].aliases = []
+        var unnamed = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: project)
+        let found = try await unnamed.execute(name: "objects_search", arguments: ["query": "刘备"], maximumBytes: 4000)
+        let foundRoot = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(found.utf8)) as? [String: Any])
+        let foundItems = try XCTUnwrap(foundRoot["items"] as? [[String: Any]])
+        XCTAssertEqual(foundItems.first?["id"] as? String, "liu", "本段称谓能定位同一身份，不必泄漏后文姓名")
+        XCTAssertFalse(found.contains("后文才揭示的身份"))
+    }
+
+    func testFinalRequestRetainsSourcedMemoryAndHostStatusAfterRecyclingTools() async throws {
+        let project = book(), snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: project)
+        let history = (0..<12).map { ChatMessage(id: "m\($0)", role: $0 % 2 == 0 ? "user" : "assistant", content: "第\($0)条原始问答") }
+        let raw = #"{"requirements":[{"text":"保留用户指定的年号表达","sources":["m0"]}],"conclusions":[],"unresolved":[]}"#
+        let memory = try ConversationMemoryRuntime.parse(raw, previous: nil, next: .init(index: 8), snapshot: snapshot, history: history, model: "synthetic", suppliedIDs: ["m0"])
+        let calls = QueryRequestCounter()
+        _ = try await ReadingAnswerEngine.run(question: "继续解释", project: project, settings: ProviderSettings(model: "synthetic", contextWindowTokens: 128_000), documents: [:], context: nil,
+            scope: .book, history: history, memory: memory, memoryEnabled: true, documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 2,
+            hostOperationContext: #"{"status":"applied","operationID":"op-confirmed"}"#) { messages, tools, _, final in
+                let index = await calls.record(final: final, tools: tools.count)
+                if index == 1 {
+                    return ProviderClient.Result(message: .init(role: "assistant", content: nil, refusal: nil, tool_calls: [.init(id: "read", type: "function", function: .init(name: "source_read", arguments: #"{"id":"u1"}"#))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 100)
+                }
+                XCTAssertTrue(final)
+                XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("早前对话派生记忆") == true && ($0["content"] as? String)?.contains("保留用户指定的年号表达") == true })
+                XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("op-confirmed") == true && ($0["role"] as? String) == "user" })
+                XCTAssertFalse(messages.contains { ($0["role"] as? String) == "tool" })
+                return ProviderClient.Result(message: .init(role: "assistant", content: "刘备在此。[unit:u1]", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 100)
+            }
+        XCTAssertEqual(history.count, 12); XCTAssertTrue(ConversationMemoryRuntime.isValid(memory, snapshot: snapshot, history: history))
+        XCTAssertNil(try ConversationMemoryRuntime.boundedDataMessage(memory, maximumBytes: 10))
+    }
 }
 
 private actor QueryReadCounter {

@@ -38,6 +38,7 @@ struct PendingAIChange: Identifiable {
         let committed = try await repository.commitChanges(proposalID: proposal.id, grant: grant)
         guard bookID == grant.bookID else { throw CancellationError() }
         publish(committed.project)
+        await recordQueryHostOperation(status: "applied", bookID: grant.bookID, proposal: proposal, receipt: committed.receipt)
         activity = "本次授权的新增整理已保存，可以撤销。"
         return try changeToolReceipt(status: "success", applied: true, proposal: proposal, receipt: committed.receipt, replayed: committed.replayed)
     }
@@ -76,14 +77,18 @@ struct PendingAIChange: Identifiable {
             let committed = try await repository.commitChanges(proposalID: pending.proposal.id, grant: pending.grant, approval: approval)
             publish(committed.project); pendingAIChanges.removeAll { $0.id == pending.id }
             if !pendingAIChanges.contains(where: { $0.grant.id == pending.grant.id }) { await repository.revokeChangeGrant(pending.grant.id) }
+            await recordQueryHostOperation(status: "applied", bookID: pending.proposal.bookID, proposal: pending.proposal, receipt: committed.receipt)
             if let document = book?.activeDocuments.first(where: { $0.id == selectedDocumentID }), pending.proposal.documents.contains(where: { $0.documentID == document.id }) { await openDocument(document) }
             activity = "审阅的修改已应用；原版本可通过本次撤销恢复。"; return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
     func discardAIChange(_ pending: PendingAIChange) async {
-        guard !isBusy else { return }
+        guard !isBusy, bookID == pending.proposal.bookID else { return }
+        isBusy = true; isCommittingLocalWrite = true
+        defer { isBusy = false; isCommittingLocalWrite = false }
         pendingAIChanges.removeAll { $0.id == pending.id }
         if !pendingAIChanges.contains(where: { $0.grant.id == pending.grant.id }) { await repository.revokeChangeGrant(pending.grant.id) }
+        await recordQueryHostOperation(status: "discarded", bookID: pending.proposal.bookID, proposal: pending.proposal)
     }
     func undoLatestAIChange() async {
         guard !isBusy, let bookID, let change = latestAIChange else { return }
@@ -93,6 +98,7 @@ struct PendingAIChange: Identifiable {
         do {
             let result = try await repository.undoChanges(bookID: bookID, operationID: change.operationID)
             publish(result.project)
+            await recordQueryHostOperation(status: "undone", bookID: bookID, receipt: result.receipt)
             if let id = selectedDocumentID, book?.activeDocuments.contains(where: { $0.id == id }) != true {
                 selectedDocumentID = nil; editorMarkdown = ""; editorTitle = ""; documentBaseHash = nil
             } else if let document = book?.activeDocuments.first(where: { $0.id == selectedDocumentID }) { await openDocument(document) }

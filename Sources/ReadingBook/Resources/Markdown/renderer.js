@@ -289,6 +289,7 @@
     sourceDecorations = Array.isArray(settings.sourceDecorations) ? settings.sourceDecorations.slice(0, 1_000) : [];
     global.getSelection?.()?.removeAllRanges();
     document.documentElement.dataset.theme = settings.theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.dataset.readingStyle = settings.readingStyle === 'companion' ? 'companion' : 'body';
     const root = document.getElementById('content');
     root.innerHTML = renderHTML(markdown, settings);
     addSourceDecorations(root);

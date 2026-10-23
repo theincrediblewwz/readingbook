@@ -286,6 +286,11 @@ public struct ProviderSettings: Codable, Sendable {
     public var maxOutputTokens: Int
     public var contextWindowTokens: Int? = nil
     public var tokenLimitParameter: String? = nil
+    /// Host-assigned request context; never persisted with a connection profile.
+    public var transportSessionID: String? = nil
+    private enum CodingKeys: String, CodingKey {
+        case baseURL, model, maxRequestsPerRun, maxOutputTokens, contextWindowTokens, tokenLimitParameter
+    }
     public init(baseURL: String = "http://localhost:11434/v1", model: String = "", maxRequestsPerRun: Int = 100, maxOutputTokens: Int = 6000, contextWindowTokens: Int? = nil, tokenLimitParameter: String? = nil) {
         self.baseURL = baseURL; self.model = model; self.maxRequestsPerRun = maxRequestsPerRun; self.maxOutputTokens = maxOutputTokens
         self.contextWindowTokens = contextWindowTokens; self.tokenLimitParameter = tokenLimitParameter

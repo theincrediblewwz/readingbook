@@ -67,6 +67,24 @@ struct ReadingToolbarButtonStyle: ButtonStyle {
     }
 }
 
+/// The paired actions in companion and editor surfaces share the reference
+/// design's generous targets, blue primary and quiet outlined secondary.
+struct ReadingActionButtonStyle: ButtonStyle {
+    var prominent = false
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.system(size: 15, weight: .medium)).padding(.horizontal, 12)
+            .frame(minHeight: 48).frame(maxWidth: .infinity)
+            .foregroundStyle(prominent ? Color.white : Palette.ink)
+            .background(prominent ? Palette.accent : Palette.paper.opacity(0.5), in: RoundedRectangle(cornerRadius: 14))
+            .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(prominent ? Color.white.opacity(0.22) : Palette.accent.opacity(0.14), lineWidth: 0.8) }
+            .shadow(color: Palette.accent.opacity(prominent ? 0.16 : 0), radius: 10, y: 4)
+            .opacity(enabled ? 1 : 0.45).scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .animation(ReadingMotion.animation(reduce: reduceMotion), value: configuration.isPressed)
+    }
+}
+
 extension View {
     func readingGlass(radius: CGFloat = 20, interactive: Bool = false) -> some View {
         modifier(ReadingGlassSurface(radius: radius, interactive: interactive))

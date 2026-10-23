@@ -1,7 +1,7 @@
 import Foundation
 import CoreFoundation
 
-/// A query boundary, not a relevance hint. Notes and original text are separate scopes.
+/// A query boundary, not a relevance hint. Extra notes/layout are explicit host capabilities.
 public enum ReadingQueryScope: String, Codable, CaseIterable, Hashable, Sendable {
     case selection, page, chapter, book, notes
     public var title: String {
@@ -25,18 +25,22 @@ public struct ReadingQuerySnapshot: Sendable {
     public let sourceHash: String
     public let scopeFingerprint: String
     public let displayTitle: String
+    /// Physical layout identities explicitly shared by the host, never inferred from visibility.
+    public let authorizedNodeIDs: [String]
     public var unitIDs: [String] { sources.map(\.unitID) }
     public var documentIDs: [String] { documents.map(\.id) }
     let sources: [QuerySourceSlice]
     let documents: [DocumentRecord]
+    private let sourceByID: [String: QuerySourceSlice]
     public func admits(_ evidence: Evidence) -> Bool {
-        guard !evidence.quote.isEmpty, let source = sources.first(where: { $0.unitID == evidence.unitID }),
+        guard !evidence.quote.isEmpty, let source = sourceByID[evidence.unitID],
               let range = source.text.range(of: evidence.quote, options: .literal) else { return false }
         return source.text[range].utf8.elementsEqual(evidence.quote.utf8)
     }
 
     public static func freeze(scope: ReadingQueryScope, in project: BookProject, context suppliedContext: ReadingContext? = nil,
-                              documentIDs: [String]? = nil) throws -> ReadingQuerySnapshot {
+                              documentIDs: [String]? = nil, appendedDocumentIDs: [String] = [],
+                              authorizedNodeIDs: [String] = []) throws -> ReadingQuerySnapshot {
         if let sourceHash = suppliedContext?.sourceHash, sourceHash != project.sourceHash { throw ReadingError.invalid("提问范围属于其他原书版本。") }
         let context: ReadingContext?
         if scope == .selection { context = suppliedContext }
@@ -68,17 +72,32 @@ public struct ReadingQuerySnapshot: Sendable {
             } else { documents = active }
             title += " · \(documents.count) 篇"
         }
+        let appended = Set(appendedDocumentIDs), active = project.activeDocuments
+        guard appendedDocumentIDs.count <= 1024, appended.count == appendedDocumentIDs.count,
+              appended.isSubset(of: Set(active.map(\.id))) else { throw ReadingError.invalid("附加笔记包含重复、已删除或不存在的文档，或超过范围上限。") }
+        if scope != .notes, !appended.isEmpty {
+            documents = active.filter { appended.contains($0.id) }
+            title += " · 附加 \(documents.count) 篇笔记"
+        }
+        let layoutIDs = Set(authorizedNodeIDs)
+        guard authorizedNodeIDs.count <= 1024, layoutIDs.count == authorizedNodeIDs.count,
+              layoutIDs.isSubset(of: Set(project.nodes.map(\.id))) else { throw ReadingError.invalid("附加布局必须是当前书中真实、无重复的物理节点，且不超过1024个。") }
+        let sortedLayoutIDs = layoutIDs.sorted()
+        if !sortedLayoutIDs.isEmpty { title += " · 附加 \(sortedLayoutIDs.count) 个布局节点" }
         let sources = try selectedSlices ?? units.map { unit in
             let text = unit.text
             return QuerySourceSlice(unitID: unit.id, locator: unit.locator, chapter: unit.chapter, text: text,
                                     textHash: try BookImporter.sha256(Data(text.utf8)))
         }
+        guard Set(sources.map(\.unitID)).count == sources.count else { throw ReadingError.invalid("原文单元身份重复，不能建立可靠查询范围。") }
         let payload: [String: Any] = ["scope": scope.rawValue, "bookID": project.id, "sourceHash": project.sourceHash,
             "sources": sources.map { ["id": $0.unitID, "hash": $0.textHash] },
-            "documents": documents.map { ["id": $0.id, "updatedAt": String($0.updatedAt.timeIntervalSince1970), "path": $0.relativePath] }]
+            "documents": documents.map { ["id": $0.id, "updatedAt": String($0.updatedAt.timeIntervalSince1970), "path": $0.relativePath] },
+            "authorizedNodeIDs": sortedLayoutIDs]
         let fingerprint = try BookImporter.sha256(JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]))
         return ReadingQuerySnapshot(scope: scope, bookID: project.id, sourceHash: project.sourceHash,
-            scopeFingerprint: fingerprint, displayTitle: title, sources: sources, documents: documents)
+            scopeFingerprint: fingerprint, displayTitle: title, authorizedNodeIDs: sortedLayoutIDs, sources: sources, documents: documents,
+            sourceByID: Dictionary(uniqueKeysWithValues: sources.map { ($0.unitID, $0) }))
     }
 
     private static func selectionSlices(quote: String, context: ReadingContext, project: BookProject, ordered: [SourceUnit]) throws -> [QuerySourceSlice] {
@@ -271,7 +290,7 @@ struct ReadingQuerySession {
             tool("source_outline", "仅列当前冻结范围内原文目录；nextOffset分页。目录不代表正文已读。", paging),
             tool("source_search", "检索当前范围原文，1至8关键词any/all；返回有界实际片段和定位，范围外无法读取。", search, ["keywords"]),
             tool("source_read", "按目录id/字符offset分段读取当前范围原文；选段范围只返回选段，按nextOffset续读，不增加阅读覆盖。", reading, ["id"]),
-            tool("documents_list", "只列已授权笔记目录；原文范围无笔记权限。目录不是正文。", paging),
+            tool("documents_list", "只列本次显式授权的笔记目录；原文范围不会自动附加笔记。目录不是正文。", paging),
             tool("documents_search", "按需检索已授权笔记全文，每批最多32篇，nextScanOffset续查后续文档，offset只在本批命中中分页；笔记不能冒充原书。", documentSearch, ["keywords"]),
             tool("document_read", "按id/offset读取已授权笔记片段，返回内容hash和续读位置，不修改文档。", reading, ["id"]),
             tool("conversation_search", "检索当前会话原始问答，返回消息id/角色/片段；旧AI回答不是原书证据。", search, ["keywords"]),

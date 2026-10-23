@@ -6,35 +6,16 @@ struct SavedAIService: Codable, Identifiable {
     var name: String
     var settings: ProviderSettings
 }
-struct ProviderCatalog: Decodable {
-    var verifiedAt: String
-    var providers: [ProviderPreset]
+extension ProviderCatalog {
     static let current: ProviderCatalog = {
         guard let url = ReadingBookResources.bundle?.url(forResource: "provider-catalog", withExtension: "json"), let data = try? Data(contentsOf: url), let catalog = try? JSONDecoder().decode(ProviderCatalog.self, from: data) else { return ProviderCatalog(verifiedAt: "", providers: []) }
         return catalog
     }()
 }
-struct ProviderPreset: Decodable, Identifiable {
-    var id: String
-    var name: String
-    var baseURL: String
-    var documentationURL: String
-    var models: [ModelPreset]
-}
-struct ModelPreset: Decodable, Identifiable {
-    var id: String
-    var name: String
-    var contextTokens: Int?
-    var maxOutputTokens: Int?
-    var vision: Bool
-    var tools: Bool
-    var tokenParameter: String
-    var documentationURL: String
-}
 
 extension AppStore {
     var matchingPreset: ProviderPreset? {
-        ProviderCatalog.current.providers.first { URL(string: $0.baseURL)?.host == URL(string: settings.baseURL)?.host }
+        providerCatalog.matchingProvider(baseURL: settings.baseURL)
     }
     var matchingModel: ModelPreset? { matchingPreset?.models.first { $0.id == settings.model } }
 
@@ -209,6 +190,7 @@ extension AppStore {
         let candidates = Array(Set(pages)).sorted().filter { OCRIntegration.unavailableReason(project: current, page: $0) == nil }
         guard !candidates.isEmpty else { serviceProfileDraft.ocrError = "所选范围没有可识别页。已有分析或引用的页需要导入原书为新项目后识别。"; return }
         let runPages = Array(candidates.prefix(configuration.maxRequestsPerRun))
+        configuration.transportSessionID = "readingbook-ocr-" + current.id
         let runSettings = configuration, runKey = key
         isBusy = true; isRecognizingPDF = true; showingOCR = false
         task = Task {

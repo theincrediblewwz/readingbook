@@ -10,7 +10,8 @@ import ReadingCore
     @Published var bookID: String? {
         didSet {
             if oldValue != bookID {
-                queryDocumentIDs = nil; queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil
+                queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []
+                queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil
                 queryAllowsOrganizing = false; renderedWorkspaceVisibility = nil; renderedSelectedNodeIDs = []
                 if queryScope == .selection { queryScope = .page }
             }
@@ -40,6 +41,9 @@ import ReadingCore
     @Published var queryScope: ReadingQueryScope = .page
     /// nil means all active notes; an empty set is an explicit empty selection.
     @Published var queryDocumentIDs: Set<String>?
+    /// Added only by the reader's explicit attachment controls; never inferred from visibility.
+    @Published var queryAttachedDocumentIDs: Set<String> = []
+    @Published var queryAuthorizedNodeIDs: Set<String> = []
     @Published var queryMemoryEnabled = UserDefaults.standard.object(forKey: "query-memory-enabled") as? Bool ?? true {
         didSet { UserDefaults.standard.set(queryMemoryEnabled, forKey: "query-memory-enabled") }
     }
@@ -93,6 +97,7 @@ import ReadingCore
     @Published var archivedBooks: [BookProject] = []
     @Published var deletionRequest: WorkspaceDeletion?
     @Published var settings = ProviderSettings()
+    @Published var providerCatalog = ProviderCatalog.current
     @Published var apiKey = ""
     @Published var requestsUsed = 0
     @Published var timeFrom = -5000.0
@@ -126,6 +131,7 @@ import ReadingCore
     }
     func load() async {
         guard !loaded else { return }; loaded = true
+        await loadModelCatalog()
         do {
             let report = try await repository.loadReport()
             books = report.projects; libraryLoadIssues = report.issues
@@ -176,7 +182,13 @@ import ReadingCore
         projectRevision += 1
         if let index = books.firstIndex(where: { $0.id == project.id }) { books[index] = project }
         else { books.insert(project, at: 0) }
-        if project.id == bookID { refreshReadingExperienceIndex() }
+        if project.id == bookID {
+            let activeDocumentIDs = Set(project.activeDocuments.map(\.id))
+            queryAttachedDocumentIDs.formIntersection(activeDocumentIDs)
+            queryAuthorizedNodeIDs.formIntersection(Set(project.nodes.map(\.id)))
+            if let selected = queryDocumentIDs { queryDocumentIDs = selected.intersection(activeDocumentIDs) }
+            refreshReadingExperienceIndex()
+        }
     }
     func chooseBook() {
         guard !isBusy else { return }
@@ -188,11 +200,14 @@ import ReadingCore
     func makePlan() {
         guard let project = book, !isBusy, providerReady else { return }
         guard !requiresPDFRecognition else { showingOCR = true; activity = "请先识别扫描页，或在对照原页后确认空白内容。"; return }
+        var requestSettings = settings
+        requestSettings.transportSessionID = "readingbook-" + project.id + "-reading"
+        let requestKey = apiKey
         isBusy = true; activity = "AI 正在预读与选择方法、类型和组件…"
         task = Task {
             do {
                 await reader.resetBudget()
-                let result = try await reader.plan(project: project, settings: settings, apiKey: apiKey)
+                let result = try await reader.plan(project: project, settings: requestSettings, apiKey: requestKey)
                 try Task.checkCancellation(); try await repository.save(result); publish(result)
                 requestsUsed = await reader.requestCount; isBusy = false; openBookScheme(); activity = "预读方案已生成，请确认后开始精读；全文覆盖尚未增加。"
             } catch { handle(error) }
@@ -201,14 +216,17 @@ import ReadingCore
     }
     func startReading() {
         if book?.bookSchemes?.pending != nil { openBookScheme(); return }
-        guard book != nil, !isBusy, providerReady else { return }
+        guard let readingBookID = bookID, book != nil, !isBusy, providerReady else { return }
         guard !requiresPDFRecognition else { showingOCR = true; activity = "扫描页尚未识别；请先 OCR，避免把空提取结果当成已读。"; return }
+        var requestSettings = settings
+        requestSettings.transportSessionID = "readingbook-" + readingBookID + "-reading"
+        let requestKey = apiKey
         isBusy = true; activity = "准备顺序精读…"
         task = Task {
             await reader.resetBudget()
             do {
                 if let current = book, current.plan == nil {
-                    let planned = try await reader.plan(project: current, settings: settings, apiKey: apiKey)
+                    let planned = try await reader.plan(project: current, settings: requestSettings, apiKey: requestKey)
                     try Task.checkCancellation(); try await repository.save(planned); publish(planned)
                     if planned.bookSchemes?.pending != nil {
                         isBusy = false; openBookScheme(); requestsUsed = await reader.requestCount
@@ -217,6 +235,7 @@ import ReadingCore
                 }
                 while let current = book {
                     try Task.checkCancellation()
+                    guard current.id == readingBookID else { throw CancellationError() }
                     let pending = current.units.first { unit in
                         let status = current.coverage[unit.id]?.status ?? .pending
                         return !ReadingLedger.isDeferred(unitID: unit.id, in: current) && status != .completed && !(status == .needsReview && ReadingLedger.hasReadingAnalysis(unitID: unit.id, in: current))
@@ -224,14 +243,15 @@ import ReadingCore
                     guard let unit = pending else { break }
                     activity = "正在精读：\(unit.locator)"
                     activeReadingUnitID = unit.id
-                    let result = try await reader.readNext(project: current, settings: settings, apiKey: apiKey)
+                    let result = try await reader.readNext(project: current, settings: requestSettings, apiKey: requestKey)
                     try Task.checkCancellation(); try await repository.save(result); publish(result)
                     if let failure = ReadingWorkflowRuntime.failureMessage(in: result, unitID: unit.id) { throw ReadingError.invalid(failure) }
                     requestsUsed = await reader.requestCount
                 }
                 while let current = book, !(await reader.synthesisComplete(project: current)) {
                     try Task.checkCancellation(); activity = "正在做章节复盘与全书综合…"
-                    let result = try await reader.synthesizeNext(project: current, settings: settings, apiKey: apiKey)
+                    guard current.id == readingBookID else { throw CancellationError() }
+                    let result = try await reader.synthesizeNext(project: current, settings: requestSettings, apiKey: requestKey)
                     try Task.checkCancellation(); try await repository.save(result); publish(result); requestsUsed = await reader.requestCount
                 }
                 if let current = book { activity = current.isFullyProcessed ? "全部登记单元已处理并通过核对。" : "本轮顺序处理结束，仍有 \(current.reviewCount) 个单元待核对。" }
@@ -356,14 +376,20 @@ import ReadingCore
         let context = queryReadingContext
         let scope = queryScope
         let documentIDs = queryDocumentIDs.map { Array($0).sorted() }
+        let attachedDocumentIDs = scope == .notes ? [] : queryAttachedDocumentIDs.sorted()
+        let authorizedNodeIDs = queryAuthorizedNodeIDs.sorted()
         let snapshot: ReadingQuerySnapshot
-        do { snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: current, context: context, documentIDs: documentIDs) }
+        do { snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: current, context: context, documentIDs: documentIDs,
+            appendedDocumentIDs: attachedDocumentIDs, authorizedNodeIDs: authorizedNodeIDs) }
         catch { errorMessage = error.localizedDescription; return }
         let memoryEnabled = queryMemoryEnabled
         let memory = memoryEnabled ? loadQueryMemory(for: snapshot) : nil
         let repository = repository
-        let requestSettings = settings, requestKey = apiKey
+        var requestSettings = settings
+        requestSettings.transportSessionID = "readingbook-" + current.id + "-chat"
+        let requestKey = apiKey
         let workspaceSnapshot = makeReadingWorkspaceSnapshot()
+        let hostOperationContext = queryHostOperationContext
         let viewTools = readingViewToolAccess(bookID: current.id, sourceHash: current.sourceHash)
         queryAllowsOrganizing = false // A grant belongs to this send, never the next question.
         isBusy = true; activity = "正在读取所选范围并回答…"
@@ -396,7 +422,8 @@ import ReadingCore
                     documentIDs: documentIDs, documentLoader: { document in
                         try Task.checkCancellation()
                         return try await repository.readDocument(bookID: current.id, document: document)
-                    }, workspace: workspaceSnapshot, hostTools: viewTools, proposalAccess: proposalTools)
+                    }, appendedDocumentIDs: attachedDocumentIDs, authorizedNodeIDs: authorizedNodeIDs,
+                    hostOperationContext: hostOperationContext, workspace: workspaceSnapshot, hostTools: viewTools, proposalAccess: proposalTools)
                 try Task.checkCancellation()
                 guard var result = book, result.id == current.id, result.sourceHash == current.sourceHash,
                       result.chats.map(\.id) == current.chats.map(\.id) + [userMessage.id] else { throw ReadingError.invalid("对话或原书已改变，本次回答未写入其他版本，请重试。") }

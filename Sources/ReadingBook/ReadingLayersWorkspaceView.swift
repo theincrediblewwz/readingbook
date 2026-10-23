@@ -44,8 +44,12 @@ struct ReadingLayersWorkspaceView: View {
     /// A directory entry represents saved companion content, not every source
     /// page. Empty pages remain available in the original reader.
     private var contentUnitIDs: Set<String> {
-        let usedAnchors = Set(readingState.layers.filter { !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.flatMap(\.sourceAnchorIDs)
-            + readingState.alignments.filter { !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.flatMap(\.sourceAnchorIDs))
+        let populatedLayers = readingState.layers.filter {
+            (layerKind == "all" || $0.kind == layerKind) && !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let populatedAlignments = (layerKind == "all" || layerKind == "reference")
+            ? readingState.alignments.filter { !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } : []
+        let usedAnchors = Set(populatedLayers.flatMap(\.sourceAnchorIDs) + populatedAlignments.flatMap(\.sourceAnchorIDs))
         return Set(anchors.filter { usedAnchors.contains($0.id) }.map(\.unitID))
     }
     private var units: [SourceUnit] {

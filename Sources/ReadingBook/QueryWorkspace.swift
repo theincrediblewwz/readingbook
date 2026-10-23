@@ -60,8 +60,7 @@ import ReadingCore
         } catch { queryDisclosure += "\n本次会话记忆未能缓存，原对话仍完整保留。" }
     }
     func clearCurrentQueryMemory() {
-        guard let book, let snapshot = try? ReadingQuerySnapshot.freeze(scope: queryScope, in: book, context: queryReadingContext,
-            documentIDs: queryDocumentIDs.map { Array($0) }) else { return }
+        guard let snapshot = try? currentQueryTaskSnapshot() else { return }
         let url = queryMemoryURL(for: snapshot)
         do {
             if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }

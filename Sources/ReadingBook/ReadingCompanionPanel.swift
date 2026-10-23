@@ -13,6 +13,7 @@ struct ReadingCompanionPanel: View {
     @State private var frozenScope: ReadingQuerySnapshot?
     @State private var items = ReadingContextItems()
     @State private var crossScopeCount = 0
+    @State private var showsSourceContext = false
     private var avoidsSpoilers: Bool { scope != "book" && store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false }
     private var sourceUnits: [SourceUnit] {
         guard let book = store.book else { return [] }
@@ -60,31 +61,35 @@ struct ReadingCompanionPanel: View {
             }.padding(.horizontal, 16).padding(.top, 8) }
             if !showsHeader {
                 HStack {
-                    Picker("伴读内容", selection: $store.readingCompanionSection) {
-                        Text("此处伴读").tag("context")
-                        Text("解释与译文").tag("layers"); Text("原文对象").tag("mentions"); Text("资料对读").tag("references")
-                    }.labelsHidden().accessibilityLabel("伴读内容").pickerStyle(.menu)
+                    Menu {
+                        Button("此处伴读") { store.readingCompanionSection = "context" }
+                        Button("解释与译文") { store.readingCompanionSection = "layers" }
+                        Button("原文对象") { store.readingCompanionSection = "mentions" }
+                        Button("资料对读") { store.readingCompanionSection = "references" }
+                    } label: { Label("伴读内容", systemImage: "ellipsis").font(.system(size: 13)).frame(minHeight: 44) }
+                        .menuStyle(.borderlessButton)
                     Spacer(minLength: 6)
                     if !recoverableItems.isEmpty {
                         Menu { ForEach(recoverableItems) { item in Button("恢复 \(item.title)") { Task { await store.restoreReadingItem(item.id) } }.disabled(store.isBusy) } } label: { Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44) }.menuStyle(.borderlessButton).help("恢复已移除的伴读")
                     }
                 }.padding(.horizontal, 16)
             }
-            if scope != "book" {
-                Picker("伴读范围", selection: $companionScope) {
-                    Text("这一页").tag(ReadingQueryScope.page)
-                    Text("这一章").tag(ReadingQueryScope.chapter)
-                }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.bottom, 10)
-                    .disabled(store.isBusy)
-            }
             HStack(alignment: .top, spacing: 8) {
-                Label(scopeTitle, systemImage: frozenScope == nil ? "doc.text" : "lock").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                if scope != "book" {
+                    Menu {
+                        Button { companionScope = .page } label: { Label("当前页", systemImage: "doc.text") }
+                        Button { companionScope = .chapter } label: { Label("当前章节", systemImage: "book.closed") }
+                    } label: {
+                        Label(companionScope == .page ? "当前页" : "当前章节", systemImage: frozenScope == nil ? "book.closed" : "lock")
+                            .font(.system(size: 14, weight: .medium)).padding(.horizontal, 12).frame(minHeight: 44)
+                            .background(Palette.paper.opacity(0.55), in: Capsule())
+                    }.menuStyle(.borderlessButton).fixedSize().disabled(store.isBusy).help(scopeTitle)
+                } else { Text("全书已有伴读").font(.subheadline).foregroundStyle(.secondary) }
                 Spacer(minLength: 0)
                 if frozenScope != nil {
                     Button("跟随原文") { frozenScope = nil }.font(.caption).buttonStyle(.borderless).disabled(store.isBusy)
                 }
-            }.padding(.horizontal, 16).padding(.bottom, 12)
-            Divider().opacity(0.4)
+            }.padding(.horizontal, 24).padding(.bottom, 10)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     if let error = store.readingExperienceError { Text(error).font(.caption).foregroundStyle(Palette.copper) }
@@ -94,22 +99,30 @@ struct ReadingCompanionPanel: View {
                                 .font(.caption).multilineTextAlignment(.leading).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                         }.buttonStyle(.borderless).disabled(store.isBusy)
                     }
-                    if scope != "book", let unit = sourceUnits.first {
-                        VStack(alignment: .leading, spacing: 7) {
-                            Text(unit.locator).font(.caption2).foregroundStyle(.secondary)
-                            Text(unit.text.isEmpty ? "原文尚未识别，请对照原书。" : String(unit.text.prefix(180)))
-                                .font(.system(size: 13, design: .serif)).foregroundStyle(.secondary).lineLimit(5).textSelection(.enabled)
-                        }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+                    if scope != "book" {
+                        if let quote = selectedQuote {
+                            Text(quote).font(.system(size: 17, design: .serif)).lineSpacing(7).textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+                                .background(Palette.accent.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+                                .overlay(alignment: .leading) { Capsule().fill(Palette.accent).frame(width: 3).padding(.vertical, 14) }
+                        }
+                        DisclosureGroup("原文与上下文", isExpanded: $showsSourceContext) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text(scopeTitle).font(.caption).foregroundStyle(.secondary)
+                                ForEach(sourceUnits) { unit in if !unit.text.isEmpty { MarkdownText(markdown: unit.text) } }
+                                if sourceUnits.allSatisfy({ $0.text.isEmpty }) { Text("此处尚无可靠识别文本，请先对照原 PDF。") }
+                            }.padding(.top, 12)
+                        }.font(.system(size: 13)).foregroundStyle(Palette.accent)
                     }
                     if effectiveSection == "mentions" { objectSection }
                     else if effectiveSection == "references" { referenceSection }
                     else { layerSection }
-                }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                }.padding(.horizontal, 24).padding(.vertical, 14).frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider().opacity(0.4)
             companionFooter
         }
+        .environment(\.markdownReadingStyle, "companion")
         .onAppear(perform: refreshItems)
         .onChange(of: projectionKey) { _, _ in refreshItems() }
         .onChange(of: companionScope) { _, _ in frozenScope = nil }
@@ -121,9 +134,9 @@ struct ReadingCompanionPanel: View {
     private var companionFooter: some View {
             HStack(spacing: 8) {
                 Button(action: askThisScope) { Label("问这部分", systemImage: "bubble.left").frame(maxWidth: .infinity) }
-                    .buttonStyle(ReadingToolbarButtonStyle()).disabled(sourceUnits.isEmpty || store.isBusy)
+                    .buttonStyle(ReadingActionButtonStyle()).disabled(sourceUnits.isEmpty || store.isBusy)
                 Button(action: noteThisScope) { Label("记入笔记", systemImage: "square.and.pencil").frame(maxWidth: .infinity) }
-                    .buttonStyle(ReadingToolbarButtonStyle()).disabled(sourceUnits.isEmpty || store.isBusy)
+                    .buttonStyle(ReadingActionButtonStyle(prominent: true)).disabled(sourceUnits.isEmpty || store.isBusy)
             if scope != "book" {
                 Button {
                     // The host freezes a fresh page/chapter snapshot before any paid request.
@@ -146,6 +159,10 @@ struct ReadingCompanionPanel: View {
         // This is an explicit transfer. General question controls keep their
         // independent scope until the reader presses this action.
         store.requestedWorkspaceRoute = "query"
+    }
+    private var selectedQuote: String? {
+        guard let anchor = store.selectedSourceAnchor, sourceUnits.contains(where: { $0.id == anchor.unitID }), !anchor.quote.isEmpty else { return nil }
+        return anchor.quote
     }
     private func noteThisScope() {
         if let layer = items.layers.first {
@@ -183,7 +200,7 @@ struct ReadingCompanionPanel: View {
     }
     @ViewBuilder private var layerSection: some View {
         if items.layers.isEmpty {
-            empty("让 AI 为这段书准备合适的伴读内容", detail: "古文可生成译文、名物注释；数学可生成定义、证明线索。类型由书的内容决定。")
+            empty("读到这里，可以再想一想", detail: "选一段原文来聊，或点下方的星光，为这一页补充解释。")
         }
         ForEach(items.layers) { layer in
             VStack(alignment: .leading, spacing: 10) {
@@ -249,11 +266,10 @@ struct ReadingCompanionPanel: View {
     }
     private func empty(_ title: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Image(systemName: "sparkles").font(.title2).foregroundStyle(Palette.accent)
-            Text(title).font(.subheadline.weight(.medium)); Text(detail).font(.caption).foregroundStyle(.secondary).lineSpacing(4)
-            Text("已有内容会显示在这里。需要时可在下方补充解释，或先问一个具体问题。")
-                .font(.caption).foregroundStyle(.secondary)
-        }.frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: "sparkles").font(.system(size: 28, weight: .light)).foregroundStyle(Palette.accent).padding(.bottom, 8)
+            Text(title).font(.system(size: 21, weight: .medium, design: .serif))
+            Text(detail).font(.system(size: 16, design: .serif)).foregroundStyle(.secondary).lineSpacing(7)
+        }.frame(maxWidth: .infinity, minHeight: 190, alignment: .center).padding(.vertical, 22)
     }
     private func itemHeader(_ title: String, label: String, id: String, kind: String) -> some View {
         HStack(alignment: .top) {

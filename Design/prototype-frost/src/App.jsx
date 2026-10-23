@@ -8,6 +8,7 @@ import {PluginsPage,ModelsPage,WorkflowPage} from './pages/Settings.jsx';
 import {LayersPage} from './pages/ReadingExperience.jsx';
 import './styles.css';
 import './fidelity.css';
+import './floating.css';
 const routes={library:'书库',reader:'原文阅读',parallel:'译注对照',layers:'已有伴读',workflow:'读书方法',chat:'与书对话',notes:'我的笔记',map:'时间与地图',mindmap:'思维导图',relations:'关系图谱',knowledge:'知识库',atlas:'全书总览',cards:'要素卡片',plugins:'插件与组件',models:'模型设置',trash:'回收站'};
 const componentForRoute={map:'spatial',mindmap:'mindmap',relations:'relations',knowledge:'knowledge',cards:'cards',atlas:'atlas'};
 const pages={library:LibraryPage,reader:ReaderPage,parallel:ParallelPage,layers:LayersPage,workflow:WorkflowPage,chat:ChatPage,notes:NotesPage,map:MapPage,mindmap:MindmapPage,relations:RelationsPage,knowledge:KnowledgePage,atlas:ObjectsPage,cards:ObjectsPage,plugins:PluginsPage,models:ModelsPage,trash:TrashPage};
@@ -18,7 +19,7 @@ function NavigationHandle({onOpen}){
   const clamp=y=>Math.max(72,Math.min(y,Math.max(72,height-48))),y=dragY??(dock==='top'?72:Math.max(72,height-48));
   return <button className="nav-handle glass" style={{top:y-24}} aria-label="展开导航" title="展开导航 · 拖动到左上或左下 · ⌘/Ctrl B" onPointerDown={e=>{if(e.button!==0)return;gesture.current={start:e.clientY,y,moved:false};e.currentTarget.setPointerCapture(e.pointerId);}} onPointerMove={e=>{const g=gesture.current;if(!g)return;if(Math.abs(e.clientY-g.start)>5)g.moved=true;if(g.moved)setDragY(clamp(g.y+e.clientY-g.start));}} onPointerUp={e=>{const g=gesture.current;if(!g)return;gesture.current=null;setDragY(null);if(g.moved){const p=clamp(g.y+e.clientY-g.start);setDock(Math.abs(p-72)<Math.abs(p-(height-48))?'top':'bottom');}else onOpen();}} onPointerCancel={()=>{gesture.current=null;setDragY(null);}} onClick={e=>{if(e.detail===0)onOpen();}}><Icon name="sidebar" size={23}/><em className="nav-tip">展开导航</em></button>;
 }
-function startingState(){const url=new URL(location.href),route=url.searchParams.get('route')||location.hash.slice(1),bookId=url.searchParams.get('book');return {...initialState,route:pages[route]?route:'reader',currentBookId:books.some(b=>b.id===bookId)?bookId:'math',selectedDocId:bookId==='history'?'h-fire':'math-note'};}
+function startingState(){const url=new URL(location.href),route=url.searchParams.get('route')||location.hash.slice(1),bookId=url.searchParams.get('book');return {...initialState,route:['plugins','models'].includes(route)?'reader':pages[route]?route:'reader',managementRoute:['plugins','models'].includes(route)?route:null,currentBookId:books.some(b=>b.id===bookId)?bookId:'math',selectedDocId:bookId==='history'?'h-fire':'math-note'};}
 export function App(){
   const [state,setState]=useState(startingState),stateRef=useRef(state);stateRef.current=state;
   const [nav,setNav]=useState(false),[menu,setMenu]=useState(null),[toast,setToast]=useState(''),[confirmation,setConfirmation]=useState(null),[about,setAbout]=useState(false);
@@ -27,7 +28,7 @@ export function App(){
   const notify=useCallback(text=>{clearTimeout(toastTimer.current);setToast(text);toastTimer.current=setTimeout(()=>setToast(''),3600);},[]);
   useEffect(()=>()=>clearTimeout(toastTimer.current),[]);
   const registerGuard=useCallback(fn=>{guards.current.add(fn);return()=>guards.current.delete(fn);},[]);
-  const navigate=useCallback(async(route,payload={})=>{if(!pages[route])return false;setNav(false);setMenu(null);for(const guard of [...guards.current]){if(!await guard(route,payload))return false;}update(prev=>({...prev,route,...payload}));history.replaceState(null,'','#'+route);return true;},[update]);
+  const navigate=useCallback(async(route,payload={})=>{if(!pages[route])return false;setNav(false);setMenu(null);if(['models','plugins'].includes(route)&&!stateRef.current.managementRoute){update({managementRoute:route});return true;}for(const guard of [...guards.current]){if(!await guard(route,payload))return false;}if(['models','plugins'].includes(route)){update({managementRoute:route});return true;}update(prev=>({...prev,managementRoute:null,route,...payload}));history.replaceState(null,'','#'+route);return true;},[update]);
   const confirm=useCallback(options=>new Promise(resolve=>{confirmResolver.current=resolve;setConfirmation(options);}),[]);
   const settle=value=>{confirmResolver.current?.(value);confirmResolver.current=null;setConfirmation(null);};
   const book=books.find(b=>b.id===state.currentBookId)||books[0];
@@ -36,6 +37,7 @@ export function App(){
   const value=useMemo(()=>({state,update,navigate,notify,confirm,registerGuard,book}),[state,update,navigate,notify,confirm,registerGuard,book]);
   if(new URL(location.href).searchParams.has('print'))return <PrintSample/>;
   const Page=pages[state.route]||ReaderPage;
+  const Overlay=state.managementRoute?pages[state.managementRoute]:null;
   const primaryLabel={reader:state.workflow.status==='running'?'查看精读':'继续精读',library:'导入一本书',workflow:'调整读法',notes:'保存',map:'回到原文',parallel:'回到原文',relations:'回到原文',mindmap:'新建笔记',chat:'新建对话',knowledge:'新建笔记',plugins:'导入插件',models:'保存配置',trash:'返回书库',cards:'添加要素',atlas:'回到原文'}[state.route];
   async function primary(){
     if(state.route==='workflow'){window.dispatchEvent(new CustomEvent('prototype-method-open'));return;}
@@ -46,8 +48,9 @@ export function App(){
     window.dispatchEvent(new CustomEvent('prototype-primary'));
   }
   const title=['models','plugins','library','trash'].includes(state.route)?routes[state.route]:book.title;
-  return <AppContext.Provider value={value}><main className="app-shell" data-route={state.route}>
-    <div className="workspace"><Page/></div>
+  return <AppContext.Provider value={value}><main className="app-shell" data-route={state.route} data-management={state.managementRoute||undefined}>
+    <div className="workspace" inert={!!state.managementRoute}><Page/></div>
+    {Overlay?<div className="management-overlay" role="dialog" aria-label={routes[state.managementRoute]}><Overlay/><Button className="management-return glass" icon="close" aria-label="关闭管理面板" onClick={()=>navigate(state.route)}>返回{routes[state.route]}</Button></div>:null}
     <div className="traffic-lights" aria-hidden="true"><i/><i/><i/></div>
     <header className="top-islands"><button className="book-island glass" aria-label="选择图书" aria-expanded={menu==='book'} onClick={()=>setMenu(menu==='book'?null:'book')}><img src="/assets/book-mark.svg" alt=""/><span>{title}</span><Icon name="chevronDown" size={16}/></button><div className="top-spacer"/><button className="service-island glass" aria-label="选择AI服务" aria-expanded={menu==='service'} onClick={()=>setMenu(menu==='service'?null:'service')}><i className="status-dot"/>{activeProfile?.name||'选择服务'}<Icon name="chevronDown" size={15}/></button>{primaryLabel&&<Button className="top-primary" variant="primary" icon={state.route==='notes'||state.route==='models'?'save':state.route==='map'?'book':'sparkle'} onClick={primary}>{primaryLabel}</Button>}</header>
     {menu==='book'?<div className="glass popup-menu book-menu"><p>阅读中的图书</p>{books.filter(b=>!(state.deletedBookIds||[]).includes(b.id)).map(b=><button className={'nav-row '+(b.id===state.currentBookId?'selected':'')} key={b.id} onClick={()=>navigate('reader',{currentBookId:b.id,selectedDocId:b.id==='math'?'math-note':'h-main',page:1,source:null})}><Icon name="book"/>{b.title}</button>)}<hr/><button className="nav-row" onClick={()=>navigate('library')}><Icon name="library"/>打开书库</button></div>:null}

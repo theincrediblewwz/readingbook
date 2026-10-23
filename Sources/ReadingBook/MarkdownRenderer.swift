@@ -36,6 +36,14 @@ struct SourceReadingSelection: Equatable, Sendable {
 
 /// Offline Markdown + KaTeX. The surrounding SwiftUI ScrollView owns vertical scrolling.
 /// A base directory is an explicit grant for relative raster images only, never file links.
+private struct MarkdownReadingStyleKey: EnvironmentKey { static let defaultValue = "body" }
+extension EnvironmentValues {
+    var markdownReadingStyle: String {
+        get { self[MarkdownReadingStyleKey.self] }
+        set { self[MarkdownReadingStyleKey.self] = newValue }
+    }
+}
+
 struct RichMarkdownView: View {
     let markdown: String
     var baseDirectory: URL?
@@ -49,6 +57,7 @@ struct RichMarkdownView: View {
     var onSourceSelection: ((SourceReadingSelection?) -> Void)?
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.markdownReadingStyle) private var readingStyle
     @State private var contentHeight: CGFloat = 40
 
     init(markdown: String, baseDirectory: URL? = nil,
@@ -71,7 +80,7 @@ struct RichMarkdownView: View {
         Group {
             if let resources = MarkdownResources.directory {
                 MarkdownWebView(markdown: markdown, baseDirectory: baseDirectory,
-                                resources: resources, theme: colorScheme == .dark ? "dark" : "light",
+                                resources: resources, theme: colorScheme == .dark ? "dark" : "light", readingStyle: readingStyle,
                                 height: $contentHeight, onOpenURL: { openURL($0) },
                                 onSelectionChange: onSelectionChange, onSelectionSave: onSelectionSave,
                                 sourceText: sourceText ?? markdown, plainText: plainText,
@@ -106,6 +115,7 @@ private struct MarkdownWebView: NSViewRepresentable {
     let baseDirectory: URL?
     let resources: URL
     let theme: String
+    let readingStyle: String
     @Binding var height: CGFloat
     var onOpenURL: (URL) -> Void
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
@@ -156,7 +166,7 @@ private struct MarkdownWebView: NSViewRepresentable {
                 contentView.saveSelection = { [weak coordinator = context.coordinator] selection in coordinator?.saveSelection(selection) }
             } else { contentView.saveSelection = nil }
         }
-        context.coordinator.update(markdown: markdown, baseDirectory: baseDirectory, theme: theme,
+        context.coordinator.update(markdown: markdown, baseDirectory: baseDirectory, theme: theme, readingStyle: readingStyle,
                                    sourceText: sourceText, plainText: plainText, decorations: sourceDecorations,
                                    focusedID: focusedDecorationID)
     }
@@ -176,7 +186,7 @@ private struct MarkdownWebView: NSViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         struct State: Equatable {
-            let markdown: String; let directory: URL?; let theme: String; let selectionEnabled: Bool
+            let markdown: String; let directory: URL?; let theme: String; let readingStyle: String; let selectionEnabled: Bool
             let sourceText: String; let plainText: Bool; let decorations: [SourceReadingDecoration]
         }
         var height: Binding<CGFloat>
@@ -201,9 +211,9 @@ private struct MarkdownWebView: NSViewRepresentable {
             self.height = height; self.onOpenURL = onOpenURL; self.onSelectionChange = onSelectionChange
         }
 
-        func update(markdown: String, baseDirectory: URL?, theme: String, sourceText: String,
+        func update(markdown: String, baseDirectory: URL?, theme: String, readingStyle: String, sourceText: String,
                     plainText: Bool, decorations: [SourceReadingDecoration], focusedID: String?) {
-            pending = State(markdown: markdown, directory: baseDirectory, theme: theme,
+            pending = State(markdown: markdown, directory: baseDirectory, theme: theme, readingStyle: readingStyle,
                             selectionEnabled: onSelectionChange != nil || onSourceSelection != nil,
                             sourceText: sourceText, plainText: plainText, decorations: Array(decorations.prefix(1_000)))
             self.focusedID = focusedID
@@ -245,7 +255,7 @@ private struct MarkdownWebView: NSViewRepresentable {
                 }
                 return item
             }
-            let options: [String: Any] = ["allowImages": state.directory != nil, "theme": state.theme,
+            let options: [String: Any] = ["allowImages": state.directory != nil, "theme": state.theme, "readingStyle": state.readingStyle,
                                           "revision": revision, "selectionEnabled": state.selectionEnabled,
                                           "sourceText": state.sourceText, "plainText": state.plainText,
                                           "sourceDecorations": decorations]

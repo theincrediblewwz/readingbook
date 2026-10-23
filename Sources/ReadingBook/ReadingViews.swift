@@ -8,11 +8,10 @@ struct ReaderWorkspaceView: View {
     @Binding var showPDF: Bool
     @Binding var showOutline: Bool
     @EnvironmentObject var pdfController: PDFReaderController
-    @State private var companionExpanded = true
+    @State private var questionExpanded = false
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     var body: some View {
         GeometryReader { geometry in
-            let reserve: CGFloat = store.readingCompanionVisible && companionExpanded && geometry.size.width >= 1050 ? 438 : 0
             ZStack(alignment: .topLeading) {
                 Group {
                     if let unit = store.selectedUnit {
@@ -45,20 +44,21 @@ struct ReaderWorkspaceView: View {
                     } else {
                         EmptyState(title: "选择一个章节", detail: "从阅读工具中的目录选择原文内容。", icon: "book.pages")
                     }
-                }.padding(.trailing, reserve).padding(.top, store.readingSourceMode == "original" ? 78 : 0)
+                }.padding(.top, store.readingSourceMode == "original" ? 78 : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
-                ReaderFloatingPanel(title: "目录与原文", icon: "list.bullet", width: 330, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 230) { outline }
-                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 560, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: 230, onExpansionChange: { companionExpanded = $0 }) {
+                ReaderFloatingPanel(title: "目录与原文", icon: "list.bullet", width: 330, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: questionExpanded ? 240 : 100) { outline }
+                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 620, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: questionExpanded ? 240 : 100, elevated: true) {
                     ReadingCompanionPanel(showsHeader: false)
                 }
-                ReaderQuestionComposer(compact: geometry.size.height < 680)
-                    .padding(.horizontal, geometry.size.width < 900 ? 24 : 58).padding(.bottom, 96)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                ReaderQuestionComposer(isExpanded: $questionExpanded, compact: geometry.size.height < 680)
+                    .frame(maxWidth: min(410, max(260, geometry.size.width - 48)))
+                    .padding(.trailing, 24).padding(.bottom, geometry.size.width < 1100 ? 96 : 26)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }.onChange(of: showOutline) { _, value in if value && geometry.size.width < 1050 { store.readingCompanionVisible = false } }
                 .onChange(of: store.readingCompanionVisible) { _, value in if value && geometry.size.width < 1050 { showOutline = false } }
                 .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.readingCompanionVisible)
-                .animation(ReadingMotion.animation(reduce: reduceMotion), value: companionExpanded)
+                .animation(ReadingMotion.animation(reduce: reduceMotion), value: questionExpanded)
         }
     }
     private var outline: some View {
@@ -153,6 +153,7 @@ struct ReaderWorkspaceView: View {
 /// demand; they no longer form the reader's default method screen.
 struct ReadingProcessingDetailsView: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
     @State private var showMethods = false
     @State private var showReview = false
     @State private var showAudit = false
@@ -189,7 +190,7 @@ struct ReadingProcessingDetailsView: View {
                                         }.font(.subheadline.weight(.medium))
                                     }
                                     if !plan.focus.isEmpty { Text("关注：" + plan.focus.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
-                                    Button { store.route = "plugins" } label: { Label("管理读书法", systemImage: "slider.horizontal.3").frame(minHeight: 44) }.buttonStyle(ReadingToolbarButtonStyle()).help("查看或编辑可执行的读书方法")
+                                    Button { dismiss(); store.requestedWorkspaceRoute = "plugins" } label: { Label("管理读书法", systemImage: "slider.horizontal.3").frame(minHeight: 44) }.buttonStyle(ReadingToolbarButtonStyle()).help("查看或编辑可执行的读书方法")
                                 }.padding(.top, 12)
                             } label: {
                                 HStack { Text("读书方案").font(.subheadline.weight(.medium)); Spacer(); Text(book.methods.filter { plan.methodIDs.contains($0.id) }.map(\.name).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1) }

@@ -25,11 +25,13 @@ struct WorkspaceView: View {
     @State private var showsModelRouteConfirmation = false
     @State private var resolvingNavigation = false
     @State private var chromeBounds: [String: CGRect] = [:]
+    @State private var managementRoute: String?
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
                 Palette.canvas.ignoresSafeArea()
                 content
+                    .allowsHitTesting(managementRoute == nil)
                     .environment(\.workspaceCanvasBlocked, canvasInteractionBlocked)
                     .environment(\.workspaceCanvasExclusionRects, canvasExclusionRects)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -44,6 +46,11 @@ struct WorkspaceView: View {
                         .padding(.trailing, 24).padding(.bottom, 86).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
                 topIslands(width: geometry.size.width).padding(.top, 14).padding(.leading, 104).padding(.trailing, 24)
+                    .allowsHitTesting(managementRoute == nil)
+                if let managementRoute {
+                    managementOverlay(managementRoute)
+                        .transition(.opacity.combined(with: .scale(scale: 0.985))).zIndex(8)
+                }
                 if navigationExpanded {
                     sidebar.frame(width: min(286, geometry.size.width - 96), height: max(100, min(690, geometry.size.height - 126)))
                         .readingGlass(radius: 24).padding(.leading, 16).padding(.top, 88)
@@ -51,7 +58,7 @@ struct WorkspaceView: View {
                 }
                 FloatingNavigationButton(viewport: geometry.size, isExpanded: navigationExpanded) {
                     withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { navigationExpanded.toggle(); servicePopover = false }
-                }.opacity(navigationExpanded ? 0 : 1).allowsHitTesting(!navigationExpanded).accessibilityHidden(navigationExpanded).zIndex(11)
+                }.opacity(navigationExpanded ? 0 : 1).allowsHitTesting(!navigationExpanded && managementRoute == nil).accessibilityHidden(navigationExpanded).zIndex(11)
             }
             .onPreferenceChange(WorkspaceChromeBoundsPreference.self) { chromeBounds = $0 }
             .onAppear { detailWidth = geometry.size.width }
@@ -95,7 +102,7 @@ struct WorkspaceView: View {
             }
         }
         .onChange(of: modalSignature) { _, _ in reconcileSheet() }
-        .onAppear { reconcileSheet(); restoreReaderMemory() }
+        .onAppear { repairLegacyManagementRoute(); reconcileSheet(); restoreReaderMemory() }
         .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreReaderMemory() }
         .onChange(of: readerShowsPDF) { _, value in store.updateWorkspaceMemory { $0.readerShowsPDF = value } }
         .onChange(of: readerOutline) { _, value in store.updateWorkspaceMemory { $0.readerOutline = value } }
@@ -118,7 +125,12 @@ struct WorkspaceView: View {
             return true
         }
         .onChange(of: store.bookID) { _, _ in showsInspector = false; compactInspector = false }
-        .onChange(of: store.route) { _, _ in if viewingGraph || viewingSpatial { showsInspector = false; compactInspector = false } }
+        .onChange(of: store.route) { old, next in
+            if ["models", "plugins"].contains(next) {
+                store.route = ["models", "plugins"].contains(old) ? (store.book == nil ? "library" : "reader") : old
+                presentManagement(next)
+            } else if viewingGraph || viewingSpatial { showsInspector = false; compactInspector = false }
+        }
     }
     private func restoreReaderMemory() {
         readerShowsPDF = store.workspaceMemory.readerShowsPDF
@@ -221,7 +233,7 @@ struct WorkspaceView: View {
     /// Exclusion rectangles stay in SwiftUI global coordinates. GraphSurface
     /// converts them once into its own canvas coordinates.
     private var canvasInteractionBlocked: Bool {
-        navigationExpanded || servicePopover || compactInspector || activeSheet != nil || sheetClosing
+        navigationExpanded || servicePopover || compactInspector || activeSheet != nil || sheetClosing || managementRoute != nil
             || showsRouteConfirmation || showsModelRouteConfirmation || resolvingNavigation || store.deletionRequest != nil
             || store.errorMessage != nil || store.serviceProfileDraft.pendingChange != nil
     }
@@ -307,9 +319,33 @@ struct WorkspaceView: View {
     private func navigate(_ route: String) {
         guard !store.isSavingDocument, !resolvingNavigation else { return }
         navigationExpanded = false; servicePopover = false
-        if store.serviceProfileDraft.isDirty(in: store) && store.route == "models" && route != "models" { pendingModelRoute = route; showsModelRouteConfirmation = true }
-        else if store.editorDirty && store.route == "editor" && route != "editor" { pendingRoute = route; showsRouteConfirmation = true }
-        else { store.route = route }
+        if store.serviceProfileDraft.isDirty(in: store) && managementRoute == "models" && route != "models" { pendingModelRoute = route; showsModelRouteConfirmation = true }
+        else if store.editorDirty && store.route == "editor" && route != "editor" && !["models", "plugins"].contains(route) { pendingRoute = route; showsRouteConfirmation = true }
+        else { completeNavigation(to: route) }
+    }
+    private func completeNavigation(to route: String) {
+        if ["models", "plugins"].contains(route) { presentManagement(route) }
+        else { closeManagement(); store.route = route }
+    }
+    private func presentManagement(_ route: String) {
+        navigationExpanded = false; servicePopover = false
+        store.showingSettings = route == "models"; store.showingPlugins = route == "plugins"
+        withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { managementRoute = route }
+    }
+    private func closeManagement() {
+        store.showingSettings = false; store.showingPlugins = false
+        withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { managementRoute = nil }
+    }
+    private func repairLegacyManagementRoute() {
+        guard ["models", "plugins"].contains(store.route) else { return }
+        let route = store.route; store.route = store.book == nil ? "library" : "reader"; presentManagement(route)
+    }
+    @ViewBuilder private func managementOverlay(_ route: String) -> some View {
+        ZStack {
+            Color.black.opacity(0.025).contentShape(Rectangle()).onTapGesture { }
+            if route == "models" { ProviderSettingsView(embedded: true, onClose: closeManagement).environmentObject(store) }
+            else { PluginLibraryView(embedded: true, onClose: closeManagement).environmentObject(store) }
+        }.accessibilityAddTraits(.isModal)
     }
     private func saveDocumentAndNavigate(to destination: String) {
         guard !resolvingNavigation else { return }
@@ -318,7 +354,7 @@ struct WorkspaceView: View {
             await store.saveCurrentDocument()
             resolvingNavigation = false
             guard pendingRoute == destination else { return }
-            if !store.editorDirty { pendingRoute = nil; store.route = destination }
+            if !store.editorDirty { pendingRoute = nil; completeNavigation(to: destination) }
             else { showsRouteConfirmation = true }
         }
     }
@@ -328,7 +364,7 @@ struct WorkspaceView: View {
         let succeeded: Bool
         if save { store.saveServiceProfileForUI(); succeeded = !store.serviceProfileDraft.isDirty(in: store) }
         else { succeeded = store.discardServiceDraftForNavigation() }
-        if succeeded { pendingModelRoute = nil; store.route = destination; resolvingNavigation = false }
+        if succeeded { pendingModelRoute = nil; completeNavigation(to: destination); resolvingNavigation = false }
         else {
             // Re-present on the next turn, after the native dialog has dismissed.
             // Keep its destination and every draft field available for retry.
@@ -464,6 +500,7 @@ struct WorkspaceView: View {
     }
     private func reconcileSheet() {
         guard !sheetClosing else { return }
+        if managementRoute != nil && !store.showingSettings && !store.showingPlugins { managementRoute = nil }
         if let activeSheet {
             let supersededByPassword: Bool
             if case .password = activeSheet { supersededByPassword = false }
@@ -477,10 +514,10 @@ struct WorkspaceView: View {
         }
         let next: WorkspaceSheet?
         if let request = store.pdfPasswordRequest { next = .password(request) }
-        else if store.showingSettings { next = .settings }
+        else if store.showingSettings { managementRoute = "models"; return }
         else if store.showingOCR { next = .ocr }
         else if store.showingTrash { next = .trash }
-        else if store.showingPlugins { next = .plugins }
+        else if store.showingPlugins { managementRoute = "plugins"; return }
         else if store.showingLibrarySearch { next = .librarySearch }
         else { next = nil }
         lastSheet = next; activeSheet = next
@@ -504,8 +541,6 @@ struct WorkspaceView: View {
     }
     @ViewBuilder private var content: some View {
         if store.route == "library" { FrostLibraryView() }
-        else if store.route == "models" { ProviderSettingsView(embedded: true, onClose: { navigate(store.book == nil ? "library" : "reader") }) }
-        else if store.route == "plugins" { PluginLibraryView(embedded: true, onClose: { navigate(store.book == nil ? "library" : "reader") }) }
         else if store.route == "trash" { LibraryTrashView(onClose: { navigate("library") }).padding(.top, 88) }
         else if store.route == "librarySearch" { LibrarySearchView(embedded: true, onClose: { navigate("library") }).padding(.top, 88) }
         else if store.book == nil { WelcomeView().padding(.top, 88) }

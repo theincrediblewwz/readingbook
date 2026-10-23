@@ -13,6 +13,7 @@ struct ProviderSettingsView: View {
     @State private var showServices = true
     @State private var configuredWidth = false
     @State private var confirmingClose = false
+    @State private var showingCatalog = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -42,7 +43,6 @@ struct ProviderSettingsView: View {
                 .onAppear { if !configuredWidth { showServices = wide; configuredWidth = true } }
                 .onChange(of: wide) { _, value in if !value { showServices = false } }
         }
-        .background(Palette.canvas.opacity(0.3))
         .confirmationDialog("删除已保存的服务配置与其密钥？", isPresented: $deletingService) {
             Button("删除配置", role: .destructive) { if let id = store.selectedServiceID { store.removeService(id) } }
         } message: { Text("书籍、文档与已生成内容会保留。") }
@@ -61,6 +61,7 @@ struct ProviderSettingsView: View {
         } message: { Text("本次修改尚未保存。保存失败时会留在这里，并保留输入。") }
         .onAppear { store.serviceProfileDraft.settingsPresentationCount += 1 }
         .onDisappear { store.serviceProfileDraft.settingsPresentationCount = max(0, store.serviceProfileDraft.settingsPresentationCount - 1) }
+        .sheet(isPresented: $showingCatalog) { ModelCatalogManagerView(onClose: { showingCatalog = false }).environmentObject(store) }
     }
 
     private var serviceList: some View {
@@ -124,6 +125,7 @@ struct ProviderSettingsView: View {
             Divider().opacity(0.5)
             HStack(spacing: 12) {
                 Button("关闭") { requestClose() }.buttonStyle(ReadingToolbarButtonStyle())
+                Button { showingCatalog = true } label: { Label("模型目录", systemImage: "square.stack.3d.up") }.buttonStyle(ReadingToolbarButtonStyle())
                 Button { store.testConnection() } label: { Label("测试连接", systemImage: "play") }
                     .buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy || store.settings.model.isEmpty)
                 Spacer(minLength: 0)
@@ -147,7 +149,7 @@ struct ProviderSettingsView: View {
         Menu {
             Button("自定义兼容服务") { store.newService() }
             Divider()
-            ForEach(ProviderCatalog.current.providers) { provider in Button(provider.name) { store.newService(provider) } }
+            ForEach(store.providerCatalog.providers) { provider in Button(provider.name) { store.newService(provider) } }
         } label: { Label("新建服务", systemImage: "plus") }.menuStyle(.borderlessButton).fixedSize()
             .padding(.horizontal, 12).frame(minHeight: ReadingLayout.controlHeight).disabled(store.isBusy)
     }
@@ -165,6 +167,9 @@ struct ProviderSettingsView: View {
                             .menuStyle(.borderlessButton).font(.system(size: 13)).fixedSize()
                     }
                 }
+            }
+            if let note = store.matchingPreset?.note, !note.isEmpty {
+                Text(note).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }.disabled(store.isBusy)
     }
@@ -209,7 +214,7 @@ struct ProviderSettingsView: View {
                         }.labelsHidden()
                     }
                     Stepper("每轮最多 \(store.settings.maxRequestsPerRun) 次请求", value: $store.settings.maxRequestsPerRun, in: 1...2000)
-                    Text("推理模型的输出额度可能包含推理 Token。未知型号不自动推测。模型目录核查于 \(ProviderCatalog.current.verifiedAt.isEmpty ? "未记录" : ProviderCatalog.current.verifiedAt)。")
+                    Text("推理模型的输出额度可能包含推理 Token。未知型号不自动推测。模型目录核查于 \(store.providerCatalog.verifiedAt.isEmpty ? "未记录" : store.providerCatalog.verifiedAt)。")
                         .font(.system(size: 13)).foregroundStyle(.secondary)
                 }.padding(.top, 16)
             }.font(.system(size: 16, weight: .medium))
@@ -282,7 +287,7 @@ struct PluginLibraryView: View {
                         PluginDefinitionPanel(selectedTab: $detailTab)
                     }.frame(width: 540, height: 660).onExitCommand { showDetails = false }
                 }
-        }.background(Palette.canvas.opacity(0.3))
+        }
         .onExitCommand { close() }
         .onChange(of: store.isBusy) { _, busy in
             guard !busy, let componentID = pendingAddition else { return }
@@ -373,7 +378,7 @@ struct PluginLibraryView: View {
             else {
                 Button(installed ? "打开" : retainedByDisabledPack ? "已停用" : "添加") {
                     componentError = ""; componentNotice = ""
-                    if installed { store.activate(component, open: true, onError: { componentError = $0 }); if !embedded { dismiss() } }
+                    if installed { store.activate(component, open: true, onError: { componentError = $0 }); if componentError.isEmpty { close() } }
                     else { pendingAddition = component.id; componentNotice = "正在添加\(component.title)…"; store.activate(component, open: false, onError: { componentError = $0; componentNotice = ""; pendingAddition = nil }) }
                 }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || store.isBusy || retainedByDisabledPack)
             }

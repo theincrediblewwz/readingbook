@@ -145,7 +145,9 @@ import ReadingCore
         let progress = unfinished ?? CompanionScopeProgress(scopeFingerprint: snapshot.scopeFingerprint, runID: UUID().uuidString)
         let remainingIDs = actionableIDs.filter { !progress.completedUnitIDs.contains($0) }
         guard remainingIDs.isEmpty || providerReady else { return nil }
-        let frozenSettings = settings, frozenKey = apiKey
+        var frozenSettings = settings
+        frozenSettings.transportSessionID = "readingbook-\(initial.id)-companion"
+        let frozenKey = apiKey
         isBusy = true; readingExperienceError = nil; readingCompanionVisible = true
         task = Task {
             defer { activeReadingUnitID = nil; isBusy = false }

@@ -19,6 +19,8 @@ struct EnhancedBookChatView: View {
     @State private var saveRequest: AnswerSaveRequest?
     @State private var openTrashAfterSheet = false
     @State private var reviewingChanges = false
+    @State private var showingMemory = false
+    @State private var memorySourceID: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,13 +36,17 @@ struct EnhancedBookChatView: View {
                 }.onChange(of: store.book?.chats.count) { _, _ in
                     if let last = store.book?.chats.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
+                .onChange(of: memorySourceID) { _, id in
+                    guard let id else { return }; withAnimation { proxy.scrollTo(id, anchor: .center) }; memorySourceID = nil
+                }
             }
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 12) {
                     QueryScopeControl()
+                    QueryAttachmentsControl()
                     Menu {
                         Button("只读提问") { store.queryAllowsOrganizing = false }
-                        Button("允许本次新增笔记、导图与知识") { store.queryAllowsOrganizing = true }
+                        Button("允许本次整理、增添与修改") { store.queryAllowsOrganizing = true }
                         Text("仅授权接下来这次发送。已有正文、移除和读法变化仍须审阅。")
                         if store.latestAIChange != nil {
                             Divider()
@@ -54,6 +60,7 @@ struct EnhancedBookChatView: View {
                     Spacer(minLength: 0)
                     Menu {
                         Toggle("整理长对话记忆", isOn: $store.queryMemoryEnabled)
+                        Button("查看记忆与原消息来源") { showingMemory = true }
                         Text("整理旧消息计入本次模型预算；原始对话保留。")
                         Button("清除本范围的整理摘要") { store.clearCurrentQueryMemory() }
                     } label: { Image(systemName: "brain.head.profile").frame(width: 40, height: 44) }
@@ -99,6 +106,9 @@ struct EnhancedBookChatView: View {
                 .environmentObject(store).frame(minWidth: 520, idealWidth: 680, minHeight: 440, idealHeight: 600)
         }
         .sheet(isPresented: $reviewingChanges) { AIChangeReview(close: { reviewingChanges = false }).environmentObject(store) }
+        .sheet(isPresented: $showingMemory) {
+            QueryMemoryInspector(onClose: { showingMemory = false }, onSource: { id in showingMemory = false; memorySourceID = id }).environmentObject(store)
+        }
     }
 
     private var selectionBar: some View {
