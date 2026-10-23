@@ -1,5 +1,26 @@
 # 插件与 AI 工具
 
+## 0.14：已接入的范围工具与受控整理
+
+用户已批准 [28 个接口方案](Design/2026-10-reader-redesign/PROPOSAL.md)。本版在 `ReadingQueryToolCatalog` 注册 18 个读取、6 个宿主界面动作、4 个受控提案；只按本次冻结范围与宿主授予的能力加载，不把全部 schema 无条件交给普通问答。
+
+| 能力组 | 实际工具 |
+| --- | --- |
+| 原文与覆盖 | `source_outline`、`source_search`、`source_read`、`reading_coverage_get` |
+| 对象与时空 | `objects_search`、`object_get`、`relations_list`、`events_query`、`entity_history_get` |
+| 笔记与会话 | `documents_list`、`documents_search`、`document_read`、`conversation_search`、`conversation_read` |
+| 能力与界面观察 | `capabilities_list`、`book_schema_get`、`workspace_context_get`、`visible_objects_list` |
+| 界面动作 | `view_select`、`view_focus`、`view_set_time_window`、`map_fit_objects`、`graph_focus`、`panel_present` |
+| 受控整理 | `knowledge_changes_propose`、`graph_changes_propose`、`document_changes_propose`、`book_scheme_propose` |
+
+笔记正文懒加载，引用只接受实际返回的范围片段；工具读取不会增加精读覆盖。界面动作等待真实渲染器回执；当前可见对象只接入图画布，其他渲染器返回 `unsupported`。界面聚焦、相机和时间查询不改节点保存坐标，也不会在用户拖动时抢占。
+
+问答默认没有写提案工具。读者明确允许本次整理后，宿主签发范围授权；符合任务的新内容可原子创建，修改已有笔记、节点、知识或方案先展示完整差异。AI 无权签发授权、批准提案、选择文件路径或永久删除。正文使用原始字节哈希校验，备份为真实 Markdown，事务回执可防重试重复写入，撤销只处理本批对象并保护后续编辑。待审提案不跨进程保留；已提交回执和备份持久化。预览保留量超过上限直接拒绝，不截掉正文让读者盲目批准。
+
+后台精读通过同一 `PluginToolRegistry` 注册的 `builtin.temporal-knowledge` / `knowledge_temporal` 写入时态实体；它受当前逐段回执、获准单元和精确引文门禁，不能修改用户 Markdown 或读者偏好。此工具属于精读/工作流，和上方 28 个问答工具分开。新时态数据为可选附加记录，旧实体/事件/文档 ID 保持稳定，不做破坏迁移；不声称与 Lumen 存储格式兼容。
+
+下方 0.13.x 章节为历史协议和退役说明，以本节与当前注册源码为准。
+
 ## 0.13.2：退役能力与下一版接口提案
 
 数学核查 `math.verify` / `math_verify`、原文索引 `reading.mentions` 和思考卡 `reading.decisions` 不再对新任务开放。旧 Codable、验证器与历史记录保留兼容，不删除笔记；旧计划使用数学核查或明确生成思考卡的 `layered-reading-v1` 时需重新预读。新伴读方法 `layered-reading-v2` 只生成适用释义、译文、对象提及和资料对齐，`reading_enrich` 拒绝新的 decisions 字段。

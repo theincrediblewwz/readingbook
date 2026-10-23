@@ -27,3 +27,5 @@
 - `../prototype-frost/evidence/revision-0.14/entity-209-no-location.png`
 
 MapKit 的虚线出现次序采用 Apple 的 [MapPolyline](https://developer.apple.com/documentation/mapkit/mappolyline) 接口；它连接已有、可排序的出现点，不作为真实路线。未知/有争议时间及同精度时间并列的点不据此推造移动先后。
+
+原生构建证据：源码 `18128f4ef69ececefcf030a4f8c9384b0384acaa` 的 [Actions 39946215789](https://github.com/theincrediblewwz/readingbook/actions/runs/39946215789) 成功，200 项 Core 检查和 arm64/x86_64 Release、临时签名、资源自检通过，无编译警告。0.14.0/build17 下载包的摘要、CRC、版本/源码、双架构/执行权限与全部 32 个资源已核对。这证明可编译与打包，不把上述浏览器截图当作原生视觉通过；Mac 集中清单全部待用户操作。
