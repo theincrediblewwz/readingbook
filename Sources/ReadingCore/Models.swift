@@ -272,6 +272,8 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var temporalKnowledge: TemporalKnowledgeState? = nil
     public var graphGroups: [CanvasGroup]? = nil
     public var controlledChanges: ControlledChangeState? = nil
+    /// Host-owned recovery snapshots for ordinary manual removals; absent in older books.
+    public var manualTrash: ManualTrashState? = nil
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units
     }

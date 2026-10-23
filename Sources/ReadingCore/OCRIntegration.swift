@@ -15,6 +15,13 @@ public enum OCRIntegration {
         let units = project.units.filter { $0.page == page }
         guard !units.isEmpty else { return "页码不存在。" }
         let ids = Set(units.map(\.id))
+        do {
+            if !ids.isDisjoint(with: try ManualTrashRuntime.protectedUnitIDs(in: project)) {
+                return "此页仍被回收记录及其关联引用，不能覆盖恢复所需原文。请导入为新项目后识别。"
+            }
+        } catch {
+            return "回收记录暂时无法核对，已保留原文；请先检查回收记录后再识别。"
+        }
         let protectedAnchors = (project.readingExperience?.anchors ?? []) + (project.readingExperience?.trash ?? []).flatMap(\.anchors)
         if protectedAnchors.contains(where: { ids.contains($0.unitID) }) { return "此页已有阅读增强或原文锚点，不能覆盖引用正文。请导入为新项目后识别。" }
         if units.contains(where: { project.coverage[$0.id]?.status == .completed }) { return "此页已有完成记录，重新导入原书为新项目后可以重新识别。" }

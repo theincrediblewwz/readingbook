@@ -518,12 +518,12 @@ struct GraphSurface: View {
                     let other = renderCache.byID[line.from == item.id ? line.to : line.from]
                     Menu("\(line.from == item.id ? "→" : "←") \(line.label) · \(other?.title ?? "节点") · \(other.map(nodeNumber) ?? 0)") {
                         if renameLine != nil { Button("修改关系名称") { beginRename(line) } }
-                        if removeLine != nil { Button("移除这条连线", role: .destructive) { deleteLine(line.id) } }
+                        if removeLine != nil { Button("连线移入回收站", role: .destructive) { deleteLine(line.id) } }
                     }
                 }
             }
         }
-        if let remove { Divider(); Button("移除节点，保留文档", role: .destructive) { remove(item.id) } }
+        if let remove { Divider(); Button("节点移入回收站，保留文档", role: .destructive) { remove(item.id) } }
     }
     private func updateNodeDrag(_ item: GraphItem, delta: CGSize, ended: Bool) {
         guard acceptsCanvasInput, !savingPosition, editingLineID == nil, connectionFromID == nil, let move else { return }
@@ -625,10 +625,10 @@ struct GraphSurface: View {
                                        movable: false, resetID: gestureEpoch, canvasID: canvasInputID,
                                        click: { twice in if twice { beginRename(edge.line) } }, drag: { _, _ in }, cancel: {})
                 }
-                .help(renameLine == nil ? edge.line.label : "双击修改关系名称；右键移除这条连线")
+                .help(renameLine == nil ? edge.line.label : "双击修改关系名称；右键将连线移入回收站")
                 .contextMenu {
                     if renameLine != nil { Button("修改关系名称") { beginRename(edge.line) } }
-                    if removeLine != nil { Button("移除这条连线", role: .destructive) { deleteLine(edge.id) } }
+                    if removeLine != nil { Button("连线移入回收站", role: .destructive) { deleteLine(edge.id) } }
                 }
         }
     }
@@ -651,7 +651,7 @@ struct GraphSurface: View {
     private func deleteLine(_ id: String) {
         guard acceptsCanvasInput, !savingLine, !savingConnection, let removeLine else { return }
         cancelConnection(); savingLine = true
-        Task { let saved = await removeLine(id); savingLine = false; if saved && editingLineID == id { editingLineID = nil }; if !saved { message = errorText?() ?? "连线未移除，请重试。" } }
+        Task { let saved = await removeLine(id); savingLine = false; if saved && editingLineID == id { editingLineID = nil }; if !saved { message = errorText?() ?? "连线未能移入回收站，请重试。" } }
     }
     private func nodeNumber(_ item: GraphItem) -> Int { renderCache.identities.ordinalByNodeID[item.id] ?? 0 }
     private var previewCurve: GraphCurve? {

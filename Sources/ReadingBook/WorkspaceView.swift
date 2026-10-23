@@ -119,8 +119,9 @@ struct WorkspaceView: View {
         .onChange(of: store.requestedWorkspaceRoute) { _, route in
             guard let route else { return }; store.requestedWorkspaceRoute = nil; navigate(route)
         }
-        .confirmationDialog("删除保存的内容？", isPresented: Binding(get: { store.deletionRequest != nil }, set: { if !$0 { store.deletionRequest = nil } }), presenting: store.deletionRequest) { request in
-            Button(request.kind == .book || request.kind == .document ? "移入回收站" : "删除对象", role: .destructive) { store.confirmDeletion(request) }
+        .confirmationDialog("移入回收站？", isPresented: Binding(get: { store.deletionRequest != nil }, set: { if !$0 { store.deletionRequest = nil } }), presenting: store.deletionRequest) { request in
+            Button("移入回收站", role: .destructive) { store.confirmDeletion(request) }
+            Button("取消", role: .cancel) { store.deletionRequest = nil }
         } message: { request in Text("“\(request.title)”\n" + request.detail) }
         .alert("需要处理", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("知道了", role: .cancel) { store.errorMessage = nil }
@@ -172,7 +173,10 @@ struct WorkspaceView: View {
                                 routeButton(view.title, icon: WorkspaceComponentRegistry.shared.component(for: view)?.icon ?? "puzzlepiece.extension", route: view.id)
                                     .contextMenu {
                                         let count = WorkspaceComponentRegistry.shared.removalIDs(for: view, in: store.book?.views ?? []).count
-                                        Button(count > 1 ? "移除此组件及 \(count - 1) 个旧重复入口" : "移除此组件入口") { Task { await store.removeView(view.id) } }
+                                        Button(count > 1 ? "将组件及 \(count - 1) 个重复入口移入回收站" : "将组件移入回收站", role: .destructive) {
+                                            let sourceBookID = store.bookID
+                                            Task { guard store.bookID == sourceBookID else { return }; await store.removeView(view.id) }
+                                        }.disabled(store.isBusy || store.editorDirty)
                                     }
                             }
                         }

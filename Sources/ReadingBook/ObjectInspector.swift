@@ -108,7 +108,7 @@ import ReadingCore
             HStack(spacing: 12) {
                 Button { draft = EntityEditDraft(entity: entity); localError = nil; restoredDraft = false } label: { Label("编辑", systemImage: "square.and.pencil") }
                 Spacer(minLength: 0)
-                Menu { Button("删除卡片…", role: .destructive) { store.requestDeletion(.entity, id: entity.id, title: entity.name) } } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("卡片管理")
+                Menu { Button("移入回收站…", role: .destructive) { store.requestDeletion(.entity, id: entity.id, title: entity.name) } } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("卡片管理")
             }.buttonStyle(ReadingToolbarButtonStyle()).font(.system(size: 15)).disabled(store.isBusy)
             ForEach(entity.properties.keys.sorted().filter { entity.properties[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }, id: \.self) { key in
                 VStack(alignment: .leading, spacing: 5) {
@@ -133,7 +133,7 @@ import ReadingCore
             MarkdownText(markdown: event.summary)
             linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs)
             EvidenceList(evidence: event.evidence)
-            Menu { Button("删除事件…", role: .destructive) { store.requestDeletion(.event, id: event.id, title: event.name) } } label: { Label("事件管理", systemImage: "ellipsis").frame(minHeight: 44) }.menuStyle(.borderlessButton).fixedSize().font(.system(size: 14)).disabled(store.isBusy)
+            Menu { Button("移入回收站…", role: .destructive) { store.requestDeletion(.event, id: event.id, title: event.name) } } label: { Label("事件管理", systemImage: "ellipsis").frame(minHeight: 44) }.menuStyle(.borderlessButton).fixedSize().font(.system(size: 14)).disabled(store.isBusy)
         } else if let document = store.book?.activeDocuments.first(where: { $0.id == objectID }) {
             Text("Markdown 文档").font(.system(size: 13)).foregroundStyle(Palette.accent)
             Text(document.title).font(.system(size: 25, weight: .semibold))
@@ -155,8 +155,11 @@ import ReadingCore
                     Label("\(relation.label) · \(store.objectTitle(relation.fromID == objectID ? relation.toID : relation.fromID))", systemImage: "arrow.up.right").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundStyle(Palette.accent)
                 Spacer(minLength: 0)
-                Button { Task { await store.removeConnection(relation.id, relation: true) } } label: { Image(systemName: "xmark.circle") }
-                    .buttonStyle(ReadingToolbarButtonStyle()).help("移除这条关系").disabled(store.isBusy)
+                Button {
+                    let sourceBookID = store.bookID
+                    Task { guard store.bookID == sourceBookID else { return }; await store.removeConnection(relation.id, relation: true) }
+                } label: { Image(systemName: "xmark.circle") }
+                    .buttonStyle(ReadingToolbarButtonStyle()).help("将这条知识关系移入回收站").accessibilityLabel("将知识关系移入回收站").disabled(store.isBusy || store.editorDirty)
             }
         }
         ForEach((store.book?.activeDocuments ?? []).filter { $0.linkedIDs.contains(objectID) }) { document in

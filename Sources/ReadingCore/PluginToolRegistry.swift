@@ -97,6 +97,10 @@ public struct PluginToolRegistry: Sendable {
         guard try encoder.encode(candidate.smartReading) == encoder.encode(project.smartReading) else {
             throw ReadingError.invalid("插件不能改写宿主冻结的智能阅读范围、确认状态或进度任务。")
         }
+        guard try encoder.encode(candidate.manualTrash) == encoder.encode(project.manualTrash) else {
+            throw ReadingError.invalid("插件不能修改用户回收站或代替用户恢复已删除内容。")
+        }
+        try ManualTrashRuntime.validateReservedRecords(in: candidate)
         if candidate.mathVerifications != project.mathVerifications {
             guard tool.pluginID == "builtin.math-verification", name == "math_verify", tool.requiresReceipts,
                   phase == nil || phase == .reading || phase == .workflow, !allowedUnitIDs.isEmpty else {

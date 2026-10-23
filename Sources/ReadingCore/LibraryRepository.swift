@@ -218,6 +218,46 @@ public actor LibraryRepository {
         return updated
     }
 
+    /// Manual deletion and its complete recovery record share one atomic metadata
+    /// replacement. An old window cannot turn a later edit into a trash snapshot.
+    public func trashManualItem(project: BookProject, kind: ManualTrashKind, id: String, viewIDs: [String] = []) throws -> BookProject {
+        let directory = try bookDirectory(project.id, mustExist: true)
+        try recoverDocument(in: directory)
+        let canonical = try readProject(in: directory)
+        try requireManualTrashRevision(project, canonical: canonical)
+        let updated = try ManualTrashRuntime.trashing(kind: kind, id: id, viewIDs: viewIDs, in: canonical)
+        try validate(updated)
+        let metadata = try encode(updated)
+        try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false,
+                                 encodedMetadataSize: metadata.count, reuseDocumentValidation: true)
+        try atomicWrite(metadata, to: try child(directory, "project.json"))
+        return updated
+    }
+
+    /// The confirmed dependency set is checked by the runtime against canonical
+    /// state. Nothing is written if any record has changed or a dependency is gone.
+    public func restoreManualItems(project: BookProject, itemID: String, expectedItemIDs: [String]) throws -> BookProject {
+        let directory = try bookDirectory(project.id, mustExist: true)
+        try recoverDocument(in: directory)
+        let canonical = try readProject(in: directory)
+        try requireManualTrashRevision(project, canonical: canonical)
+        let updated = try ManualTrashRuntime.restoring(itemID: itemID, expectedItemIDs: expectedItemIDs, in: canonical)
+        try validate(updated)
+        let metadata = try encode(updated)
+        try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false,
+                                 encodedMetadataSize: metadata.count, reuseDocumentValidation: true)
+        try atomicWrite(metadata, to: try child(directory, "project.json"))
+        return updated
+    }
+
+    private func requireManualTrashRevision(_ project: BookProject, canonical: BookProject) throws {
+        try validate(canonical)
+        guard project.id == canonical.id, project.sourceHash == canonical.sourceHash, project.originalName == canonical.originalName,
+              try ControlledChangeRecords.revision(project) == ControlledChangeRecords.revision(canonical) else {
+            throw ControlledChangeError.conflict("等待回收或恢复期间内容已变化；请重新载入并确认，当前资料没有被覆盖。")
+        }
+    }
+
     /// Annotation edits use the canonical disk project so a reader window cannot overwrite newer knowledge or notes.
     public func saveAnnotations(project: BookProject, annotations: [ReaderAnnotation]) throws -> BookProject {
         let directory = try bookDirectory(project.id, mustExist: true)
@@ -491,6 +531,7 @@ public actor LibraryRepository {
         try TemporalKnowledgeRuntime.validateStoredState(in: project)
         try ControlledGraphRuntime.validate(in: project)
         try ControlledChangeRecords.validate(in: project)
+        try ManualTrashRuntime.validateStoredState(in: project)
         let recognizedPages = project.ocrPages ?? []
         guard recognizedPages.count <= 20_000, Set(recognizedPages.map(\.page)).count == recognizedPages.count else { throw ReadingError.invalid("OCR 页记录重复或超过上限。") }
         for page in recognizedPages {
@@ -1019,6 +1060,12 @@ extension LibraryRepository {
     }
     private func requireCurrentChangeHistory(_ project: BookProject, existing: BookProject) throws {
         guard try project.controlledChanges.map(ControlledChangeCoding.data) == existing.controlledChanges.map(ControlledChangeCoding.data) else { throw ControlledChangeError.conflict("磁盘上已有更新的整理回执；当前窗口未覆盖该结果，请重新载入后保存。") }
+        try requireCurrentManualTrashHistory(project, existing: existing)
+    }
+    private func requireCurrentManualTrashHistory(_ project: BookProject, existing: BookProject) throws {
+        guard try project.manualTrash.map(ControlledChangeCoding.data) == existing.manualTrash.map(ControlledChangeCoding.data) else {
+            throw ControlledChangeError.conflict("磁盘回收或恢复状态已变化；当前窗口不能复活已删除对象或覆盖恢复记录，请重新载入后保存。")
+        }
     }
 
     private struct ControlledBodyJournal: Codable {
@@ -1036,6 +1083,8 @@ extension LibraryRepository {
         let metadata = try encode(project)
         try validatePackageFiles(project, in: directory, strictContents: false, verifySourceHash: false, encodedMetadataSize: metadata.count, pendingDocumentSizes: bodies.mapValues(\.count))
         let before = try readLimited(try child(directory, "project.json"), limit: Self.metadataLimit)
+        let canonical: BookProject = try decode(before)
+        try requireCurrentManualTrashHistory(project, existing: canonical)
         let journals = try ensureDirectory(try child(directory, ".changes-journal")), staging = try child(journals, operationID)
         try requireVacant(staging); _ = try ensureDirectory(staging)
         var changes: [ControlledBodyJournal] = []
@@ -1083,6 +1132,7 @@ extension LibraryRepository {
                 cleanupControlledJournal(journal, staging: staging, marker: marker)
                 continue
             }
+            try requireCurrentManualTrashHistory(journal.project, existing: current)
             guard Set(current.documents.map(\.id)).isSubset(of: Set(journal.project.documents.map(\.id))) else { throw ControlledChangeError.conflict("整理恢复缺少后来的文档登记，保留现场。") }
             let currentHash = try BookImporter.sha256(currentMetadata)
             guard currentHash == journal.beforeMetadataHash || currentHash == journal.afterMetadataHash else { throw ControlledChangeError.conflict("恢复期间项目元数据已有外部修改；磁盘及待恢复资料均保留。") }
