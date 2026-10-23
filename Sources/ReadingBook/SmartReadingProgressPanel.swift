@@ -2,6 +2,7 @@ import SwiftUI
 import ReadingCore
 
 struct SmartReadingProgressPanel: View {
+    var maximumExpandedHeight: CGFloat = 360
     @EnvironmentObject private var store: AppStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
@@ -45,7 +46,8 @@ struct SmartReadingProgressPanel: View {
             }
             if expanded, let progress, session?.isPlanConfirmed == true {
                 Divider().opacity(0.3)
-                VStack(alignment: .leading, spacing: 12) {
+                ScrollView {
+                  VStack(alignment: .leading, spacing: 12) {
                     statusRow("预读并确定阅读方案", completed: store.book?.plan != nil && !awaiting)
                     statusRow("逐段阅读 · \(progress.receiptCount)/\(progress.receiptTotal)", completed: progress.receiptTotal > 0 && progress.receiptCount == progress.receiptTotal)
                     if progress.excludedCount > 0 || progress.blankCount > 0 {
@@ -53,7 +55,6 @@ struct SmartReadingProgressPanel: View {
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                     if !progress.currentStepTitle.isEmpty { Text(progress.currentStepTitle).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2) }
-                    ScrollView {
                         VStack(alignment: .leading, spacing: 11) {
                             ForEach(Array(currentReceipts.suffix(4))) { receipt in
                                 HStack(alignment: .top, spacing: 8) {
@@ -63,7 +64,6 @@ struct SmartReadingProgressPanel: View {
                             }
                             ForEach(progress.steps) { step in statusRow(step.title, completed: step.isCompleted) }
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                    }.frame(maxHeight: 190)
                     if let message = session?.lastMessage { Text(message).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled) }
                     Text("已保存的处理状态；你仍可翻页阅读。").font(.system(size: 11)).foregroundStyle(.secondary)
                     HStack(spacing: 10) {
@@ -72,11 +72,12 @@ struct SmartReadingProgressPanel: View {
                         if !store.isBusy && !awaiting && session?.status != .completed { Button { store.startReading() } label: { Label("继续", systemImage: "play.fill") }.buttonStyle(ReadingToolbarButtonStyle(selected: true)) }
                         resultMenu
                     }
-                }.padding(17)
+                  }.padding(17)
+                }.frame(maxHeight: maximumExpandedHeight)
             } else if expanded {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(session?.lastMessage ?? (awaiting ? "预读不计入正文覆盖。确认方案后，才开始所选范围的逐段分析。" : "上次预读尚未确认，可重新制定方案，原文与已有分析仍保留。"))
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(4)
                     Button { store.requestedWorkspaceRoute = awaiting ? "book.scheme" : "workflow" } label: { Label(awaiting ? "查看并确认方案" : "重新设置范围", systemImage: "slider.horizontal.3") }.buttonStyle(ReadingToolbarButtonStyle())
                 }.padding(17)
             }

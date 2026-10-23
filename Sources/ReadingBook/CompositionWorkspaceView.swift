@@ -324,7 +324,7 @@ private struct CompositionObjectDetails: View {
                     ForEach(item.fields.keys.filter { $0 != "temporalMatch" }.sorted(), id: \.self) { key in
                         VStack(alignment: .leading, spacing: 5) {
                             Text(fieldLabel(key, item: item)).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                            Text(fieldValue(key, value: item.fields[key] ?? "")).font(.callout).textSelection(.enabled)
+                            MarkdownText(markdown: fieldValue(key, value: item.fields[key] ?? ""))
                         }
                     }
                     if let extent = item.extent, !extent.sourceText.isEmpty { Label(extent.sourceText, systemImage: "clock").font(.callout).foregroundStyle(.secondary) }

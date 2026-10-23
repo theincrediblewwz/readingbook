@@ -48,7 +48,7 @@ struct WorkspaceView: View {
                 topIslands(width: geometry.size.width).padding(.top, 14).padding(.leading, 104).padding(.trailing, 24)
                     .allowsHitTesting(managementRoute == nil)
                 if store.book != nil && managementRoute == nil && !navigationExpanded && store.route != "library" && (store.route != "workflow" || store.book?.smartReading != nil) {
-                    SmartReadingProgressPanel().environmentObject(store)
+                    SmartReadingProgressPanel(maximumExpandedHeight: max(120, min(430, geometry.size.height - (store.route == "reader" ? 103 : 26) - 190))).environmentObject(store)
                         .workspaceChromeBounds("smart-progress")
                         .padding(.leading, geometry.size.width < 700 ? 68 : 80)
                         .padding(.bottom, store.route == "reader" ? 103 : 26)

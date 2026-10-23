@@ -364,6 +364,7 @@ public enum PluginEngine {
             try RegisteredReadingTool(pluginID: "builtin.reading", schema: ReadingWorkflowRuntime.completionTool, phases: [.workflow], requiresReceipts: true) { data, project, allowed in try ReadingWorkflowRuntime.complete(arguments: data, to: &project, allowedUnitIDs: allowed) }
         ]))
         try registry.install(ReadingExperienceToolPlugin())
+        try registry.install(ReadingGraphToolPlugin())
         try registry.install(TemporalKnowledgeToolPlugin())
         return registry
     }
