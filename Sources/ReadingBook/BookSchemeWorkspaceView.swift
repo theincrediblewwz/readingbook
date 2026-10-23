@@ -104,9 +104,9 @@ struct BookSchemeWorkspaceView: View {
     }
     private func definitions(_ configuration: BookSchemeConfiguration) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            sectionTitle("组件", subtitle: "决定本书工作区中有哪些界面；关闭入口不会删除其中的知识。", count: configuration.views.count)
-            if configuration.views.isEmpty { Text("尚未配置额外组件。").foregroundStyle(.secondary) }
-            ForEach(configuration.views) { view in
+            sectionTitle("组件", subtitle: "决定本书工作区中有哪些界面；关闭入口不会删除其中的知识。", count: configuration.views.filter { !PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }.count)
+            if configuration.views.allSatisfy({ PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }) { Text("尚未配置额外组件。").foregroundStyle(.secondary) }
+            ForEach(configuration.views.filter { !PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }) { view in
                 Toggle(isOn: option(view.id, keyPath: \.viewIDs)) {
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: view.kind.icon).foregroundStyle(Palette.accent).frame(width: 24)
@@ -125,8 +125,8 @@ struct BookSchemeWorkspaceView: View {
                 }
             }
             Divider()
-            sectionTitle("实际执行的读书法", subtitle: "可组合多种方法；步骤使用已注册动作执行，逐段回执始终先行。", count: configuration.methods.count)
-            ForEach(configuration.methods) { method in methodRow(method, configuration: configuration) }
+            sectionTitle("实际执行的读书法", subtitle: "可组合多种方法；步骤使用已注册动作执行，逐段回执始终先行。", count: configuration.methods.filter { PluginEngine.isActiveMethod($0) }.count)
+            ForEach(configuration.methods.filter { PluginEngine.isActiveMethod($0) }) { method in methodRow(method, configuration: configuration) }
             Divider()
             sectionTitle("卡片类型", subtitle: "已有类型保留原 ID；新增类型可选择，依赖它的组件须一并保持有效。", count: configuration.types.count)
             ForEach(configuration.types) { type in typeRow(type) }

@@ -127,7 +127,7 @@ public struct ReadingWorkflowActionRegistry: Sendable {
         let descriptors = [
             ReadingWorkflowActionDescriptor(id: "ai.analyze", title: "原文分析", detail: "依据当前原文执行这一条阅读步骤，提交可核对的分析与引用；需要时实际调用知识工具保存适用对象。旧自然语言方法通过此受控动作执行。", allowedTools: common + knowledge),
             ReadingWorkflowActionDescriptor(id: "facts.extract", title: "知识抽取", detail: "实际调用知识工具创建或补充适用对象和关联，再提交抽取结果；没有适用对象须明确解释，不强造人物或事件。", allowedTools: common + knowledge),
-            ReadingWorkflowActionDescriptor(id: "reading.enrich", title: "多层伴读", detail: "把已读原文锚定到适用词语提及、白话或概念解释、资料对齐和思考卡，实际调用 reading_enrich 保存可点击产物；不适用的类型不强行生成。已有实体须按名称、别名和称谓复用。外部资料只允许已导入且有可核对原文的材料；不得捏造来源。", allowedTools: common + knowledge),
+            ReadingWorkflowActionDescriptor(id: "reading.enrich", title: "多层伴读", detail: "把已读原文锚定到适用词语提及、白话或概念解释与资料对齐，实际调用 reading_enrich 保存可点击产物；不适用的类型不强行生成。已有实体须按名称、别名和称谓复用。外部资料只允许已导入且有可核对原文的材料；不得捏造来源。", allowedTools: common + knowledge),
             ReadingWorkflowActionDescriptor(id: "math.verify", title: "精确数学核查", detail: "对本单元适用的有理数线性方程组或矩阵行变换实际调用 math_verify，保留原文与AI转录数字的区别，解释宿主真实结果和错误位置。核查不通过也应如实完成本步并列出疑点；不声称证明书中一般论证正确。没有适用数字矩阵、超出有理数/规模/精确范围时，必须在noChangesReason说明不支持的具体内容和原因，不能假报核查通过。", allowedTools: common + ["math_verify"]),
             ReadingWorkflowActionDescriptor(id: "reading.review", title: "复盘核对", detail: "对照已执行步骤与原文核对条件、矛盾、遗漏和不确定处，提交复盘结果；不能以先前分析代替原文。", allowedTools: common)
         ]

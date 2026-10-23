@@ -10,6 +10,8 @@ public enum BookSchemeRuntime {
         var state = original.bookSchemes ?? BookSchemeState()
         state.pending = BookSchemeProposal(title: "AI 预读方案", origin: "ai", before: BookSchemeConfiguration(project: original), proposed: next,
             notes: ["仅依据目录与开头样本；不增加逐段或全文阅读覆盖。", "确认后才启用组件与方法；已有回执、知识对象和 Markdown 不变。"])
+        state.pending?.selection.methodIDs = Set((next.plan?.methodIDs ?? []).filter { id in next.methods.contains { $0.id == id && PluginEngine.isActiveMethod($0) } })
+        state.pending?.selection.viewIDs = Set(next.views.filter { !PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }.map(\.id))
         state.pending?.sourceFingerprint = try sourceFingerprint(original)
         result.bookSchemes = state
         result.audit.append(contentsOf: proposed.audit.dropFirst(original.audit.count))
@@ -32,7 +34,12 @@ public enum BookSchemeRuntime {
         var next = pending.proposed
         let priorTypes = Set(pending.before.types.map(\.id))
         guard selected.typeIDs.isSubset(of: Set(next.types.map(\.id))), selected.methodIDs.isSubset(of: Set(next.methods.map(\.id))), selected.viewIDs.isSubset(of: Set(next.views.map(\.id))) else { throw ReadingError.invalid("方案选择引用了不存在的定义。") }
-        next.views.removeAll { !selected.viewIDs.contains($0.id) }
+        guard next.methods.filter({ selected.methodIDs.contains($0.id) }).allSatisfy({ PluginEngine.isActiveMethod($0) }),
+              next.views.filter({ selected.viewIDs.contains($0.id) }).allSatisfy({ !PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }) else {
+            throw ReadingError.invalid("此预览仍选用了已停用功能，请放弃旧预览并重新生成方案；历史记录与笔记保留。")
+        }
+        // Retired view declarations stay archival even when no longer selectable.
+        next.views.removeAll { !selected.viewIDs.contains($0.id) && !PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }
         // Historical definitions remain even if unused in the next plan.
         next.types.removeAll { !priorTypes.contains($0.id) && !selected.typeIDs.contains($0.id) }
         // The method picker chooses execution, not deletion from the catalogue.

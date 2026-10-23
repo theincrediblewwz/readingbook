@@ -6,11 +6,13 @@ struct ProviderSettingsView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     var embedded = false
+    var onClose: (() -> Void)? = nil
     @State private var deletingService = false
     @State private var showAdvanced = false
     @State private var showNotes = false
     @State private var showServices = true
     @State private var configuredWidth = false
+    @State private var confirmingClose = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -33,7 +35,7 @@ struct ProviderSettingsView: View {
                                      icon: "sparkles", viewport: canvas,
                                      width: showList ? max(300, canvas.width - listWidth - 22) : canvas.width,
                                      height: canvas.height, initial: CGPoint(x: showList ? listWidth + 22 : 0, y: 0),
-                                     movable: embedded, canClose: false) {
+                                     movable: embedded, canCollapse: embedded, onClose: requestClose) {
                     modelConfiguration(wide: wide)
                 }
             }.frame(width: canvas.width, height: canvas.height, alignment: .topLeading).padding(.horizontal, inset).padding(.top, topInset).padding(.bottom, inset)
@@ -45,6 +47,18 @@ struct ProviderSettingsView: View {
             Button("删除配置", role: .destructive) { if let id = store.selectedServiceID { store.removeService(id) } }
         } message: { Text("书籍、文档与已生成内容会保留。") }
         .serviceProfileChangeConfirmation(store: store, isSettingsContext: true)
+        .interactiveDismissDisabled(store.serviceProfileDraft.isDirty(in: store))
+        .onExitCommand { requestClose() }
+        .confirmationDialog("保存模型配置后关闭？", isPresented: $confirmingClose, titleVisibility: .visible) {
+            Button("保存并关闭") {
+                store.saveServiceProfileForUI()
+                if !store.serviceProfileDraft.isDirty(in: store) { close() }
+            }.disabled(store.isBusy)
+            Button("放弃更改并关闭", role: .destructive) {
+                if store.discardServiceDraftForNavigation() { close() }
+            }.disabled(store.isBusy)
+            Button("继续编辑", role: .cancel) { }
+        } message: { Text("本次修改尚未保存。保存失败时会留在这里，并保留输入。") }
         .onAppear { store.serviceProfileDraft.settingsPresentationCount += 1 }
         .onDisappear { store.serviceProfileDraft.settingsPresentationCount = max(0, store.serviceProfileDraft.settingsPresentationCount - 1) }
     }
@@ -109,7 +123,7 @@ struct ProviderSettingsView: View {
             }
             Divider().opacity(0.5)
             HStack(spacing: 12) {
-                if !embedded { Button("关闭") { dismiss() }.buttonStyle(ReadingToolbarButtonStyle()) }
+                Button("关闭") { requestClose() }.buttonStyle(ReadingToolbarButtonStyle())
                 Button { store.testConnection() } label: { Label("测试连接", systemImage: "play") }
                     .buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy || store.settings.model.isEmpty)
                 Spacer(minLength: 0)
@@ -117,6 +131,16 @@ struct ProviderSettingsView: View {
                     .buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: ReadingLayout.controlHeight).disabled(store.isBusy)
             }.padding(14)
         }.controlSize(.large)
+    }
+
+    private func requestClose() {
+        if store.serviceProfileDraft.isDirty(in: store) { confirmingClose = true }
+        else { close() }
+    }
+    private func close() {
+        if let onClose { onClose() }
+        else if embedded { store.requestedWorkspaceRoute = store.book == nil ? "library" : "reader" }
+        else { dismiss() }
     }
 
     private var newServiceMenu: some View {
@@ -213,6 +237,7 @@ struct PluginLibraryView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     var embedded = false
+    var onClose: (() -> Void)? = nil
     @State private var search = ""
     @State private var tab = "installed"
     @State private var showDetails = true
@@ -239,7 +264,7 @@ struct PluginLibraryView: View {
             ZStack(alignment: .topLeading) {
                 SettingsFloatingCard(title: "插件与组件", subtitle: "按书组合类型、方法和视图", icon: "puzzlepiece.extension", viewport: canvas,
                                      width: withAside ? max(350, canvas.width - asideWidth - 22) : canvas.width,
-                                     height: canvas.height, initial: .zero, movable: embedded, canClose: false) {
+                                     height: canvas.height, initial: .zero, movable: embedded, canCollapse: embedded, onClose: close) {
                     pluginList
                 }
                 if withAside {
@@ -255,9 +280,10 @@ struct PluginLibraryView: View {
                     VStack(spacing: 0) {
                         HStack { Text("本书类型与读书法").font(.system(size: 20, weight: .semibold)); Spacer(); Button("完成") { showDetails = false }.buttonStyle(ReadingToolbarButtonStyle()) }.padding(18)
                         PluginDefinitionPanel(selectedTab: $detailTab)
-                    }.frame(width: 540, height: 660)
+                    }.frame(width: 540, height: 660).onExitCommand { showDetails = false }
                 }
         }.background(Palette.canvas.opacity(0.3))
+        .onExitCommand { close() }
         .onChange(of: store.isBusy) { _, busy in
             guard !busy, let componentID = pendingAddition else { return }
             if let component = WorkspaceComponentRegistry.shared.component(id: componentID), store.installedComponent(for: component) != nil {
@@ -311,8 +337,14 @@ struct PluginLibraryView: View {
                 HStack(spacing: 8) { footerExplanation; Spacer(minLength: 0); definitionButtons; importButton }
                 VStack(alignment: .leading, spacing: 8) { footerExplanation; HStack { definitionButtons; Spacer(minLength: 0); importButton } }
             }.padding(14)
-            if !embedded { HStack { Spacer(); Button("完成") { dismiss() }.keyboardShortcut(.defaultAction).buttonStyle(ReadingToolbarButtonStyle()) }.padding(.horizontal, 14).padding(.bottom, 8) }
+            if !embedded { HStack { Spacer(); Button("完成") { close() }.keyboardShortcut(.defaultAction).buttonStyle(ReadingToolbarButtonStyle()) }.padding(.horizontal, 14).padding(.bottom, 8) }
         }
+    }
+
+    private func close() {
+        if let onClose { onClose() }
+        else if embedded { store.requestedWorkspaceRoute = store.book == nil ? "library" : "reader" }
+        else { dismiss() }
     }
 
     private var footerExplanation: some View { Label("停用保留已有内容", systemImage: "info.circle").font(.system(size: 13)).foregroundStyle(.secondary).fixedSize() }
@@ -382,13 +414,13 @@ private struct CompactPluginRow: View {
                     VStack(alignment: .leading, spacing: 14) {
                         Text(plugin.description).font(.system(size: 14)).foregroundStyle(.secondary).textSelection(.enabled)
                         ForEach(plugin.types) { CompactTypeRow(type: $0) }
-                        ForEach(plugin.methods) { CompactMethodRow(method: $0) }
-                        ForEach(plugin.views) { Label("\($0.title) · \($0.kind.title)", systemImage: $0.kind.icon).font(.system(size: 13)).foregroundStyle(.secondary) }
+                        ForEach(plugin.methods.filter(PluginEngine.isActiveMethod)) { CompactMethodRow(method: $0) }
+                        ForEach(plugin.views.filter { !PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }) { Label("\($0.title) · \($0.kind.title)", systemImage: $0.kind.icon).font(.system(size: 13)).foregroundStyle(.secondary) }
                     }.padding(.top, 12)
                 } label: {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(plugin.name).font(.system(size: 18, weight: .semibold)).lineLimit(2)
-                        Text("声明包 · \(plugin.types.count) 类型 · \(plugin.methods.count) 方法 · \(plugin.views.count) 视图").font(.system(size: 13)).foregroundStyle(.secondary)
+                        Text("声明包 · \(plugin.types.count) 类型 · \(plugin.methods.filter(PluginEngine.isActiveMethod).count) 方法 · \(plugin.views.filter { !PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }.count) 视图").font(.system(size: 13)).foregroundStyle(.secondary)
                     }
                 }
                 Toggle("启用", isOn: Binding(get: { store.book?.disabledPluginIDs.contains(plugin.id) != true }, set: { enabled in
@@ -414,7 +446,8 @@ private struct PluginDefinitionPanel: View {
     @State private var notice = ""
     @State private var showExecutions = false
     private var selectedType: EntityType? { store.book?.types.first { $0.id == selectedID } }
-    private var selectedMethod: ReadingMethod? { store.book?.methods.first { $0.id == selectedID } }
+    private var methods: [ReadingMethod] { store.book.map { PluginEngine.activeMethods(in: $0) } ?? [] }
+    private var selectedMethod: ReadingMethod? { methods.first { $0.id == selectedID } }
 
     var body: some View {
         ScrollView {
@@ -424,7 +457,7 @@ private struct PluginDefinitionPanel: View {
                 Picker(selectedTab == "types" ? "选择类型" : "选择方法", selection: $selectedID) {
                     Text("＋ 新建定义").tag("")
                     if selectedTab == "types" { ForEach(store.book?.types ?? []) { Text($0.name).tag($0.id) } }
-                    else { ForEach(store.book?.methods ?? []) { Text($0.name).tag($0.id) } }
+                    else { ForEach(methods) { Text($0.name).tag($0.id) } }
                 }.onChange(of: selectedID) { _, _ in loadSelection() }
                 Divider().opacity(0.5)
                 VStack(alignment: .leading, spacing: 8) { Text("名称").font(.system(size: 14)); TextField(selectedTab == "types" ? "例如：定理、战役" : "读书法名称", text: $name).settingsTextField() }
@@ -441,7 +474,7 @@ private struct PluginDefinitionPanel: View {
                         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.line, lineWidth: 0.7))
                 }
                 if selectedTab == "methods" {
-                    Picker("新步骤执行动作", selection: $actionID) { ForEach(ReadingWorkflowRuntime.actions, id: \.id) { Text($0.title).tag($0.id) } }
+                    Picker("新步骤执行动作", selection: $actionID) { ForEach(PluginEngine.activeWorkflowActions, id: \.id) { Text($0.title).tag($0.id) } }
                     Text("已有步骤保留各自动作；新增或改写步骤使用上面的动作。宿主仍先核对逐段回执。")
                         .font(.system(size: 13)).foregroundStyle(.secondary)
                     if let method = selectedMethod {
@@ -461,7 +494,7 @@ private struct PluginDefinitionPanel: View {
     }
 
     private func selectFirstDefinition() {
-        selectedID = selectedTab == "types" ? store.book?.types.first?.id ?? "" : store.book?.methods.first?.id ?? ""
+        selectedID = selectedTab == "types" ? store.book?.types.first?.id ?? "" : methods.first?.id ?? ""
         loadSelection()
     }
 
@@ -581,6 +614,7 @@ private struct SettingsFloatingCard<Content: View>: View {
     let initial: CGPoint
     var movable = true
     var canClose = true
+    var canCollapse = true
     var onClose: () -> Void = {}
     let content: Content
     @State private var position: CGPoint?
@@ -588,8 +622,8 @@ private struct SettingsFloatingCard<Content: View>: View {
     @State private var collapsed = false
     @State private var epoch = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    init(title: String, subtitle: String = "", icon: String = "square.stack", viewport: CGSize, width: CGFloat, height: CGFloat, initial: CGPoint, movable: Bool = true, canClose: Bool = true, onClose: @escaping () -> Void = {}, @ViewBuilder content: () -> Content) {
-        self.title = title; self.subtitle = subtitle; self.icon = icon; self.viewport = viewport; self.width = width; self.height = height; self.initial = initial; self.movable = movable; self.canClose = canClose; self.onClose = onClose; self.content = content()
+    init(title: String, subtitle: String = "", icon: String = "square.stack", viewport: CGSize, width: CGFloat, height: CGFloat, initial: CGPoint, movable: Bool = true, canClose: Bool = true, canCollapse: Bool = true, onClose: @escaping () -> Void = {}, @ViewBuilder content: () -> Content) {
+        self.title = title; self.subtitle = subtitle; self.icon = icon; self.viewport = viewport; self.width = width; self.height = height; self.initial = initial; self.movable = movable; self.canClose = canClose; self.canCollapse = canCollapse; self.onClose = onClose; self.content = content()
     }
     private var cardSize: CGSize { CGSize(width: min(width, viewport.width), height: collapsed ? 78 : min(height, viewport.height)) }
     private var origin: CGPoint { clamp(position ?? initial) }
@@ -616,8 +650,10 @@ private struct SettingsFloatingCard<Content: View>: View {
                             }, cancel: { if let dragStart { position = clamp(dragStart) }; dragStart = nil })
                         }
                     }
-                Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { collapsed.toggle() } } label: { Image(systemName: collapsed ? "plus" : "minus") }
-                    .buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开面板" : "收起面板").accessibilityLabel(collapsed ? "展开\(title)" : "收起\(title)")
+                if canCollapse {
+                    Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { collapsed.toggle() } } label: { Image(systemName: collapsed ? "plus" : "minus") }
+                        .buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开面板" : "收起面板").accessibilityLabel(collapsed ? "展开\(title)" : "收起\(title)")
+                }
                 if canClose { Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭面板").accessibilityLabel("关闭\(title)") }
             }.padding(.leading, 20).padding(.trailing, 10).padding(.vertical, 10)
             if !collapsed { Divider().opacity(0.4); content.frame(maxWidth: .infinity, maxHeight: .infinity) }

@@ -139,7 +139,7 @@ private struct GraphNodeDetails: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text(item.title).font(.system(size: 20, weight: .semibold)).textSelection(.enabled)
                 if let document {
-                    Text(document.origin == "user" ? "我的理解 · 已保存内容" : "主动保存的 AI 摘记").font(.caption).foregroundStyle(.secondary)
+                    Text(document.origin == "user" ? "我的笔记 · 已保存内容" : "主动保存的 AI 摘记").font(.caption).foregroundStyle(.secondary)
                     if let loadError { Text(loadError).font(.caption).foregroundStyle(.red) }
                     else if let markdown { MarkdownText(markdown: markdown) }
                     else { ProgressView().controlSize(.small).frame(maxWidth: .infinity) }

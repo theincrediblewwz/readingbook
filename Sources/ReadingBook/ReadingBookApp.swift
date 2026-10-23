@@ -16,7 +16,7 @@ struct ReadingBookApp: App {
         .commands {
             CommandGroup(after: .newItem) {
                 Button("导入书籍…") { store.chooseBook() }.keyboardShortcut("o")
-                Button("写下理解") { store.newDocument() }.keyboardShortcut("n", modifiers: [.command, .shift])
+                Button("新建笔记") { store.newDocument() }.keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("保存文档") { Task { await store.saveCurrentDocument() } }.keyboardShortcut("s")
             }
             CommandMenu("阅读") {
@@ -28,7 +28,7 @@ struct ReadingBookApp: App {
                 Button("原文阅读") { store.requestedWorkspaceRoute = "reader" }.keyboardShortcut("1")
                 Button("阅读流程") { store.requestedWorkspaceRoute = "workflow" }.keyboardShortcut("2")
                 Button("与书对话") { store.requestedWorkspaceRoute = "query" }.keyboardShortcut("3")
-                Button("我的理解") { store.requestedWorkspaceRoute = "editor" }.keyboardShortcut("4")
+                Button("我的笔记") { store.requestedWorkspaceRoute = "editor" }.keyboardShortcut("4")
             }
         }
         Settings { ProviderSettingsView().environmentObject(store).frame(minWidth: 760, idealWidth: 1060, minHeight: 620, idealHeight: 760) }

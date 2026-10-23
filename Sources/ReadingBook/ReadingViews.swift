@@ -389,8 +389,8 @@ struct DocumentEditorView: View {
                             Text(store.editorTitle.isEmpty ? "未命名笔记" : store.editorTitle).font(.system(size: 30, weight: .semibold)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                             MarkdownText(markdown: previewBody)
                             if let document = currentDocument, !document.evidence.isEmpty {
-                                DisclosureGroup("原文依据 · \(document.evidence.count) 处") { EvidenceList(evidence: document.evidence).padding(.top, 12) }
-                                    .font(.system(size: 14)).tint(Palette.accent).padding(18).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+                                EvidenceDisclosure(evidence: document.evidence).id(document.id)
+                                    .padding(18).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
                             }
                         }.padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 30)
                     }
@@ -447,7 +447,7 @@ struct DocumentEditorView: View {
         let origin = clampedListOrigin(listOrigin, viewport: viewport)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                Text("我的理解").font(.system(size: 18, weight: .semibold)).frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+                Text("我的笔记").font(.system(size: 18, weight: .semibold)).frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
                     .overlay { FloatingPanelPointerInput(epoch: panelEpoch, begin: { dragOrigin = listOrigin }, drag: { delta, _ in listOrigin = clampedListOrigin(CGPoint(x: dragOrigin.x + delta.width, y: dragOrigin.y + delta.height), viewport: viewport) }, cancel: { listOrigin = clampedListOrigin(dragOrigin, viewport: viewport) }) }.help("拖动笔记列表")
                 Button { listCollapsed.toggle() } label: { Image(systemName: listCollapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(listCollapsed ? "展开列表" : "折叠列表")
                 Button { showingDocuments = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭列表")

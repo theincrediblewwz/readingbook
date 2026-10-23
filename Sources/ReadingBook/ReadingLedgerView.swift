@@ -130,11 +130,7 @@ struct ReadingLedgerView: View {
                                     if let ids = run.mathVerificationIDs, !ids.isEmpty {
                                         let records = (book.mathVerifications ?? []).filter { ids.contains($0.id) }
                                         ForEach(records) { record in
-                                            Button {
-                                                store.selectedObjectID = record.id; store.route = "math.verify"
-                                            } label: {
-                                                Label(record.summary + (record.deletedAt == nil ? "" : " · 已删除，可恢复"), systemImage: record.status == .verified ? "checkmark.seal" : "xmark.seal")
-                                            }.buttonStyle(.bordered).controlSize(.regular)
+                                            Text("历史记录 · " + record.summary).foregroundStyle(.secondary).textSelection(.enabled)
                                         }
                                     }
                                     if let output = run.output {

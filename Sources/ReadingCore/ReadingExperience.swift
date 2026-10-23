@@ -407,7 +407,6 @@ public enum ReadingExperienceRuntime {
         payload["events"] = items.events.prefix(16).map { ["id": $0.id, "name": String($0.name.prefix(160)), "dateText": String($0.dateText.prefix(120)), "summary": String($0.summary.prefix(300)), "placeIDs": Array($0.placeIDs.prefix(24)), "participantIDs": Array($0.participantIDs.prefix(24))] as [String: Any] }
         payload["layers"] = items.layers.prefix(12).map { ["id": $0.id, "kind": $0.kind, "title": String($0.title.prefix(120)), "markdown": String($0.markdown.prefix(500)), "sourceLabel": String($0.sourceLabel.prefix(120))] }
         payload["alignments"] = items.alignments.prefix(8).map { ["id": $0.id, "title": String($0.title.prefix(120)), "markdown": String($0.markdown.prefix(400))] }
-        payload["decisions"] = items.decisions.prefix(8).map { ["id": $0.id, "title": String($0.title.prefix(120)), "contextMarkdown": String($0.contextMarkdown.prefix(400))] }
         while true {
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
             if data.count <= maximumUTF8Bytes, let text = String(data: data, encoding: .utf8) { return text }

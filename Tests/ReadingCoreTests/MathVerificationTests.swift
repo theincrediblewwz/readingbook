@@ -144,6 +144,25 @@ final class MathVerificationTests: XCTestCase {
     private func toolArguments() throws -> Data {
         try JSONSerialization.data(withJSONObject: ["title": "练习核查", "input": "设方程 2x=1。", "mode": "solveLinearSystem", "matrix": [["2", "1"]], "evidence": [["unitID": "u1", "quote": "设方程 2x=1。"]]])
     }
+    /// Only explicit legacy fixtures exercise the retired tool; the app registry
+    /// must never advertise or execute it for a new AI session.
+    private func legacyRegistry() throws -> PluginToolRegistry {
+        var registry = PluginEngine.registry
+        try registry.install(MathVerificationToolPlugin())
+        return registry
+    }
+
+    func testDefaultProductRejectsRetiredMathToolWithoutChangingSavedHistory() throws {
+        var book = try bookWithReceipts()
+        let record = try MathVerificationEngine.verify(MathVerificationRequest(input: "2 1"))
+        book.mathVerifications = [record]
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(book)
+        XCTAssertNil(PluginEngine.registry.definition(named: "math_verify"))
+        XCTAssertThrowsError(try PluginEngine.apply(name: "math_verify", arguments: toolArguments(), to: &book, allowedUnitIDs: ["u1"], phase: .reading))
+        XCTAssertEqual(try encoder.encode(book), before)
+        XCTAssertNoThrow(try MathVerificationTools.validateStoredRecords(in: book))
+    }
 
     func testNativeToolIsReceiptGatedAndPersistsActualHostCalculation() throws {
         var registry = PluginToolRegistry(); try registry.install(MathVerificationToolPlugin())
@@ -218,12 +237,13 @@ final class MathVerificationTests: XCTestCase {
 
     func testWorkflowLinksOnlyActualNewRecordsFromThisAttemptAndTrashPreservesHistory() async throws {
         var book = try workflowBook()
+        let archivedTools = try legacyRegistry()
         let task = try XCTUnwrap(ReadingWorkflowRuntime.nextTask(for: book.units[0], in: book))
         let actual = ReadingWorkflowServices { task, original in
             var candidate = original
             let arguments = try JSONSerialization.data(withJSONObject: ["title": "实际计算", "input": "设方程 2x=1。", "mode": "solveLinearSystem",
                 "matrix": [["2", "1"]], "evidence": [["unitID": "u1", "quote": "设方程 2x=1。"]]])
-            _ = try PluginEngine.apply(name: "math_verify", arguments: arguments, to: &candidate, allowedUnitIDs: ["u1"], phase: .workflow)
+            _ = try PluginEngine.apply(name: "math_verify", arguments: arguments, to: &candidate, allowedUnitIDs: ["u1"], registry: archivedTools, phase: .workflow)
             ReadingWorkflowRuntime.recordTool("math_verify", in: &candidate, previous: original)
             try ReadingWorkflowRuntime.complete(stepID: task.requirement.stepID,
                 output: ReadingWorkflowOutput(result: "宿主算出 x=1/2 并回代；AI转录与原文仍需对照。", paragraphIDs: task.input.paragraphIDs,
@@ -273,6 +293,7 @@ final class MathVerificationTests: XCTestCase {
 
     func testFailedMathematicalCheckCanFinishWorkflowOnlyWithExplicitIssue() async throws {
         var book = try workflowBook()
+        let archivedTools = try legacyRegistry()
         let task = try XCTUnwrap(ReadingWorkflowRuntime.nextTask(for: book.units[0], in: book))
         func services(includeIssue: Bool) -> ReadingWorkflowServices {
             ReadingWorkflowServices { task, original in
@@ -280,7 +301,7 @@ final class MathVerificationTests: XCTestCase {
                 let arguments: [String: Any] = ["title": "错误步骤", "input": "设方程 2x=1。", "mode": "checkRowSteps", "matrix": [["2", "1"]],
                     "steps": [["operation": ["kind": "scale", "targetRow": 1, "factor": "2"], "expected": [["4", "3"]]]],
                     "evidence": [["unitID": "u1", "quote": "设方程 2x=1。"]]]
-                _ = try PluginEngine.apply(name: "math_verify", arguments: JSONSerialization.data(withJSONObject: arguments), to: &candidate, allowedUnitIDs: ["u1"], phase: .workflow)
+                _ = try PluginEngine.apply(name: "math_verify", arguments: JSONSerialization.data(withJSONObject: arguments), to: &candidate, allowedUnitIDs: ["u1"], registry: archivedTools, phase: .workflow)
                 ReadingWorkflowRuntime.recordTool("math_verify", in: &candidate, previous: original)
                 try ReadingWorkflowRuntime.complete(stepID: task.requirement.stepID,
                     output: ReadingWorkflowOutput(result: "指定的倍乘结果不成立，核查已停止。", paragraphIDs: task.input.paragraphIDs,

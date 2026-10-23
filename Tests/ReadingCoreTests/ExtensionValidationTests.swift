@@ -69,7 +69,7 @@ final class ExtensionValidationTests: XCTestCase {
     func testStaleSchemeAndLaterConfigurationConflictCanBeLoadedAndDiscarded() throws {
         let original = book()
         var proposed = original
-        proposed.views = [ViewDefinition(id: "math", title: "数学核查", kind: .knowledge, rendererID: "math.verify")]
+        proposed.views = [ViewDefinition(id: "layers", title: "多层伴读", kind: .knowledge, rendererID: "reading.layers")]
         var value = try BookSchemeRuntime.stageAIProposal(from: original, proposed: proposed)
         value.units[0].text += "新增文字"; value.views = [ViewDefinition(id: "later", title: "后来添加", kind: .cards)]
         XCTAssertNoThrow(try BookSchemeRuntime.validateStoredState(in: value))
@@ -107,24 +107,57 @@ final class ExtensionValidationTests: XCTestCase {
         XCTAssertThrowsError(try BookSchemeRuntime.validateStoredState(in: value))
     }
 
-    func testModelCanConfigureRealMathAndSchemeRenderersButNotUnknownOrMismatchedKinds() throws {
+    func testModelCanConfigureCurrentRenderersButCannotReviveRetiredComponents() throws {
         var value = book()
         let views: [[String: Any]] = [
-            ["id": "math", "title": "数学核查", "kind": "knowledge", "rendererID": "math.verify"],
+            ["id": "layers", "title": "多层伴读", "kind": "knowledge", "rendererID": "reading.layers"],
             ["id": "scheme", "title": "书本方案", "kind": "workflow", "rendererID": "book.scheme"]
         ]
         _ = try PluginEngine.apply(name: "views_configure", arguments: JSONSerialization.data(withJSONObject: ["views": views]),
                                    to: &value, allowedUnitIDs: [], phase: .planning)
-        XCTAssertEqual(value.views.map(\.rendererID), ["math.verify", "book.scheme"])
+        XCTAssertEqual(value.views.map(\.rendererID), ["reading.layers", "book.scheme"])
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let original = try encoder.encode(value)
         for invalid in [
-            ["id": "wrong", "title": "错误类型", "kind": "cards", "rendererID": "math.verify"],
+            ["id": "math", "title": "数学核查", "kind": "knowledge", "rendererID": "math.verify"],
+            ["id": "index", "title": "原文索引", "kind": "knowledge", "rendererID": "reading.mentions"],
+            ["id": "thought", "title": "思考卡", "kind": "knowledge", "rendererID": "reading.decisions"],
+            ["id": "math.verify", "title": "旧入口", "kind": "knowledge"],
+            ["id": "wrong", "title": "错误类型", "kind": "cards", "rendererID": "reading.layers"],
             ["id": "unknown", "title": "不存在", "kind": "knowledge", "rendererID": "native.future"]
         ] {
             XCTAssertThrowsError(try PluginEngine.apply(name: "views_configure", arguments: JSONSerialization.data(withJSONObject: ["views": [invalid]]),
                                                        to: &value, allowedUnitIDs: [], phase: .planning))
             XCTAssertEqual(try encoder.encode(value), original)
         }
+    }
+
+    func testLegacyRetiredConfigurationAndSavedNotesSurviveReplanning() throws {
+        var value = book()
+        let method = ReadingMethod(id: "old-math", name: "旧数学核查", goal: "旧档", steps: ["验算"],
+            executions: [ReadingStepExecution(stepIndex: 0, actionID: "math.verify")])
+        value.methods.append(method)
+        value.plan = ReadingPlan(methodIDs: [method.id])
+        value.views = [ViewDefinition(id: "old-index", title: "旧索引", kind: .knowledge, rendererID: "reading.mentions"),
+                       ViewDefinition(id: "math.verify", title: "旧核查入口", kind: .knowledge)]
+        value.documents = [DocumentRecord(id: "saved-math-note", title: "我主动保存的数学笔记")]
+        value.mathVerifications = [try MathVerificationEngine.verify(MathVerificationRequest(input: "2 1"))]
+        _ = try BookSchemeRuntime.saveTemplate(name: "旧数学方案", in: &value)
+        value = try JSONDecoder().decode(BookProject.self, from: JSONEncoder().encode(value))
+        XCTAssertNoThrow(try BookSchemeRuntime.validateStoredState(in: value))
+        XCTAssertNoThrow(try ReadingLedger.validateStoredRecords(in: value))
+        XCTAssertNoThrow(try MathVerificationTools.validateStoredRecords(in: value))
+        XCTAssertThrowsError(try PluginEngine.requireActivePlan(in: value))
+        XCTAssertFalse(PluginEngine.activeMethods(in: value).contains { $0.id == method.id })
+        var proposed = value; proposed.plan = ReadingPlan(methodIDs: ["textbook"])
+        var preview = try BookSchemeRuntime.stageAIProposal(from: value, proposed: proposed)
+        XCTAssertTrue(preview.bookSchemes?.pending?.selection.viewIDs.isEmpty == true)
+        try BookSchemeRuntime.applyPending(in: &preview)
+        XCTAssertEqual(preview.methods.first { $0.id == method.id }, method)
+        XCTAssertEqual(preview.views, value.views, "Retired configuration is kept as archival data, not activated or deleted.")
+        XCTAssertEqual(preview.documents, value.documents)
+        XCTAssertEqual(preview.mathVerifications, value.mathVerifications)
+        XCTAssertEqual(preview.plan?.methodIDs, ["textbook"])
+        XCTAssertNoThrow(try PluginEngine.requireActivePlan(in: preview))
     }
 }

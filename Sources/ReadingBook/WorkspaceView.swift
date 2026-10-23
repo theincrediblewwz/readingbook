@@ -21,6 +21,9 @@ struct WorkspaceView: View {
     @State private var navigationExpanded = false
     @State private var pendingRoute: String?
     @State private var pendingModelRoute: String?
+    @State private var showsRouteConfirmation = false
+    @State private var showsModelRouteConfirmation = false
+    @State private var resolvingNavigation = false
     @State private var chromeBounds: [String: CGRect] = [:]
     var body: some View {
         GeometryReader { geometry in
@@ -62,29 +65,31 @@ struct WorkspaceView: View {
         .serviceProfileChangeConfirmation(store: store)
         .tint(Palette.accent)
         .onOpenURL { url in Task { await store.openInternalURL(url) } }
-        .confirmationDialog("保存当前 Markdown 后离开？", isPresented: Binding(get: { pendingRoute != nil }, set: { if !$0 { pendingRoute = nil } })) {
-            Button("保存并继续") { let destination = pendingRoute; pendingRoute = nil; Task { await store.saveCurrentDocument(); if !store.editorDirty, let destination { store.route = destination } } }
-            Button("放弃修改并继续", role: .destructive) { let destination = pendingRoute; pendingRoute = nil; store.discardDraftForWorkspaceNavigation(); if let destination { store.route = destination } }
-            Button("继续编辑", role: .cancel) { pendingRoute = nil }
-        } message: { Text("已保存正文保留；本次未保存修改可保存或放弃。") }
-        .confirmationDialog("当前模型配置尚未保存", isPresented: Binding(get: { pendingModelRoute != nil }, set: { if !$0 { pendingModelRoute = nil } })) {
-            Button("保存并继续") {
-                let destination = pendingModelRoute; pendingModelRoute = nil
-                store.saveServiceProfileForUI()
-                if !store.serviceProfileDraft.isDirty(in: store), let destination { store.route = destination }
-            }
-            Button("放弃更改并继续", role: .destructive) {
-                let destination = pendingModelRoute; pendingModelRoute = nil
-                if store.discardServiceDraftForNavigation(), let destination { store.route = destination }
-            }
-            Button("继续编辑", role: .cancel) { pendingModelRoute = nil }
-        } message: { Text("保存会写入本机配置与钥匙串；取消可继续编辑。") }
+        .confirmationDialog("保存当前 Markdown 后离开？", isPresented: $showsRouteConfirmation, presenting: pendingRoute) { destination in
+            Button("保存并继续") { saveDocumentAndNavigate(to: destination) }.disabled(store.isBusy)
+            Button("放弃修改并继续", role: .destructive) {
+                pendingRoute = nil; showsRouteConfirmation = false
+                store.discardDraftForWorkspaceNavigation(); store.route = destination
+            }.disabled(store.isBusy)
+            Button("继续编辑", role: .cancel) { pendingRoute = nil; showsRouteConfirmation = false }
+        } message: { _ in Text("已保存正文保留；本次未保存修改可保存或放弃。") }
+        .confirmationDialog("当前模型配置尚未保存", isPresented: $showsModelRouteConfirmation, presenting: pendingModelRoute) { destination in
+            Button("保存并继续") { resolveModelNavigation(to: destination, save: true) }.disabled(store.isBusy)
+            Button("放弃更改并继续", role: .destructive) { resolveModelNavigation(to: destination, save: false) }.disabled(store.isBusy)
+            Button("继续编辑", role: .cancel) { pendingModelRoute = nil; showsModelRouteConfirmation = false }
+        } message: { _ in Text("保存会写入本机配置与钥匙串；取消可继续编辑。") }
+        .onChange(of: showsRouteConfirmation) { _, visible in
+            if !visible && !resolvingNavigation { pendingRoute = nil }
+        }
+        .onChange(of: showsModelRouteConfirmation) { _, visible in
+            if !visible && !resolvingNavigation { pendingModelRoute = nil }
+        }
         .sheet(item: sheetBinding, onDismiss: finishSheetDismissal) { sheet in
             switch sheet {
-            case .settings: ProviderSettingsView().environmentObject(store).frame(width: 860, height: 660)
+            case .settings: ProviderSettingsView(onClose: { closeSheet(.settings) }).environmentObject(store).frame(width: 860, height: 660)
             case .ocr: PDFOCRPanel().environmentObject(store).frame(width: 560, height: 460)
             case .trash: LibraryTrashView().environmentObject(store).frame(width: 600, height: 500)
-            case .plugins: PluginLibraryView().environmentObject(store).frame(width: 900, height: 680)
+            case .plugins: PluginLibraryView(onClose: { closeSheet(.plugins) }).environmentObject(store).frame(width: 900, height: 680)
             case .librarySearch: LibrarySearchView().environmentObject(store).frame(minWidth: 620, idealWidth: 800, minHeight: 500, idealHeight: 640)
             case .password(let request): PDFPasswordSheet(request: request).environmentObject(store)
             }
@@ -140,7 +145,7 @@ struct WorkspaceView: View {
                         routeButton("原文阅读", icon: "book.pages", route: "reader")
                         routeButton("阅读流程", icon: "point.3.connected.trianglepath.dotted", route: "workflow")
                         routeButton("与书对话", icon: "bubble.left.and.bubble.right", route: "query")
-                        routeButton("我的理解", icon: "square.and.pencil", route: "editor")
+                        routeButton("我的笔记", icon: "square.and.pencil", route: "editor")
                         if !componentViews.isEmpty {
                             Text("本书组件").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.top, 16).padding(.bottom, 5)
                             ForEach(componentViews) { view in
@@ -217,7 +222,7 @@ struct WorkspaceView: View {
     /// converts them once into its own canvas coordinates.
     private var canvasInteractionBlocked: Bool {
         navigationExpanded || servicePopover || compactInspector || activeSheet != nil || sheetClosing
-            || pendingRoute != nil || pendingModelRoute != nil || store.deletionRequest != nil
+            || showsRouteConfirmation || showsModelRouteConfirmation || resolvingNavigation || store.deletionRequest != nil
             || store.errorMessage != nil || store.serviceProfileDraft.pendingChange != nil
     }
     private var canvasExclusionRects: [CGRect] { chromeBounds.keys.sorted().compactMap { chromeBounds[$0] } }
@@ -296,11 +301,38 @@ struct WorkspaceView: View {
         }
     }
     private func navigate(_ route: String) {
-        guard !store.isSavingDocument else { return }
+        guard !store.isSavingDocument, !resolvingNavigation else { return }
         navigationExpanded = false; servicePopover = false
-        if store.serviceProfileDraft.isDirty(in: store) && store.route == "models" && route != "models" { pendingModelRoute = route }
-        else if store.editorDirty && store.route == "editor" && route != "editor" { pendingRoute = route }
+        if store.serviceProfileDraft.isDirty(in: store) && store.route == "models" && route != "models" { pendingModelRoute = route; showsModelRouteConfirmation = true }
+        else if store.editorDirty && store.route == "editor" && route != "editor" { pendingRoute = route; showsRouteConfirmation = true }
         else { store.route = route }
+    }
+    private func saveDocumentAndNavigate(to destination: String) {
+        guard !resolvingNavigation else { return }
+        pendingRoute = destination; resolvingNavigation = true; showsRouteConfirmation = false
+        Task {
+            await store.saveCurrentDocument()
+            resolvingNavigation = false
+            guard pendingRoute == destination else { return }
+            if !store.editorDirty { pendingRoute = nil; store.route = destination }
+            else { showsRouteConfirmation = true }
+        }
+    }
+    private func resolveModelNavigation(to destination: String, save: Bool) {
+        guard !resolvingNavigation else { return }
+        pendingModelRoute = destination; resolvingNavigation = true; showsModelRouteConfirmation = false
+        let succeeded: Bool
+        if save { store.saveServiceProfileForUI(); succeeded = !store.serviceProfileDraft.isDirty(in: store) }
+        else { succeeded = store.discardServiceDraftForNavigation() }
+        if succeeded { pendingModelRoute = nil; store.route = destination; resolvingNavigation = false }
+        else {
+            // Re-present on the next turn, after the native dialog has dismissed.
+            // Keep its destination and every draft field available for retry.
+            DispatchQueue.main.async {
+                resolvingNavigation = false
+                if pendingModelRoute == destination { showsModelRouteConfirmation = true }
+            }
+        }
     }
     private var compactReaderControls: Bool { detailWidth < 950 }
     private var readerControls: some View {
@@ -318,7 +350,6 @@ struct WorkspaceView: View {
                 Button(store.readingCompanionVisible ? "收起伴读" : "展开伴读") { store.readingCompanionVisible.toggle() }
                 Button("解释与译文") { store.readingCompanionSection = "layers"; store.readingCompanionVisible = true }
                 Button("原文中的对象") { store.readingCompanionSection = "mentions"; store.readingCompanionVisible = true }
-                Button("停下来想一想") { store.readingCompanionSection = "decisions"; store.readingCompanionVisible = true }
                 Menu("原文与译注对照") {
                     Button("原书阅读") { store.readingSourceMode = "original" }
                     Button("逐段对照") { store.readingSourceMode = "stacked" }
@@ -403,9 +434,29 @@ struct WorkspaceView: View {
     }
     private var sheetBinding: Binding<WorkspaceSheet?> {
         Binding(get: { activeSheet }, set: { value in
-            if value == nil { sheetClosing = true }
+            if value == nil {
+                sheetClosing = true
+                if let activeSheet { clearSheetRequest(activeSheet) }
+            }
             activeSheet = value
         })
+    }
+    private func closeSheet(_ sheet: WorkspaceSheet) {
+        guard activeSheet?.id == sheet.id else { return }
+        sheetClosing = true
+        clearSheetRequest(sheet)
+        activeSheet = nil
+    }
+    private func clearSheetRequest(_ sheet: WorkspaceSheet) {
+        switch sheet {
+        case .settings: store.showingSettings = false
+        case .ocr: store.showingOCR = false
+        case .trash: store.showingTrash = false
+        case .plugins: store.showingPlugins = false
+        case .librarySearch: store.showingLibrarySearch = false
+        case .password(let request):
+            if store.pdfPasswordRequest?.id == request.id { store.cancelPDFPasswordRequest(request.id) }
+        }
     }
     private func reconcileSheet() {
         guard !sheetClosing else { return }
@@ -449,8 +500,8 @@ struct WorkspaceView: View {
     }
     @ViewBuilder private var content: some View {
         if store.route == "library" { FrostLibraryView() }
-        else if store.route == "models" { ProviderSettingsView(embedded: true) }
-        else if store.route == "plugins" { PluginLibraryView(embedded: true) }
+        else if store.route == "models" { ProviderSettingsView(embedded: true, onClose: { navigate(store.book == nil ? "library" : "reader") }) }
+        else if store.route == "plugins" { PluginLibraryView(embedded: true, onClose: { navigate(store.book == nil ? "library" : "reader") }) }
         else if store.route == "trash" { LibraryTrashView(onClose: { navigate("library") }).padding(.top, 88) }
         else if store.route == "librarySearch" { LibrarySearchView(embedded: true, onClose: { navigate("library") }).padding(.top, 88) }
         else if store.book == nil { WelcomeView().padding(.top, 88) }
@@ -557,16 +608,62 @@ struct EmptyState: View {
 }
 
 struct EvidenceList: View {
-    @EnvironmentObject var store: AppStore
     var evidence: [Evidence]
+    var showsHeading = true
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if !evidence.isEmpty { Text("回到原文").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+            if showsHeading && !evidence.isEmpty { Text("原文依据").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
             ForEach(Array(evidence.enumerated()), id: \.offset) { _, reference in
-                Button { store.follow(reference) } label: {
-                    VStack(alignment: .leading, spacing: 5) { Text(store.book?.units.first { $0.id == reference.unitID }?.locator ?? reference.unitID).font(.caption2).foregroundStyle(Palette.accent); Text(reference.quote).font(.caption).foregroundStyle(.secondary).lineLimit(4) }.frame(maxWidth: .infinity, alignment: .leading).padding(10).background(Palette.accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 9)).contentShape(Rectangle())
-                }.buttonStyle(.plain)
+                EvidenceReferenceRow(reference: reference).id(reference.unitID + "\n" + reference.quote)
             }
+        }
+    }
+}
+
+/// Inspect a quote in place; leaving for the source is a separate action.
+private struct EvidenceReferenceRow: View {
+    @EnvironmentObject var store: AppStore
+    let reference: Evidence
+    @State private var expanded = false
+    private var unit: SourceUnit? { store.book?.units.first { $0.id == reference.unitID } }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { expanded.toggle() } label: {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
+                        Text(unit?.locator ?? reference.unitID).font(.caption.weight(.medium))
+                        Spacer(minLength: 0)
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption)
+                    }.foregroundStyle(Palette.accent)
+                    if !expanded { Text(reference.quote).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(3).multilineTextAlignment(.leading) }
+                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(12).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel(expanded ? "收起原文依据" : "展开原文依据")
+            if expanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let unit, !unit.chapter.isEmpty { Text(unit.chapter).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                    Text(reference.quote).font(.system(size: 15)).lineSpacing(5).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    Button { store.follow(reference) } label: { Label("回到原文", systemImage: "arrow.uturn.backward") }
+                        .buttonStyle(ReadingToolbarButtonStyle()).disabled(unit == nil)
+                    if unit == nil { Text("来源片段已不存在，引句仍保留。").font(.caption).foregroundStyle(.secondary) }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.bottom, 12)
+            }
+        }.background(Palette.accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct EvidenceDisclosure: View {
+    var evidence: [Evidence]
+    @State private var expanded = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: 10) {
+                    Label("原文依据 · \(evidence.count) 处", systemImage: "text.quote")
+                    Spacer(minLength: 0)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                }.font(.system(size: 14)).foregroundStyle(Palette.accent).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            if expanded { EvidenceList(evidence: evidence, showsHeading: false).padding(.top, 8) }
         }
     }
 }

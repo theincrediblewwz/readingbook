@@ -17,7 +17,13 @@ struct ReadingCompanionPanel: View {
         }
         return store.readingContextItems
     }
-    private var effectiveSection: String { section == "context" ? store.readingCompanionSection : section }
+    private var effectiveSection: String {
+        let value = section == "context" ? store.readingCompanionSection : section
+        return value == "decisions" ? "layers" : value
+    }
+    private var recoverableItems: [ReadingExperienceTrashItem] {
+        (store.book?.readingExperience?.trash ?? []).filter { $0.kind != "decision" }
+    }
     var body: some View {
         VStack(spacing: 0) {
             if showsHeader { HStack(spacing: 10) {
@@ -27,11 +33,10 @@ struct ReadingCompanionPanel: View {
                     Button("解释与译文") { store.readingCompanionSection = "layers" }
                     Button("原文中的对象") { store.readingCompanionSection = "mentions" }
                     Button("资料对读") { store.readingCompanionSection = "references" }
-                    Button("停下来想一想") { store.readingCompanionSection = "decisions" }
                 } label: { Image(systemName: "line.3.horizontal.decrease") }.menuStyle(.borderlessButton).frame(width: 40, height: 40).help("选择伴读内容") }
-                if !(store.book?.readingExperience?.trash ?? []).isEmpty {
+                if !recoverableItems.isEmpty {
                     Menu {
-                        ForEach(store.book?.readingExperience?.trash ?? []) { item in Button("恢复 \(item.title)") { Task { await store.restoreReadingItem(item.id) } }.disabled(store.isBusy) }
+                        ForEach(recoverableItems) { item in Button("恢复 \(item.title)") { Task { await store.restoreReadingItem(item.id) } }.disabled(store.isBusy) }
                     } label: { Image(systemName: "arrow.uturn.backward") }.menuStyle(.borderlessButton).frame(width: 40, height: 40).help("恢复已移除的伴读")
                 }
                 if let onClose { Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("收起伴读") }
@@ -40,11 +45,11 @@ struct ReadingCompanionPanel: View {
                 HStack {
                     Picker("伴读内容", selection: $store.readingCompanionSection) {
                         Text("此处伴读").tag("context")
-                        Text("解释与译文").tag("layers"); Text("原文对象").tag("mentions"); Text("资料对读").tag("references"); Text("思考卡").tag("decisions")
+                        Text("解释与译文").tag("layers"); Text("原文对象").tag("mentions"); Text("资料对读").tag("references")
                     }.labelsHidden().accessibilityLabel("伴读内容").pickerStyle(.menu)
                     Spacer(minLength: 6)
-                    if !(store.book?.readingExperience?.trash ?? []).isEmpty {
-                        Menu { ForEach(store.book?.readingExperience?.trash ?? []) { item in Button("恢复 \(item.title)") { Task { await store.restoreReadingItem(item.id) } }.disabled(store.isBusy) } } label: { Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44) }.menuStyle(.borderlessButton).help("恢复已移除的伴读")
+                    if !recoverableItems.isEmpty {
+                        Menu { ForEach(recoverableItems) { item in Button("恢复 \(item.title)") { Task { await store.restoreReadingItem(item.id) } }.disabled(store.isBusy) } } label: { Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44) }.menuStyle(.borderlessButton).help("恢复已移除的伴读")
                     }
                 }.padding(.horizontal, 16)
             }
@@ -59,7 +64,6 @@ struct ReadingCompanionPanel: View {
                     if let error = store.readingExperienceError { Text(error).font(.caption).foregroundStyle(Palette.copper) }
                     if effectiveSection == "mentions" { objectSection }
                     else if effectiveSection == "references" { referenceSection }
-                    else if effectiveSection == "decisions" { decisionSection }
                     else { layerSection }
                 }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
             }

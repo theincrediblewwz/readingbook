@@ -54,14 +54,19 @@ struct WorkspaceComponentDescriptor: Identifiable {
     }
     func component(for kind: ComponentKind) -> WorkspaceComponentDescriptor? { aliases[kind].flatMap { entries[$0]?.descriptor } }
     func component(id: String) -> WorkspaceComponentDescriptor? { entries[id]?.descriptor }
-    func render(id: String) -> AnyView? { entries[id]?.render(nil) }
+    func render(id: String) -> AnyView? {
+        guard !PluginEngine.isRetiredRenderer(id) else { return nil }
+        return entries[id]?.render(nil)
+    }
     func component(for view: ViewDefinition) -> WorkspaceComponentDescriptor? {
+        guard !PluginEngine.isRetiredRenderer(view.rendererID ?? view.id) else { return nil }
         if let id = view.rendererID {
             return entries[id]?.descriptor ?? WorkspaceComponentDescriptor(kind: view.kind, title: view.title, icon: "puzzlepiece.extension", rendererID: id)
         }
         return component(for: view.kind)
     }
     func render(_ definition: ViewDefinition?, kind: ComponentKind) -> AnyView? {
+        if let definition, PluginEngine.isRetiredRenderer(definition.rendererID ?? definition.id) { return nil }
         if let definition, let id = definition.rendererID {
             if let entry = entries[id] { return entry.render(definition) }
             return AnyView(ContentUnavailableView(definition.title, systemImage: "puzzlepiece.extension", description: Text("组件 \(id) 尚未安装。内容与配置已保留，安装对应插件后可继续查看。")))
@@ -98,7 +103,6 @@ struct WorkspaceComponentDescriptor: Identifiable {
     let id = "builtin.book-tools"
     func register(in registry: inout WorkspaceComponentRegistry) throws {
         try registry.register(WorkspaceComponentDescriptor(kind: .workflow, title: "书本方案", icon: "slider.horizontal.3", permanent: true, rendererID: "book.scheme")) { AnyView(BookSchemeWorkspaceView(definition: $0)) }
-        try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "数学核查", icon: "function", rendererID: "math.verify")) { AnyView(MathVerificationWorkspaceView(definition: $0)) }
     }
 }
 
@@ -106,8 +110,6 @@ struct WorkspaceComponentDescriptor: Identifiable {
     let id = "builtin.reading-experience"
     func register(in registry: inout WorkspaceComponentRegistry) throws {
         try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "多层伴读", icon: "text.book.closed", rendererID: "reading.layers")) { AnyView(ReadingExperienceWorkspaceView(section: "layers", definition: $0)) }
-        try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "原文索引", icon: "text.magnifyingglass", rendererID: "reading.mentions")) { AnyView(ReadingExperienceWorkspaceView(section: "mentions", definition: $0)) }
-        try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "思考卡", icon: "rectangle.on.rectangle", rendererID: "reading.decisions")) { AnyView(ReadingExperienceWorkspaceView(section: "decisions", definition: $0)) }
         try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "全书总览", icon: "chart.bar.xaxis", rendererID: "reading.atlas")) { AnyView(ReadingAtlasView(definition: $0)) }
     }
 }
@@ -120,7 +122,7 @@ struct WorkspaceComponentDescriptor: Identifiable {
         try registry.register(WorkspaceComponentDescriptor(kind: .mindmap, title: "思维导图", icon: ComponentKind.mindmap.icon, aliases: [])) { _ in AnyView(DocumentGraphView()) }
         try registry.register(WorkspaceComponentDescriptor(kind: .relations, title: "关系图谱", icon: ComponentKind.relations.icon, aliases: [])) { _ in AnyView(RelationGraphView()) }
         try registry.register(WorkspaceComponentDescriptor(kind: .knowledge, title: "知识库", icon: ComponentKind.knowledge.icon, aliases: [])) { _ in AnyView(KnowledgeLibraryView()) }
-        try registry.register(WorkspaceComponentDescriptor(kind: .editor, title: "我的理解", icon: ComponentKind.editor.icon, aliases: [], permanent: true)) { _ in AnyView(DocumentEditorView()) }
+        try registry.register(WorkspaceComponentDescriptor(kind: .editor, title: "我的笔记", icon: ComponentKind.editor.icon, aliases: [], permanent: true)) { _ in AnyView(DocumentEditorView()) }
         try registry.register(WorkspaceComponentDescriptor(kind: .query, title: "与书对话", icon: ComponentKind.query.icon, aliases: [], permanent: true)) { _ in AnyView(EnhancedBookChatView()) }
         try registry.register(WorkspaceComponentDescriptor(kind: .workflow, title: "阅读流程", icon: ComponentKind.workflow.icon, aliases: [], permanent: true)) { _ in AnyView(ReadingWorkflowView()) }
     }

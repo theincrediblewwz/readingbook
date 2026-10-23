@@ -41,10 +41,18 @@ struct ReadingLayersWorkspaceView: View {
         for kind in readingState.layers.map(\.kind) where !result.contains(kind) { result.append(kind) }
         return result
     }
+    /// A directory entry represents saved companion content, not every source
+    /// page. Empty pages remain available in the original reader.
+    private var contentUnitIDs: Set<String> {
+        let usedAnchors = Set(readingState.layers.filter { !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.flatMap(\.sourceAnchorIDs)
+            + readingState.alignments.filter { !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.flatMap(\.sourceAnchorIDs))
+        return Set(anchors.filter { usedAnchors.contains($0.id) }.map(\.unitID))
+    }
     private var units: [SourceUnit] {
         let original = unitScope == "page" ? store.visibleSourceUnits : (store.book?.units ?? [])
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        return original.filter { query.isEmpty || $0.locator.localizedCaseInsensitiveContains(query) || $0.chapter.localizedCaseInsensitiveContains(query) || $0.text.localizedCaseInsensitiveContains(query) }
+        let populated = contentUnitIDs
+        return original.filter { populated.contains($0.id) && (query.isEmpty || $0.locator.localizedCaseInsensitiveContains(query) || $0.chapter.localizedCaseInsensitiveContains(query) || $0.text.localizedCaseInsensitiveContains(query)) }
     }
 
     var body: some View {
@@ -97,7 +105,7 @@ struct ReadingLayersWorkspaceView: View {
                 ScrollView {
                     LazyVStack(spacing: 9) {
                         ForEach(units) { value in sourceRow(value).id(value.id) }
-                        if units.isEmpty { Text("没有匹配的原文片段").font(.system(size: 14)).foregroundStyle(.secondary).padding(22) }
+                        if units.isEmpty { Text(contentUnitIDs.isEmpty ? "还没有已保存的伴读内容" : "此范围没有匹配的伴读片段").font(.system(size: 14)).foregroundStyle(.secondary).padding(22) }
                     }.padding(12)
                 }.onChange(of: sourceID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
                     .onAppear { if let sourceID { proxy.scrollTo(sourceID, anchor: .center) } }
@@ -141,7 +149,7 @@ struct ReadingLayersWorkspaceView: View {
             Divider().padding(.horizontal, 22)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
-                    sourceQuote
+                    if !contentUnitIDs.isEmpty { sourceQuote }
                     if let error = store.readingExperienceError { Label(error, systemImage: "exclamationmark.circle").foregroundStyle(.red).font(.system(size: 14)).textSelection(.enabled) }
                     ForEach(layers) { layer in layerCard(layer) }
                     ForEach(alignments) { alignment in alignmentCard(alignment) }

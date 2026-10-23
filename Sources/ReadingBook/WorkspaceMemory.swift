@@ -61,8 +61,9 @@ import ReadingCore
             await openDocument(document)
             guard bookID == expectedBookID, generation == navigationGeneration else { return }
         }
-        let permanent: Set<String> = ["reader", "editor", "workflow", "query", "library", "models", "plugins", "trash", "librarySearch", "book.scheme", "math.verify"]
-        let routeExists = permanent.contains(memory.route) || book.views.contains { $0.id == memory.route } || ComponentKind(rawValue: memory.route) != nil
+        let permanent: Set<String> = ["reader", "editor", "workflow", "query", "library", "models", "plugins", "trash", "librarySearch", "book.scheme"]
+        let retiredView = book.views.contains { $0.id == memory.route && PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }
+        let routeExists = !PluginEngine.isRetiredRenderer(memory.route) && !retiredView && (permanent.contains(memory.route) || book.views.contains { $0.id == memory.route } || ComponentKind(rawValue: memory.route) != nil)
         route = routeExists ? memory.route : "reader"
         if route == "editor", selectedDocumentID == nil { route = "reader" }
         if route != "editor" { readingContextDocumentID = nil; selectedObjectID = nil }

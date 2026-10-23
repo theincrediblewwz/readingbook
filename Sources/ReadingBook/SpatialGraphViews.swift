@@ -71,7 +71,7 @@ struct DocumentGraphView: View {
             if let book = store.book, !graphData.items.isEmpty {
                 graphWorkspace(book).id(book.id)
             } else {
-                EmptyState(title: "从第一篇理解开始", detail: "在“我的理解”写一篇笔记，或主动保存 AI 回答。双击节点打开文档，从节点边缘的圆点拖出连线。", icon: "point.3.connected.trianglepath.dotted")
+                EmptyState(title: "从第一篇笔记开始", detail: "在“我的笔记”写一篇笔记，或主动保存 AI 回答。双击节点打开文档，从节点边缘的圆点拖出连线。", icon: "point.3.connected.trianglepath.dotted")
             }
         }.popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
             if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 330, height: 500) }
@@ -264,7 +264,7 @@ struct KnowledgeLibraryView: View {
                         BrandGlyph(name: "note").frame(width: 19, height: 19).foregroundStyle(Palette.accent)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(document.title).font(.system(size: 17, weight: .medium)).lineLimit(2)
-                            Text(document.origin == "user" ? "我的理解" : "主动保存的摘记").font(.system(size: 13)).foregroundStyle(.secondary)
+                            Text(document.origin == "user" ? "我的笔记" : "主动保存的摘记").font(.system(size: 13)).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 4)
                         Text(document.updatedAt, style: .date).font(.caption2).foregroundStyle(.secondary)
@@ -334,8 +334,8 @@ struct KnowledgeLibraryView: View {
             .background(Palette.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
     }
     private var newNoteButton: some View {
-        Button { store.newDocument() } label: { Label("写下理解", systemImage: "square.and.pencil") }
-            .buttonStyle(ReadingToolbarButtonStyle()).foregroundStyle(Palette.accent).help("写下理解").accessibilityLabel("写下理解").disabled(store.isBusy)
+        Button { store.newDocument() } label: { Label("新建笔记", systemImage: "square.and.pencil") }
+            .buttonStyle(ReadingToolbarButtonStyle()).foregroundStyle(Palette.accent).help("新建笔记").accessibilityLabel("新建笔记").disabled(store.isBusy)
     }
     private func sectionLabel(_ title: String, count: Int) -> some View {
         Text("\(title) · \(count)").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 6)
