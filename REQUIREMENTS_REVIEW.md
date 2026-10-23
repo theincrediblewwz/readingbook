@@ -1,3 +1,33 @@
+# 0.13.1：使用流程与开发流程多轮审核（2026-10-23）
+
+基线 `800864e`，修复位于独立分支 `codex/audit-recovery-0.13.1`。本轮先按实际使用链分流只读审查，再互相检查修复、用真实 Markdown 解析器核对边界，最后交给 macOS Actions 编译与回归。没有依据旧勾选宣称通过，也不把 Windows 静态检查当 Mac 真机验证。
+
+| 确认的问题与触发方式 | 本轮处理 | 主要证据与回归 |
+| --- | --- | --- |
+| 导入中断留下 `.creating-`/`.importing-`，或一本书损坏，导致所有正常书无法加载；坏回收条目也阻断其他恢复 | 逐书加载报告，故障目录原地保留、显式报告；正常书与回收条目可继续使用 | `LibraryRepository.loadReport/trashReport`；`StorageAuditTests` 健康/故障混合夹具 |
+| 外部编辑器更新 Markdown 后，旧 App 草稿可以覆盖新正文；事务恢复也可能覆盖外部改动 | 同次读取正文/原始字节 SHA；保存必须匹配基准，恢复只接受旧哈希或已提交新哈希；冲突保留现场，可另存新笔记 | `readDocumentSnapshot/saveDocument/recoverDocument`；BOM、过期版本和恢复日志回归 |
+| 新文档 ID 可能覆盖未登记的同名恢复正文；待写正文未算入包大小上限 | 拒绝覆盖未登记文件；新正文与恢复正文均计入 512 MiB 门禁 | 存储回归；检查在写正文/事务前执行 |
+| 独立导入的数学记录可自报 verified，方案历史/模板缺少完整结构校验 | 所有数学记录按输入精确重算，校验来源/流程归属；方案校验数量、ID、引用、选择与定义，合法过期预览仍能加载后放弃 | `StoredExtensionValidation`；手动/AI/软删除/篡改/旧 nil/未知历史兼容 |
+| AI 提示允许 math.verify/book.scheme，但工具解析白名单拒绝，数学方案不能真实创建组件 | 模型 renderer 元数据统一并核对 kind，未知 renderer 仍拒绝 | `PluginEngine.modelRendererKinds`；真实工具配置回归 |
+| 异常正 token 计数可在保护门禁前溢出；响应体读完才查 4 MiB，不能限制接收期内存 | 派生预算和累计使用检查式算术；响应头/分块接收即限长，保留无重定向、错误体不回显和取消保护 | `ReadingTokenBudget`、`BoundedProviderResponse`；离线 URLProtocol 夹具模拟成功/超限/错误/取消，无真实模型 |
+| 书项目导入没有忙碌提交锁，完成时可能和其他导入/切书/编辑抢状态 | 验证提交期间锁定，完成后明确发布再切书；切书恢复期也受忙碌与暂停保护 | `AppStore.importProject/selectBook`；Mac 清单专项 |
+| 从当前书进入书库再点“继续阅读”，保存的 library 路由被恢复，按钮看似无反应 | 书封面与继续阅读明确要求 reader；自动启动/普通切书继续恢复上次布局，未保存草稿优先 | `FrostLibraryView`、`selectBook(preferredRoute:)` |
+| ⌘1–4 菜单绕过未保存确认；多个主窗口共享一个 AppStore 却有不同 PDF 控制器，会抢阅读状态 | 命令走 Workspace 同一导航确认入口；本版采用一个主窗口，设置窗口保留，避免假装支持独立多窗口 | `ReadingBookApp`、`WorkspaceView`；Mac 快捷键/关闭重开专项 |
+| 全串引用正则会把代码、公式和现有链接里的 [doc:]/[unit:] 改写 | 语法感知的只读呈现转换，保护围栏/行内代码、数学、链接目标、引用定义和 shortcut links | `MarkdownReferenceLinksTests`；交叉审查的四个边界已与项目真实 markdown-it 输出核对 |
+| 选择地图事件后，缩窗/拖动时间窗会重定位并把缩放重设为 4° | 普通布局变化保留手动视野；主动选择事件仍定位，用户操作优先于短期布局稳定 | `SpatialTimelineView`；仍需 Mac MapKit 手势验收 |
+| PDF/图谱节流窗口内立刻切书/退出，最后视野尚未写入 Store；图侧面板未接每书记忆 | 切书/后台/退出先同步采集，再落盘；思维/关系节点面板独立 key，过期书回调被拒 | `ReadingBookCaptureWorkspaceMemory`、`FloatingGraphWorkspace`；Mac 快速切换专项 |
+| 大图每节点反复扫描全节点/全对象，边分组也逐帧重算；全量连接目标菜单进一步放大开销 | 缓存物理身份/序号/邻接/边分组和图投影；相机只改本地视野，停下再发布；保留端口/就地起线，移除巨大目标枚举 | `GraphIdentityIndex`、`GraphRenderCache`、`BookGraphPresentationCache`；万节点与重复物理节点核心用例 |
+| 普通节点/书签保存重读全部 Markdown；数学校验反复消元；每个键都序列化整篇草稿 | 普通保存复用文件身份/大小/时间戳相同的 UTF-8 验证；数学缓存只复用完整值相等且已验证结果，来源/归属每次检查；草稿防抖并在退出/后台 flush | `StorageAuditTests`、缓存篡改回归；加载/导入/导出仍完整核验；未声称定量提速 |
+| 问当前笔记时，正文读取总预算可能先被较早笔记耗尽，当前笔记反而未传入检索 | 当前阅读文档先进入原有有界读取，原书逐段回执与完整当前单元不截短 | `AppStore.ask` 的上下文排序；不等同全库全文索引 |
+
+Lumen 参考来自正在进行的“Add知识经验积累与引用模块”任务，以及 `E:/opensourceproject/LearnStuffQuickly/desktop` 的本地基线 `a63290d6d3a3963dc7c5a6f270f185230d7ef279`。吸收的是 `src/ai/budget.ts` 的有界上下文与原文保留原则、`src/canvas/history.ts` 的交互预览/提交分离、`src/reader/readerPrefs.ts` 的内容与展示位置分离。实现采用本项目 Swift/Core 模型，没有改动该项目或假定存储兼容；其滚动语义摘要/跨会话后台任务仍在开发，不作为本轮已验证能力迁入。
+
+第三轮已通过 [macOS Actions 39912277155](https://github.com/theincrediblewwz/readingbook/actions/runs/39912277155)：源码 `dd524c063aca97b3a92ad0af956c295fc2ada0e5`，162 项 Core 检查、双架构 Release 编译、临时签名与资源自检通过，无编译警告；下载包的摘要、CRC、版本/源码、双架构/0755 与 32 个离线资源已核对。首轮编译发现 App 调用 Core 内部哈希方法，已改为 App 使用 CryptoKit 计算；不把失败构建作为交付证据。
+
+仍需 Mac 实测：PDFKit 页内位置、MapKit 手势/遮挡、快捷键确认、关闭重开、万节点连续拖动与真实模型质量。缓存按文件身份/大小/时间戳变化重验，不承诺识别恶意保持所有文件元数据的同长原地写入；故障目录保留后不会自动破坏性清理。
+
+---
+
 # 0.13：用户批准的 1、3、4
 
 | 项目 | 本版实现 | 验收边界 |

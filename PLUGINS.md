@@ -1,5 +1,13 @@
 # 插件与 AI 工具
 
+## 0.13.1：模型配置与导入校验
+
+`views_configure` 的 `rendererID` 必须与 `PluginEngine.modelRendererKinds` 的实际种类一致，包含 `math.verify → knowledge` 和 `book.scheme → workflow`；模型提示与解析器使用同一组有效元数据。未知模型请求仍拒绝；已保存的未知历史配置保留，不能冒充可执行插件。
+
+加载和导入会校验独立数学记录、方案预览、配置历史和模板。数学记录不能只写 `verified`，宿主按原输入重算，并核验原文依据及工作流归属；软删除也不跳过校验。合法但已过期的方案可以保留供查看/放弃，只有采纳或撤销时要求当前状态匹配。
+
+AI 响应在接收头和每个分块时限制为 4 MiB，拒绝重定向与异常 token 计数；预算使用检查式算术。传输取消、错误体与超限用离线 URLProtocol 夹具回归，不需要真实付费模型调用。
+
 ## 0.13：方案事务与数学核查
 
 AI 预读只生成 `bookSchemes.pending`。书本方案页通过注册的 `book.scheme` 渲染器提供预览、组件/类型/执行方法选择、采纳、模板 JSON 与最近 20 次配置历史。未处理 pending 时精读被阻止；配置与原文散列均匹配才允许采纳，OCR 改动使旧预览失效。撤销仅回退配置，保留已被知识和流程引用的定义及用户内容；后续配置冲突直接停止。
@@ -60,6 +68,6 @@ ID 为 1–128 位 ASCII 字母、数字、点、下划线、短横线。禁止�
 
 新知识必须带 `evidence: [{"unitID":"unit-000001","quote":"原文精确连续片段"}]`。越界引用、未知对象、错误字段或不完整覆盖会失败。AI 没有写用户 Markdown、任意 SQL、文件系统或网络检索工具。
 
-`LibraryRepository` 负责落盘；`BookProject` 是共同数据契约；`WorkspaceSelection` 的首版实现位于 AppStore 的选中对象与时间范围。扩展源码渲染器时，在 `ComponentKind`、`WorkspaceView` 和工具 schema 中明确注册；保持证据、范围与对象身份校验。
+`LibraryRepository` 负责落盘；`BookProject` 是共同数据契约；`WorkspaceSelection` 的首版实现位于 AppStore 的选中对象与时间范围。扩展源码渲染器时，在 `WorkspaceComponentRegistry` 注册原生工厂，在 `PluginEngine.modelRendererKinds` 与工具 schema 声明模型可选的 renderer/kind；新增种类时同步更新 `ComponentKind`。执行工具通过 `PluginToolRegistry` 注册；保持证据、范围与对象身份校验。
 
 普通问答为只读。保存为 Markdown 是用户主动执行的应用操作，与 AI 自动创建书本分析要素分开。
