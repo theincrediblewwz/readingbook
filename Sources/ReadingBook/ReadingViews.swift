@@ -318,6 +318,7 @@ struct DocumentEditorView: View {
     @State private var measuredWindow = false
     @State private var listOrigin = CGPoint(x: 12, y: 100)
     @State private var dragOrigin = CGPoint.zero
+    @State private var listDragging = false
     @State private var panelEpoch = 0
     @State private var documentSearch = ""
     @State private var showingSources = false
@@ -348,8 +349,15 @@ struct DocumentEditorView: View {
                     }.buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 16)
                         .padding(.leading, 12).padding(.top, 104).help("恢复笔记列表")
                 }
-                VStack { Spacer(); editorToolbar(compact: geometry.size.width < 960).padding(8).readingGlass(radius: 22).padding(.bottom, 22) }
+                VStack { Spacer(); editorToolbar(compact: geometry.size.width < 960).padding(8).readingGlass(radius: 22).workspaceChromeBounds("notes-tools").padding(.bottom, 22) }
                     .frame(maxWidth: .infinity)
+            }
+            .background {
+                let stable = clampedListOrigin(listDragging ? dragOrigin : listOrigin, viewport: geometry.size)
+                let height = listCollapsed ? ReadingLayout.panelHeaderHeight : min(640, max(180, geometry.size.height - 124))
+                let frame = showingDocuments ? CGRect(x: stable.x, y: stable.y, width: 340, height: height) : CGRect(x: 12, y: 104, width: 100, height: 44)
+                let offset = geometry.frame(in: .global).origin
+                Color.clear.preference(key: WorkspaceChromeBoundsPreference.self, value: ["notes-list": frame.offsetBy(dx: offset.x, dy: offset.y)])
             }
             .onAppear {
                 guard !measuredWindow else { return }; measuredWindow = true
@@ -359,7 +367,7 @@ struct DocumentEditorView: View {
             .onChange(of: geometry.size) { previous, next in
                 if previous.width >= 1036 && next.width < 1036 { showingDocuments = false }
                 listOrigin = clampedListOrigin(listOrigin, viewport: next)
-                panelEpoch += 1
+                panelEpoch += 1; listDragging = false
             }
             .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreListMemory(viewport: geometry.size, defaultShown: wide) }
         }
@@ -371,7 +379,7 @@ struct DocumentEditorView: View {
         .onChange(of: store.editorDirty) { _, dirty in if dirty && store.selectedDocumentID == nil { preview = false } }
         .onChange(of: showingDocuments) { _, _ in saveListMemory() }
         .onChange(of: listCollapsed) { _, _ in saveListMemory() }
-        .onChange(of: listOrigin) { _, _ in saveListMemory() }
+        .onChange(of: listOrigin) { _, _ in if !listDragging { saveListMemory() } }
         .onDisappear { saveListMemory() }
     }
     private func restoreListMemory(viewport: CGSize, defaultShown: Bool) {
@@ -468,12 +476,15 @@ struct DocumentEditorView: View {
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("草稿、导图与文档管理")
     }
     private func documentPanel(viewport: CGSize) -> some View {
-        let height = listCollapsed ? CGFloat(64) : min(640, max(180, viewport.height - 124))
+        let height = listCollapsed ? ReadingLayout.panelHeaderHeight : min(640, max(180, viewport.height - 124))
         let origin = clampedListOrigin(listOrigin, viewport: viewport)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Text("我的笔记").font(.system(size: 16, weight: .semibold)).frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
-                    .overlay { FloatingPanelPointerInput(epoch: panelEpoch, begin: { dragOrigin = listOrigin }, drag: { delta, _ in listOrigin = clampedListOrigin(CGPoint(x: dragOrigin.x + delta.width, y: dragOrigin.y + delta.height), viewport: viewport) }, cancel: { listOrigin = clampedListOrigin(dragOrigin, viewport: viewport) }) }.help("拖动笔记列表")
+                    .overlay { FloatingPanelPointerInput(epoch: panelEpoch, begin: { dragOrigin = listOrigin; listDragging = true }, drag: { delta, finished in
+                        listOrigin = clampedListOrigin(CGPoint(x: dragOrigin.x + delta.width, y: dragOrigin.y + delta.height), viewport: viewport)
+                        if finished { listDragging = false; saveListMemory() }
+                    }, cancel: { listOrigin = clampedListOrigin(dragOrigin, viewport: viewport); listDragging = false }) }.help("拖动笔记列表")
                 Button { listCollapsed.toggle() } label: { Image(systemName: listCollapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(listCollapsed ? "展开列表" : "折叠列表")
                 Button { showingDocuments = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭列表")
             }.padding(.horizontal, 12)
@@ -481,7 +492,7 @@ struct DocumentEditorView: View {
         }.frame(width: 340, height: height).readingGlass(radius: 20).position(x: origin.x + 170, y: origin.y + height / 2)
     }
     private func clampedListOrigin(_ value: CGPoint, viewport: CGSize) -> CGPoint {
-        let height = listCollapsed ? CGFloat(64) : min(640, max(180, viewport.height - 124))
+        let height = listCollapsed ? ReadingLayout.panelHeaderHeight : min(640, max(180, viewport.height - 124))
         return CGPoint(x: min(max(12, value.x), max(12, viewport.width - 352)), y: min(max(96, value.y), max(96, viewport.height - height - 12)))
     }
     private var documentPicker: some View {
@@ -489,7 +500,7 @@ struct DocumentEditorView: View {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("搜索笔记…", text: $documentSearch).textFieldStyle(.plain).font(.system(size: 15))
-                if !documentSearch.isEmpty { Button { documentSearch = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空笔记搜索").frame(width: 36, height: 44) }
+                if !documentSearch.isEmpty { Button { documentSearch = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空笔记搜索").frame(width: 44, height: 44) }
             }.padding(.horizontal, 12).frame(minHeight: 46).background(Palette.surface.opacity(0.65), in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(Palette.line.opacity(0.8)))
             if store.editorDirty { Text("有未保存的修改，请先保存或放弃再切换。").font(.system(size: 13)).foregroundStyle(Palette.copper).fixedSize(horizontal: false, vertical: true) }
             ScrollView {

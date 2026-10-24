@@ -18,8 +18,8 @@ import ReadingCore
             }
         }
     }
-    func saveBookSchemeSelection(_ selection: BookSchemeSelection) {
-        mutateBookScheme("方案调整已保存，尚未启用。") { try BookSchemeRuntime.updateSelection(selection, in: &$0) }
+    func saveBookSchemeSelection(_ selection: BookSchemeSelection, onSaved: (() -> Void)? = nil) {
+        mutateBookScheme("方案调整已保存，尚未启用。", onSaved: onSaved) { try BookSchemeRuntime.updateSelection(selection, in: &$0) }
     }
     func discardBookScheme() {
         mutateBookScheme("待确认方案已放弃，继续使用原来的配置。", onSaved: { self.smartReadingPlanReady = false }) { project in
@@ -38,8 +38,8 @@ import ReadingCore
     func revertBookScheme() {
         mutateBookScheme("最近一次方案更新已撤销；用户 Markdown、知识对象和阅读记录保留。") { try BookSchemeRuntime.revertLatest(in: &$0) }
     }
-    func saveBookSchemeTemplate(name: String) {
-        mutateBookScheme("已保存当前生效方案模板，可预览复用或导出。") { _ = try BookSchemeRuntime.saveTemplate(name: name, in: &$0) }
+    func saveBookSchemeTemplate(name: String, onSaved: (() -> Void)? = nil) {
+        mutateBookScheme("已保存当前生效方案模板，可预览复用或导出。", onSaved: onSaved) { _ = try BookSchemeRuntime.saveTemplate(name: name, in: &$0) }
     }
     func stageBookSchemeTemplate(_ template: BookSchemeTemplate) {
         mutateBookScheme("模板已生成待确认方案，当前配置尚未改变。") { try BookSchemeRuntime.stageTemplate(template, in: &$0) }

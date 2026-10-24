@@ -12,6 +12,10 @@ struct WorkspaceView: View {
     @State private var servicePopover = false
     @State private var columns: NavigationSplitViewVisibility = .detailOnly
     @StateObject private var pdfController = PDFReaderController()
+    @StateObject private var pluginDefinitionDrafts = PluginDefinitionDraftStore()
+    @StateObject private var bookSchemeDrafts = BookSchemeViewDraftStore()
+    @State private var workspaceHeight: CGFloat = 600
+    @State private var progressSize = CGSize(width: 260, height: 52)
     @State private var readerShowsPDF = true
     @State private var readerOutline = false
     @State private var activeSheet: WorkspaceSheet?
@@ -47,13 +51,9 @@ struct WorkspaceView: View {
                 }
                 topIslands(width: geometry.size.width).padding(.top, 14).padding(.leading, 104).padding(.trailing, 24)
                     .allowsHitTesting(managementRoute == nil)
-                if store.book?.smartReading != nil && managementRoute == nil && !navigationExpanded && store.route != "library" && !questionOverlapsProgress(in: geometry) {
-                    SmartReadingProgressPanel(maximumExpandedHeight: max(120, min(430, geometry.size.height - 104 - 166))).environmentObject(store)
-                        .workspaceChromeBounds("smart-progress")
-                        .padding(.leading, geometry.size.width < 700 ? 68 : 80)
-                        .padding(.bottom, 104)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                        .zIndex(6)
+                    .opacity(managementRoute == nil ? 1 : 0).accessibilityHidden(managementRoute != nil)
+                if store.book?.smartReading != nil && managementRoute == nil && !navigationExpanded && store.route != "library" {
+                    floatingProgress(in: geometry).zIndex(6)
                 }
                 if let managementRoute {
                     managementOverlay(managementRoute)
@@ -66,10 +66,11 @@ struct WorkspaceView: View {
                 }
                 FloatingNavigationButton(viewport: geometry.size, isExpanded: navigationExpanded) {
                     withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { navigationExpanded.toggle(); servicePopover = false }
-                }.opacity(navigationExpanded ? 0 : 1).allowsHitTesting(!navigationExpanded && managementRoute == nil).accessibilityHidden(navigationExpanded).zIndex(11)
+                }.opacity(navigationExpanded || managementRoute != nil ? 0 : 1).allowsHitTesting(!navigationExpanded && managementRoute == nil).accessibilityHidden(navigationExpanded || managementRoute != nil).zIndex(11)
             }
             .onPreferenceChange(WorkspaceChromeBoundsPreference.self) { chromeBounds = $0 }
-            .onAppear { detailWidth = geometry.size.width }
+            .onAppear { detailWidth = geometry.size.width; workspaceHeight = geometry.size.height }
+            .onChange(of: geometry.size.height) { _, height in workspaceHeight = height }
             .onChange(of: geometry.size.width) { _, width in
                 detailWidth = width
                 if width < 920 { showsInspector = false }
@@ -77,6 +78,7 @@ struct WorkspaceView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .environmentObject(pdfController)
+        .environment(\.bookSchemeDraftStore, bookSchemeDrafts)
         .serviceProfileChangeConfirmation(store: store)
         .tint(Palette.accent)
         .onOpenURL { url in Task { await store.openInternalURL(url) } }
@@ -101,10 +103,10 @@ struct WorkspaceView: View {
         }
         .sheet(item: sheetBinding, onDismiss: finishSheetDismissal) { sheet in
             switch sheet {
-            case .settings: ProviderSettingsView(onClose: { closeSheet(.settings) }).environmentObject(store).frame(width: 860, height: 660)
+            case .settings: ProviderSettingsView(onClose: { closeSheet(.settings) }).environmentObject(store).frame(width: min(860, max(300, detailWidth - 40)), height: min(660, max(300, workspaceHeight - 40)))
             case .ocr: PDFOCRPanel().environmentObject(store).frame(width: 560, height: 460)
             case .trash: LibraryTrashView().environmentObject(store).frame(width: 600, height: 500)
-            case .plugins: PluginLibraryView(onClose: { closeSheet(.plugins) }).environmentObject(store).frame(width: 900, height: 680)
+            case .plugins: PluginLibraryView(onClose: { closeSheet(.plugins) }, draftStore: pluginDefinitionDrafts).environmentObject(store).frame(width: min(900, max(300, detailWidth - 40)), height: min(680, max(300, workspaceHeight - 40)))
             case .librarySearch: LibrarySearchView().environmentObject(store).frame(minWidth: 620, idealWidth: 800, minHeight: 500, idealHeight: 640)
             case .password(let request): PDFPasswordSheet(request: request).environmentObject(store)
             }
@@ -133,7 +135,7 @@ struct WorkspaceView: View {
             }
             return true
         }
-        .onChange(of: store.bookID) { _, _ in showsInspector = false; compactInspector = false }
+        .onChange(of: store.bookID) { _, _ in showsInspector = false; compactInspector = false; progressSize = CGSize(width: 260, height: 52) }
         .onChange(of: store.route) { old, next in
             if ["models", "plugins"].contains(next) {
                 store.route = ["models", "plugins"].contains(old) ? (store.book == nil ? "library" : "reader") : old
@@ -141,13 +143,28 @@ struct WorkspaceView: View {
             } else if viewingGraph || viewingSpatial { showsInspector = false; compactInspector = false }
         }
     }
-    private func questionOverlapsProgress(in geometry: GeometryProxy) -> Bool {
-        guard store.route == "reader", let question = chromeBounds["reader-question"] else { return false }
-        let frame = geometry.frame(in: .global)
-        let height = min(430, max(120, geometry.size.height - 270))
-        let zone = CGRect(x: frame.minX + (geometry.size.width < 700 ? 68 : 80),
-                          y: frame.maxY - 104 - height - 53, width: 306, height: height + 53)
-        return zone.insetBy(dx: -12, dy: -12).intersects(question)
+    private func floatingProgress(in geometry: GeometryProxy) -> some View {
+        let global = geometry.frame(in: .global)
+        let available = CGRect(x: 20, y: 88, width: max(0, geometry.size.width - 40), height: max(0, geometry.size.height - 112))
+        let obstacles = chromeBounds.filter { $0.key != "smart-progress" && $0.key != "window-drag" }.map {
+            $0.value.offsetBy(dx: -global.minX, dy: -global.minY)
+        }
+        let preferred = CGPoint(x: geometry.size.width < 700 ? 68 : 80, y: geometry.size.height - 104 - progressSize.height)
+        let placement = FloatingChromeGeometry.place(size: progressSize, preferredOrigin: preferred, within: available, avoiding: obstacles)
+        let frame = placement ?? CGRect(origin: preferred, size: progressSize)
+        return SmartReadingProgressPanel(maximumExpandedHeight: max(100, min(430, geometry.size.height - 220))).environmentObject(store)
+            .background {
+                GeometryReader { panel in Color.clear.preference(key: WorkspaceProgressSizePreference.self, value: panel.size) }
+            }
+            .onPreferenceChange(WorkspaceProgressSizePreference.self) { value in
+                guard value.width.isFinite, value.height.isFinite, value.width > 0, value.height > 0,
+                      abs(value.width - progressSize.width) > 0.5 || abs(value.height - progressSize.height) > 0.5 else { return }
+                progressSize = value
+            }
+            .workspaceChromeBounds("smart-progress")
+            .transformPreference(WorkspaceChromeBoundsPreference.self) { if placement == nil { $0.removeValue(forKey: "smart-progress") } }
+            .opacity(placement == nil ? 0 : 1).allowsHitTesting(placement != nil).accessibilityHidden(placement == nil)
+            .position(x: frame.midX, y: frame.midY)
     }
     private func restoreReaderMemory() {
         readerShowsPDF = store.workspaceMemory.readerShowsPDF
@@ -360,7 +377,7 @@ struct WorkspaceView: View {
         ZStack {
             Color.black.opacity(0.025).contentShape(Rectangle()).onTapGesture { }
             if route == "models" { ProviderSettingsView(embedded: true, onClose: closeManagement).environmentObject(store) }
-            else { PluginLibraryView(embedded: true, onClose: closeManagement).environmentObject(store) }
+            else { PluginLibraryView(embedded: true, onClose: closeManagement, draftStore: pluginDefinitionDrafts).environmentObject(store) }
         }.accessibilityAddTraits(.isModal)
     }
     private func saveDocumentAndNavigate(to destination: String) {
@@ -585,6 +602,13 @@ struct WorkspaceChromeBoundsPreference: PreferenceKey {
     static var defaultValue: [String: CGRect] = [:]
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+private struct WorkspaceProgressSizePreference: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next.width > 0 && next.height > 0 { value = next }
     }
 }
 extension View {

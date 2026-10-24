@@ -28,8 +28,8 @@ struct SpatialTimelineView: View {
     @State private var timelineCollapsed = false
     @State private var viewport = CGSize(width: 900, height: 650)
     @AppStorage("readingbook.timelinePanelDock") private var dockRaw = FloatingPanelDock.bottomLeading.rawValue
-    @AppStorage("frost-navigation-dock-v1") private var navigationDockRaw = NavigationOrbDock.topLeading.rawValue
     @State private var measuredPanelSize = CGSize(width: 740, height: 214)
+    @State private var personFrame = CGRect.zero
     @State private var dragOrigin: CGPoint?
     @State private var dragCenter: CGPoint?
     @State private var pointerEpoch = 0
@@ -39,14 +39,14 @@ struct SpatialTimelineView: View {
     @State private var showsFootprintSequence = false
 
     private var temporalMode: Bool { store.temporalAxis != "legacy" }
-    private var temporalEventIDs: Set<String> {
-        Set(store.temporalEvents.filter { store.selectedTemporalEntityID == nil || $0.match == .matches }.map(\.object.id))
-    }
     private var visibleEvents: [KnowledgeEvent] {
         guard let book = store.book else { return [] }
-        let admitted = Dictionary(store.temporalEvents.map { ($0.object.id, $0.object) }, uniquingKeysWith: { first, _ in first })
+        // A snapshot can traverse all temporal records. Resolve it once, rather
+        // than once per event while a reader drags the current-time pointer.
+        let snapshots = store.temporalEvents
+        let byID = Dictionary(snapshots.map { ($0.object.id, $0) }, uniquingKeysWith: { first, _ in first })
         let scoped = (store.readingScopeCurrent ? store.readingContextItems.events : book.events).compactMap { event -> KnowledgeEvent? in
-            guard let object = admitted[event.id] else { return nil }
+            guard let object = byID[event.id]?.object else { return nil }
             var safe = event; safe.summary = object.summary
             safe.participantIDs = object.references["participants"] ?? []; safe.placeIDs = object.references["places"] ?? []
             return safe
@@ -56,7 +56,7 @@ struct SpatialTimelineView: View {
             return Double(event.endYear ?? year) >= store.timeFrom && Double(year) <= store.timeTo
         } }
         return scoped.filter { event in
-            guard temporalEventIDs.contains(event.id), let item = store.temporalEvents.first(where: { $0.object.id == event.id }) else { return false }
+            guard let item = byID[event.id] else { return false }
             if store.selectedTemporalEntityID != nil { return item.match == .matches }
             let start = axisValue(item.extent), end = axisEnd(item.extent)
             guard let start else { return store.showUndated }
@@ -68,8 +68,9 @@ struct SpatialTimelineView: View {
             let ids = Set(store.temporalEvents.map(\.object.id))
             return (store.readingScopeCurrent ? store.readingContextItems.events : (store.book?.events ?? [])).filter { ids.contains($0.id) }
         }
+        let eventsByID = Dictionary((store.book?.events ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return store.temporalEvents.compactMap { item in
-            guard var event = store.book?.events.first(where: { $0.id == item.object.id }), let value = axisValue(item.extent) else { return nil }
+            guard var event = eventsByID[item.object.id], let value = axisValue(item.extent) else { return nil }
             event.startYear = Int(value); event.endYear = axisEnd(item.extent).map(Int.init); return event
         }
     }
@@ -160,16 +161,22 @@ struct SpatialTimelineView: View {
     private var topReserve: CGFloat { 96 }
     private var workingViewport: CGSize { CGSize(width: viewport.width, height: max(0, viewport.height - topReserve)) }
     private var panelWidth: CGFloat { min(740, max(0, viewport.width - 144)) }
+    private let timelineHeaderHeight: CGFloat = 68
     private var detailHeight: CGFloat { min(220, max(210, viewport.height * 0.24)) }
     private var dock: FloatingPanelDock { FloatingPanelDock(rawValue: dockRaw) ?? .bottomLeading }
-    private var panelSize: CGSize { CGSize(width: panelWidth, height: min(measuredPanelSize.height, max(0, workingViewport.height - 48))) }
+    private var maximumTimelineHeight: CGFloat {
+        let viewportLimit = max(timelineHeaderHeight, workingViewport.height - 48)
+        guard viewport.width < 1050, showsPerson, store.selectedTemporalEntityID != nil else { return viewportLimit }
+        // Keep a scrollable person card above a bottom dock or below a top
+        // dock. Only presentation height changes; the saved dock stays intact.
+        let reserve: CGFloat = dock == .topLeading || dock == .topTrailing ? 296 : 272
+        return min(viewportLimit, max(timelineHeaderHeight, viewport.height - reserve))
+    }
+    private var panelSize: CGSize {
+        CGSize(width: panelWidth, height: timelineCollapsed ? timelineHeaderHeight : min(max(timelineHeaderHeight, measuredPanelSize.height), maximumTimelineHeight))
+    }
     private func dockFrame(_ position: FloatingPanelDock) -> CGRect {
-        let frame = FloatingPanelGeometry.frame(at: position, viewport: workingViewport, panel: panelSize, margin: 24).offsetBy(dx: 0, dy: topReserve)
-        let center = NavigationOrbGeometry.center(in: viewport, dock: NavigationOrbDock(rawValue: navigationDockRaw) ?? .topLeading)
-        let navigation = CGRect(x: center.x - 24, y: center.y - 24, width: 48, height: 48)
-        // Move only an overlapping floating card. The map keeps every pixel.
-        guard frame.intersects(navigation) else { return frame }
-        return frame.offsetBy(dx: min(56, max(0, viewport.width - frame.maxX - 24)), dy: 0)
+        FloatingPanelGeometry.frame(at: position, viewport: workingViewport, panel: panelSize, margin: 24).offsetBy(dx: 0, dy: topReserve)
     }
     private func clampedPanelCenter(_ center: CGPoint) -> CGPoint {
         let local = FloatingPanelGeometry.clampedCenter(CGPoint(x: center.x, y: center.y - topReserve), viewport: workingViewport, panel: panelSize, margin: 24)
@@ -182,6 +189,18 @@ struct SpatialTimelineView: View {
         }
         return dockFrame(dock)
     }
+    private var timelineRestoreFrame: CGRect { CGRect(x: 24, y: topReserve + 12, width: 180, height: 52) }
+    private var settledTimelineFrame: CGRect { showsTimeline ? dockFrame(dock) : timelineRestoreFrame }
+    private var mapControlsFrame: CGRect { CGRect(x: max(0, viewport.width - 70), y: 88, width: 56, height: 150) }
+    private func chromeFrames(in geometry: GeometryProxy) -> [String: CGRect] {
+        let origin = geometry.frame(in: .global).origin
+        var frames = ["map-timeline": settledTimelineFrame.offsetBy(dx: origin.x, dy: origin.y),
+                      "map-controls": mapControlsFrame.offsetBy(dx: origin.x, dy: origin.y)]
+        if store.selectedTemporalEntityID != nil, !personFrame.isEmpty {
+            frames["map-person"] = personFrame.offsetBy(dx: origin.x, dy: origin.y)
+        }
+        return frames
+    }
 
     private var mapWorkspace: some View {
         GeometryReader { geometry in
@@ -189,17 +208,16 @@ struct SpatialTimelineView: View {
                 bookMap
                 if let id = store.selectedTemporalEntityID {
                     ReaderFloatingPanel(title: store.objectTitle(id), icon: "person.crop.rectangle", width: 340, height: 490,
-                        isPresented: $showsPerson, viewport: geometry.size, memoryIDOverride: "map.person", restoreNearTop: true) {
+                        isPresented: $showsPerson, viewport: geometry.size, memoryIDOverride: "map.person", bottomReserve: 24,
+                        avoidRects: [settledTimelineFrame, mapControlsFrame], restoreNearTop: true,
+                        onFrameChange: { frame in if personFrame != frame { personFrame = frame } }) {
                         TemporalPersonContents(entityID: id)
                     }
                 }
                 if showsTimeline {
-                timelineCard.frame(width: panelWidth).fixedSize(horizontal: false, vertical: true)
-                    .background {
-                        GeometryReader { panel in Color.clear.preference(key: TimelinePanelSizeKey.self, value: panel.size) }
-                    }
-                    .frame(height: panelSize.height, alignment: .top).clipped()
+                timelineCard.frame(width: panelWidth, height: panelSize.height, alignment: .top)
                     .readingGlass(radius: 24)
+                    .clipShape(RoundedRectangle(cornerRadius: 24))
                     .position(x: panelFrame.midX, y: panelFrame.midY)
                     .onPreferenceChange(TimelinePanelSizeKey.self) { next in
                         guard next.width > 0, next.height > 0,
@@ -209,11 +227,16 @@ struct SpatialTimelineView: View {
                     }
                     .transition(.opacity)
                 } else {
-                    Button { restoreTimeline() } label: { Label("时间与地图", systemImage: "clock") }
-                        .buttonStyle(ReadingToolbarButtonStyle()).padding(7).readingGlass(interactive: true)
-                        .padding(.leading, 24).padding(.top, topReserve + 12).transition(.opacity)
+                    Button { restoreTimeline() } label: {
+                        Label("时间与地图", systemImage: "clock").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                    }
+                        .buttonStyle(ReadingToolbarButtonStyle()).frame(width: timelineRestoreFrame.width, height: timelineRestoreFrame.height).readingGlass(interactive: true)
+                        .position(x: timelineRestoreFrame.midX, y: timelineRestoreFrame.midY).transition(.opacity)
                 }
             }
+            // Only settled rectangles are shared. Dragging the time card does
+            // not make the person card or the global progress follow each frame.
+            .preference(key: WorkspaceChromeBoundsPreference.self, value: chromeFrames(in: geometry))
             .onAppear {
                 viewport = geometry.size
                 if geometry.size.width < 900 || geometry.size.height < 700 { timelineCollapsed = true }
@@ -336,9 +359,26 @@ struct SpatialTimelineView: View {
     }
 
     private var timelineCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            timelineHeader
+        VStack(alignment: .leading, spacing: 0) {
+            // Keep every dismissal control outside the scrolling content.
+            timelineHeader.padding(.horizontal, 16).frame(height: timelineHeaderHeight)
             if !timelineCollapsed {
+                ScrollView {
+                    timelineContents.fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 20).padding(.bottom, 12)
+                        .background {
+                            GeometryReader { contents in
+                                Color.clear.preference(key: TimelinePanelSizeKey.self,
+                                    value: CGSize(width: panelWidth, height: contents.size.height + timelineHeaderHeight))
+                            }
+                        }
+                }.scrollBounceBehavior(.basedOnSize)
+                    .frame(height: max(0, panelSize.height - timelineHeaderHeight))
+            }
+        }
+    }
+    private var timelineContents: some View {
+        VStack(alignment: .leading, spacing: 8) {
             timeRangeBar
             TimelineRangeControl(lower: $store.timeFrom, upper: $store.timeTo, bounds: bounds,
                                    events: axisEvents, selectedID: store.selectedObjectID, select: selectEvent,
@@ -356,15 +396,14 @@ struct SpatialTimelineView: View {
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).frame(height: 18, alignment: .leading)
                     .padding(.horizontal, 7).padding(.bottom, 3)
             }
-            }
-        }.padding(.horizontal, 20).padding(.vertical, 12)
+        }
     }
 
     private var timelineHeader: some View {
         HStack(spacing: 8) {
             HStack(spacing: 7) {
-                Image(systemName: "circle.grid.2x3.fill").font(.system(size: 11)).foregroundStyle(.tertiary)
-                Text("时间与地图").font(.system(size: 18, weight: .semibold)).lineLimit(1)
+                Image(systemName: "line.3.horizontal").font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
+                Text("时间与地图").font(.system(size: 16, weight: .semibold)).lineLimit(1)
             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 .overlay {
                     FloatingPanelPointerInput(epoch: pointerEpoch, begin: beginPanelDrag, drag: dragPanel, cancel: cancelPanelDrag)
@@ -408,28 +447,53 @@ struct SpatialTimelineView: View {
     }
 
     private var timeRangeBar: some View {
-        HStack(spacing: 6) {
-            Button {
-                fromText = String(Int(store.timeFrom)); toText = String(Int(store.timeTo)); rangeError = ""; editingRange = true
-            } label: {
-                HStack(spacing: 5) {
-                    Text("\(axisLabel(store.timeFrom)) — \(axisLabel(store.timeTo))")
-                        .monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
-                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
+        Group {
+            if panelWidth < 700 {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) { timeRangeButton; Spacer(minLength: 0); eventListButton }
+                    personSelector
                 }
-            }.buttonStyle(ReadingToolbarButtonStyle(selected: editingRange)).help("输入精确起止年份")
-                .popover(isPresented: $editingRange) { rangeEditor }
-            Spacer(minLength: 0)
-            Menu {
-                Button("全部人物与事件") { store.selectedTemporalEntityID = nil }
-                ForEach(admittedEntities.filter { $0.latitude == nil && $0.longitude == nil }) { entity in
-                    Button(entity.name) { store.selectedTemporalEntityID = entity.id; showsPerson = true }
+            } else {
+                HStack(spacing: 8) {
+                    timeRangeButton
+                    Spacer(minLength: 8)
+                    personSelector.frame(maxWidth: 180)
+                    eventListButton
                 }
-            } label: { Label(store.selectedTemporalEntityID.map(store.objectTitle) ?? "跟随人物", systemImage: "person.crop.circle") }
-                .menuStyle(.borderlessButton).fixedSize().frame(minHeight: 44)
-            Button { showingEvents.toggle() } label: { Label("事件 \(visibleEvents.count)", systemImage: "list.bullet") }
-                .buttonStyle(ReadingToolbarButtonStyle(selected: showingEvents)).help("浏览事件清单")
-        }.padding(.horizontal, 4).background(Palette.accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 10))
+            }
+        }.padding(.horizontal, 4).background(Palette.accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
+    }
+    private var timeRangeButton: some View {
+        Button {
+            fromText = String(Int(store.timeFrom)); toText = String(Int(store.timeTo)); rangeError = ""; editingRange = true
+        } label: {
+            HStack(spacing: 5) {
+                Text("\(axisLabel(store.timeFrom)) — \(axisLabel(store.timeTo))")
+                    .monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
+                Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
+            }
+        }.buttonStyle(ReadingToolbarButtonStyle(selected: editingRange)).help("\(axisLabel(store.timeFrom)) — \(axisLabel(store.timeTo))；输入精确起止时间")
+            .popover(isPresented: $editingRange) { rangeEditor }
+    }
+    private var personSelector: some View {
+        Menu {
+            Button("全部人物与事件") { store.selectedTemporalEntityID = nil }
+            ForEach(admittedEntities.filter { $0.latitude == nil && $0.longitude == nil }) { entity in
+                Button(entity.name) { store.selectedTemporalEntityID = entity.id; showsPerson = true }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "person.crop.circle")
+                Text(store.selectedTemporalEntityID.map(store.objectTitle) ?? "跟随人物").lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
+            }.font(.system(size: 15)).padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+        }.menuStyle(.borderlessButton).menuIndicator(.hidden)
+            .help(store.selectedTemporalEntityID.map(store.objectTitle) ?? "选择人物，查看其行动与时空")
+    }
+    private var eventListButton: some View {
+        Button { showingEvents.toggle() } label: { Label("事件 \(visibleEvents.count)", systemImage: "list.bullet").lineLimit(1) }
+            .buttonStyle(ReadingToolbarButtonStyle(selected: showingEvents)).fixedSize(horizontal: true, vertical: false).help("浏览事件清单")
     }
 
     private func eventDetails(_ event: KnowledgeEvent) -> some View {
@@ -438,7 +502,7 @@ struct SpatialTimelineView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(event.dateText + (event.placeIDs.isEmpty ? "" : " · " + event.placeIDs.map(store.objectTitle).joined(separator: "、")))
                         .font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
-                    Text(event.name).font(.system(size: 24, weight: .semibold, design: .serif)).lineLimit(2).textSelection(.enabled)
+                    Text(event.name).font(.system(size: 20, weight: .semibold)).lineLimit(2).textSelection(.enabled)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 Button { collapseDetails() } label: { Image(systemName: "xmark") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("收起事件详情，保留时间范围").accessibilityLabel("收起事件详情")
@@ -512,10 +576,10 @@ struct SpatialTimelineView: View {
                     .background(selected ? Palette.accent : Palette.surface, in: Circle())
                     .overlay(Circle().stroke(Palette.accent.opacity(0.5), lineWidth: 1))
                 if selected {
-                    Text(point.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.accent).lineLimit(1).padding(.horizontal, 14).padding(.vertical, 8).background(Palette.surface, in: Capsule())
-                    Text(point.subtitle).font(.system(size: 12)).lineLimit(1).padding(.horizontal, 9).padding(.vertical, 5).background(Palette.surface.opacity(0.94), in: Capsule())
+                    Text(point.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.accent).lineLimit(1).truncationMode(.middle).frame(maxWidth: 240).padding(.horizontal, 14).padding(.vertical, 8).background(Palette.surface, in: Capsule())
+                    Text(point.subtitle).font(.system(size: 13)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 240).padding(.horizontal, 9).padding(.vertical, 5).background(Palette.surface.opacity(0.94), in: Capsule())
                 }
-            }.frame(minWidth: 36, minHeight: 36).contentShape(Rectangle())
+            }.frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         }.buttonStyle(.plain).help("\(point.title) · \(point.subtitle)").accessibilityLabel("\(point.title)，\(point.subtitle)")
     }
 

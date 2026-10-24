@@ -75,12 +75,15 @@ struct TimelineRangeControl: View {
                 }
                 if let cursor {
                     let x = mapping.x(cursor.wrappedValue)
+                    let text = label(cursor.wrappedValue)
+                    let labelWidth = min(max(44, ceil((text as NSString).size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)]).width) + 18), max(0, geometry.size.width))
+                    let labelX = min(max(labelWidth / 2, x), max(labelWidth / 2, geometry.size.width - labelWidth / 2))
                     Rectangle().fill(Palette.copper).frame(width: 2, height: 37).offset(x: x - 1, y: axisY)
                         .allowsHitTesting(false)
-                    Text(label(cursor.wrappedValue)).font(.system(size: 12, weight: .semibold)).monospacedDigit()
-                        .padding(.horizontal, 9).padding(.vertical, 6).background(Palette.surface, in: Capsule())
+                    Text(text).font(.system(size: 12, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
+                        .padding(.horizontal, 9).padding(.vertical, 6).frame(width: labelWidth).background(Palette.surface, in: Capsule())
                         .overlay(Capsule().stroke(Palette.copper.opacity(0.6)))
-                        .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                        .frame(height: 44).contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance: 0).onChanged { value in
                             if cursorOrigin == nil { cursorOrigin = cursor.wrappedValue }
                             let next = (cursorOrigin ?? cursor.wrappedValue) + Double(value.translation.width / max(1, mapping.width)) * mapping.span
@@ -90,7 +93,7 @@ struct TimelineRangeControl: View {
                             Slider(value: cursor, in: lower...max(lower, upper), step: 1) { Text("当前时间") }
                                 .accessibilityValue(label(cursor.wrappedValue))
                         }.help("拖动当前时间；人物卡、地图与关系同步更新")
-                        .position(x: x, y: 79)
+                        .position(x: labelX, y: 79)
                 }
             }
             .overlay(alignment: .topLeading) {

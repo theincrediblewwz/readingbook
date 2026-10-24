@@ -26,63 +26,91 @@ struct ModelCatalogManagerView: View {
     @State private var search = ""
     @State private var task: Task<Void, Never>?
     private var catalog: ProviderCatalog { snapshot?.catalog ?? store.providerCatalog }
+    @State private var pane = "update"
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Image(systemName: "square.stack.3d.up").font(.system(size: 24)).foregroundStyle(Palette.accent)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("模型目录").font(.system(size: 23, weight: .semibold))
-                    Text("AI 核对公开资料，你确认后更新推荐值").font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction)
-            }.padding(22)
+                Image(systemName: "square.stack.3d.up").font(.system(size: 18)).foregroundStyle(Palette.accent)
+                Text("模型目录").font(.system(size: 16, weight: .semibold))
+                Spacer(minLength: 8)
+                Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle())
+                    .keyboardShortcut(.cancelAction).accessibilityLabel("关闭模型目录")
+            }.padding(.horizontal, 16).frame(height: 56)
             Divider().opacity(0.4)
-            HStack(spacing: 0) {
-                catalogList.frame(width: 310)
-                Divider().opacity(0.4)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        if let review { proposalReview(review) }
-                        else { updateRequest }
-                        if !status.isEmpty { Label(status, systemImage: running ? "sparkles" : "info.circle").font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
-                    }.padding(24)
+            GeometryReader { geometry in
+                if geometry.size.width >= 880 {
+                    HStack(spacing: 0) {
+                        catalogList.frame(width: 280)
+                        Divider().opacity(0.4)
+                        updatePanel
+                    }
+                } else {
+                    VStack(spacing: 0) {
+                        Picker("目录页面", selection: $pane) {
+                            Text("目录").tag("catalog"); Text(review == nil ? "更新目录" : "审阅提案").tag("update")
+                        }.pickerStyle(.segmented).labelsHidden().padding(16)
+                        if pane == "catalog" { catalogList } else { updatePanel }
+                    }
                 }
             }
             Divider().opacity(0.4)
-            HStack {
-                Text("连接地址、已选模型与钥匙串不随目录更新。").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                if running { Button("停止核对") { task?.cancel() }.buttonStyle(ReadingToolbarButtonStyle()) }
-                else if review != nil {
-                    Button("放弃提案") { review = nil; evidence = []; status = "原目录保留。" }.buttonStyle(ReadingToolbarButtonStyle())
-                    Button("应用目录更新", action: applyReview).buttonStyle(.borderedProminent).controlSize(.large)
-                } else {
-                    Button("回退上次目录", action: rollback).buttonStyle(ReadingToolbarButtonStyle()).disabled(snapshot?.canRollback != true)
-                    Button(action: inspect) { Label("AI 检查官网", systemImage: "sparkles") }.buttonStyle(.borderedProminent).controlSize(.large).disabled(snapshot == nil || store.isBusy)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("已保存的连接、模型选择和 Key 保持不变。").font(.system(size: 13)).foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Spacer(minLength: 0)
+                    catalogActions
                 }
-            }.padding(18)
-        }.frame(minWidth: 850, idealWidth: 980, minHeight: 580, idealHeight: 680)
-            .background(Palette.surface).task { await load() }.onDisappear { task?.cancel() }
+            }.padding(16)
+        }.frame(minWidth: 600, idealWidth: 980, minHeight: 440, idealHeight: 640)
+            .font(.system(size: 15)).background(Palette.surface).task { await load() }.onDisappear { task?.cancel() }
+            .onChange(of: review != nil) { _, available in if available { pane = "update" } }
             .onExitCommand(perform: onClose)
+    }
+    private var updatePanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if let review { proposalReview(review) } else { updateRequest }
+                if !status.isEmpty {
+                    Label(status, systemImage: running ? "sparkles" : "info.circle")
+                        .font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+        }
+    }
+    @ViewBuilder private var catalogActions: some View {
+        if running {
+            Button("停止核对") { task?.cancel() }.buttonStyle(ReadingToolbarButtonStyle())
+        } else if review != nil {
+            Button("放弃提案") { review = nil; evidence = []; status = "原目录保留。" }.buttonStyle(ReadingToolbarButtonStyle())
+            Button("应用目录更新", action: applyReview).buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44)
+        } else {
+            Button("回退上次目录", action: rollback).buttonStyle(ReadingToolbarButtonStyle()).disabled(snapshot?.canRollback != true)
+            Button(action: inspect) { Label("AI 检查官网", systemImage: "sparkles") }.buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44).disabled(snapshot == nil || store.isBusy)
+        }
     }
     private var catalogList: some View {
         VStack(spacing: 0) {
-            TextField("搜索服务或型号", text: $search).textFieldStyle(.roundedBorder).padding(16)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("搜索服务或型号", text: $search).textFieldStyle(.plain)
+                if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).accessibilityLabel("清空型号搜索") }
+            }.padding(.leading, 14).padding(.trailing, search.isEmpty ? 14 : 0).frame(height: 44)
+                .background(Palette.paper.opacity(0.75), in: RoundedRectangle(cornerRadius: 16)).padding(16)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(catalog.providers.filter { provider in search.isEmpty || provider.name.localizedCaseInsensitiveContains(search) || provider.models.contains(where: { $0.name.localizedCaseInsensitiveContains(search) || $0.id.localizedCaseInsensitiveContains(search) }) }) { provider in
                         VStack(alignment: .leading, spacing: 10) {
-                            Text(provider.name).font(.system(size: 17, weight: .semibold))
+                            Text(provider.name).font(.system(size: 16, weight: .semibold))
                             ForEach(provider.models) { model in
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(model.name).font(.system(size: 14, weight: .medium))
+                                    Text(model.name).font(.system(size: 15, weight: .medium))
                                     Text("上下文 \(model.contextTokens.map(String.init) ?? "未确认") · 输出 \(model.maxOutputTokens.map(String.init) ?? "未确认")")
-                                        .font(.caption).foregroundStyle(.secondary)
+                                        .font(.system(size: 13)).foregroundStyle(.secondary)
                                 }.padding(.vertical, 3)
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
-                            .background(Palette.paper.opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
+                            .background(Palette.paper.opacity(0.6), in: RoundedRectangle(cornerRadius: 20))
                     }
                 }.padding(.horizontal, 14).padding(.bottom, 18)
             }
@@ -90,25 +118,25 @@ struct ModelCatalogManagerView: View {
     }
     private var updateRequest: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("让目录跟上新模型").font(.system(size: 27, weight: .medium, design: .serif))
-            Text("使用当前配置的 AI 查阅公共资料，整理服务、型号和已核实上限。未确认的值保持空缺；你可以检查出处和每一处改动。")
-                .font(.system(size: 16)).foregroundStyle(.secondary).lineSpacing(6)
+            Text("让目录跟上新模型").font(.system(size: 18, weight: .semibold))
+            Text("AI 查阅官网并生成提案。核对型号、上限与出处后，再由你保存。")
+                .font(.system(size: 15)).foregroundStyle(.secondary).lineSpacing(4)
             TextEditor(text: $request).font(.system(size: 15)).scrollContentBackground(.hidden).padding(12)
                 .frame(height: 130).background(Palette.paper, in: RoundedRectangle(cornerRadius: 14)).disabled(running)
-            Text("补充官方网站（可选，每行一个 HTTPS 链接）").font(.subheadline.weight(.medium))
+            Text("补充官网链接 · 可选，每行一个 HTTPS 地址").font(.system(size: 13, weight: .medium))
             TextField("https://服务商官网/文档", text: $officialURLs, axis: .vertical).textFieldStyle(.plain).lineLimit(2...4)
                 .padding(14).background(Palette.paper, in: RoundedRectangle(cornerRadius: 14)).disabled(running)
-            Text("仅公开目录资料会交给助手；点击检查会使用当前模型的请求额度。").font(.caption).foregroundStyle(.secondary)
+            Text("仅发送公开目录资料。点击检查将使用当前模型的请求额度；未核实的上限保持空缺。").font(.system(size: 13)).foregroundStyle(.secondary)
         }
     }
     private func proposalReview(_ value: ModelCatalogReview) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("检查这次更新").font(.system(size: 26, weight: .medium, design: .serif))
-            Text(value.proposal.summary).font(.callout).lineSpacing(5)
+            Text("检查这次更新").font(.system(size: 18, weight: .semibold))
+            Text(value.proposal.summary).font(.system(size: 15)).lineSpacing(4)
             ForEach(value.differences) { difference in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(difference.path).font(.subheadline.weight(.semibold)).textSelection(.enabled)
-                    Text(difference.before.isEmpty ? "之前：未收录" : "之前：" + difference.before).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text(difference.before.isEmpty ? "之前：未收录" : "之前：" + difference.before).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
                     Text("更新：" + difference.after).font(.callout).textSelection(.enabled)
                 }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Palette.paper.opacity(0.7), in: RoundedRectangle(cornerRadius: 14))
             }

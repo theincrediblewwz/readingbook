@@ -91,6 +91,7 @@ struct GraphSurface: View {
     @State private var canvasHovered = false
     @Environment(\.workspaceCanvasBlocked) private var workspaceCanvasBlocked
     @Environment(\.workspaceCanvasExclusionRects) private var workspaceCanvasExclusionRects
+    @Environment(\.graphBrowserSettledFrame) private var browserSettledFrame
 
     private struct NodeDrag {
         var id: String
@@ -102,6 +103,7 @@ struct GraphSurface: View {
     @State private var camera = GraphCamera()
     @State private var viewportSize = CGSize.zero
     @State private var controlsRect = CGRect.zero
+    @State private var chromeSizes: [String: CGSize] = [:]
     @State private var cameraInitialized = false
     @State private var memoryScope: String?
     @State private var renderCache = GraphRenderCache()
@@ -124,6 +126,13 @@ struct GraphSurface: View {
     @FocusState private var focus: FocusTarget?
     private enum FocusTarget: Hashable { case node(String), port(String, PortSide), line(String) }
     private enum PortSide: Hashable { case leading, trailing }
+    private enum ControlsMode: String, CaseIterable { case full, compact, menu }
+    private struct ChromeLayout {
+        var mode = ControlsMode.full
+        var controls: CGRect?
+        var status: CGRect?
+        var mergesStatus = false
+    }
     private let nodeSize = CGSize(width: 232, height: 100)
     private var acceptsCanvasInput: Bool { isEnabled && !workspaceCanvasBlocked }
     private var canNavigate: Bool {
@@ -155,17 +164,22 @@ struct GraphSurface: View {
             let globalFrame = geometry.frame(in: .global)
             let workspaceExclusions = workspaceCanvasExclusionRects.filter { !$0.isNull && !$0.isInfinite && !$0.isEmpty }
                 .map { $0.offsetBy(dx: -globalFrame.minX, dy: -globalFrame.minY) }
-            let visibility = visibilitySnapshot(in: geometry.size, exclusions: workspaceExclusions + [interactionExclusion].compactMap { $0 })
+                // The published browser frame is deliberately settled. Only its
+                // live frame excludes input while dragging, never a stale hole.
+                .filter { frame in browserSettledFrame.map { frame != $0 } ?? true }
+            let chrome = chromeLayout(in: geometry.size)
+            let localChrome = [chrome.controls, chrome.status].compactMap { $0 }
+            let visibility = visibilitySnapshot(in: geometry.size, exclusions: workspaceExclusions + [interactionExclusion].compactMap { $0 } + localChrome)
             ZStack(alignment: .topLeading) {
                 Palette.canvas
                 grid(in: geometry.size)
                 GraphPointerBridge(enabled: canNavigate, movable: true, resetID: gestureEpoch, exclusion: interactionExclusion,
-                                   additionalExclusions: workspaceExclusions, canvasID: canvasInputID,
+                                   additionalExclusions: workspaceExclusions + localChrome, canvasID: canvasInputID,
                                    click: { _ in backgroundTapped() }, drag: { updatePan(delta: $0, ended: $1) },
                                    cancel: { cancelPan() })
                     .contextMenu { if let createDocument { Button("新建笔记") { createDocument() } } }
                 GraphViewportInput(enabled: canNavigate, canvasID: canvasInputID,
-                                   exclusions: workspaceExclusions + [interactionExclusion, controlsRect.isEmpty ? nil : controlsRect].compactMap { $0 },
+                                   exclusions: workspaceExclusions + [interactionExclusion].compactMap { $0 } + localChrome,
                                    scroll: { panViewport(by: $0) }, zoom: { zoomViewport(by: $0, at: $1) })
                 GraphAmbientLayer(active: ambientMotion && !reduceMotion && scenePhase == .active && canNavigate
                                   && !canvasHovered && selectedID == nil && focus == nil && items.count <= 80) { phase in
@@ -198,21 +212,25 @@ struct GraphSurface: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height).clipped()
             .transaction { $0.animation = nil }
-            .overlay(alignment: .bottomLeading) {
-                statusOverlay.lineLimit(2).multilineTextAlignment(.leading)
-                    .frame(maxWidth: min(300, statusWidth(in: geometry.size)), alignment: .leading)
-                    .padding(.leading, geometry.size.width >= 1050 && navigationDock == NavigationOrbDock.bottomLeading.rawValue ? 80 : 24)
-                    .padding(.bottom, geometry.size.width < 1050 ? 96 : 24).allowsHitTesting(false)
-            }
-            .overlay(alignment: .bottom) {
-                cameraControls.background {
-                    GeometryReader { controls in
-                        Color.clear.preference(key: GraphControlsFrameKey.self, value: controls.frame(in: .named("graph-viewport")))
+            .overlay(alignment: .topLeading) {
+                ZStack(alignment: .topLeading) {
+                    chromeMeasurements(in: geometry.size)
+                    if let frame = chrome.status {
+                        statusOverlay.lineLimit(2).multilineTextAlignment(.leading)
+                            .frame(width: frame.width, height: frame.height, alignment: .leading)
+                            .readingGlass(radius: 16)
+                            .position(x: frame.midX, y: frame.midY).allowsHitTesting(false)
                     }
-                }.padding(.horizontal, 24).padding(.bottom, 24)
+                    if let frame = chrome.controls {
+                        cameraControls(mode: chrome.mode, mergingStatus: chrome.mergesStatus)
+                            .frame(width: frame.width, height: frame.height)
+                            .position(x: frame.midX, y: frame.midY)
+                    }
+                }.frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
             }
-            .coordinateSpace(name: "graph-viewport")
-            .onPreferenceChange(GraphControlsFrameKey.self) { controlsRect = $0 }
+            .preference(key: WorkspaceChromeBoundsPreference.self, value: chromeBounds(chrome, globalFrame: globalFrame))
+            .onPreferenceChange(GraphChromeSizesKey.self) { if chromeSizes != $0 { chromeSizes = $0 } }
+            .onChange(of: chrome.controls, initial: true) { _, frame in controlsRect = frame ?? .zero }
             .task(id: visibility) {
                 guard !Task.isCancelled else { return }
                 store.renderedWorkspaceVisibility = visibility
@@ -346,43 +364,129 @@ struct GraphSurface: View {
             .offset(x: x - period * 2, y: y - period * 2).opacity(0.18)
             .allowsHitTesting(false).accessibilityHidden(true)
     }
-    private var cameraControls: some View {
-        HStack(spacing: ReadingLayout.groupSpacing) {
-            Button { zoomViewport(by: 1 / 1.25, at: usableCenter) } label: { Image(systemName: "minus") }
-                .help("缩小画布").accessibilityLabel("缩小画布")
-            Button { zoomViewport(by: 1 / camera.scale, at: usableCenter) } label: {
-                Text(Double(camera.scale).formatted(.percent.precision(.fractionLength(camera.scale < 0.01 ? 2 : 0))))
-                    .monospacedDigit().font(.system(size: 13, weight: .medium)).frame(minWidth: 50)
-            }.help("恢复 100% 缩放")
-            Button { zoomViewport(by: 1.25, at: usableCenter) } label: { Image(systemName: "plus") }
-                .help("放大画布").accessibilityLabel("放大画布")
-            Divider().frame(height: 18).padding(.horizontal, 2)
-            Button { fitAll() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-                .help("显示全部节点").accessibilityLabel("显示全部节点")
-            Button { centerSelection() } label: { Image(systemName: "scope") }
-                .disabled(selectedPhysicalID == nil).help("定位选中节点").accessibilityLabel("定位选中节点")
-            if let scopeTitle, let toggleScope {
-                Divider().frame(height: 18).padding(.horizontal, 2)
-                Button(action: toggleScope) { Label(scopeTitle, systemImage: "line.3.horizontal.decrease") }.help("切换全书关系与当前原文关系")
+    private func cameraControls(mode: ControlsMode, mergingStatus: Bool = false) -> some View {
+        VStack(spacing: 4) {
+            if mergingStatus {
+                Text(statusText).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                    .frame(height: 18).padding(.horizontal, 8).help(statusText)
             }
-            if let createDocument {
-                Divider().frame(height: 18).padding(.horizontal, 2)
-                Button(action: createDocument) { Label("新建节点", systemImage: "plus") }.help("新建 Markdown 笔记与节点")
+            HStack(spacing: ReadingLayout.groupSpacing) {
+                if mode != .menu { zoomControls }
+                if mode == .full { expandedCameraActions }
+                else { cameraActionsMenu(includeZoom: mode == .menu) }
             }
         }
         .buttonStyle(ReadingToolbarButtonStyle()).padding(7).readingGlass(radius: 30)
         .disabled(!canNavigate).help("拖动空白或双指平移 · 捏合或 ⌘ 滚轮缩放")
     }
+    @ViewBuilder private var zoomControls: some View {
+        Button { zoomViewport(by: 1 / 1.25, at: usableCenter) } label: { Image(systemName: "minus") }
+            .help("缩小画布").accessibilityLabel("缩小画布")
+        Button { zoomViewport(by: 1 / camera.scale, at: usableCenter) } label: {
+            Text(Double(camera.scale).formatted(.percent.precision(.fractionLength(camera.scale < 0.01 ? 2 : 0))))
+                .monospacedDigit().font(.system(size: 13, weight: .medium)).frame(minWidth: 50)
+        }.help("恢复 100% 缩放")
+        Button { zoomViewport(by: 1.25, at: usableCenter) } label: { Image(systemName: "plus") }
+            .help("放大画布").accessibilityLabel("放大画布")
+    }
+    @ViewBuilder private var expandedCameraActions: some View {
+        Divider().frame(height: 18).padding(.horizontal, 2)
+        Button { fitAll() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+            .help("显示全部节点").accessibilityLabel("显示全部节点")
+        Button { centerSelection() } label: { Image(systemName: "scope") }
+            .disabled(selectedPhysicalID == nil).help("定位选中节点").accessibilityLabel("定位选中节点")
+        if let scopeTitle, let toggleScope {
+            Divider().frame(height: 18).padding(.horizontal, 2)
+            Button(action: toggleScope) { Label(scopeTitle, systemImage: "line.3.horizontal.decrease") }.help("切换全书关系与当前原文关系")
+        }
+        if let createDocument {
+            Divider().frame(height: 18).padding(.horizontal, 2)
+            Button(action: createDocument) { Label("新建节点", systemImage: "plus") }.help("新建 Markdown 笔记与节点")
+        }
+    }
+    private func cameraActionsMenu(includeZoom: Bool) -> some View {
+        Menu {
+            Text(statusText)
+            Divider()
+            if includeZoom {
+                Button { zoomViewport(by: 1 / 1.25, at: usableCenter) } label: { Label("缩小画布", systemImage: "minus") }
+                Button { zoomViewport(by: 1 / camera.scale, at: usableCenter) } label: { Label("恢复 100%", systemImage: "arrow.counterclockwise") }
+                Button { zoomViewport(by: 1.25, at: usableCenter) } label: { Label("放大画布", systemImage: "plus") }
+                Divider()
+            }
+            Button { fitAll() } label: { Label("显示全部节点", systemImage: "arrow.up.left.and.arrow.down.right") }
+            Button { centerSelection() } label: { Label("定位选中节点", systemImage: "scope") }.disabled(selectedPhysicalID == nil)
+            if let scopeTitle, let toggleScope { Button(action: toggleScope) { Label(scopeTitle, systemImage: "line.3.horizontal.decrease") } }
+            if let createDocument { Button(action: createDocument) { Label("新建节点", systemImage: "plus") } }
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("画布工具与状态").accessibilityLabel("更多画布工具与状态")
+    }
+
+    /// Measure intrinsic chrome once per content change. Hidden measurements
+    /// have no pointer receivers, global bounds or model side effects.
+    private func chromeMeasurements(in size: CGSize) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(ControlsMode.allCases, id: \.rawValue) { mode in
+                cameraControls(mode: mode).fixedSize().background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: GraphChromeSizesKey.self, value: [mode.rawValue: proxy.size])
+                    }
+                }
+            }
+            if !statusText.isEmpty {
+                statusOverlay.lineLimit(2).multilineTextAlignment(.leading)
+                    .frame(width: min(300, max(0, size.width - 48)), alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: GraphChromeSizesKey.self, value: ["status": proxy.size])
+                        }
+                    }
+            }
+        }.hidden().allowsHitTesting(false).accessibilityHidden(true)
+    }
+    private func chromeLayout(in size: CGSize) -> ChromeLayout {
+        let bounds = CGRect(x: 24, y: 88, width: max(0, size.width - 48), height: max(0, size.height - 112))
+        var obstacles = [browserSettledFrame].compactMap { $0 }.filter { !$0.isEmpty && !$0.isNull }
+        if navigationDock == NavigationOrbDock.bottomLeading.rawValue {
+            obstacles.append(CGRect(x: 14, y: max(14, size.height - 72), width: 58, height: 58))
+        }
+        var result = ChromeLayout()
+        for mode in ControlsMode.allCases {
+            guard let measured = chromeSizes[mode.rawValue], measured.width > 0, measured.height > 0 else { continue }
+            let preferred = CGPoint(x: bounds.midX - measured.width / 2, y: bounds.maxY - measured.height)
+            if let frame = FloatingChromeGeometry.place(size: measured, preferredOrigin: preferred, within: bounds, avoiding: obstacles) {
+                result.mode = mode; result.controls = frame; break
+            }
+        }
+        guard !statusText.isEmpty, let measured = chromeSizes["status"], measured.height > 0 else { return result }
+        let preferred = CGPoint(x: navigationDock == NavigationOrbDock.bottomLeading.rawValue ? 80 : bounds.minX,
+                                y: bounds.maxY - measured.height)
+        result.status = FloatingChromeGeometry.place(size: measured, preferredOrigin: preferred, within: bounds,
+            avoiding: obstacles + [result.controls].compactMap { $0 })
+        if result.status == nil, let controls = result.controls {
+            // Keep a short, visible state when no separate status card fits.
+            for mode in ControlsMode.allCases.drop(while: { $0 != result.mode }) {
+                guard let base = chromeSizes[mode.rawValue] else { continue }
+                let combined = CGSize(width: base.width, height: base.height + 22)
+                if let frame = FloatingChromeGeometry.place(size: combined,
+                    preferredOrigin: CGPoint(x: controls.midX - combined.width / 2, y: controls.maxY - combined.height), within: bounds, avoiding: obstacles) {
+                    result.mode = mode; result.controls = frame; result.mergesStatus = true; break
+                }
+            }
+        }
+        return result
+    }
+    private func chromeBounds(_ layout: ChromeLayout, globalFrame: CGRect) -> [String: CGRect] {
+        let identity = title ?? store.route
+        var frames: [String: CGRect] = [:]
+        if let controls = layout.controls { frames["graph-controls.\(identity)"] = controls.offsetBy(dx: globalFrame.minX, dy: globalFrame.minY) }
+        if let status = layout.status { frames["graph-status.\(identity)"] = status.offsetBy(dx: globalFrame.minX, dy: globalFrame.minY) }
+        return frames
+    }
     private var usableCenter: CGPoint {
         let usable = GraphCamera.usableRect(in: viewportSize, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: obscuredTrailingWidth)
         return CGPoint(x: usable.midX, y: usable.midY)
-    }
-    private func statusWidth(in size: CGSize) -> CGFloat {
-        // The collapsed browser still owns its top-right button. Long status
-        // messages must wrap before that button even when it no longer narrows
-        // the camera's usable area.
-        let trailing = max(obscuredTrailingWidth, interactionExclusion.map { size.width - $0.minX } ?? 0)
-        return max(80, GraphCamera.usableRect(in: size, obscuredLeadingWidth: obscuredLeadingWidth, obscuredTrailingWidth: trailing).width - 24)
     }
     private func reframeCamera(previousLeadingWidth: CGFloat, previousTrailingWidth: CGFloat) {
         guard cameraInitialized, viewportSize.width > 0 else { return }
@@ -433,17 +537,18 @@ struct GraphSurface: View {
         selectedNodeID = id; selectedNodeIDChanged?(id)
         store.renderedSelectedNodeIDs = id.map { [$0] } ?? []
     }
-    @ViewBuilder private var statusOverlay: some View {
-        if savingConnection || savingLine { Text("正在保存连线…").font(.caption).padding(9).readingGlass() }
-        else if let id = connectionFromID, let source = renderCache.byID[id] {
-            Text(message.isEmpty ? "从「\(source.title)」连线 · 点击目标节点，Esc 或点空白取消" : message)
-                .font(.caption).padding(9).readingGlass()
-        } else if editingLineID != nil {
-            Text(message.isEmpty ? "关系名称：回车保存，Esc 取消" : message).font(.caption).padding(9).readingGlass()
-        } else if !message.isEmpty { Text(message).font(.caption).padding(9).readingGlass() }
-        else if title != nil {
-            Text("\(items.count) 个节点 · \(lines.count) 条连线").font(.system(size: 13)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.vertical, 11).readingGlass(radius: 14)
+    private var statusText: String {
+        if savingConnection || savingLine { return "正在保存连线…" }
+        if let id = connectionFromID, let source = renderCache.byID[id] {
+            return message.isEmpty ? "从「\(source.title)」连线 · 点击目标节点，Esc 或点空白取消" : message
         }
+        if editingLineID != nil { return message.isEmpty ? "关系名称：回车保存，Esc 取消" : message }
+        if !message.isEmpty { return message }
+        return title == nil ? "" : "\(items.count) 个节点 · \(lines.count) 条连线"
+    }
+    private var statusOverlay: some View {
+        Text(statusText).font(.system(size: 13)).foregroundStyle(.secondary)
+            .padding(.horizontal, 16).padding(.vertical, 10)
     }
     private func nodeShell(_ item: GraphItem) -> some View {
         ZStack {
@@ -690,9 +795,11 @@ private struct GraphAmbientLayer<Content: View>: View {
     }
 }
 
-private struct GraphControlsFrameKey: PreferenceKey {
-    static var defaultValue = CGRect.zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+private struct GraphChromeSizesKey: PreferenceKey {
+    static var defaultValue: [String: CGSize] = [:]
+    static func reduce(value: inout [String: CGSize], nextValue: () -> [String: CGSize]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
 }
 
 private enum GraphGridTile {

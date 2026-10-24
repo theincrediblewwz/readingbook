@@ -1,6 +1,17 @@
 import SwiftUI
 import ReadingCore
 
+private struct GraphBrowserSettledFrameKey: EnvironmentKey {
+    static let defaultValue: CGRect? = nil
+}
+extension EnvironmentValues {
+    /// Placement uses the released panel position; pointer exclusion stays live.
+    var graphBrowserSettledFrame: CGRect? {
+        get { self[GraphBrowserSettledFrameKey.self] }
+        set { self[GraphBrowserSettledFrameKey.self] = newValue }
+    }
+}
+
 /// The browser is an overlay over the same world canvas, never a layout column.
 /// Its native handle measures a single window-space drag origin so previewing a
 /// node or saving its position cannot move the panel underneath the pointer.
@@ -33,7 +44,7 @@ struct FloatingGraphWorkspace<Surface: View>: View {
 
     private var panelWidth: CGFloat { min(ReadingLayout.nodeBrowserWidth, max(220, viewport.width - margin * 2)) }
     private var fullHeight: CGFloat { max(220, min(770, viewport.height - topReserve - 104)) }
-    private var panelHeight: CGFloat { collapsed ? 60 : fullHeight }
+    private var panelHeight: CGFloat { collapsed ? 56 : fullHeight }
     private var panelFrame: CGRect {
         let origin = clamp(dragPosition ?? savedOrigin ?? CGPoint(x: viewport.width - panelWidth - margin, y: topReserve + 12))
         return CGRect(x: origin.x, y: origin.y, width: panelWidth, height: panelHeight)
@@ -43,6 +54,7 @@ struct FloatingGraphWorkspace<Surface: View>: View {
     private var settledFrame: CGRect {
         CGRect(origin: clamp(savedOrigin ?? CGPoint(x: viewport.width - panelWidth - margin, y: topReserve + 12)), size: CGSize(width: panelWidth, height: panelHeight))
     }
+    private var settledExclusion: CGRect { shown ? settledFrame : restoreFrame }
     private var leadingCover: CGFloat {
         shown && !collapsed && settledFrame.midX < viewport.width / 2 ? min(settledFrame.maxX + margin, viewport.width - 120) : 0
     }
@@ -54,8 +66,12 @@ struct FloatingGraphWorkspace<Surface: View>: View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
                 Palette.canvas
+                Color.clear.preference(key: WorkspaceChromeBoundsPreference.self,
+                    value: viewport.width > 0 && viewport.height > 0 ? ["graph-browser.\(memoryID)": settledExclusion.offsetBy(dx: geometry.frame(in: .global).minX, dy: geometry.frame(in: .global).minY)] : [:])
+                    .allowsHitTesting(false)
                 if viewport.width > 0, viewport.height > 0 {
                     surface(exclusion, leadingCover, trailingCover)
+                        .environment(\.graphBrowserSettledFrame, settledExclusion)
                         .overlay(alignment: .topLeading) { browserOverlay }.readingGlassGroup()
                 }
             }.onAppear {
@@ -86,13 +102,13 @@ struct FloatingGraphWorkspace<Surface: View>: View {
             }
     }
     @ViewBuilder private var browserOverlay: some View {
-        if shown {
-            GraphNodeBrowser(items: items, selectedNodeID: selectedNodeID, height: fullHeight, select: select, open: open,
+        GraphNodeBrowser(items: items, selectedNodeID: selectedNodeID, height: fullHeight, select: select, open: open,
                              close: { animate { shown = false }; cancelDrag() }, collapsed: collapsed,
                              toggleCollapsed: { cancelDrag(); animate { collapsed.toggle() } }, width: panelWidth,
                              dragEpoch: pointerEpoch, beginDrag: beginDrag, drag: updateDrag, cancelDrag: cancelDrag)
-                .position(x: panelFrame.midX, y: panelFrame.midY).transition(.opacity)
-        } else {
+                .position(x: panelFrame.midX, y: panelFrame.midY)
+                .opacity(shown ? 1 : 0).allowsHitTesting(shown).accessibilityHidden(!shown)
+        if !shown {
             Button { cancelDrag(); animate { shown = true; collapsed = false } } label: {
                 Label("节点 · \(items.count)", systemImage: "sidebar.right")
             }.buttonStyle(ReadingToolbarButtonStyle()).padding(5).readingGlass(interactive: true)

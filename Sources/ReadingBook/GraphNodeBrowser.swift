@@ -25,19 +25,21 @@ struct GraphNodeBrowser: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if !collapsed {
+            VStack(spacing: 0) {
                 searchField
                 nodeList
                 Divider().opacity(0.45)
                 preview
             }
-        }.frame(width: width, height: collapsed ? 60 : height).contentShape(Rectangle()).onTapGesture { }.readingGlass(radius: 24)
+            .frame(height: collapsed ? 0 : nil).opacity(collapsed ? 0 : 1).clipped()
+            .allowsHitTesting(!collapsed).accessibilityHidden(collapsed)
+        }.frame(width: width, height: collapsed ? 56 : height).contentShape(Rectangle()).onTapGesture { }.readingGlass(radius: 24)
     }
     private var header: some View {
         HStack(spacing: 8) {
             HStack(spacing: 9) {
-                Image(systemName: "circle.grid.2x3.fill").font(.system(size: 11)).foregroundStyle(.tertiary)
-                Text("节点").font(.system(size: 18, weight: .semibold))
+                Image(systemName: "circle.grid.2x3.fill").font(.system(size: 15)).foregroundStyle(.tertiary)
+                Text("节点").font(.system(size: 16, weight: .semibold))
                 Text("\(items.count)").font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 .overlay {
@@ -51,14 +53,14 @@ struct GraphNodeBrowser: View {
                     .accessibilityLabel(collapsed ? "展开节点面板" : "收起节点面板内容")
             }
             Button(action: close) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭节点面板，可从右侧恢复").accessibilityLabel("关闭节点面板")
-        }.padding(.leading, 18).padding(.trailing, 8).padding(.vertical, 8)
+        }.padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 6).frame(height: 56).layoutPriority(1)
     }
     private var searchField: some View {
         HStack(spacing: 9) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("搜索节点…", text: $query).textFieldStyle(.plain).font(.system(size: 15))
             if !query.isEmpty {
-                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).help("清除节点搜索")
+                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).help("清除节点搜索").accessibilityLabel("清除节点搜索")
             }
         }.padding(.horizontal, 14).frame(height: 44).background(Palette.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 13))
             .overlay(RoundedRectangle(cornerRadius: 13).stroke(Palette.line, lineWidth: 1)).padding(.horizontal, 16).padding(.bottom, 12)
@@ -74,7 +76,7 @@ struct GraphNodeBrowser: View {
                     }
                     if filtered.isEmpty { Text("没有匹配的节点").font(.subheadline).foregroundStyle(.secondary).padding(18) }
                 }.padding(.horizontal, 10).padding(.bottom, 10)
-            }.frame(height: min(390, max(96, (height - 152) * 0.60)))
+            }.frame(height: min(320, max(88, (height - 128) * 0.50)))
                 .onChange(of: selectedNodeID) { _, id in
                     defer { clickedInList = nil }
                     if let id, clickedInList != id, filtered.contains(where: { $0.id == id }) { proxy.scrollTo(id, anchor: .center) }
@@ -86,7 +88,7 @@ struct GraphNodeBrowser: View {
             GraphNodeDetails(item: selected).id(selected.id).frame(maxHeight: .infinity)
         } else {
             Text("单击节点在这里查看内容，双击打开对应文档。")
-                .font(.caption).foregroundStyle(.secondary).padding(14).frame(maxHeight: .infinity, alignment: .topLeading)
+                .font(.system(size: 15)).foregroundStyle(.secondary).padding(16).frame(maxHeight: .infinity, alignment: .topLeading)
         }
     }
 }
@@ -102,8 +104,8 @@ private struct GraphNodeBrowserRow: View {
             Image(systemName: !item.documentIDs.isEmpty || item.subtitle == "Markdown" ? "doc.text" : "circle.hexagongrid")
                 .font(.system(size: 23, weight: .regular)).foregroundStyle(Palette.accent).frame(width: 30)
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.title).font(.system(size: 16, weight: selected ? .semibold : .medium)).foregroundStyle(selected ? Palette.accent : Palette.ink).lineLimit(2)
-                Text(item.subtitle).font(.system(size: 13)).foregroundStyle(.secondary)
+                Text(item.title).font(.system(size: 15, weight: selected ? .semibold : .medium)).foregroundStyle(selected ? Palette.accent : Palette.ink).lineLimit(2)
+                Text(item.subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
         }.padding(.horizontal, 12).padding(.vertical, 10)
@@ -142,7 +144,7 @@ private struct GraphNodeDetails: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text(item.title).font(.system(size: 20, weight: .semibold)).textSelection(.enabled)
+                Text(item.title).font(.system(size: 16, weight: .semibold)).textSelection(.enabled)
                 if documents.count > 1 {
                     Menu {
                         ForEach(documents) { document in Button(document.title) { previewDocumentID = document.id } }
@@ -156,22 +158,22 @@ private struct GraphNodeDetails: View {
                     else { ProgressView().controlSize(.small).frame(maxWidth: .infinity) }
                     if !document.evidence.isEmpty { EvidenceDisclosure(evidence: document.evidence).id(document.id) }
                 } else if let entity = store.book?.entities.first(where: { $0.id == item.targetID }) {
-                    Text(entity.summary).font(.subheadline).textSelection(.enabled)
+                    Text(entity.summary).font(.system(size: 15)).textSelection(.enabled)
                     ForEach(entity.properties.sorted(by: { $0.key < $1.key }), id: \.key) { field in
-                        VStack(alignment: .leading, spacing: 3) { Text(field.key).font(.caption).foregroundStyle(.secondary); Text(field.value).font(.subheadline).textSelection(.enabled) }
+                        VStack(alignment: .leading, spacing: 3) { Text(field.key).font(.system(size: 13)).foregroundStyle(.secondary); Text(field.value).font(.system(size: 15)).textSelection(.enabled) }
                     }
                     if !entity.evidence.isEmpty { EvidenceDisclosure(evidence: entity.evidence).id(entity.id) }
                 } else if let event = store.book?.events.first(where: { $0.id == item.targetID }) {
                     Text(event.dateText).font(.caption).foregroundStyle(Palette.accent)
-                    Text(event.summary).font(.subheadline).textSelection(.enabled)
-                    if !event.placeIDs.isEmpty { Text("地点：" + event.placeIDs.map(store.objectTitle).joined(separator: "、")).font(.subheadline) }
-                    if !event.participantIDs.isEmpty { Text("参与者：" + event.participantIDs.map(store.objectTitle).joined(separator: "、")).font(.subheadline) }
+                    Text(event.summary).font(.system(size: 15)).textSelection(.enabled)
+                    if !event.placeIDs.isEmpty { Text("地点：" + event.placeIDs.map(store.objectTitle).joined(separator: "、")).font(.system(size: 15)) }
+                    if !event.participantIDs.isEmpty { Text("参与者：" + event.participantIDs.map(store.objectTitle).joined(separator: "、")).font(.system(size: 15)) }
                     if !event.evidence.isEmpty { EvidenceDisclosure(evidence: event.evidence).id(event.id) }
                 } else if let unit = store.book?.units.first(where: { $0.id == item.targetID }) {
                     Text(unit.locator).font(.caption).foregroundStyle(.secondary)
                     Text(unit.text).font(.system(size: 15)).textSelection(.enabled)
-                } else { Text("这个节点暂时没有可预览的内容。").font(.subheadline).foregroundStyle(.secondary) }
-            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                } else { Text("这个节点暂时没有可预览的内容。").font(.system(size: 15)).foregroundStyle(.secondary) }
+            }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
         }.task(id: revision) {
             markdown = nil; loadError = nil
             guard let bookID = store.bookID, let document else { return }

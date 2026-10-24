@@ -35,7 +35,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     private var memoryID: String { memoryIDOverride ?? (trailing ? "reader.companion" : "reader.outline") }
 
     private var panelWidth: CGFloat { min(width, max(240, viewport.width - 100)) }
-    private var headerHeight: CGFloat { elevated ? 56 : 52 }
+    private var headerHeight: CGFloat { ReadingLayout.panelHeaderHeight }
     private var wantedHeight: CGFloat { collapsed ? headerHeight : min(height, max(headerHeight, viewport.height - 88 - bottomReserve)) }
     private var panelHeight: CGFloat { presentationPlacement().height }
     private var origin: CGPoint { presentationPlacement().origin }
@@ -163,7 +163,7 @@ struct ReaderFloatingPanel<Content: View>: View {
                                 }, cancel: { dragStart = nil; dragOrigin = nil; dragHeight = nil; reportStableFrame() })
                             }
                             .help("拖动\(title)面板").accessibilityLabel("拖动\(title)面板")
-                        Label(title, systemImage: icon).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                        Label(title, systemImage: icon).font(.system(size: ReadingLayout.panelTitleSize, weight: .semibold)).lineLimit(1)
                         Spacer(minLength: 0)
                         Button { transientPresentation = nil; collapsed.toggle() } label: { Image(systemName: collapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开\(title)" : "收起\(title)")
                         Button { transientPresentation = nil; isPresented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭\(title)")
@@ -184,6 +184,14 @@ struct ReaderFloatingPanel<Content: View>: View {
                     .transition(.opacity)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background {
+                GeometryReader { geometry in
+                    let offset = geometry.frame(in: .global).origin
+                    let frame = lastReportedFrame ?? .zero
+                    Color.clear.preference(key: WorkspaceChromeBoundsPreference.self,
+                        value: frame.isEmpty ? [:] : ["panel." + memoryID: frame.offsetBy(dx: offset.x, dy: offset.y)])
+                }.allowsHitTesting(false)
+            }
             // These keys animate opening only. Pointer-driven origins never acquire an animation.
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: isPresented)
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: collapsed)

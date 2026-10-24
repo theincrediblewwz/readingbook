@@ -50,26 +50,26 @@ import ReadingCore
 struct TemporalPersonContents: View {
     @EnvironmentObject var store: AppStore
     let entityID: String
-    private var snapshot: EntityTimeSnapshot? { store.temporalSnapshot(entityID) }
     var body: some View {
+        let snapshot = store.temporalSnapshot(entityID)
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Label(store.temporalValueLabel, systemImage: "clock").font(.subheadline).foregroundStyle(Palette.accent)
                 if let object = snapshot?.object {
-                    Text(object.name).font(.system(size: 26, weight: .semibold, design: .serif))
+                    Text(object.name).font(.system(size: 20, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
                     if !object.summary.isEmpty { MarkdownText(markdown: object.summary) }
                 }
                 if store.temporalPoint == nil {
                     Text("当前使用原书纪年标签，尚未统一历法。请在时间轴选择明确历法或叙事顺序后，查看此时的行动。")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.system(size: 15)).foregroundStyle(.secondary)
                 } else if let snapshot {
                     if snapshot.presences.isEmpty && snapshot.participations.isEmpty {
                         Text("此时没有已记录的行动或位置。不会沿用其他时期的位置。")
-                            .font(.callout).foregroundStyle(.secondary)
+                            .font(.system(size: 15)).foregroundStyle(.secondary)
                     }
                     ForEach(snapshot.presences) { presence in
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(presence.action).font(.subheadline.weight(.medium))
+                            Text(presence.action).font(.system(size: 15, weight: .medium))
                             if let place = presence.placeID { Label(store.objectTitle(place), systemImage: "mappin.and.ellipse").font(.caption) }
                             anchorEvidence(presence.sourceAnchorIDs)
                         }.padding(12).background(Palette.accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
@@ -82,20 +82,20 @@ struct TemporalPersonContents: View {
                     if !snapshot.relations.isEmpty {
                         Text("此时关系").font(.subheadline.weight(.semibold))
                         ForEach(snapshot.relations.filter { $0.match == .matches }, id: \.relation.id) { item in
-                            Text("\(store.objectTitle(item.relation.fromID)) · \(item.relation.label) · \(store.objectTitle(item.relation.toID))").font(.callout)
+                            Text("\(store.objectTitle(item.relation.fromID)) · \(item.relation.label) · \(store.objectTitle(item.relation.toID))").font(.system(size: 15))
                         }
                     }
                     if !snapshot.uncertainPresences.isEmpty || !snapshot.uncertainParticipations.isEmpty {
                         DisclosureGroup("时间或位置尚待核对") {
                             ForEach(snapshot.uncertainPresences) { item in
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Text(item.action).font(.callout)
+                                    Text(item.action).font(.system(size: 15))
                                     Text(item.extent.sourceText.isEmpty ? "时间未明" : item.extent.sourceText).font(.caption).foregroundStyle(.secondary)
                                     anchorEvidence(item.sourceAnchorIDs)
                                 }.padding(.vertical, 6)
                             }
                             ForEach(snapshot.uncertainParticipations) { item in
-                                Text("\(store.objectTitle(item.eventID)) · \(item.role)").font(.callout)
+                                Text("\(store.objectTitle(item.eventID)) · \(item.role)").font(.system(size: 15))
                             }
                         }.font(.caption)
                     }

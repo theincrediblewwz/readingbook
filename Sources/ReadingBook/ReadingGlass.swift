@@ -6,6 +6,10 @@ enum ReadingLayout {
     static let controlHeight: CGFloat = 44
     static let groupSpacing: CGFloat = 8
     static let panelPadding: CGFloat = 16
+    static let panelHeaderHeight: CGFloat = 56
+    static let panelTitleSize: CGFloat = 16
+    static let bodySize: CGFloat = 15
+    static let secondarySize: CGFloat = 13
     static let nodeBrowserWidth: CGFloat = 370
     static let navigationRowHeight: CGFloat = 48
 }
