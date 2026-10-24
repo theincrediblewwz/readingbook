@@ -32,7 +32,7 @@ struct WorkspaceView: View {
     @State private var resolvingNavigation = false
     @State private var chromeBounds: [String: CGRect] = [:]
     @State private var managementRoute: String?
-    var body: some View {
+    private var workspaceContent: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
                 Palette.canvas.ignoresSafeArea()
@@ -82,6 +82,12 @@ struct WorkspaceView: View {
         .environment(\.bookSchemeDraftStore, bookSchemeDrafts)
         .serviceProfileChangeConfirmation(store: store)
         .tint(Palette.accent)
+    }
+    private var deletionPresented: Binding<Bool> {
+        Binding(get: { store.deletionRequest != nil }, set: { visible in if !visible { store.deletionRequest = nil } })
+    }
+    var body: some View {
+        workspaceContent
         .onOpenURL { url in Task { await store.openInternalURL(url) } }
         .confirmationDialog("保存当前 Markdown 后离开？", isPresented: $showsRouteConfirmation, presenting: pendingRoute) { destination in
             Button("保存并继续") { saveDocumentAndNavigate(to: destination) }.disabled(store.isBusy)
@@ -123,7 +129,7 @@ struct WorkspaceView: View {
         .onChange(of: store.requestedWorkspaceRoute) { _, route in
             guard let route else { return }; store.requestedWorkspaceRoute = nil; navigate(route)
         }
-        .confirmationDialog("移入回收站？", isPresented: Binding(get: { store.deletionRequest != nil }, set: { if !$0 { store.deletionRequest = nil } }), presenting: store.deletionRequest) { request in
+        .confirmationDialog("移入回收站？", isPresented: deletionPresented, presenting: store.deletionRequest) { request in
             Button("移入回收站", role: .destructive) { store.confirmDeletion(request) }
             Button("取消", role: .cancel) { store.deletionRequest = nil }
         } message: { request in Text("“\(request.title)”\n" + request.detail) }

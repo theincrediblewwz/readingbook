@@ -334,7 +334,7 @@ private struct BookSchemeWorkspaceContent: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("之前：" + revision.before.views.map(\.title).joined(separator: "、"))
                             Text("之后：" + revision.after.views.map(\.title).joined(separator: "、"))
-                            Text("方法：" + (revision.after.plan?.methodIDs ?? []).compactMap { id in revision.after.methods.first { $0.id == id }?.name }.joined(separator: "、"))
+                            Text("方法：" + readingMethodNames(revision.after))
                         }.font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled).padding(.top, 10)
                     }
                     if revision.id == state.history.last(where: { $0.revertedAt == nil })?.id {
@@ -347,6 +347,11 @@ private struct BookSchemeWorkspaceContent: View {
     private func sectionTitle(_ title: String, subtitle: String, count: Int) -> some View {
         HStack { Text(title).font(.system(size: 16, weight: .semibold)); Text("\(count)").font(.system(size: 13)).foregroundStyle(.secondary) }
             .help(subtitle).accessibilityHint(subtitle)
+    }
+    private func readingMethodNames(_ configuration: BookSchemeConfiguration) -> String {
+        let ids: [String] = configuration.plan?.methodIDs ?? []
+        let names: [String] = ids.compactMap { id in configuration.methods.first(where: { $0.id == id })?.name }
+        return names.joined(separator: "、")
     }
     private func changeTag<T: Identifiable & Equatable>(_ value: T, old: [T]?) -> some View where T.ID == String {
         let prior = old?.first { $0.id == value.id }

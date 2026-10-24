@@ -22,6 +22,7 @@ struct EnhancedBookChatView: View {
 
 private struct BookChatContent: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.workspaceCanvasBlocked) private var workspaceBlocked
     @ObservedObject var composerDraft: QueryComposerDraft
     var embedded = false
     private var question: String {
@@ -38,7 +39,7 @@ private struct BookChatContent: View {
     @State private var showingComposerHelp = false
     @State private var memorySourceID: String?
     @FocusState private var composerFocused: Bool
-    private var composerIsActive: Bool { embedded ? store.readingCompanionVisible && store.readingCompanionTab == "chat" : store.route == "query" }
+    private var composerIsActive: Bool { !workspaceBlocked && (embedded ? store.readingCompanionVisible && store.readingCompanionTab == "chat" : store.route == "query") }
 
     var body: some View {
         VStack(spacing: 0) {
