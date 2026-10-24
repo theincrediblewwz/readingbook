@@ -8,11 +8,19 @@ struct ReaderNavigationPanel: View {
     @ObservedObject var pdf: PDFReaderController
     @Binding var showsPDF: Bool
     let viewingPDF: Bool
+    var maximumHeight: CGFloat = 600
     var openOutline: (Bool) -> Void
     var close: () -> Void
     @State private var showsParallelModes = false
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     var body: some View {
+        ViewThatFits(in: .vertical) {
+            panelContent
+            ScrollView { panelContent }.scrollBounceBehavior(.basedOnSize)
+        }.frame(width: 354).frame(maxHeight: max(180, maximumHeight)).background(Palette.surface)
+            .onAppear { showsParallelModes = store.readingSourceMode != "original" }
+    }
+    private var panelContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("阅读导航").font(.system(size: 16, weight: .semibold))
             HStack(spacing: 4) {
@@ -53,8 +61,7 @@ struct ReaderNavigationPanel: View {
                 }
               }.padding(.top, 10)
             }.font(.system(size: 14, weight: .medium))
-        }.padding(18).frame(width: 354).background(Palette.surface)
-            .onAppear { showsParallelModes = store.readingSourceMode != "original" }
+        }.padding(18)
     }
     private func sectionLabel(_ value: String) -> some View { Text(value).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary) }
     private func navigationTile(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {

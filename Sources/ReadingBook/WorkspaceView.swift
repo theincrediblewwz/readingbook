@@ -346,7 +346,7 @@ struct WorkspaceView: View {
                             readerOutline = false; pdfController.command(.setThumbnails(false)); readerPopover = nil
                         } else { toggleReaderPopover(.navigation) }
                     }.popover(isPresented: readerPopoverBinding(.navigation), arrowEdge: .top) {
-                        ReaderNavigationPanel(pdf: pdfController, showsPDF: $readerShowsPDF, viewingPDF: viewingPDF, openOutline: openReadingOutline, close: { readerPopover = nil }).environmentObject(store)
+                        ReaderNavigationPanel(pdf: pdfController, showsPDF: $readerShowsPDF, viewingPDF: viewingPDF, maximumHeight: workspaceHeight - 128, openOutline: openReadingOutline, close: { readerPopover = nil }).environmentObject(store)
                     }
                 }
                 DockDivider()
