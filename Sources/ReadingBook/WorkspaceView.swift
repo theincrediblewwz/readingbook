@@ -151,8 +151,10 @@ struct WorkspaceView: View {
         }
         let preferred = CGPoint(x: geometry.size.width < 700 ? 68 : 80, y: geometry.size.height - 104 - progressSize.height)
         let placement = FloatingChromeGeometry.place(size: progressSize, preferredOrigin: preferred, within: available, avoiding: obstacles)
+        let compact = placement == nil ? FloatingChromeGeometry.place(size: CGSize(width: 52, height: 52), preferredOrigin: preferred, within: available, avoiding: obstacles) : nil
         let frame = placement ?? CGRect(origin: preferred, size: progressSize)
-        return SmartReadingProgressPanel(maximumExpandedHeight: max(100, min(430, geometry.size.height - 220))).environmentObject(store)
+        return ZStack(alignment: .topLeading) {
+          SmartReadingProgressPanel(maximumExpandedHeight: max(100, min(430, geometry.size.height - 220))).environmentObject(store)
             .background {
                 GeometryReader { panel in Color.clear.preference(key: WorkspaceProgressSizePreference.self, value: panel.size) }
             }
@@ -165,6 +167,19 @@ struct WorkspaceView: View {
             .transformPreference(WorkspaceChromeBoundsPreference.self) { if placement == nil { $0.removeValue(forKey: "smart-progress") } }
             .opacity(placement == nil ? 0 : 1).allowsHitTesting(placement != nil).accessibilityHidden(placement == nil)
             .position(x: frame.midX, y: frame.midY)
+          if let compact {
+            Button { navigate("workflow") } label: {
+                Image(systemName: store.isSmartReadingRunning ? "sparkles" : "book.pages")
+                    .font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
+                    .frame(width: 52, height: 52).contentShape(Circle())
+            }.buttonStyle(.plain).readingGlass(radius: 26, interactive: true)
+                .help("空间有限；点击查看智能阅读进度与结果")
+                .accessibilityLabel("查看智能阅读进度")
+                .contextMenu { if store.isSmartReadingRunning { Button("暂停分析，保留检查点") { store.pause() } } }
+                .workspaceChromeBounds("smart-progress")
+                .position(x: compact.midX, y: compact.midY)
+          }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
     private func restoreReaderMemory() {
         readerShowsPDF = store.workspaceMemory.readerShowsPDF
