@@ -107,7 +107,7 @@ public actor LibraryRepository {
         try validatePackageFiles(project, in: staging, strictContents: true, verifySourceHash: true)
         try files.moveItem(at: staging, to: destination)
         refreshReadableAfterCommit(id: project.id)
-        try? refreshReadableLibraryIndex()
+        _ = try? refreshReadableLibraryIndex()
     }
 
     public func save(_ project: BookProject) throws {
@@ -322,7 +322,7 @@ public actor LibraryRepository {
         try requireVacant(destination)
         do { try files.moveItem(at: source, to: destination) }
         catch { throw ReadingError.invalid("书籍未能完整移入回收站。原书及可能的目标文件均已保留，请检查 books/\(project.id) 与 trash/\(project.id)：\(error.localizedDescription)") }
-        try? refreshReadableLibraryIndex()
+        _ = try? refreshReadableLibraryIndex()
     }
 
     public func archivedBooks() throws -> [BookProject] {
@@ -363,8 +363,8 @@ public actor LibraryRepository {
         try forgetRemovedBook(id: id)
         do { try files.moveItem(at: source, to: destination) }
         catch { throw ReadingError.invalid("书籍恢复未完成。回收目录及可能的目标文件均已保留，请检查 trash/\(id) 与 books/\(id)：\(error.localizedDescription)") }
-        try? refreshReadableViews(id: id)
-        try? refreshReadableLibraryIndex()
+        _ = try? refreshReadableViews(id: id)
+        _ = try? refreshReadableLibraryIndex()
         return project
     }
 
@@ -445,8 +445,8 @@ public actor LibraryRepository {
         // Recheck copied content, not just the external package before copying it.
         try validatePackageFiles(project, in: staging, strictContents: true, verifySourceHash: true)
         try files.moveItem(at: staging, to: destination)
-        try? refreshReadableViews(id: project.id)
-        try? refreshReadableLibraryIndex()
+        _ = try? refreshReadableViews(id: project.id)
+        _ = try? refreshReadableLibraryIndex()
         return project
     }
 

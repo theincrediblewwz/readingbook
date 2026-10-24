@@ -83,7 +83,7 @@ extension LibraryRepository {
             membership.removed[project.id] = Date()
             try saveMembership(membership)
         }
-        try? refreshReadableLibraryIndex()
+        _ = try? refreshReadableLibraryIndex()
     }
 
     public func removedBooksReport() throws -> LibraryLoadReport {
@@ -106,8 +106,8 @@ extension LibraryRepository {
     public func rejoinBook(id: String) throws -> BookProject {
         let project = try storageProject(in: bookDirectory(id, mustExist: true), expectedID: id)
         try forgetRemovedBook(id: id)
-        try? refreshReadableViews(id: id)
-        try? refreshReadableLibraryIndex()
+        _ = try? refreshReadableViews(id: id)
+        _ = try? refreshReadableLibraryIndex()
         return project
     }
 
@@ -182,7 +182,7 @@ extension LibraryRepository {
             throw ReadingError.invalid("项目仍在原目录，未完成本机副本移除；原登记保留。")
         }
         try? forgetRemovedBook(id: id)
-        try? refreshReadableLibraryIndex()
+        _ = try? refreshReadableLibraryIndex()
         return destination
     }
 

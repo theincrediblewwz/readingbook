@@ -13,7 +13,7 @@ extension LibraryRepository {
     func refreshReadableAfterCommit(id: String) {
         if let previous = readableAutomaticRefresh[id], Date().timeIntervalSince(previous) < 2 { return }
         readableAutomaticRefresh[id] = Date()
-        try? refreshReadableViews(id: id)
+        _ = try? refreshReadableViews(id: id)
     }
 
     /// Derived views have stable Chinese names. They never become the writer for
