@@ -6,6 +6,7 @@ import ReadingCore
 /// Displays the original PDF with PDFKit. Page numbers and callbacks are 1-based.
 /// OCR text is deliberately not substituted for the PDF's rendered page.
 struct PDFReaderView: NSViewRepresentable {
+    @Environment(\.workspaceCanvasBlocked) private var interactionBlocked
     var controller: PDFReaderController
     var url: URL
     var sourceHash: String
@@ -40,11 +41,13 @@ struct PDFReaderView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PDFReaderContainerView {
         let view = PDFReaderContainerView()
+        view.setInteractionBlocked(interactionBlocked)
         view.update(from: self)
         return view
     }
 
     func updateNSView(_ nsView: PDFReaderContainerView, context: Context) {
+        nsView.setInteractionBlocked(interactionBlocked)
         nsView.update(from: self)
     }
 
@@ -56,6 +59,7 @@ struct PDFReaderView: NSViewRepresentable {
 @MainActor final class PDFReaderContainerView: NSView, NSSearchFieldDelegate {
     private let bindingID = UUID()
     private weak var controller: PDFReaderController?
+    private var interactionBlocked = false
     private var sourceHash = ""
     private var sessionPassword: String?
     private var onUnlock: ((String) -> Void)?
@@ -102,6 +106,8 @@ struct PDFReaderView: NSViewRepresentable {
     private let pdfView = AnnotationPDFView()
     private let thumbnails = PDFThumbnailView()
     private let thumbnailScroll = NSScrollView()
+    private let thumbnailPanel = PDFReaderFloatingPanel()
+    private var thumbnailTop: NSLayoutConstraint?
     private let contentStack = NSStackView()
     private let header = PDFReaderFloatingPanel()
     private let searchField = NSSearchField()
@@ -142,6 +148,25 @@ struct PDFReaderView: NSViewRepresentable {
     private var allowsSearchAutoNavigation = false
     private var searchEscapeMonitor: Any?
     private let matchLimit = 5000
+    private struct ControlSnapshot: Equatable {
+        let controllerID: ObjectIdentifier?
+        let generation: Int
+        let page: Int
+        let pageCount: Int
+        let zoom: Int
+        let ready: Bool
+        let selected: Bool
+        let canEdit: Bool
+        let searchVisible: Bool
+        let continuous: Bool
+        let thumbnailsVisible: Bool
+        let fitMode: String
+        let searchFrame: CGRect
+        let thumbnailFrame: CGRect
+    }
+    private var pendingControlSnapshot: ControlSnapshot?
+    private var lastControlSnapshot: ControlSnapshot?
+    private var controlPublishScheduled = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -151,8 +176,28 @@ struct PDFReaderView: NSViewRepresentable {
     convenience init() { self.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError("PDFReaderContainerView is created in code") }
 
+    func setInteractionBlocked(_ blocked: Bool) {
+        guard interactionBlocked != blocked else { return }
+        interactionBlocked = blocked; pdfView.interactionBlocked = blocked
+        guard blocked, let owner = window, let responder = owner.firstResponder else { return }
+        // Only resign a PDF-owned responder. A management card may already
+        // own this window's shared field editor by the time this update runs.
+        if ownsResponder(responder) { owner.makeFirstResponder(nil) }
+    }
+    private func ownsResponder(_ responder: NSResponder) -> Bool {
+        let searchEditor = searchField.currentEditor()
+        let belongsToPDF = (responder as? NSView).map { $0 === pdfView || $0.isDescendant(of: pdfView) } ?? false
+        return belongsToPDF || responder === searchField || (searchEditor != nil && responder === searchEditor)
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        interactionBlocked ? nil : super.hitTest(point)
+    }
+
     private func configure() {
         pdfView.onRegion = { [weak self] page, rect in self?.createRegion(page: page, rect: rect) }
+        pdfView.onSinglePageNavigation = { [weak self] offset in
+            if offset < 0 { self?.previousPage() } else { self?.nextPage() }
+        }
         pdfView.onRegionError = { [weak self] message in self?.setStatus(message) }
         pdfView.isManagedAnnotation = { [weak self] annotation in
             self?.annotationIDs[ObjectIdentifier(annotation)] != nil || self?.sourceAnnotationIDs[ObjectIdentifier(annotation)] != nil
@@ -180,32 +225,46 @@ struct PDFReaderView: NSViewRepresentable {
         thumbnails.allowsDragging = false
         thumbnails.allowsMultipleSelection = false
         thumbnails.labelFont = .systemFont(ofSize: 10)
-        thumbnails.backgroundColor = .controlBackgroundColor
+        thumbnails.backgroundColor = .clear
         thumbnailScroll.documentView = thumbnails
         thumbnailScroll.hasVerticalScroller = true
         thumbnailScroll.hasHorizontalScroller = false
         thumbnailScroll.autohidesScrollers = true
-        thumbnailScroll.drawsBackground = true
-        thumbnailScroll.backgroundColor = .controlBackgroundColor
-        thumbnailScroll.isHidden = true
-        thumbnailScroll.widthAnchor.constraint(equalToConstant: 118).isActive = true
+        thumbnailScroll.drawsBackground = false
+        thumbnailScroll.translatesAutoresizingMaskIntoConstraints = false
+        thumbnailPanel.isHidden = true
+        let thumbnailTitle = NSTextField(labelWithString: "缩略图")
+        thumbnailTitle.font = .systemFont(ofSize: 14, weight: .semibold)
+        let thumbnailHeader = row([thumbnailTitle, symbolButton("xmark", "关闭缩略图", #selector(hideThumbnails))])
+        let thumbnailBody = NSStackView(views: [thumbnailHeader, thumbnailScroll])
+        thumbnailBody.orientation = .vertical; thumbnailBody.alignment = .leading; thumbnailBody.spacing = 4
+        thumbnailHeader.setContentHuggingPriority(.required, for: .vertical)
+        thumbnailScroll.setContentHuggingPriority(.defaultLow, for: .vertical)
+        thumbnailBody.translatesAutoresizingMaskIntoConstraints = false
+        thumbnailPanel.panelContent.addSubview(thumbnailBody)
+        NSLayoutConstraint.activate([
+            thumbnailBody.leadingAnchor.constraint(equalTo: thumbnailPanel.panelContent.leadingAnchor, constant: 10),
+            thumbnailBody.trailingAnchor.constraint(equalTo: thumbnailPanel.panelContent.trailingAnchor, constant: -10),
+            thumbnailBody.topAnchor.constraint(equalTo: thumbnailPanel.panelContent.topAnchor, constant: 8),
+            thumbnailBody.bottomAnchor.constraint(equalTo: thumbnailPanel.panelContent.bottomAnchor, constant: -10),
+            thumbnailHeader.widthAnchor.constraint(equalTo: thumbnailBody.widthAnchor),
+            thumbnailScroll.widthAnchor.constraint(equalTo: thumbnailBody.widthAnchor)
+        ])
 
         contentStack.orientation = .horizontal
         contentStack.alignment = .top
         contentStack.distribution = .fill
         contentStack.spacing = 0
         contentStack.detachesHiddenViews = true
-        contentStack.addArrangedSubview(thumbnailScroll)
         contentStack.addArrangedSubview(pdfView)
         pdfView.heightAnchor.constraint(equalTo: contentStack.heightAnchor).isActive = true
-        thumbnailScroll.heightAnchor.constraint(equalTo: contentStack.heightAnchor).isActive = true
         pdfView.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         searchField.placeholderString = "搜索 PDF 文字 · 回车查找"
         searchField.controlSize = .regular
         searchField.font = .systemFont(ofSize: 15)
         searchField.setAccessibilityLabel("搜索 PDF 文字")
-        searchField.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        searchField.heightAnchor.constraint(equalToConstant: 44).isActive = true
         // One visible close affordance closes the entire find panel. Keeping the
         // search field's native clear cross beside it gave two identical crosses
         // different meanings, while the original outer cross only cleared text.
@@ -246,14 +305,22 @@ struct PDFReaderView: NSViewRepresentable {
         ])
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         header.translatesAutoresizingMaskIntoConstraints = false; header.isHidden = true
-        addSubview(contentStack); addSubview(header)
+        thumbnailPanel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(contentStack); addSubview(thumbnailPanel); addSubview(header)
+        let thumbnailTop = thumbnailPanel.topAnchor.constraint(equalTo: topAnchor, constant: 76)
+        self.thumbnailTop = thumbnailTop
         NSLayoutConstraint.activate([
             contentStack.leadingAnchor.constraint(equalTo: leadingAnchor), contentStack.trailingAnchor.constraint(equalTo: trailingAnchor),
             contentStack.topAnchor.constraint(equalTo: topAnchor), contentStack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            header.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 12),
-            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 16),
-            header.widthAnchor.constraint(lessThanOrEqualToConstant: 500)
+            header.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 18),
+            header.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -18),
+            header.centerXAnchor.constraint(equalTo: centerXAnchor),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 76),
+            header.widthAnchor.constraint(lessThanOrEqualToConstant: 500),
+            thumbnailPanel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            thumbnailTop,
+            thumbnailPanel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -88),
+            thumbnailPanel.widthAnchor.constraint(equalToConstant: 156)
         ])
         let preferredSearchWidth = header.widthAnchor.constraint(equalToConstant: 500)
         preferredSearchWidth.priority = .defaultHigh; preferredSearchWidth.isActive = true
@@ -449,7 +516,12 @@ struct PDFReaderView: NSViewRepresentable {
 
     private func position(at page: PDFPage) {
         pdfView.go(to: page)
+        // A display-mode change rebuilds PDFKit's document view. Resolve that
+        // layout before fitting or a destination may use the previous page's
+        // geometry and retain its old scroll offset in single-page mode.
+        pdfView.layoutDocumentView()
         applyFit()
+        pdfView.layoutDocumentView()
         let box = page.bounds(for: pdfView.displayBox)
         pdfView.go(to: PDFDestination(page: page, at: CGPoint(x: box.minX, y: box.maxY)))
         refreshControls()
@@ -482,11 +554,20 @@ struct PDFReaderView: NSViewRepresentable {
         else { lastEmittedPage = pending.page }
     }
 
-    @objc private func previousPage() { if let page = currentPageNumber, page > 1 { navigate(to: page - 1) } }
-    @objc private func nextPage() { if let page = currentPageNumber, let document, page < document.pageCount { navigate(to: page + 1) } }
+    @objc private func previousPage() {
+        if let page = currentPageNumber, page > 1 { navigate(to: page - 1); window?.makeFirstResponder(pdfView) }
+    }
+    @objc private func nextPage() {
+        if let page = currentPageNumber, let document, page < document.pageCount { navigate(to: page + 1); window?.makeFirstResponder(pdfView) }
+    }
     @objc private func toggleThumbnails() {
-        thumbnailScroll.isHidden.toggle()
-        needsLayout = true; layoutSubtreeIfNeeded(); layoutThumbnails(); applyFit()
+        setThumbnailsVisible(thumbnailPanel.isHidden)
+    }
+    @objc private func hideThumbnails() { setThumbnailsVisible(false) }
+    private func setThumbnailsVisible(_ visible: Bool) {
+        guard !visible || (document != nil && document?.isLocked == false) else { return }
+        thumbnailPanel.isHidden = !visible
+        needsLayout = true; layoutSubtreeIfNeeded(); layoutThumbnails(); refreshControls()
     }
 
     @objc private func zoomOut() { changeZoom(by: 1 / 1.2) }
@@ -499,10 +580,19 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     private func changePDFDisplayMode(_ mode: PDFDisplayMode) {
-        let page = currentPageNumber
+        guard pdfView.displayMode != mode else { refreshControls(); return }
+        let page = currentPageNumber ?? sourcePage ?? 1
+        memoryCaptureTask?.cancel(); memoryCaptureTask = nil; pendingWorkspaceMemory = nil
+        // Suppress synchronous PDFKit observations until the explicit current
+        // page navigation has been installed. A mode choice must not echo a
+        // transient first page into the book's reading position.
+        installingDocument = true
+        if mode == .singlePage { fitMode = .page }
         pdfView.displayMode = mode
-        if let page { navigate(to: page, notifyParent: false) }
-        applyFit()
+        pdfView.layoutDocumentView()
+        installingDocument = false
+        navigate(to: page, notifyParent: false)
+        refreshControls()
     }
 
     @objc private func toggleSearch() {
@@ -535,16 +625,17 @@ struct PDFReaderView: NSViewRepresentable {
         // from navigating, restoring highlights or showing a late status message.
         clearSearchState(); setStatus("")
         header.isHidden = true; needsLayout = true
-        if wasVisible, restoreFocus { window?.makeFirstResponder(pdfView) }
+        if wasVisible, restoreFocus, !interactionBlocked { window?.makeFirstResponder(pdfView) }
     }
 
     private func installSearchEscapeMonitor() {
         guard searchEscapeMonitor == nil else { return }
         searchEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let handled = MainActor.assumeIsolated {
-                guard let self, event.keyCode == 53, !self.searchRow.isHidden,
-                      event.window === self.window, self.window?.attachedSheet == nil,
-                      !self.editingAnnotationSheet else { return false }
+                guard let self, !self.interactionBlocked, event.keyCode == 53, !self.searchRow.isHidden,
+                      let owner = self.window, event.window === owner, owner.attachedSheet == nil,
+                      !self.editingAnnotationSheet, let responder = owner.firstResponder,
+                      self.ownsResponder(responder) || responder === owner else { return false }
                 self.closeSearch(); return true
             }
             return handled ? nil : event
@@ -563,6 +654,9 @@ struct PDFReaderView: NSViewRepresentable {
 
     override func layout() {
         super.layout()
+        let chrome = visibleChromeFrame(header)
+        let nextTop: CGFloat = chrome.isEmpty ? 76 : max(76, chrome.maxY + 12)
+        if let thumbnailTop, abs(thumbnailTop.constant - nextTop) > 0.5 { thumbnailTop.constant = nextTop }
         let size = pdfView.bounds.size
         if abs(size.width - lastViewportSize.width) > 0.5 || abs(size.height - lastViewportSize.height) > 0.5 {
             lastViewportSize = size; layoutThumbnails(); applyFit()
@@ -571,6 +665,7 @@ struct PDFReaderView: NSViewRepresentable {
                 DispatchQueue.main.async { [weak self] in self?.settleNavigation(request, generation: generation, attempt: 0) }
             }
         }
+        refreshControls()
     }
 
     private func applyFit() {
@@ -639,7 +734,7 @@ struct PDFReaderView: NSViewRepresentable {
         let saved = pendingWorkspaceMemory
         switch saved?.fitMode { case "page": fitMode = .page; case "actual": fitMode = .actual; case "custom": fitMode = .custom; default: fitMode = .width }
         pdfView.displayMode = saved?.continuous == false ? .singlePage : .singlePageContinuous
-        thumbnailScroll.isHidden = !(saved?.thumbnails ?? false)
+        thumbnailPanel.isHidden = !(saved?.thumbnails ?? false)
         if fitMode == .custom, let scale = saved?.scale { pdfView.scaleFactor = CGFloat(scale) }
     }
     private func restoreWorkspaceDestination() {
@@ -675,7 +770,7 @@ struct PDFReaderView: NSViewRepresentable {
         let location = WorkspacePoint(x: Double((destination.point.x - box.minX) / box.width), y: Double((destination.point.y - box.minY) / box.height))
         let mode: String
         switch fitMode { case .page: mode = "page"; case .width: mode = "width"; case .actual: mode = "actual"; case .custom: mode = "custom" }
-        let memory = WorkspacePDFMemory(page: index + 1, location: location, scale: Double(pdfView.scaleFactor), fitMode: mode, continuous: pdfView.displayMode == .singlePageContinuous, thumbnails: !thumbnailScroll.isHidden)
+        let memory = WorkspacePDFMemory(page: index + 1, location: location, scale: Double(pdfView.scaleFactor), fitMode: mode, continuous: pdfView.displayMode == .singlePageContinuous, thumbnails: !thumbnailPanel.isHidden)
         if memory.isValid { memoryCallback?(memory) }
     }
 
@@ -684,16 +779,44 @@ struct PDFReaderView: NSViewRepresentable {
         let number = currentPageNumber ?? 1, count = ready ? document?.pageCount ?? 0 : 0
         previousMatchButton.isEnabled = !matches.isEmpty; nextMatchButton.isEnabled = !matches.isEmpty
         let zoom = Int((pdfView.scaleFactor * 100).rounded()), selected = !(pdfView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        let id = bindingID, generation = documentGeneration, canEdit = canEditAnnotations
         let searchVisible = !searchRow.isHidden
-        DispatchQueue.main.async { [weak self, weak controller] in
-            guard let self, self.documentGeneration == generation else { return }
-            controller?.update(id: id, page: number, pageCount: count, zoomPercent: zoom, isReady: ready, hasSelection: ready && selected, canEditAnnotations: canEdit, isSearchVisible: searchVisible)
-        }
+        let continuous = pdfView.displayMode == .singlePageContinuous, thumbnailsVisible = !thumbnailPanel.isHidden
+        let mode: String
+        switch fitMode { case .page: mode = "page"; case .width: mode = "width"; case .actual: mode = "actual"; case .custom: mode = "custom" }
+        let searchFrame = visibleChromeFrame(header), thumbnailFrame = visibleChromeFrame(thumbnailPanel)
+        let snapshot = ControlSnapshot(controllerID: controller.map { ObjectIdentifier($0) }, generation: documentGeneration,
+            page: number, pageCount: count, zoom: zoom, ready: ready, selected: ready && selected, canEdit: canEditAnnotations,
+            searchVisible: searchVisible, continuous: continuous, thumbnailsVisible: thumbnailsVisible, fitMode: mode,
+            searchFrame: searchFrame, thumbnailFrame: thumbnailFrame)
+        if let previous = pendingControlSnapshot ?? lastControlSnapshot, previous == snapshot { return }
+        pendingControlSnapshot = snapshot
+        guard !controlPublishScheduled else { return }
+        controlPublishScheduled = true
+        DispatchQueue.main.async { [weak self] in self?.publishControls() }
+    }
+    private func publishControls() {
+        controlPublishScheduled = false
+        guard let snapshot = pendingControlSnapshot else { return }
+        pendingControlSnapshot = nil
+        guard snapshot.generation == documentGeneration,
+              snapshot.controllerID == controller.map({ ObjectIdentifier($0) }) else { refreshControls(); return }
+        guard snapshot != lastControlSnapshot else { return }
+        lastControlSnapshot = snapshot
+        controller?.update(id: bindingID, page: snapshot.page, pageCount: snapshot.pageCount, zoomPercent: snapshot.zoom,
+            isReady: snapshot.ready, hasSelection: snapshot.selected, canEditAnnotations: snapshot.canEdit,
+            isSearchVisible: snapshot.searchVisible, isContinuous: snapshot.continuous,
+            thumbnailsVisible: snapshot.thumbnailsVisible, fitMode: snapshot.fitMode,
+            chromeFrame: snapshot.searchFrame, thumbnailFrame: snapshot.thumbnailFrame)
+    }
+    private func visibleChromeFrame(_ view: NSView) -> CGRect {
+        guard overlay.isHidden, !view.isHidden, view.bounds.width > 0, view.bounds.height > 0 else { return .zero }
+        let frame = view.convert(view.bounds, to: self)
+        return CGRect(x: frame.minX, y: isFlipped ? frame.minY : bounds.height - frame.maxY,
+                      width: frame.width, height: frame.height)
     }
 
     @objc private func findText() {
-        guard !searchRow.isHidden, let document, !document.isLocked else { return }
+        guard !interactionBlocked, !searchRow.isHidden, let document, !document.isLocked else { return }
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { clearSearchState(); return }
         guard query.count <= 500 else { setStatus("搜索词最多为 500 字。"); return }
@@ -778,7 +901,7 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard control === searchField, commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        guard !interactionBlocked, control === searchField, commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
         closeSearch(); return true
     }
 
@@ -794,13 +917,14 @@ struct PDFReaderView: NSViewRepresentable {
         button.bezelStyle = .circular; button.controlSize = .regular; button.isBordered = false
         button.imageScaling = .scaleProportionallyDown
         button.toolTip = title; button.setAccessibilityLabel(title)
-        button.widthAnchor.constraint(equalToConstant: 40).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
         return button
     }
 
     func shutdown() {
+        pendingControlSnapshot = nil; lastControlSnapshot = nil
         memoryCaptureTask?.cancel(); captureWorkspaceMemory(); memoryCallback = nil; observedClip = nil
         invalidateNavigation(); installingDocument = true
         removeSearchEscapeMonitor()
@@ -822,16 +946,19 @@ struct PDFReaderView: NSViewRepresentable {
         case .next: nextPage()
         case .jump(let page):
             guard let document, (1...document.pageCount).contains(page) else { setStatus("页码超出原PDF范围。"); return }
-            navigate(to: page)
+            navigate(to: page); window?.makeFirstResponder(pdfView)
         case .zoomIn: zoomIn()
         case .zoomOut: zoomOut()
         case .fitPage: fitMode = .page; applyFit()
         case .fitWidth: fitMode = .width; applyFit()
         case .actualSize: fitMode = .actual; applyFit()
         case .showSearch: showSearch()
+        case .hideSearch: closeSearch()
         case .toggleSearch: toggleSearch()
         case .toggleThumbnails: toggleThumbnails()
+        case .setThumbnails(let visible): setThumbnailsVisible(visible)
         case .toggleContinuous: changePDFDisplayMode(pdfView.displayMode == .singlePageContinuous ? .singlePage : .singlePageContinuous)
+        case .setContinuous(let continuous): changePDFDisplayMode(continuous ? .singlePageContinuous : .singlePage)
         case .createHighlight: createHighlight()
         case .createRegion:
             guard canEditAnnotations else { setStatus("当前任务运行中，请稍后添加区域批注。"); return }
@@ -1085,6 +1212,8 @@ private extension ReaderAnnotationColor {
 /// Region mode intercepts PDFKit's text selection only while explicitly armed.
 /// Both endpoints must belong to the same page; coordinates are converted by PDFView, including rotation/crop.
 @MainActor private final class AnnotationPDFView: PDFView {
+    var interactionBlocked = false
+    var onSinglePageNavigation: ((Int) -> Void)?
     var onRegion: ((PDFPage, CGRect) -> Void)?
     var onRegionError: ((String) -> Void)?
     var isManagedAnnotation: ((PDFAnnotation) -> Bool)?
@@ -1157,7 +1286,21 @@ private extension ReaderAnnotationColor {
         onRegion?(start.page, rect)
     }
     override func keyDown(with event: NSEvent) {
+        guard !interactionBlocked else { return }
         if regionArmed && event.keyCode == 53 { cancelRegionSelection(); onRegionError?(""); return }
+        // Single-page mode has an explicit page turn, rather than relying on
+        // a PDFKit scroll view to reveal a neighbouring page that is not laid
+        // out. Keep modifiers, text selection gestures and ordinary scrolling
+        // with PDFKit; only plain paging keys address our navigation pipeline.
+        if !regionArmed, displayMode == .singlePage,
+           event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+           let onSinglePageNavigation {
+            switch event.keyCode {
+            case 123, 116: onSinglePageNavigation(-1); return
+            case 124, 121: onSinglePageNavigation(1); return
+            default: break
+            }
+        }
         super.keyDown(with: event)
     }
 }

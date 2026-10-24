@@ -103,7 +103,7 @@ private struct BookSchemeWorkspaceContent: View {
                 }
             }.frame(width: cardWidth, height: cardHeight)
                 .font(.system(size: 15))
-                .readingGlass(radius: 22).clipShape(RoundedRectangle(cornerRadius: 22))
+                .readingGlass(radius: 22, prominent: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
             .onAppear { draft.reconcile(with: store.book) }

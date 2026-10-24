@@ -55,7 +55,7 @@ struct ModelCatalogManagerView: View {
                 VStack(alignment: .leading, spacing: 8) { catalogNote; HStack { Spacer(minLength: 0); catalogActions } }
             }.padding(14)
         }.frame(width: min(940, max(1, (availableSize?.width ?? 1004) - 64)), height: min(680, max(1, (availableSize?.height ?? 744) - 64)))
-            .font(.system(size: 15)).readingGlass(radius: 22).clipShape(RoundedRectangle(cornerRadius: 22)).task { await load() }.onDisappear { task?.cancel() }
+            .font(.system(size: 15)).readingGlass(radius: 22, prominent: true).task { await load() }.onDisappear { task?.cancel() }
             .onChange(of: review != nil) { _, available in if available { pane = "update" } }
             .onExitCommand(perform: onClose)
     }

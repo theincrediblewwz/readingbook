@@ -5,6 +5,7 @@ import ReadingCore
 /// a change to every view subscribed to the reading workspace's AppStore.
 struct ReaderOutlinePanel: View {
     @EnvironmentObject private var store: AppStore
+    @Binding var bookmarksOnly: Bool
     @State private var query = ""
     @State private var results: [SourceUnit] = []
     @State private var resultRequest: SearchRequest?
@@ -25,12 +26,18 @@ struct ReaderOutlinePanel: View {
         SearchRequest(bookID: store.bookID, sourceHash: store.book?.sourceHash,
                       revision: sourceRevision, query: query)
     }
-    private var visibleUnits: [SourceUnit] { resultRequest == request ? results : [] }
+    private var visibleUnits: [SourceUnit] {
+        guard resultRequest == request else { return [] }
+        return bookmarksOnly ? results.filter { store.book?.bookmarks.contains($0.id) == true } : results
+    }
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
 
     var body: some View {
         let currentRequest = request
         VStack(spacing: 0) {
+            Picker("阅读导航内容", selection: $bookmarksOnly) {
+                Text("目录").tag(false); Text("书签").tag(true)
+            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 16).padding(.bottom, 12)
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("搜索原文或章节", text: $query).textFieldStyle(.plain).font(.system(size: 15))
@@ -48,8 +55,8 @@ struct ReaderOutlinePanel: View {
                         ForEach(visibleUnits) { unit in outlineRow(unit) }
                         if resultRequest != currentRequest || searching {
                             ProgressView().controlSize(.small).padding(20).accessibilityLabel("正在搜索原文")
-                        } else if results.isEmpty {
-                            Text("没有匹配的原文").font(.caption).foregroundStyle(.secondary).padding(20)
+                        } else if visibleUnits.isEmpty {
+                            Text(bookmarksOnly ? (query.isEmpty ? "还没有书签" : "没有匹配的书签") : "没有匹配的原文").font(.system(size: 14)).foregroundStyle(.secondary).padding(24)
                         }
                     }.padding(8)
                 }

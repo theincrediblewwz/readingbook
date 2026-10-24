@@ -14,6 +14,7 @@ struct ReadingBookApp: App {
         .windowToolbarStyle(.unified)
         .defaultSize(width: 1480, height: 940)
         .commands {
+            ReaderKeyboardCommands()
             CommandGroup(after: .newItem) {
                 Button("导入书籍…") { store.chooseBook() }.keyboardShortcut("o")
                 Button("新建笔记") { store.newDocument() }.keyboardShortcut("n", modifiers: [.command, .shift])

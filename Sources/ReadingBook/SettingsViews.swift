@@ -37,7 +37,7 @@ struct ProviderSettingsView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.frame(width: cardWidth, height: cardHeight)
                 .font(.system(size: 15))
-                .readingGlass(radius: 22).clipShape(RoundedRectangle(cornerRadius: 22))
+                .readingGlass(radius: 22, prominent: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear { presentationSize = geometry.size }
                 .onChange(of: geometry.size) { _, size in presentationSize = size }
@@ -282,7 +282,7 @@ private struct PluginLibraryWorkspace: View {
                 pluginList
             }.frame(width: cardWidth, height: cardHeight)
                 .font(.system(size: 15))
-                .readingGlass(radius: 22).clipShape(RoundedRectangle(cornerRadius: 22))
+                .readingGlass(radius: 22, prominent: true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .modifier(PluginDefinitionConfirmation(draft: definitionDraft, store: store, active: !showDetails, perform: performDefinitionAction))
                 .sheet(isPresented: Binding(get: { showDetails }, set: { if !$0 { requestDefinitionAction(.hide) } })) {

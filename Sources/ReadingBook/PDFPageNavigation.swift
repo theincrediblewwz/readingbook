@@ -16,14 +16,21 @@ struct PDFPageNavigation: View {
                     if let page = Int(entry), (1...max(1, pdf.pageCount)).contains(page) { pdf.command(.jump(page)) }
                     else { entry = String(pdf.page) }
                     editingPage = false
-                }.disabled(!pdf.isReady).accessibilityLabel("PDF 页码，回车定位")
+                }.onExitCommand { entry = String(pdf.page); editingPage = false }
+                .disabled(!pdf.isReady).accessibilityLabel("PDF 页码，回车定位")
             Text("/ \(pdf.pageCount)").font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
             Button { pdf.command(.next) } label: { Image(systemName: "chevron.right") }
                 .buttonStyle(ReadingToolbarButtonStyle()).help("下一页").disabled(!pdf.isReady || pdf.page >= pdf.pageCount)
         }.fixedSize().onChange(of: pdf.page) { _, page in if !editingPage { entry = String(page) } }
             .onAppear { entry = String(pdf.page) }
             .onDisappear { onEditingChange(false) }
-            .onChange(of: pdf.isReady) { _, _ in if !editingPage { entry = String(pdf.page) } }
-            .onChange(of: editingPage) { _, value in onEditingChange(value) }
+            .onChange(of: pdf.isReady) { _, ready in
+                if !ready { editingPage = false }
+                if !editingPage { entry = String(pdf.page) }
+            }
+            .onChange(of: editingPage) { _, value in
+                if !value { entry = String(pdf.page) }
+                onEditingChange(value)
+            }
     }
 }

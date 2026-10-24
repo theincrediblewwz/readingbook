@@ -7,9 +7,14 @@ struct ReaderWorkspaceView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var showPDF: Bool
     @Binding var showOutline: Bool
+    @Binding var bookmarksOnly: Bool
     @EnvironmentObject var pdfController: PDFReaderController
     @State private var outlineFrame = CGRect.zero
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
+    private var pdfChrome: [CGRect] {
+        guard isPDF, showPDF, store.readingSourceMode == "original" else { return [] }
+        return [pdfController.chromeFrame, pdfController.thumbnailFrame].filter { !$0.isEmpty && !$0.isNull }
+    }
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
@@ -46,21 +51,34 @@ struct ReaderWorkspaceView: View {
                     }
                 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
-                ReaderFloatingPanel(title: "目录与搜索", icon: "list.bullet", width: 302, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 88,
+                ReaderFloatingPanel(title: "目录与书签", icon: "list.bullet", width: 302, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 88, avoidRects: pdfChrome,
                     showsRestoreButton: false, unifiedDismiss: true,
-                    onFrameChange: { value in if outlineFrame != value { outlineFrame = value } }) { ReaderOutlinePanel() }
+                    onFrameChange: { value in if outlineFrame != value { outlineFrame = value } }) { ReaderOutlinePanel(bookmarksOnly: $bookmarksOnly) }
                 ReaderFloatingPanel(title: "伴读与对话", icon: "sparkles", width: 376, height: 620, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: 88,
-                    avoidRects: outlineFrame.isEmpty ? [] : [outlineFrame], elevated: true, showsRestoreButton: false, unifiedDismiss: true, resizable: true) {
+                    avoidRects: pdfChrome + (outlineFrame.isEmpty ? [] : [outlineFrame]), elevated: true, showsRestoreButton: false, unifiedDismiss: true, resizable: true) {
                     ReaderAIPanel()
                 }
             }
-                .onChange(of: showOutline) { _, value in if value && geometry.size.width < 1000 { store.readingCompanionVisible = false } }
+                .background {
+                    let offset = geometry.frame(in: .global).origin
+                    Color.clear.preference(key: WorkspaceChromeBoundsPreference.self, value: pdfChromeBounds(offset: offset)).allowsHitTesting(false)
+                }
+                .onChange(of: showOutline) { _, value in
+                    if value { pdfController.command(.setThumbnails(false)); if geometry.size.width < 1000 { store.readingCompanionVisible = false } }
+                }
                 .onChange(of: store.readingCompanionVisible) { _, value in
                     if value && geometry.size.width < 1000 { showOutline = false }
                     if !value { store.queryAllowsOrganizing = false }
                 }
                 .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.readingCompanionVisible)
         }
+    }
+    private func pdfChromeBounds(offset: CGPoint) -> [String: CGRect] {
+        guard isPDF, showPDF, store.readingSourceMode == "original" else { return [:] }
+        var bounds: [String: CGRect] = [:]
+        if !pdfController.chromeFrame.isEmpty { bounds["pdf-search"] = pdfController.chromeFrame.offsetBy(dx: offset.x, dy: offset.y) }
+        if !pdfController.thumbnailFrame.isEmpty { bounds["pdf-thumbnails"] = pdfController.thumbnailFrame.offsetBy(dx: offset.x, dy: offset.y) }
+        return bounds
     }
     private func sourceText(_ unit: SourceUnit) -> some View {
         ScrollView {

@@ -183,15 +183,14 @@ struct ReaderFloatingPanel<Content: View>: View {
                     }.padding(.leading, 16).padding(.trailing, 8).frame(height: headerHeight).layoutPriority(1)
                     content().frame(maxWidth: .infinity).frame(minHeight: 0, maxHeight: collapsed ? 0 : .infinity)
                         .opacity(collapsed ? 0 : 1).clipped().allowsHitTesting(!collapsed).disabled(collapsed || !isPresented).accessibilityHidden(collapsed || panelHeight <= headerHeight)
-                }.frame(width: panelWidth, height: panelHeight).readingGlass(radius: 24)
+                }.frame(width: panelWidth, height: panelHeight).readingGlass(radius: 24, prominent: true)
                     .overlay {
                         RoundedRectangle(cornerRadius: 24).strokeBorder(Palette.accent.opacity(elevated ? 0.13 : 0), lineWidth: 0.7).allowsHitTesting(false)
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 24))
                     .overlay(alignment: .bottomTrailing) {
                         if resizable && !collapsed {
                             Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11)).foregroundStyle(.tertiary)
-                                .frame(width: 24, height: 24).contentShape(Rectangle())
+                                .frame(width: 24, height: 24).contentShape(Rectangle()).padding(4)
                                 .overlay { FloatingPanelPointerInput(epoch: epoch, begin: {
                                     resizePreferredStart = preferredSize; resizeStart = CGSize(width: panelWidth, height: panelHeight); resizeOrigin = origin
                                 }, drag: { delta, ended in

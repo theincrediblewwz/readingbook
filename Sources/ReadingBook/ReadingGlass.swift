@@ -25,26 +25,33 @@ enum ReadingMotion {
 struct ReadingGlassSurface: ViewModifier {
     var radius: CGFloat = 22
     var interactive = false
+    var prominent = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
-        surface(content)
+        // Clip only the content. Clipping after this modifier would also erase
+        // the outside shadow that separates floating cards from the page.
+        surface(content.clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous)))
             .overlay {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.16 : 0.64), Palette.line.opacity(0.24)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.6)
+                    .strokeBorder(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.27 : 0.9), Palette.line.opacity(prominent ? 0.95 : 0.65)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: prominent ? 1 : 0.7)
                     .allowsHitTesting(false)
             }
-            .shadow(color: .black.opacity(scheme == .dark ? 0.23 : 0.06), radius: 24, x: 0, y: 10)
-            .shadow(color: Palette.accent.opacity(0.045), radius: 4, x: 0, y: 2)
+            .shadow(color: .black.opacity(scheme == .dark ? (prominent ? 0.38 : 0.27) : (prominent ? 0.15 : 0.085)), radius: prominent ? 28 : 20, x: 0, y: prominent ? 14 : 8)
+            .shadow(color: .black.opacity(scheme == .dark ? 0.14 : (prominent ? 0.075 : 0.04)), radius: 4, x: 0, y: 2)
     }
     @ViewBuilder private func surface(_ content: Content) -> some View {
         if reduceTransparency {
             content.background(Palette.surface, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
         } else if #available(macOS 26.0, *) {
-            content.glassEffect(.regular.interactive(interactive), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            content
+                .background(Palette.surface.opacity(prominent ? (scheme == .dark ? 0.88 : 0.84) : 0), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .glassEffect(.regular.interactive(interactive), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
         } else {
-            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            content
+                .background(Palette.surface.opacity(prominent ? 0.72 : 0), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
         }
     }
 }
@@ -59,7 +66,16 @@ struct ReadingToolbarButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 15, weight: .medium))
             .padding(.horizontal, 10).frame(minWidth: ReadingLayout.controlHeight, minHeight: ReadingLayout.controlHeight)
-            .background(Palette.accent.opacity(selected ? 0.14 : configuration.isPressed ? 0.15 : hovered ? 0.075 : 0), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Palette.accent.opacity(configuration.isPressed ? 0.18 : selected ? 0.14 : hovered ? 0.075 : 0))
+                    .padding(4)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Palette.accent.opacity(selected ? 0.15 : 0), lineWidth: 0.7)
+                    .padding(4).allowsHitTesting(false)
+            }
             .foregroundStyle(selected ? Palette.accent : .primary)
             .opacity(enabled ? 1 : 0.42)
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -90,8 +106,8 @@ struct ReadingActionButtonStyle: ButtonStyle {
 }
 
 extension View {
-    func readingGlass(radius: CGFloat = 20, interactive: Bool = false) -> some View {
-        modifier(ReadingGlassSurface(radius: radius, interactive: interactive))
+    func readingGlass(radius: CGFloat = 20, interactive: Bool = false, prominent: Bool = false) -> some View {
+        modifier(ReadingGlassSurface(radius: radius, interactive: interactive, prominent: prominent))
     }
     @ViewBuilder func readingGlassGroup() -> some View {
         if #available(macOS 26.0, *) { GlassEffectContainer(spacing: 16) { self } }
