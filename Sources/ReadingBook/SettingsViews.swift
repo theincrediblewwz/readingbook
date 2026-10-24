@@ -304,7 +304,7 @@ private struct PluginLibraryWorkspace: View {
                     VStack(spacing: 0) {
                         HStack { Text("类型与阅读方法").font(.system(size: 16, weight: .semibold)); Spacer(); Button { requestDefinitionAction(.hide) } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("关闭定义编辑") }.padding(.horizontal, 16).frame(height: 56)
                         definitionPanel
-                    }.frame(minWidth: 440, idealWidth: 540, minHeight: 420, idealHeight: 620)
+                    }.frame(width: min(540, max(1, geometry.size.width - 40)), height: min(620, max(1, geometry.size.height - 40)))
                         .interactiveDismissDisabled(definitionDraft.isDirty || definitionDraft.saving)
                         .onExitCommand { requestDefinitionAction(.hide) }
                         .modifier(PluginDefinitionConfirmation(draft: definitionDraft, store: store, active: true, perform: performDefinitionAction))
