@@ -759,18 +759,6 @@ private struct SettingsFloatingCard<Content: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                if movable {
-                    Image(systemName: "line.3.horizontal").font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44).contentShape(Rectangle())
-                        .overlay {
-                            FloatingPanelPointerInput(epoch: epoch, begin: { onActivate(); dragStart = origin }, drag: { translation, ended in
-                                let start = dragStart ?? origin
-                                var transaction = Transaction(); transaction.disablesAnimations = true
-                                withTransaction(transaction) { position = clamp(CGPoint(x: start.x + translation.width, y: start.y + translation.height)) }
-                                if ended { dragStart = nil }
-                            }, cancel: { if let dragStart { position = clamp(dragStart) }; dragStart = nil })
-                        }.help("拖动\(title)").accessibilityLabel("拖动\(title)")
-                }
                 HStack(spacing: 10) {
                     Image(systemName: icon).font(.system(size: 18)).foregroundStyle(Palette.accent)
                     VStack(alignment: .leading, spacing: 2) {
@@ -778,13 +766,24 @@ private struct SettingsFloatingCard<Content: View>: View {
                         if !subtitle.isEmpty { Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1) }
                     }
                     Spacer(minLength: 0)
-                }.frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                    .overlay {
+                        if movable {
+                            FloatingPanelPointerInput(epoch: epoch, begin: { onActivate(); dragStart = origin }, drag: { translation, ended in
+                                let start = dragStart ?? origin
+                                var transaction = Transaction(); transaction.disablesAnimations = true
+                                withTransaction(transaction) { position = clamp(CGPoint(x: start.x + translation.width, y: start.y + translation.height)) }
+                                if ended { dragStart = nil }
+                            }, cancel: { if let dragStart { position = clamp(dragStart) }; dragStart = nil }).accessibilityHidden(true)
+                        }
+                    }.help(movable ? "拖动标题移动\(title)" : title)
+                    .accessibilityHint(movable ? "拖动标题可移动面板；右侧可收起或关闭" : "")
                 if canCollapse {
                     Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { collapsed.toggle() } } label: { Image(systemName: collapsed ? "plus" : "minus") }
                         .buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开面板" : "收起面板").accessibilityLabel(collapsed ? "展开\(title)" : "收起\(title)")
                 }
                 if canClose { Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭面板").accessibilityLabel("关闭\(title)") }
-            }.padding(.leading, movable ? 4 : 16).padding(.trailing, 8).frame(height: 56).layoutPriority(1)
+            }.padding(.leading, 16).padding(.trailing, 8).frame(height: 56).layoutPriority(1)
             Divider().opacity(collapsed ? 0 : 0.4).frame(height: collapsed ? 0 : 1)
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
                 .frame(height: collapsed ? 0 : max(0, cardSize.height - 57))

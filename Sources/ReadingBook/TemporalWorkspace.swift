@@ -23,9 +23,11 @@ import ReadingCore
     }
     var availableTemporalExtents: [TemporalExtent] {
         guard let book, let state = book.temporalKnowledge else { return [] }
+        // Reuse this read's source boundary instead of rebuilding its unit set per record.
+        let allowedUnitIDs = temporalBoundary.allowedUnitIDs
         let anchors = Dictionary(((book.readingExperience?.anchors ?? []) + state.anchors).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         func admits(_ ids: [String]) -> Bool {
-            guard let allowed = temporalBoundary.allowedUnitIDs else { return true }
+            guard let allowed = allowedUnitIDs else { return true }
             return !ids.isEmpty && ids.allSatisfy { id in anchors[id].map { allowed.contains($0.unitID) } ?? false }
         }
         return state.presences.filter { admits($0.sourceAnchorIDs) }.map(\.extent)

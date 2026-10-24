@@ -38,7 +38,7 @@ struct GraphNodeBrowser: View {
     private var header: some View {
         HStack(spacing: 8) {
             HStack(spacing: 9) {
-                Image(systemName: "circle.grid.2x3.fill").font(.system(size: 15)).foregroundStyle(.tertiary)
+                Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 18)).foregroundStyle(Palette.accent)
                 Text("节点").font(.system(size: 16, weight: .semibold))
                 Text("\(items.count)").font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
@@ -46,7 +46,7 @@ struct GraphNodeBrowser: View {
                     if let beginDrag, let drag, let cancelDrag {
                         FloatingPanelPointerInput(epoch: dragEpoch, begin: beginDrag, drag: drag, cancel: cancelDrag).accessibilityHidden(true)
                     }
-                }.help("拖动标题移动节点面板")
+                }.help("拖动标题移动节点面板").accessibilityHint("拖动标题可移动节点面板；右侧可收起或关闭")
             if let toggleCollapsed {
                 Button(action: toggleCollapsed) { Image(systemName: collapsed ? "plus" : "minus") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开节点面板" : "收起节点面板内容")

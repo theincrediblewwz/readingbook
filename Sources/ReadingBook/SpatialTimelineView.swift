@@ -411,7 +411,7 @@ struct SpatialTimelineView: View {
     private var timelineHeader: some View {
         HStack(spacing: 8) {
             HStack(spacing: 7) {
-                Image(systemName: "line.3.horizontal").font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
+                Image(systemName: "clock").font(.system(size: 18)).foregroundStyle(Palette.accent)
                 Text("时间与地图").font(.system(size: 16, weight: .semibold)).lineLimit(1)
             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 .overlay {

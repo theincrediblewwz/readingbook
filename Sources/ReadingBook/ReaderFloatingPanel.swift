@@ -150,8 +150,8 @@ struct ReaderFloatingPanel<Content: View>: View {
                 // temporary hide; hidden surfaces never receive pointer input.
                 VStack(spacing: 0) {
                     HStack(spacing: 8) {
-                        Image(systemName: "line.3.horizontal").font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(.secondary).frame(width: 44, height: 44).contentShape(Rectangle())
+                        Label(title, systemImage: icon).font(.system(size: ReadingLayout.panelTitleSize, weight: .semibold)).lineLimit(1)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                             .overlay {
                                 FloatingPanelPointerInput(epoch: epoch, begin: {
                                     transientPresentation = nil
@@ -160,11 +160,9 @@ struct ReaderFloatingPanel<Content: View>: View {
                                     let start = dragStart ?? origin
                                     dragOrigin = clamp(CGPoint(x: start.x + delta.width, y: start.y + delta.height), height: dragHeight ?? wantedHeight)
                                     if finished { savedOrigin = dragOrigin; dragStart = nil; dragOrigin = nil; dragHeight = nil; reportStableFrame() }
-                                }, cancel: { dragStart = nil; dragOrigin = nil; dragHeight = nil; reportStableFrame() })
+                                }, cancel: { dragStart = nil; dragOrigin = nil; dragHeight = nil; reportStableFrame() }).accessibilityHidden(true)
                             }
-                            .help("拖动\(title)面板").accessibilityLabel("拖动\(title)面板")
-                        Label(title, systemImage: icon).font(.system(size: ReadingLayout.panelTitleSize, weight: .semibold)).lineLimit(1)
-                        Spacer(minLength: 0)
+                            .help("拖动标题移动\(title)面板").accessibilityLabel(title).accessibilityHint("拖动标题可移动面板；右侧可收起或关闭")
                         Button { transientPresentation = nil; collapsed.toggle() } label: { Image(systemName: collapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开\(title)" : "收起\(title)")
                         Button { transientPresentation = nil; isPresented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭\(title)")
                     }.padding(.leading, 16).padding(.trailing, 8).frame(height: headerHeight).layoutPriority(1)

@@ -21,7 +21,6 @@ struct WorkspaceView: View {
     @State private var activeSheet: WorkspaceSheet?
     @State private var lastSheet: WorkspaceSheet?
     @State private var sheetClosing = false
-    @State private var hoveredRoute: String?
     @State private var navigationExpanded = false
     @State private var pendingRoute: String?
     @State private var pendingModelRoute: String?
@@ -258,7 +257,7 @@ struct WorkspaceView: View {
                 Text(title).font(.system(size: 15, weight: store.route == route ? .semibold : .regular))
                 Spacer(minLength: 0)
             }.padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: ReadingLayout.navigationRowHeight, alignment: .leading)
-                .background(hoveredRoute == route ? Palette.accent.opacity(0.045) : .clear, in: RoundedRectangle(cornerRadius: 12))
+                .modifier(WorkspaceNavigationRowHover(reduceMotion: reduceMotion))
                 .background {
                     if store.route == route {
                         RoundedRectangle(cornerRadius: 12).fill(Palette.accent.opacity(0.12))
@@ -268,9 +267,7 @@ struct WorkspaceView: View {
                 .contentShape(Rectangle())
                 .overlay(alignment: .leading) { if store.route == route { Capsule().fill(Palette.accent).frame(width: 2, height: 15).padding(.leading, 3) } }
         }.buttonStyle(.plain).foregroundStyle(store.route == route ? Palette.accent : .primary)
-            .onHover { hoveredRoute = $0 ? route : nil }
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.route)
-            .animation(ReadingMotion.animation(reduce: reduceMotion), value: hoveredRoute)
     }
     private var viewingPDF: Bool { store.route == "reader" && store.readingSourceMode == "original" && readerShowsPDF && store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     private var viewingWorkflow: Bool { store.route == "workflow" || store.book?.views.first(where: { $0.id == store.route })?.kind == .workflow }
@@ -608,6 +605,19 @@ struct WorkspaceView: View {
             if store.requestsUsed > 0 { Text("本轮 \(store.requestsUsed) 次请求").font(.caption2.monospacedDigit()).foregroundStyle(.tertiary) }
             Text("本地书库").font(.caption2).foregroundStyle(.tertiary)
         }.padding(.horizontal, 16).padding(.vertical, 12)
+    }
+}
+
+/// Pointer feedback belongs to its row, not the full reading workspace.
+private struct WorkspaceNavigationRowHover: ViewModifier {
+    let reduceMotion: Bool
+    @State private var hovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(hovered ? Palette.accent.opacity(0.045) : .clear, in: RoundedRectangle(cornerRadius: 12))
+            .onHover { if hovered != $0 { hovered = $0 } }
+            .animation(ReadingMotion.animation(reduce: reduceMotion), value: hovered)
     }
 }
 

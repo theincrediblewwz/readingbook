@@ -484,7 +484,8 @@ struct DocumentEditorView: View {
                     .overlay { FloatingPanelPointerInput(epoch: panelEpoch, begin: { dragOrigin = listOrigin; listDragging = true }, drag: { delta, finished in
                         listOrigin = clampedListOrigin(CGPoint(x: dragOrigin.x + delta.width, y: dragOrigin.y + delta.height), viewport: viewport)
                         if finished { listDragging = false; saveListMemory() }
-                    }, cancel: { listOrigin = clampedListOrigin(dragOrigin, viewport: viewport); listDragging = false }) }.help("拖动笔记列表")
+                    }, cancel: { listOrigin = clampedListOrigin(dragOrigin, viewport: viewport); listDragging = false }).accessibilityHidden(true) }
+                    .help("拖动标题移动笔记列表").accessibilityLabel("我的笔记").accessibilityHint("拖动标题可移动列表；右侧可折叠或关闭")
                 Button { listCollapsed.toggle() } label: { Image(systemName: listCollapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(listCollapsed ? "展开列表" : "折叠列表")
                 Button { showingDocuments = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭列表")
             }.padding(.horizontal, 12)
