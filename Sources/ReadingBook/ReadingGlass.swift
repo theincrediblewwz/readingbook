@@ -79,7 +79,7 @@ struct ReadingActionButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.system(size: 15, weight: .medium)).padding(.horizontal, 12)
-            .frame(minHeight: 48).frame(maxWidth: .infinity)
+            .frame(minHeight: 44).frame(maxWidth: .infinity)
             .foregroundStyle(prominent ? Color.white : Palette.ink)
             .background(prominent ? Palette.accent : Palette.paper.opacity(0.5), in: RoundedRectangle(cornerRadius: 14))
             .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(prominent ? Color.white.opacity(0.22) : Palette.accent.opacity(0.14), lineWidth: 0.8) }

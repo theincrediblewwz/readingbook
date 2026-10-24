@@ -8,8 +8,6 @@ struct ReaderWorkspaceView: View {
     @Binding var showPDF: Bool
     @Binding var showOutline: Bool
     @EnvironmentObject var pdfController: PDFReaderController
-    @State private var questionExpanded = false
-    @State private var questionFrame = CGRect.zero
     @State private var outlineFrame = CGRect.zero
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     var body: some View {
@@ -46,60 +44,23 @@ struct ReaderWorkspaceView: View {
                     } else {
                         EmptyState(title: "选择一个章节", detail: "从阅读工具中的目录选择原文内容。", icon: "book.pages")
                     }
-                }.padding(.top, store.readingSourceMode == "original" ? 78 : 0)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
-                ReaderFloatingPanel(title: "目录与原文", icon: "list.bullet", width: 330, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 100, avoidRects: questionFrame.isEmpty ? [] : [questionFrame],
-                    onFrameChange: { value in if outlineFrame != value { outlineFrame = value } }) { outline }
-                // A one-way priority prevents two floating panels from chasing
-                // each other when a large question moves beside the outline.
-                ReaderFloatingPanel(title: "伴读", icon: "text.book.closed", width: 410, height: 620, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: 100, avoidRects: [questionFrame, outlineFrame].filter { !$0.isEmpty }, elevated: true) {
-                    ReadingCompanionPanel(showsHeader: false)
                 }
-                ReaderQuestionComposer(isExpanded: $questionExpanded, viewport: geometry.size,
-                    availableRect: CGRect(x: 20, y: 88, width: max(0, geometry.size.width - 40), height: max(0, geometry.size.height - 184)),
-                    compact: geometry.size.height < 680,
-                    onFrameChange: { value in if questionFrame != value { questionFrame = value } })
-            }.preference(key: WorkspaceChromeBoundsPreference.self, value: questionFrame.isEmpty ? [:] : ["reader-question": questionFrame.offsetBy(dx: geometry.frame(in: .global).minX, dy: geometry.frame(in: .global).minY)])
-                .onChange(of: showOutline) { _, value in if value && geometry.size.width < 1050 { store.readingCompanionVisible = false } }
-                .onChange(of: store.readingCompanionVisible) { _, value in if value && geometry.size.width < 1050 { showOutline = false } }
-                .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.readingCompanionVisible)
-                .animation(ReadingMotion.animation(reduce: reduceMotion), value: questionExpanded)
-        }
-    }
-    private var outline: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索原文或章节", text: $store.search).textFieldStyle(.plain).font(.system(size: 15))
-                if !store.search.isEmpty { Button { store.search = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).frame(width: 44, height: 44).accessibilityLabel("清空原文搜索") }
-            }.padding(.horizontal, 14).frame(minHeight: 46).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16).padding(.bottom, 12)
-            Divider().opacity(0.4)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(filteredUnits) { unit in
-                            Button { store.navigateToUnit(unit.id) } label: {
-                                HStack(alignment: .top, spacing: 9) {
-                                    statusIcon(unit)
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        Text(isPDF ? "第 \(unit.page ?? 1) 页" : unit.chapter).font(.subheadline.weight(.medium)).lineLimit(1)
-                                        Text("行 \(unit.lineStart)–\(unit.lineEnd)").font(.caption2).foregroundStyle(.secondary)
-                                        Text(unit.text.isEmpty ? "尚未识别文本" : String(unit.text.prefix(64)).replacingOccurrences(of: "\n", with: " ")).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-                                    }
-                                    Spacer(minLength: 0)
-                                    if store.book?.bookmarks.contains(unit.id) == true { Image(systemName: "bookmark.fill").font(.caption2).foregroundStyle(Palette.copper) }
-                                }.padding(12).frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
-                                    .background(store.selectedUnitID == unit.id ? Palette.accent.opacity(0.11) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
-                                    .contentShape(Rectangle())
-                            }.buttonStyle(.plain).id(unit.id)
-                                .accessibilityLabel("\(unit.locator)，点击定位原文")
-                        }
-                        if filteredUnits.isEmpty { Text("没有匹配的原文").font(.caption).foregroundStyle(.secondary).padding(20) }
-                    }.padding(8)
-                }.onChange(of: store.selectedUnitID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
-                    .onAppear { if let id = store.selectedUnitID { proxy.scrollTo(id, anchor: .center) } }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
+                ReaderFloatingPanel(title: "目录与搜索", icon: "list.bullet", width: 302, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 88,
+                    showsRestoreButton: false, unifiedDismiss: true,
+                    onFrameChange: { value in if outlineFrame != value { outlineFrame = value } }) { ReaderOutlinePanel() }
+                ReaderFloatingPanel(title: "伴读与对话", icon: "sparkles", width: 376, height: 620, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: 88,
+                    avoidRects: outlineFrame.isEmpty ? [] : [outlineFrame], elevated: true, showsRestoreButton: false, unifiedDismiss: true, resizable: true) {
+                    ReaderAIPanel()
+                }
             }
-        }.background(Palette.surface.opacity(0.45))
+                .onChange(of: showOutline) { _, value in if value && geometry.size.width < 1000 { store.readingCompanionVisible = false } }
+                .onChange(of: store.readingCompanionVisible) { _, value in
+                    if value && geometry.size.width < 1000 { showOutline = false }
+                    if !value { store.queryAllowsOrganizing = false }
+                }
+                .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.readingCompanionVisible)
+        }
     }
     private func sourceText(_ unit: SourceUnit) -> some View {
         ScrollView {
@@ -142,15 +103,6 @@ struct ReaderWorkspaceView: View {
             return store.book?.units.filter { $0.page == page }.map(\.text).joined() ?? unit.text
         }
         return unit.text
-    }
-    private var filteredUnits: [SourceUnit] {
-        let units = store.book?.units ?? []
-        return store.search.isEmpty ? units : units.filter { $0.chapter.localizedCaseInsensitiveContains(store.search) || $0.text.localizedCaseInsensitiveContains(store.search) || $0.locator.localizedCaseInsensitiveContains(store.search) }
-    }
-    private func statusIcon(_ unit: SourceUnit) -> some View {
-        let status = store.book?.coverage[unit.id]?.status ?? .pending
-        return Image(systemName: status == .completed ? "checkmark.circle.fill" : status == .needsReview || unit.warning != nil ? "exclamationmark.circle" : "circle")
-            .font(.caption).foregroundStyle(status == .completed ? Palette.accent : .secondary).padding(.top, 2)
     }
     private func move(_ offset: Int) {
         guard let units = store.book?.units, let current = store.selectedUnitID, let index = units.firstIndex(where: { $0.id == current }), units.indices.contains(index + offset) else { return }
@@ -339,25 +291,20 @@ struct DocumentEditorView: View {
             ZStack(alignment: .topLeading) {
                 Palette.canvas.ignoresSafeArea()
                 documentPaper
-                    .padding(.leading, leftInset).padding(.trailing, 24).padding(.top, 100).padding(.bottom, 100)
+                    .padding(.leading, leftInset).padding(.trailing, 24).padding(.top, 80).padding(.bottom, 88)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if showingDocuments {
                     documentPanel(viewport: geometry.size)
-                } else {
-                    Button { showingDocuments = true; listCollapsed = false; listOrigin = CGPoint(x: 12, y: 100) } label: {
-                        Label("笔记", systemImage: "doc.on.doc")
-                    }.buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 16)
-                        .padding(.leading, 12).padding(.top, 104).help("恢复笔记列表")
                 }
-                VStack { Spacer(); editorToolbar(compact: geometry.size.width < 960).padding(8).readingGlass(radius: 22).workspaceChromeBounds("notes-tools").padding(.bottom, 22) }
-                    .frame(maxWidth: .infinity)
+                FloatingReadingDock(id: "notes-tools", viewport: geometry.size) { editorToolbar(compact: geometry.size.width < 960) }
+                    .environmentObject(store)
             }
             .background {
                 let stable = clampedListOrigin(listDragging ? dragOrigin : listOrigin, viewport: geometry.size)
                 let height = listCollapsed ? ReadingLayout.panelHeaderHeight : min(640, max(180, geometry.size.height - 124))
-                let frame = showingDocuments ? CGRect(x: stable.x, y: stable.y, width: 340, height: height) : CGRect(x: 12, y: 104, width: 100, height: 44)
+                let frame = showingDocuments ? CGRect(x: stable.x, y: stable.y, width: 340, height: height) : CGRect.zero
                 let offset = geometry.frame(in: .global).origin
-                Color.clear.preference(key: WorkspaceChromeBoundsPreference.self, value: ["notes-list": frame.offsetBy(dx: offset.x, dy: offset.y)])
+                Color.clear.preference(key: WorkspaceChromeBoundsPreference.self, value: frame.isEmpty ? [:] : ["notes-list": frame.offsetBy(dx: offset.x, dy: offset.y)])
             }
             .onAppear {
                 guard !measuredWindow else { return }; measuredWindow = true
@@ -451,14 +398,14 @@ struct DocumentEditorView: View {
         return lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .newlines)
     }
     private func editorToolbar(compact: Bool) -> some View {
-        HStack(spacing: compact ? 5 : 10) {
-            Button { preview = false } label: { Text("编辑").frame(minWidth: 60) }.buttonStyle(ReadingToolbarButtonStyle(selected: !preview)).disabled(!hasDocument)
-            Button { preview = true } label: { Text("预览").frame(minWidth: 60) }.buttonStyle(ReadingToolbarButtonStyle(selected: preview)).disabled(!hasDocument)
-            Rectangle().fill(Palette.line).frame(width: 1, height: 26).padding(.horizontal, 4)
-            Button { showingDocuments.toggle(); if showingDocuments { listCollapsed = false } } label: { Image(systemName: "list.bullet.rectangle") }
-                .buttonStyle(ReadingToolbarButtonStyle(selected: showingDocuments)).help("显示或收起笔记列表")
+        HStack(spacing: 4) {
+            DockIconButton(title: "笔记列表", icon: "list.bullet.rectangle", isSelected: showingDocuments) { showingDocuments.toggle(); if showingDocuments { listCollapsed = false } }
+            DockDivider()
+            DockIconButton(title: preview ? "编辑笔记" : "预览笔记", icon: preview ? "square.and.pencil" : "eye", isSelected: !preview) { preview.toggle() }.disabled(!hasDocument)
+            DockIconButton(title: store.isSavingDocument ? "保存中" : "保存笔记", icon: "square.and.arrow.down") { Task { await store.saveCurrentDocument() } }.disabled(!store.editorDirty || store.isBusy)
+            DockDivider()
             documentMenu
-        }.controlSize(.large).fixedSize(horizontal: true, vertical: false)
+        }.fixedSize(horizontal: true, vertical: true)
     }
     private var documentMenu: some View {
         Menu {
@@ -486,8 +433,7 @@ struct DocumentEditorView: View {
                         if finished { listDragging = false; saveListMemory() }
                     }, cancel: { listOrigin = clampedListOrigin(dragOrigin, viewport: viewport); listDragging = false }).accessibilityHidden(true) }
                     .help("拖动标题移动笔记列表").accessibilityLabel("我的笔记").accessibilityHint("拖动标题可移动列表；右侧可折叠或关闭")
-                Button { listCollapsed.toggle() } label: { Image(systemName: listCollapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(listCollapsed ? "展开列表" : "折叠列表")
-                Button { showingDocuments = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭列表")
+                DockIconButton(title: listCollapsed ? "展开笔记列表" : "收起笔记列表", icon: listCollapsed ? "plus" : "minus") { if listCollapsed { listCollapsed = false } else { showingDocuments = false } }
             }.padding(.horizontal, 12)
             if !listCollapsed { documentPicker }
         }.frame(width: 340, height: height).readingGlass(radius: 20).position(x: origin.x + 170, y: origin.y + height / 2)

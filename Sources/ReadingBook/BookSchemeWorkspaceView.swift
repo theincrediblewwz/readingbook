@@ -6,9 +6,10 @@ struct BookSchemeWorkspaceView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.bookSchemeDraftStore) private var sharedDrafts
     var definition: ViewDefinition?
+    var onClose: (() -> Void)? = nil
     @StateObject private var localDrafts = BookSchemeViewDraftStore()
     var body: some View {
-        BookSchemeWorkspaceContent(definition: definition, draft: (sharedDrafts ?? localDrafts).draft(for: store))
+        BookSchemeWorkspaceContent(definition: definition, onClose: onClose, draft: (sharedDrafts ?? localDrafts).draft(for: store))
     }
 }
 
@@ -58,6 +59,7 @@ extension EnvironmentValues {
 private struct BookSchemeWorkspaceContent: View {
     @EnvironmentObject private var store: AppStore
     var definition: ViewDefinition?
+    var onClose: (() -> Void)? = nil
     @ObservedObject var draft: BookSchemeViewDraft
     private var tab: String { get { draft.tab } nonmutating set { draft.tab = newValue } }
     private var selection: BookSchemeSelection? { get { draft.selection } nonmutating set { draft.selection = newValue } }
@@ -71,11 +73,14 @@ private struct BookSchemeWorkspaceContent: View {
 
     var body: some View {
         GeometryReader { geometry in
-            VStack(alignment: .leading, spacing: 18) {
+            let cardWidth = min(960, max(1, geometry.size.width - 40))
+            let cardHeight = min(720, max(1, geometry.size.height - 40))
+            VStack(alignment: .leading, spacing: 0) {
                 header
+                Divider().opacity(0.4)
                 Picker("方案内容", selection: $draft.tab) {
                     Text("方案预览").tag("scheme"); Text("模板 · \(state.templates.count)").tag("templates"); Text("版本 · \(state.history.count)").tag("history")
-                }.pickerStyle(.segmented).frame(maxWidth: 450).labelsHidden()
+                }.pickerStyle(.segmented).frame(maxWidth: 450).labelsHidden().padding(16)
                 if store.book == nil {
                     ContentUnavailableView("先选择一本书", systemImage: "book.closed", description: Text("书本方案按书保存，不改写用户知识和笔记。"))
                 } else {
@@ -86,20 +91,25 @@ private struct BookSchemeWorkspaceContent: View {
                                     Label("方案已在其他操作中更新，当前勾选已保留。重新载入后再调整和确认。", systemImage: "exclamationmark.circle")
                                         .font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
                                     Button("放弃当前勾选并重新载入") { draft.reload(from: store.book) }.buttonStyle(ReadingToolbarButtonStyle())
-                                }.padding(16).readingGlass(radius: 20)
+                                }.padding(16).background(Palette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
                             }
                             if tab == "templates" { templates }
                             else if tab == "history" { history }
-                            else if let configuration { scheme(configuration, wide: geometry.size.width >= 1080) }
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 24)
+                            else if let configuration { scheme(configuration, wide: cardWidth >= 920) }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 20)
                     }
                     if tab == "scheme", pending != nil { confirmationBar }
+                    if tab == "templates" { templateEditor }
                 }
-            }.padding(.horizontal, 16).padding(.top, 76).padding(.bottom, 16)
-        }.background(Palette.canvas.opacity(0.2))
+            }.frame(width: cardWidth, height: cardHeight)
+                .font(.system(size: 15))
+                .readingGlass(radius: 22).clipShape(RoundedRectangle(cornerRadius: 22))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
             .onAppear { draft.reconcile(with: store.book) }
             .onChange(of: BookSchemeViewDraft.signature(for: store.book)) { _, _ in draft.reconcile(with: store.book) }
             .onChange(of: store.bookID) { _, _ in confirmation = ""; templateToDelete = nil }
+            .onExitCommand(perform: close)
             .confirmationDialog(confirmation == "revert" ? "撤销最近一次配置更新？" : confirmation == "template" ? "删除这个方案模板？" : "放弃待确认方案？", isPresented: Binding(get: { !confirmation.isEmpty }, set: { if !$0 { confirmation = "" } }), titleVisibility: .visible) {
                 if confirmation == "revert" { Button("撤销配置更新") { store.revertBookScheme() } }
                 else if confirmation == "template" { Button("删除模板", role: .destructive) { if let id = templateToDelete { store.deleteBookSchemeTemplate(id) } } }
@@ -109,28 +119,22 @@ private struct BookSchemeWorkspaceContent: View {
     }
 
     private var header: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 16) { heading; Spacer(minLength: 12); headerActions }
-            VStack(alignment: .leading, spacing: 12) { heading; headerActions }
-        }
-    }
-    private var heading: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "slider.horizontal.3").font(.system(size: 18)).foregroundStyle(Palette.accent)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("书本方案").font(.system(size: 18, weight: .semibold))
-                Text(pending == nil ? "配置如何读、显示什么，保留每次改变。" : "先看变更，再决定是否用于这本书。")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
-            }
+        SettingsManagementHeader(title: "书本方案", icon: "slider.horizontal.3", dirty: draft.isDirty, onClose: close) {
+            headerActions
         }
     }
     private var headerActions: some View {
-        HStack(spacing: 10) {
+        Menu {
             Button { store.importBookSchemeTemplate() } label: { Label("导入模板", systemImage: "square.and.arrow.down") }
-                .buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy || pending != nil || store.book == nil)
             Button { store.makePlan() } label: { Label("AI 预读方案", systemImage: "sparkles") }
-                .buttonStyle(ReadingToolbarButtonStyle(selected: true)).disabled(store.isBusy || pending != nil || store.book == nil)
-        }
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .help("书本方案操作").accessibilityLabel("书本方案操作")
+            .disabled(store.isBusy || pending != nil || store.book == nil)
+    }
+    private func close() {
+        if let onClose { onClose() }
+        else { store.requestedWorkspaceRoute = store.book == nil ? "library" : "reader" }
     }
 
     @ViewBuilder private func scheme(_ configuration: BookSchemeConfiguration, wide: Bool) -> some View {
@@ -145,7 +149,7 @@ private struct BookSchemeWorkspaceContent: View {
         VStack(alignment: .leading, spacing: 18) {
             Label(pending == nil ? "当前生效" : "待确认", systemImage: pending == nil ? "checkmark.seal" : "circle.dashed")
                 .font(.system(size: 14, weight: .semibold)).foregroundStyle(Palette.accent)
-            Text(pending?.title ?? "\(store.book?.title ?? "本书")的阅读配置").font(.system(size: 18, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+            Text(pending?.title ?? "\(store.book?.title ?? "本书")的阅读配置").font(.system(size: 16, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
             Text(configuration.plan?.rationale ?? "尚未选择读书法。可以生成 AI 预读方案，或导入适合的模板。")
                 .font(.system(size: 15)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             if let focus = configuration.plan?.focus, !focus.isEmpty {
@@ -156,12 +160,15 @@ private struct BookSchemeWorkspaceContent: View {
                 }
             }
             if let pending {
-                Divider()
-                ForEach(Array(pending.notes.enumerated()), id: \.offset) { item in Text(item.element).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-                Text("逐段回执与已完成覆盖不会因方案切换而增加。")
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).fixedSize(horizontal: false, vertical: true)
+                DisclosureGroup("方案说明") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(pending.notes.enumerated()), id: \.offset) { item in Text(item.element).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                        Text("逐段回执与已完成覆盖不会因方案切换而增加。")
+                            .font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).fixedSize(horizontal: false, vertical: true)
+                    }.padding(.top, 10)
+                }.font(.system(size: 14))
             }
-        }.padding(16).frame(maxWidth: .infinity, alignment: .leading).readingGlass(radius: 24)
+        }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Palette.paper.opacity(0.6), in: RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line.opacity(0.6), lineWidth: 0.6))
     }
     private func definitions(_ configuration: BookSchemeConfiguration) -> some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -177,7 +184,7 @@ private struct BookSchemeWorkspaceContent: View {
                                 .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             if !view.typeIDs.isEmpty { Text("类型：" + view.typeIDs.compactMap { id in configuration.types.first { $0.id == id }?.name }.joined(separator: "、")).font(.system(size: 13)).foregroundStyle(.secondary) }
                         }
-                    }.padding(.vertical, 4)
+                    }.padding(.vertical, 4).frame(minHeight: 44)
                 }.toggleStyle(.switch).disabled(pending == nil || store.isBusy || draft.conflict)
                 if let renderer = view.rendererID {
                     DisclosureGroup("组件详情") { Text(renderer).font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled) }.font(.system(size: 13))
@@ -213,8 +220,8 @@ private struct BookSchemeWorkspaceContent: View {
                 }
             }
         }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.surface.opacity(0.85), in: RoundedRectangle(cornerRadius: 24))
-            .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Palette.line, lineWidth: 0.6))
+            .background(Palette.surface.opacity(0.85), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line, lineWidth: 0.6))
     }
     private func methodRow(_ method: ReadingMethod, configuration: BookSchemeConfiguration) -> some View {
         DisclosureGroup {
@@ -235,7 +242,7 @@ private struct BookSchemeWorkspaceContent: View {
         } label: {
             Toggle(isOn: option(method.id, keyPath: \.methodIDs)) {
                 HStack { Text(method.name).font(.system(size: 16, weight: .medium)); changeTag(method, old: pending?.before.methods) }
-            }.toggleStyle(.checkbox).disabled(pending == nil || store.isBusy || draft.conflict)
+            }.toggleStyle(.checkbox).frame(minHeight: 44).disabled(pending == nil || store.isBusy || draft.conflict)
         }
     }
     private func typeRow(_ type: EntityType) -> some View {
@@ -246,38 +253,62 @@ private struct BookSchemeWorkspaceContent: View {
         } label: {
             Toggle(isOn: option(type.id, keyPath: \.typeIDs)) {
                 HStack(spacing: 8) { Image(systemName: type.icon).foregroundStyle(Palette.accent); Text(type.name).font(.system(size: 15)); if existing { Text("已保存").font(.system(size: 13)).foregroundStyle(.secondary) } else { Text("新增").font(.system(size: 13)).foregroundStyle(Palette.accent) } }
-            }.toggleStyle(.checkbox).disabled(existing || pending == nil || store.isBusy || draft.conflict)
+            }.toggleStyle(.checkbox).frame(minHeight: 44).disabled(existing || pending == nil || store.isBusy || draft.conflict)
         }
     }
     private var confirmationBar: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) { Text("确认后启用这些配置").font(.system(size: 15)).foregroundStyle(.secondary); Spacer(); pendingActions }
-            VStack(alignment: .leading, spacing: 12) { Text("确认后启用这些配置").font(.system(size: 15)).foregroundStyle(.secondary); pendingActions }
-        }.padding(16).readingGlass(radius: 20)
+        VStack(spacing: 0) {
+            Divider().opacity(0.4)
+            pendingActions.padding(14).frame(maxWidth: .infinity, alignment: .trailing)
+        }
     }
     private var pendingActions: some View {
-        HStack(spacing: 10) {
-            Button("放弃") { confirmation = "discard" }.buttonStyle(ReadingToolbarButtonStyle())
-            Button("保存调整") { if let selection { store.saveBookSchemeSelection(selection, onSaved: { draft.reload(from: store.book) }) } }.buttonStyle(ReadingToolbarButtonStyle()).disabled(draft.conflict)
-            Button { if let selection { store.applyBookScheme(selection) } } label: { Label("仅采纳方案", systemImage: "checkmark") }.buttonStyle(ReadingToolbarButtonStyle(selected: true)).disabled(draft.conflict)
-            if pending?.origin == "ai", store.book?.smartReading != nil {
-                Button { if let selection { store.confirmSmartReading(selection) } } label: { Label("确认并开始分析", systemImage: "sparkles") }.buttonStyle(ReadingActionButtonStyle(prominent: true)).disabled(draft.conflict)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { discardAction; saveAdjustmentsAction; acceptAction; if canConfirmAndStart { confirmAndStartAction } }
+            VStack(spacing: 8) {
+                HStack { discardAction; saveAdjustmentsAction; Spacer(minLength: 0) }
+                HStack { Spacer(minLength: 0); acceptAction; if canConfirmAndStart { confirmAndStartAction } }
             }
         }.disabled(store.isBusy)
     }
+    private var canConfirmAndStart: Bool { pending?.origin == "ai" && store.book?.smartReading != nil }
+    private var discardAction: some View { Button("放弃") { confirmation = "discard" }.buttonStyle(ReadingToolbarButtonStyle()) }
+    private var saveAdjustmentsAction: some View {
+        Button("保存调整") { if let selection { store.saveBookSchemeSelection(selection, onSaved: { draft.reload(from: store.book) }) } }
+            .buttonStyle(ReadingToolbarButtonStyle()).disabled(draft.conflict)
+    }
+    private var acceptAction: some View {
+        Button { if let selection { store.applyBookScheme(selection) } } label: { Label("仅采纳方案", systemImage: "checkmark") }
+            .buttonStyle(ReadingToolbarButtonStyle(selected: true)).disabled(draft.conflict)
+    }
+    private var confirmAndStartAction: some View {
+        Button { if let selection { store.confirmSmartReading(selection) } } label: { Label("确认并开始分析", systemImage: "sparkles") }
+            .buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44).disabled(draft.conflict)
+    }
+    private var templateEditor: some View {
+        VStack(spacing: 0) {
+            Divider().opacity(0.4)
+            HStack(spacing: 12) {
+                TextField("为当前生效方案命名…", text: $draft.templateName).textFieldStyle(.plain).font(.system(size: 15))
+                    .padding(.horizontal, 12).frame(minHeight: 44)
+                    .background(Palette.paper.opacity(0.75), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.line, lineWidth: 0.6))
+                    .disabled(store.isBusy)
+                Button { let submitted = templateName; store.saveBookSchemeTemplate(name: submitted, onSaved: { if templateName == submitted { templateName = "" } }) } label: { Label("保存模板", systemImage: "square.and.arrow.up") }
+                    .buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44)
+                    .disabled(store.isBusy || templateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }.padding(14)
+        }
+    }
+
     private var templates: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack(spacing: 12) {
-                TextField("为当前生效方案命名…", text: $draft.templateName).textFieldStyle(.roundedBorder).frame(maxWidth: 360).disabled(store.isBusy)
-                Button { let submitted = templateName; store.saveBookSchemeTemplate(name: submitted, onSaved: { if templateName == submitted { templateName = "" } }) } label: { Label("保存为模板", systemImage: "square.and.arrow.up") }
-                    .buttonStyle(ReadingToolbarButtonStyle(selected: true)).disabled(store.isBusy || templateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
             Text("模板只保存生效配置。待确认的调整请先采纳；导出后可在另一本书导入预览。")
-                .font(.system(size: 15)).foregroundStyle(.secondary)
+                .font(.system(size: 13)).foregroundStyle(.secondary)
             if state.templates.isEmpty { ContentUnavailableView("还没有模板", systemImage: "square.stack.3d.up", description: Text("把适合历史、教材或研究资料的方案保存下来，下一本书可以继续调整。")) }
             ForEach(state.templates) { template in
                 VStack(alignment: .leading, spacing: 14) {
-                    Text(template.name).font(.system(size: 18, weight: .semibold))
+                    Text(template.name).font(.system(size: 16, weight: .semibold))
                     Text("\(template.configuration.views.count) 个组件 · \(template.configuration.plan?.methodIDs.count ?? 0) 种执行方法 · \(template.configuration.types.count) 种类型").font(.system(size: 15)).foregroundStyle(.secondary)
                     HStack(spacing: 12) {
                         Button("预览使用") { store.stageBookSchemeTemplate(template); tab = "scheme" }.buttonStyle(ReadingToolbarButtonStyle(selected: true)).disabled(pending != nil)
@@ -285,7 +316,7 @@ private struct BookSchemeWorkspaceContent: View {
                         Spacer()
                         Button { templateToDelete = template.id; confirmation = "template" } label: { Image(systemName: "trash") }.buttonStyle(ReadingToolbarButtonStyle()).help("删除模板")
                     }.disabled(store.isBusy)
-                }.padding(16).readingGlass(radius: 24)
+                }.padding(16).background(Palette.paper.opacity(0.6), in: RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line.opacity(0.6), lineWidth: 0.6))
             }
         }
     }
@@ -296,7 +327,7 @@ private struct BookSchemeWorkspaceContent: View {
             if state.history.isEmpty { ContentUnavailableView("还没有采纳记录", systemImage: "clock.arrow.circlepath", description: Text("原有配置继续有效，下一次采纳方案时会保存前后版本。")) }
             ForEach(state.history.reversed()) { revision in
                 VStack(alignment: .leading, spacing: 14) {
-                    HStack { Text(revision.title).font(.system(size: 18, weight: .semibold)); Spacer(); Text(revision.revertedAt == nil ? "已采纳" : "已撤销").font(.system(size: 13)).foregroundStyle(.secondary) }
+                    HStack { Text(revision.title).font(.system(size: 16, weight: .semibold)); Spacer(); Text(revision.revertedAt == nil ? "已采纳" : "已撤销").font(.system(size: 13)).foregroundStyle(.secondary) }
                     Text(revision.appliedAt, style: .date).font(.system(size: 13)).foregroundStyle(.secondary)
                     Text("组件 \(revision.before.views.count) → \(revision.after.views.count) · 执行方法 \(revision.before.plan?.methodIDs.count ?? 0) → \(revision.after.plan?.methodIDs.count ?? 0)").font(.system(size: 15))
                     DisclosureGroup("查看前后配置") {
@@ -309,15 +340,13 @@ private struct BookSchemeWorkspaceContent: View {
                     if revision.id == state.history.last(where: { $0.revertedAt == nil })?.id {
                         Button { confirmation = "revert" } label: { Label("撤销这次配置更新", systemImage: "arrow.uturn.backward") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy || pending != nil)
                     }
-                }.padding(16).readingGlass(radius: 24)
+                }.padding(16).background(Palette.paper.opacity(0.6), in: RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line.opacity(0.6), lineWidth: 0.6))
             }
         }
     }
     private func sectionTitle(_ title: String, subtitle: String, count: Int) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack { Text(title).font(.system(size: 16, weight: .semibold)); Text("\(count)").font(.system(size: 13)).foregroundStyle(.secondary) }
-            Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
+        HStack { Text(title).font(.system(size: 16, weight: .semibold)); Text("\(count)").font(.system(size: 13)).foregroundStyle(.secondary) }
+            .help(subtitle).accessibilityHint(subtitle)
     }
     private func changeTag<T: Identifiable & Equatable>(_ value: T, old: [T]?) -> some View where T.ID == String {
         let prior = old?.first { $0.id == value.id }

@@ -56,9 +56,9 @@ struct TemporalPersonContents: View {
         let snapshot = store.temporalSnapshot(entityID)
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Label(store.temporalValueLabel, systemImage: "clock").font(.subheadline).foregroundStyle(Palette.accent)
+                Label(store.temporalValueLabel, systemImage: "clock").font(.system(size: 15)).foregroundStyle(Palette.accent)
                 if let object = snapshot?.object {
-                    Text(object.name).font(.system(size: 20, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+                    Text(object.name).font(.system(size: 16, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
                     if !object.summary.isEmpty { MarkdownText(markdown: object.summary) }
                 }
                 if store.temporalPoint == nil {
@@ -78,11 +78,11 @@ struct TemporalPersonContents: View {
                     }
                     ForEach(snapshot.events.filter { $0.match == .matches }, id: \.object.id) { event in
                         Button { store.focus(event.object.id) } label: {
-                            Label(event.object.name, systemImage: "flag").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                            Label(event.object.name, systemImage: "flag").font(.system(size: 15)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     }
                     if !snapshot.relations.isEmpty {
-                        Text("此时关系").font(.subheadline.weight(.semibold))
+                        Text("此时关系").font(.system(size: 16, weight: .semibold))
                         ForEach(snapshot.relations.filter { $0.match == .matches }, id: \.relation.id) { item in
                             Text("\(store.objectTitle(item.relation.fromID)) · \(item.relation.label) · \(store.objectTitle(item.relation.toID))").font(.system(size: 15))
                         }

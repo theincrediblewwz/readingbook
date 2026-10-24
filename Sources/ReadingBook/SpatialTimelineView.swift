@@ -28,7 +28,6 @@ struct SpatialTimelineView: View {
     @State private var timelineCollapsed = false
     @State private var viewport = CGSize(width: 900, height: 650)
     @AppStorage("readingbook.timelinePanelDock") private var dockRaw = FloatingPanelDock.bottomLeading.rawValue
-    @AppStorage("frost-navigation-dock-v1") private var navigationDockRaw = NavigationOrbDock.topLeading.rawValue
     @State private var measuredPanelSize = CGSize(width: 740, height: 214)
     @State private var personFrame = CGRect.zero
     @State private var dragOrigin: CGPoint?
@@ -38,6 +37,7 @@ struct SpatialTimelineView: View {
     @State private var selectionLayoutToken: UUID?
     @State private var showsPerson = true
     @State private var showsFootprintSequence = false
+    @State private var mapMemorySaveTask: Task<Void, Never>?
 
     private var temporalMode: Bool { store.temporalAxis != "legacy" }
     private var visibleEvents: [KnowledgeEvent] {
@@ -81,7 +81,9 @@ struct SpatialTimelineView: View {
         return extent.start.map { Double($0.year) }
     }
     private func axisEnd(_ extent: TemporalExtent) -> Double? {
-        store.temporalAxis == "narrative" ? extent.narrativeEnd.map(Double.init) : extent.end.map { Double($0.year) }
+        if store.temporalAxis == "narrative" { return extent.narrativeEnd.map(Double.init) }
+        guard store.temporalAxis == "calendar:" + (extent.calendar ?? "") else { return nil }
+        return extent.end.map { Double($0.year) }
     }
     private func axisLabel(_ value: Double) -> String {
         store.temporalAxis == "narrative" ? "叙事 \(Int(value))" : TimelineRangeControl.yearLabel(Int(value))
@@ -161,8 +163,8 @@ struct SpatialTimelineView: View {
     // Keep distinct upper-corner targets even while reserving MapKit's controls.
     private var topReserve: CGFloat { 96 }
     private var workingViewport: CGSize { CGSize(width: viewport.width, height: max(0, viewport.height - topReserve)) }
-    private var panelWidth: CGFloat { min(740, max(0, viewport.width - 144)) }
-    private let timelineHeaderHeight: CGFloat = 68
+    private var panelWidth: CGFloat { min(timelineCollapsed ? 480 : 740, max(0, viewport.width - 144)) }
+    private let timelineHeaderHeight: CGFloat = 56
     private var detailHeight: CGFloat { min(220, max(210, viewport.height * 0.24)) }
     private var dock: FloatingPanelDock { FloatingPanelDock(rawValue: dockRaw) ?? .bottomLeading }
     private var maximumTimelineHeight: CGFloat {
@@ -177,14 +179,7 @@ struct SpatialTimelineView: View {
         CGSize(width: panelWidth, height: timelineCollapsed ? timelineHeaderHeight : min(max(timelineHeaderHeight, measuredPanelSize.height), maximumTimelineHeight))
     }
     private func dockFrame(_ position: FloatingPanelDock) -> CGRect {
-        var frame = FloatingPanelGeometry.frame(at: position, viewport: workingViewport, panel: panelSize, margin: 24).offsetBy(dx: 0, dy: topReserve)
-        let navigationDock = NavigationOrbDock(rawValue: navigationDockRaw) ?? .topLeading
-        let center = NavigationOrbGeometry.center(in: viewport, dock: navigationDock)
-        let diameter = NavigationOrbGeometry.buttonDiameter
-        let navigation = CGRect(x: center.x - diameter / 2, y: center.y - diameter / 2, width: diameter, height: diameter)
-        if frame.intersects(navigation.insetBy(dx: -12, dy: -12)) {
-            frame.origin.x = min(max(frame.minX, max(80, navigation.maxX + 12)), max(24, viewport.width - frame.width - 24))
-        }
+        let frame = FloatingPanelGeometry.frame(at: position, viewport: workingViewport, panel: panelSize, margin: 24).offsetBy(dx: 0, dy: topReserve)
         return frame
     }
     private func clampedPanelCenter(_ center: CGPoint) -> CGPoint {
@@ -198,7 +193,7 @@ struct SpatialTimelineView: View {
         }
         return dockFrame(dock)
     }
-    private var timelineRestoreFrame: CGRect { CGRect(x: 24, y: topReserve + 12, width: 180, height: 52) }
+    private var timelineRestoreFrame: CGRect { CGRect(x: max(24, viewport.width / 2 - 122), y: max(topReserve + 12, viewport.height - 76), width: 244, height: 52) }
     private var settledTimelineFrame: CGRect { showsTimeline ? dockFrame(dock) : timelineRestoreFrame }
     private var mapControlsFrame: CGRect { CGRect(x: max(0, viewport.width - 70), y: 88, width: 56, height: 150) }
     private func chromeFrames(in geometry: GeometryProxy) -> [String: CGRect] {
@@ -225,8 +220,7 @@ struct SpatialTimelineView: View {
                 }
                 if showsTimeline {
                 timelineCard.frame(width: panelWidth, height: panelSize.height, alignment: .top)
-                    .readingGlass(radius: 24)
-                    .clipShape(RoundedRectangle(cornerRadius: 24))
+                    .clipShape(RoundedRectangle(cornerRadius: 22))
                     .position(x: panelFrame.midX, y: panelFrame.midY)
                     .onPreferenceChange(TimelinePanelSizeKey.self) { next in
                         guard next.width > 0, next.height > 0,
@@ -236,10 +230,12 @@ struct SpatialTimelineView: View {
                     }
                     .transition(.opacity)
                 } else {
-                    Button { restoreTimeline() } label: {
-                        Label("时间与地图", systemImage: "clock").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
-                    }
-                        .buttonStyle(ReadingToolbarButtonStyle()).frame(width: timelineRestoreFrame.width, height: timelineRestoreFrame.height).readingGlass(interactive: true)
+                    ReadingDockSurface {
+                        Button { restoreTimeline() } label: { Label("时间轴", systemImage: "clock").frame(minHeight: 44) }
+                            .buttonStyle(ReadingToolbarButtonStyle()).help("显示时间轴与事件")
+                        DockDivider()
+                        DockIconButton(title: "显示全部地图标记", icon: "arrow.up.left.and.arrow.down.right") { camera = .automatic }
+                    }.frame(width: timelineRestoreFrame.width, height: timelineRestoreFrame.height)
                         .position(x: timelineRestoreFrame.midX, y: timelineRestoreFrame.midY).transition(.opacity)
                 }
             }
@@ -270,9 +266,9 @@ struct SpatialTimelineView: View {
         .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreMapMemory() }
         .onChange(of: showsTimeline) { _, _ in saveMapPanelMemory() }
         .onChange(of: timelineCollapsed) { _, _ in saveMapPanelMemory() }
-        .onChange(of: store.timeFrom) { _, _ in store.timeCursor = min(store.timeTo, max(store.timeFrom, store.timeCursor)); saveMapPanelMemory() }
-        .onChange(of: store.timeTo) { _, _ in store.timeCursor = min(store.timeTo, max(store.timeFrom, store.timeCursor)); saveMapPanelMemory() }
-        .onChange(of: store.timeCursor) { _, _ in saveMapPanelMemory() }
+        .onChange(of: store.timeFrom) { _, _ in clampCursor(); scheduleMapPanelMemory() }
+        .onChange(of: store.timeTo) { _, _ in clampCursor(); scheduleMapPanelMemory() }
+        .onChange(of: store.timeCursor) { _, _ in scheduleMapPanelMemory() }
         .onChange(of: store.temporalAxis) { _, _ in saveMapPanelMemory() }
         .onChange(of: store.selectedTemporalEntityID) { _, id in if id != nil { showsPerson = true }; saveMapPanelMemory() }
         .onChange(of: store.showUndated) { _, _ in saveMapPanelMemory() }
@@ -282,6 +278,7 @@ struct SpatialTimelineView: View {
         observedWorkspace
         .onChange(of: store.workspaceAICommand) { _, command in handleViewCommand(command) }
         .onExitCommand { cancelPanelDrag() }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ReadingBookCaptureWorkspaceMemory"))) { _ in saveMapPanelMemory() }
         .onChange(of: measuredPanelSize) { _, _ in
             // Only settle a newly selected event's expanding detail card.
             // Resizing or moving chrome after manual navigation preserves the map.
@@ -359,6 +356,7 @@ struct SpatialTimelineView: View {
         store.selectedTemporalEntityID = saved.temporalEntityID.flatMap { id in store.book?.entities.contains(where: { $0.id == id }) == true ? id : nil }
     }
     private func saveMapPanelMemory() {
+        mapMemorySaveTask?.cancel(); mapMemorySaveTask = nil
         guard let memoryScope else { return }
         store.updateWorkspaceMemory({ memory in
             memory.panels["map.timeline"] = WorkspacePanelMemory(isPresented: showsTimeline, collapsed: timelineCollapsed)
@@ -367,14 +365,29 @@ struct SpatialTimelineView: View {
         }, expectedKey: memoryScope)
     }
 
-    private var timelineCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Keep every dismissal control outside the scrolling content.
-            timelineHeader.padding(.horizontal, 16).frame(height: timelineHeaderHeight)
-            if !timelineCollapsed {
+    private func clampCursor() {
+        let next = min(store.timeTo, max(store.timeFrom, store.timeCursor))
+        if next != store.timeCursor { store.timeCursor = next }
+    }
+    private func scheduleMapPanelMemory() {
+        mapMemorySaveTask?.cancel()
+        let expectedKey = store.workspaceMemoryKey
+        mapMemorySaveTask = Task { @MainActor in
+            do { try await Task.sleep(nanoseconds: 180_000_000) } catch { return }
+            guard !Task.isCancelled, expectedKey == store.workspaceMemoryKey, memoryScope == expectedKey else { return }
+            saveMapPanelMemory()
+        }
+    }
+    @ViewBuilder private var timelineCard: some View {
+        if timelineCollapsed {
+            ReadingDockSurface { timelineHeader.frame(width: max(0, panelWidth - 12)) }
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                // Keep dismissal in the draggable title, outside the body scroll.
+                timelineHeader.padding(.horizontal, 12).frame(height: timelineHeaderHeight)
                 ScrollView {
                     timelineContents.fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 20).padding(.bottom, 12)
+                        .padding(.horizontal, 16).padding(.bottom, 12)
                         .background {
                             GeometryReader { contents in
                                 Color.clear.preference(key: TimelinePanelSizeKey.self,
@@ -383,7 +396,7 @@ struct SpatialTimelineView: View {
                         }
                 }.scrollBounceBehavior(.basedOnSize)
                     .frame(height: max(0, panelSize.height - timelineHeaderHeight))
-            }
+            }.readingGlass(radius: 20)
         }
     }
     private var timelineContents: some View {
@@ -398,10 +411,8 @@ struct SpatialTimelineView: View {
                 // Keep this region's height stable when filtering the selected
                 // event out, so a held endpoint never shifts under the pointer.
                 eventDetails(event).frame(height: detailHeight).transition(.opacity)
-            } else {
-                Text(points.isEmpty
-                     ? (visibleEvents.isEmpty ? "当前范围没有事件；可调整端点或显示全部时间。" : "暂无可定位坐标，事件详情仍可从清单阅读。")
-                     : "\(points.count) 个地图标记 · 点事件查看详情")
+            } else if points.isEmpty {
+                Text(visibleEvents.isEmpty ? "当前范围没有事件；可调整端点或显示全部时间。" : "暂无可定位坐标，事件详情仍可从清单阅读。")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).frame(height: 18, alignment: .leading)
                     .padding(.horizontal, 7).padding(.bottom, 3)
             }
@@ -412,7 +423,10 @@ struct SpatialTimelineView: View {
         HStack(spacing: 8) {
             HStack(spacing: 7) {
                 Image(systemName: "clock").font(.system(size: 18)).foregroundStyle(Palette.accent)
-                Text("时间与地图").font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("时间与地图").font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                    if timelineCollapsed { Text("\(axisLabel(store.timeFrom)) — \(axisLabel(store.timeTo))").font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1) }
+                }
             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 .overlay {
                     FloatingPanelPointerInput(epoch: pointerEpoch, begin: beginPanelDrag, drag: dragPanel, cancel: cancelPanelDrag)
@@ -451,7 +465,7 @@ struct SpatialTimelineView: View {
             }.buttonStyle(ReadingToolbarButtonStyle()).help(timelineCollapsed ? "展开时间卡片" : "收起时间卡片内容").accessibilityLabel(timelineCollapsed ? "展开时间卡片" : "收起时间卡片内容")
             Button { cancelPanelDrag(); withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { showsTimeline = false } } label: {
                 Image(systemName: "xmark")
-            }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭时间卡片，可从左侧恢复").accessibilityLabel("关闭时间卡片")
+            }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭时间卡片，可从底部工具栏恢复").accessibilityLabel("关闭时间卡片")
         }
     }
 
@@ -470,7 +484,7 @@ struct SpatialTimelineView: View {
                     eventListButton
                 }
             }
-        }.padding(.horizontal, 4).background(Palette.accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
+        }.padding(.horizontal, 0)
     }
     private var timeRangeButton: some View {
         Button {
@@ -511,7 +525,7 @@ struct SpatialTimelineView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(event.dateText + (event.placeIDs.isEmpty ? "" : " · " + event.placeIDs.map(store.objectTitle).joined(separator: "、")))
                         .font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
-                    Text(event.name).font(.system(size: 20, weight: .semibold)).lineLimit(2).textSelection(.enabled)
+                    Text(event.name).font(.system(size: 16, weight: .semibold)).lineLimit(2).textSelection(.enabled)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 Button { collapseDetails() } label: { Image(systemName: "xmark") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("收起事件详情，保留时间范围").accessibilityLabel("收起事件详情")

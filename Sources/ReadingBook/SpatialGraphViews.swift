@@ -11,22 +11,7 @@ struct EntityCardsView: View {
         (store.book?.entities ?? []).filter { (typeIDs.isEmpty || typeIDs.contains($0.typeID)) && (filter.isEmpty || $0.typeID == filter) && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.summary.localizedCaseInsensitiveContains(query)) }
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 16) {
-                Text("\(entities.count) 张卡片").font(.system(size: 14)).foregroundStyle(.secondary).padding(.leading, 12)
-                Spacer(minLength: 12)
-                HStack(spacing: 9) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("查找卡片", text: $query).textFieldStyle(.plain).font(.system(size: 15))
-                }.padding(.horizontal, 14).frame(minWidth: 110, maxWidth: 280, minHeight: 44)
-                    .background(Palette.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
-                Menu {
-                    Picker("类型", selection: $filter) {
-                        Text("全部类型").tag("")
-                        ForEach((store.book?.types ?? []).filter { typeIDs.isEmpty || typeIDs.contains($0.id) }) { type in Text(type.name).tag(type.id) }
-                    }
-                } label: { Image(systemName: filter.isEmpty ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("筛选卡片类型")
-            }.padding(8).readingGlass(radius: 24).padding(.horizontal, 24).padding(.top, 108)
+        VStack(alignment: .leading, spacing: 0) {
             if entities.isEmpty {
                 if !query.isEmpty || !filter.isEmpty { EmptyState(title: "没有匹配的卡片", detail: "调整搜索词或类型筛选，已保存的卡片仍会保留。", icon: "magnifyingglass") }
                 else { EmptyState(title: "卡片会随着阅读长出来", detail: "AI 会依据内容创建人物、概念、定理或自定义类型，并保留每张卡片的原文依据。", icon: "rectangle.stack") }
@@ -38,7 +23,7 @@ struct EntityCardsView: View {
                             Button { store.focus(entity.id); inspectedEntity = entity } label: {
                                 VStack(alignment: .leading, spacing: 10) {
                                     HStack { Image(systemName: store.book?.types.first { $0.id == entity.typeID }?.icon ?? "square.stack").font(.system(size: 24)).foregroundStyle(Palette.accent); Spacer(); Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.system(size: 13)).foregroundStyle(.secondary) }
-                                    Text(entity.name).font(.system(size: 23, weight: .semibold, design: .serif))
+                                    Text(entity.name).font(.system(size: 16, weight: .semibold))
                                     Text(entity.summary).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(4).frame(maxWidth: .infinity, minHeight: 66, alignment: .topLeading)
                                     HStack { Text("\(entity.evidence.count) 处原文依据").font(.system(size: 12)).foregroundStyle(.secondary); Spacer(); Image(systemName: "arrow.up.right").font(.system(size: 13)).foregroundStyle(Palette.accent) }
                                 }.softPanel().overlay(RoundedRectangle(cornerRadius: 14).stroke(store.selectedObjectID == entity.id ? Palette.accent.opacity(0.5) : .clear, lineWidth: 1)).contentShape(Rectangle())
@@ -47,11 +32,32 @@ struct EntityCardsView: View {
                     }.padding(.horizontal, 24).padding(.bottom, 24)
                 }
             }
-        }.background(Palette.canvas).popover(item: $inspectedEntity) { entity in
+        }.padding(.top, 80).padding(.bottom, 92).background(Palette.canvas)
+            .overlay(alignment: .bottom) { cardsDock.padding(.horizontal, 24).padding(.bottom, 18) }
+            .popover(item: $inspectedEntity) { entity in
             ObjectInspector(id: entity.id, onClose: { inspectedEntity = nil }).environmentObject(store).frame(width: 330, height: 500)
         }.onChange(of: store.bookID) { _, _ in inspectedEntity = nil; query = ""; filter = "" }
             .onChange(of: typeIDs) { _, ids in if !ids.isEmpty && !ids.contains(filter) { filter = "" } }
     }
+    private var cardsDock: some View {
+        ReadingDockSurface {
+                Text("\(entities.count) 张卡片").font(.system(size: 14)).foregroundStyle(.secondary).padding(.leading, 12)
+                DockDivider()
+                HStack(spacing: 9) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("查找卡片", text: $query).textFieldStyle(.plain).font(.system(size: 15))
+                    if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).help("清除卡片搜索").accessibilityLabel("清除卡片搜索") }
+                }.padding(.horizontal, 14).frame(width: 260, height: 44)
+                    .background(Palette.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
+                Menu {
+                    Picker("类型", selection: $filter) {
+                        Text("全部类型").tag("")
+                        ForEach((store.book?.types ?? []).filter { typeIDs.isEmpty || typeIDs.contains($0.id) }) { type in Text(type.name).tag(type.id) }
+                    }
+                } label: { Image(systemName: filter.isEmpty ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("筛选卡片类型")
+        }
+    }
+
 }
 
 struct DocumentGraphView: View {
@@ -158,9 +164,11 @@ struct RelationGraphView: View {
             if items.isEmpty {
                 EmptyState(title: "关系来自阅读", detail: "AI 发现的依赖、参与、发生于等关系会在这里连接。双击节点查看卡片与原文。", icon: "point.3.filled.connected.trianglepath.dotted")
                     .overlay(alignment: .bottom) {
-                        Button { store.readingScopeCurrent.toggle() } label: {
-                            Label(store.readingScopeCurrent ? "当前原文 · 切换全书" : "全书关系 · 切换当前原文", systemImage: "line.3.horizontal.decrease")
-                        }.buttonStyle(ReadingToolbarButtonStyle()).padding(7).readingGlass().padding(.bottom, 24)
+                        ReadingDockSurface {
+                            Button { store.readingScopeCurrent.toggle() } label: {
+                                Label(store.readingScopeCurrent ? "当前原文 · 切换全书" : "全书关系 · 切换当前原文", systemImage: "line.3.horizontal.decrease").frame(minHeight: 44)
+                            }.buttonStyle(ReadingToolbarButtonStyle())
+                        }.padding(.bottom, 18)
                     }
             }
             else { FloatingGraphWorkspace(items: items, memoryID: "relations.browser", selectedNodeID: physicalSelection ?? store.selectedObjectID,
@@ -250,14 +258,7 @@ struct KnowledgeLibraryView: View {
         (store.book?.entities ?? []).filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.summary.localizedCaseInsensitiveContains(query) }
     }
     var body: some View {
-        VStack(spacing: 16) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 16) { categoryPicker; Spacer(minLength: 16); librarySearch; newNoteButton }
-                    VStack(alignment: .leading, spacing: 12) {
-                        categoryPicker
-                        HStack(spacing: 12) { librarySearch; Spacer(minLength: 0); newNoteButton }
-                    }
-                }.padding(10).readingGlass(radius: 24).padding(.horizontal, 24).padding(.top, 108)
+        VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if !query.isEmpty { Text("搜索全部笔记、阅读分析与要素").font(.caption).foregroundStyle(.secondary) }
@@ -267,11 +268,15 @@ struct KnowledgeLibraryView: View {
                     if !query.isEmpty, documents.isEmpty, insights.isEmpty, entities.isEmpty { Text("没有找到匹配内容。").foregroundStyle(.secondary).padding(.vertical, 20) }
                 }.padding(.horizontal, 24).padding(.bottom, 24).frame(maxWidth: 1100).frame(maxWidth: .infinity, alignment: .topLeading)
             }.background(Palette.canvas)
-        }.background(Palette.canvas).popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
+        }.padding(.top, 80).padding(.bottom, 92).background(Palette.canvas)
+            .overlay(alignment: .bottom) { libraryDock.padding(.horizontal, 24).padding(.bottom, 18) }
+            .popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
             if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 330, height: 500) }
-        }.task(id: documentCacheKey) {
+        }.task(id: documentSearchKey) {
             documentTexts = [:]
-            guard let book = store.book else { return }; var loaded: [String: String] = [:]
+            // Opening the library needs metadata only. Read Markdown bodies
+            // once when a content search is active, not on every library visit.
+            guard !query.isEmpty, let book = store.book else { return }; var loaded: [String: String] = [:]
             do { for document in book.activeDocuments { try Task.checkCancellation(); loaded[document.id] = try await store.repository.readDocument(bookID: book.id, document: document) }; if !Task.isCancelled && store.book?.id == book.id { documentTexts = loaded } }
             catch is CancellationError { }
             catch { store.errorMessage = error.localizedDescription }
@@ -285,7 +290,7 @@ struct KnowledgeLibraryView: View {
                     HStack(spacing: 11) {
                         BrandGlyph(name: "note").frame(width: 19, height: 19).foregroundStyle(Palette.accent)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(document.title).font(.system(size: 17, weight: .medium)).lineLimit(2)
+                            Text(document.title).font(.system(size: 16, weight: .medium)).lineLimit(2)
                             Text(document.origin == "user" ? "我的笔记" : "主动保存的摘记").font(.system(size: 13)).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 4)
@@ -341,23 +346,33 @@ struct KnowledgeLibraryView: View {
         }
     }
     @State private var inspectedID: String?
+    private var libraryDock: some View {
+        ReadingDockSurface {
+            categoryPicker
+            DockDivider()
+            librarySearch
+            DockDivider()
+            newNoteButton
+        }
+    }
     private var categoryPicker: some View {
-        Picker("内容", selection: $section) {
-            Text("笔记").tag("documents"); Text("分析").tag("insights"); Text("要素").tag("entities")
-        }.pickerStyle(.segmented).labelsHidden().controlSize(.large).frame(width: 240)
-            .accessibilityLabel("知识库内容分类").disabled(!query.isEmpty)
+        HStack(spacing: 2) {
+            ForEach([("documents", "笔记"), ("insights", "分析"), ("entities", "要素")], id: \.0) { item in
+                Button { section = item.0 } label: { Text(item.1).font(.system(size: 15)).frame(minWidth: 44, minHeight: 44) }
+                    .buttonStyle(ReadingToolbarButtonStyle(selected: section == item.0)).accessibilityAddTraits(section == item.0 ? .isSelected : [])
+            }
+        }.accessibilityLabel("知识库内容分类").disabled(!query.isEmpty)
     }
     private var librarySearch: some View {
         HStack(spacing: 9) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("搜索全部内容", text: $query).textFieldStyle(.plain).font(.system(size: 15))
-            if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).help("清除知识搜索") }
-        }.padding(.horizontal, 14).frame(minWidth: 160, maxWidth: 320, minHeight: 44)
+            if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).help("清除知识搜索").accessibilityLabel("清除知识搜索") }
+        }.padding(.horizontal, 14).frame(width: 260, height: 44)
             .background(Palette.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
     }
     private var newNoteButton: some View {
-        Button { store.newDocument() } label: { Label("新建笔记", systemImage: "square.and.pencil") }
-            .buttonStyle(ReadingToolbarButtonStyle()).foregroundStyle(Palette.accent).help("新建笔记").accessibilityLabel("新建笔记").disabled(store.isBusy)
+        DockIconButton(title: "新建笔记", icon: "square.and.pencil") { store.newDocument() }.disabled(store.isBusy)
     }
     private func sectionLabel(_ title: String, count: Int) -> some View {
         Text("\(title) · \(count)").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 6)
@@ -378,5 +393,6 @@ struct KnowledgeLibraryView: View {
     private func insightActions(_ insight: ReadingInsight) -> some View {
         HStack { insightSources(insight); Spacer(); Button("保存为文档") { Task { await store.saveInsight(insight) } }.disabled(store.isBusy) }
     }
+    private var documentSearchKey: String { documentCacheKey + (query.isEmpty ? "|idle" : "|search") }
     private var documentCacheKey: String { (store.book?.id ?? "") + (store.book?.activeDocuments.map { $0.id + String($0.updatedAt.timeIntervalSince1970) }.joined(separator: "|") ?? "") }
 }

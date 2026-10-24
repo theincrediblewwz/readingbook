@@ -23,6 +23,9 @@ private final class GraphRenderCache {
     var identities = GraphIdentityIndex(nodes: [])
     var lanes: [String: CGFloat] = [:]
     var incident: [String: [GraphLine]] = [:]
+    var renderedEdges: [RenderedGraphLine] = []
+    var motionPhase: Double?
+    var motionEdges: [RenderedGraphLine] = []
     private var memorySave: Task<Void, Never>?
     func cancelMemorySave() { memorySave?.cancel(); memorySave = nil }
     func queueCameraMemory(store: AppStore, scope: String, id: String, camera: GraphCamera) {
@@ -35,13 +38,15 @@ private final class GraphRenderCache {
         }
     }
     deinit { memorySave?.cancel() }
-    func update(items: [GraphItem], lines: [GraphLine]) {
-        if self.items != items {
+    func update(items: [GraphItem], lines: [GraphLine], nodeSize: CGSize) {
+        let itemsChanged = self.items != items, linesChanged = self.lines != lines
+        let geometryChanged = itemsChanged || linesChanged
+        if itemsChanged {
             self.items = items
             byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             identities = GraphIdentityIndex(nodes: items.map { (nodeID: $0.id, targetID: $0.targetID) })
         }
-        if self.lines != lines {
+        if linesChanged {
             self.lines = lines; lanes = [:]; incident = [:]
             for line in lines { incident[line.from, default: []].append(line); if line.to != line.from { incident[line.to, default: []].append(line) } }
             for group in Dictionary(grouping: lines, by: { [$0.from, $0.to].sorted().joined(separator: "|") }).values {
@@ -49,6 +54,18 @@ private final class GraphRenderCache {
                     let lane = (CGFloat(offset) - CGFloat(group.count - 1) / 2) * 32
                     lanes[line.id] = line.from < line.to ? lane : -lane
                 }
+            }
+        }
+        if geometryChanged {
+            motionPhase = nil; motionEdges = []
+            renderedEdges = lines.compactMap { line in
+                guard let from = byID[line.from], let to = byID[line.to] else { return nil }
+                let aRect = CGRect(x: from.x, y: from.y, width: nodeSize.width, height: nodeSize.height)
+                let bRect = CGRect(x: to.x, y: to.y, width: nodeSize.width, height: nodeSize.height)
+                let a = graphAnchor(aRect, towards: CGPoint(x: bRect.midX, y: bRect.midY))
+                let b = graphAnchor(bRect, towards: CGPoint(x: aRect.midX, y: aRect.midY))
+                return RenderedGraphLine(line: line, curve: GraphCurve(start: a.point, end: b.point,
+                    startNormal: a.normal, endNormal: b.normal, lane: lanes[line.id] ?? 0))
             }
         }
     }
@@ -92,6 +109,7 @@ struct GraphSurface: View {
     @Environment(\.workspaceCanvasBlocked) private var workspaceCanvasBlocked
     @Environment(\.workspaceCanvasExclusionRects) private var workspaceCanvasExclusionRects
     @Environment(\.graphBrowserSettledFrame) private var browserSettledFrame
+    @Environment(\.graphBrowserControls) private var browserControls
 
     private struct NodeDrag {
         var id: String
@@ -103,9 +121,11 @@ struct GraphSurface: View {
     @State private var camera = GraphCamera()
     @State private var viewportSize = CGSize.zero
     @State private var controlsRect = CGRect.zero
+    @State private var controlsDock: FloatingPanelDock = .bottomCenter
     @State private var chromeSizes: [String: CGSize] = [:]
     @State private var cameraInitialized = false
     @State private var memoryScope: String?
+    @State private var rendererIdentity = ""
     @State private var renderCache = GraphRenderCache()
     @State private var panOrigin: GraphCamera?
     @State private var connectionDragScale: CGFloat?
@@ -140,8 +160,11 @@ struct GraphSurface: View {
     }
     private func point(_ item: GraphItem, phase: Double? = nil) -> CGPoint {
         let location = nodeDragState?.id == item.id ? nodeDragState!.position : CGPoint(x: item.x, y: item.y)
-        let seed = Double(item.id.unicodeScalars.reduce(0) { ($0 + Int($1.value)) % 997 }) / 73
-        let drift = phase.map { CGPoint(x: sin($0 + seed) * 4, y: cos($0 * 0.73 + seed * 1.7) * 3) } ?? .zero
+        let drift: CGPoint
+        if let phase {
+            let seed = Double(item.id.unicodeScalars.reduce(0) { ($0 + Int($1.value)) % 997 }) / 73
+            drift = CGPoint(x: sin(phase + seed) * 4, y: cos(phase * 0.73 + seed * 1.7) * 3)
+        } else { drift = .zero }
         return CGPoint(x: location.x + nodeSize.width / 2 + drift.x, y: location.y + nodeSize.height / 2 + drift.y)
     }
     private func rect(_ item: GraphItem, phase: Double? = nil) -> CGRect {
@@ -152,14 +175,25 @@ struct GraphSurface: View {
         renderCache.identities.selectedNode(targetID: selectedID, preferredNodeID: selectedNodeID)
     }
     private func renderedLines(phase: Double? = nil) -> [RenderedGraphLine] {
-        return lines.compactMap { line in
+        // Static curves and their paths survive camera movement. Only the
+        // incident edges of a held node need new geometry during its drag.
+        if nodeDragState == nil {
+            if phase == nil { return renderCache.renderedEdges }
+            if renderCache.motionPhase == phase { return renderCache.motionEdges }
+        }
+        let incidentIDs = nodeDragState.map { Set((renderCache.incident[$0.id] ?? []).map(\.id)) }
+        let rendered = renderCache.renderedEdges.compactMap { cached -> RenderedGraphLine? in
+            let line = cached.line
+            if phase == nil, incidentIDs?.contains(line.id) != true { return cached }
             guard let from = renderCache.byID[line.from], let to = renderCache.byID[line.to] else { return nil }
             let a = anchor(rect(from, phase: phase), towards: point(to, phase: phase)), b = anchor(rect(to, phase: phase), towards: point(from, phase: phase))
             return RenderedGraphLine(line: line, curve: GraphCurve(start: a.point, end: b.point, startNormal: a.normal, endNormal: b.normal, lane: renderCache.lanes[line.id] ?? 0))
         }
+        if nodeDragState == nil, let phase { renderCache.motionPhase = phase; renderCache.motionEdges = rendered }
+        return rendered
     }
     var body: some View {
-        let _ = renderCache.update(items: items, lines: lines)
+        let _ = renderCache.update(items: items, lines: lines, nodeSize: nodeSize)
         GeometryReader { geometry in
             let globalFrame = geometry.frame(in: .global)
             let workspaceExclusions = workspaceCanvasExclusionRects.filter { !$0.isNull && !$0.isInfinite && !$0.isEmpty }
@@ -169,7 +203,8 @@ struct GraphSurface: View {
                 .filter { frame in browserSettledFrame.map { frame != $0 } ?? true }
             let chrome = chromeLayout(in: geometry.size)
             let localChrome = [chrome.controls, chrome.status].compactMap { $0 }
-            let visibility = visibilitySnapshot(in: geometry.size, exclusions: workspaceExclusions + [interactionExclusion].compactMap { $0 } + localChrome)
+            let visibleNodes = visibleItems(in: geometry.size)
+            let visibility = visibilitySnapshot(in: geometry.size, candidates: visibleNodes, exclusions: workspaceExclusions + [interactionExclusion].compactMap { $0 } + localChrome)
             ZStack(alignment: .topLeading) {
                 Palette.canvas
                 grid(in: geometry.size)
@@ -184,7 +219,10 @@ struct GraphSurface: View {
                 GraphAmbientLayer(active: ambientMotion && !reduceMotion && scenePhase == .active && canNavigate
                                   && !canvasHovered && selectedID == nil && focus == nil && items.count <= 80) { phase in
                 let motion = ambientMotion && !reduceMotion && items.count <= 80 ? phase : nil
-                let rendered = renderedLines(phase: motion)
+                let viewport = worldViewport(in: geometry.size).insetBy(dx: -12 / camera.scale, dy: -12 / camera.scale)
+                let edges = renderedLines(phase: motion)
+                let rendered = edges.filter { $0.curve.bounds.intersects(viewport) }
+                let labels = edges.filter { labelVisible($0, in: geometry.size) }
                 ZStack(alignment: .topLeading) {
                 Canvas { context, _ in
                     context.translateBy(x: geometry.size.width / 2 - camera.center.x * camera.scale,
@@ -199,11 +237,11 @@ struct GraphSurface: View {
                         context.fill(curve.arrow, with: .color(Palette.copper))
                     }
                 }.allowsHitTesting(false).accessibilityHidden(true)
-                ForEach(rendered.filter { labelVisible($0, in: geometry.size) }) { edge in
+                ForEach(labels) { edge in
                     edgeLabel(edge).scaleEffect(camera.scale)
                         .position(camera.screen(CGPoint(x: edge.curve.middle.x, y: edge.curve.middle.y - 11), in: geometry.size))
                 }
-                ForEach(visibleItems(in: geometry.size)) { item in
+                ForEach(visibleNodes) { item in
                     nodeShell(item).scaleEffect(camera.scale)
                         .position(camera.screen(point(item, phase: motion), in: geometry.size)).zIndex(item.id == selectedPhysicalID ? 2 : 1)
                 }
@@ -233,7 +271,7 @@ struct GraphSurface: View {
             .onChange(of: chrome.controls, initial: true) { _, frame in controlsRect = frame ?? .zero }
             .task(id: visibility) {
                 guard !Task.isCancelled else { return }
-                store.renderedWorkspaceVisibility = visibility
+                if store.renderedWorkspaceVisibility != visibility { store.renderedWorkspaceVisibility = visibility }
             }
             .onContinuousHover { phase in
                 if case .active = phase { canvasHovered = true } else { canvasHovered = false }
@@ -246,6 +284,7 @@ struct GraphSurface: View {
                 }
             }
             .onAppear {
+                rendererIdentity = store.route
                 viewportSize = geometry.size
                 if !cameraInitialized {
                     restoreCameraMemory()
@@ -306,12 +345,14 @@ struct GraphSurface: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in cancelTransientInteractions() }
         .onDisappear {
             saveCameraMemory(); cancelTransientInteractions(); editingLineID = nil
-            if store.renderedWorkspaceVisibility?.rendererID == store.route { store.renderedWorkspaceVisibility = nil; store.renderedSelectedNodeIDs = [] }
+            if !rendererIdentity.isEmpty, store.renderedWorkspaceVisibility?.rendererID == rendererIdentity { store.renderedWorkspaceVisibility = nil; store.renderedSelectedNodeIDs = [] }
         }
     }
     private func restoreCameraMemory() {
         renderCache.cancelMemorySave()
         memoryScope = store.workspaceMemoryKey
+        let savedDock = store.workspaceMemory.panels["dock.graph.tools." + (title ?? store.route)]?.dock.flatMap(FloatingPanelDock.init(rawValue:))
+        controlsDock = [.bottomLeading, .bottomCenter, .bottomTrailing].contains(savedDock ?? .bottomCenter) ? (savedDock ?? .bottomCenter) : .bottomCenter
         if let saved = store.workspaceMemory.graphs[title ?? store.route], saved.isValid {
             camera = GraphCamera(center: CGPoint(x: saved.center.x, y: saved.center.y), scale: saved.scale)
         } else {
@@ -333,19 +374,24 @@ struct GraphSurface: View {
             return viewport.contains(position)
         }
     }
-    private func visibilitySnapshot(in size: CGSize, exclusions: [CGRect]) -> ReadingVisibleObjectsSnapshot {
+    private func visibilitySnapshot(in size: CGSize, candidates: [GraphItem], exclusions: [CGRect]) -> ReadingVisibleObjectsSnapshot {
         let viewport = CGRect(origin: .zero, size: size)
         var partial = false
-        let visible = items.filter { item in
-            let origin = camera.screen(CGPoint(x: item.x, y: item.y), in: size)
+        let visible = candidates.filter { item in
+            let itemRect = rect(item)
+            let origin = camera.screen(itemRect.origin, in: size)
             let bounds = CGRect(origin: origin, size: CGSize(width: nodeSize.width * camera.scale, height: nodeSize.height * camera.scale))
             let clipped = bounds.intersection(viewport)
             guard !clipped.isNull, !clipped.isEmpty, !exclusions.contains(where: { $0.contains(clipped) }) else { return false }
             if !viewport.contains(bounds) || exclusions.contains(where: { $0.intersects(clipped) }) { partial = true }
             return true
         }
-        return ReadingVisibleObjectsSnapshot(rendererID: store.route, objectIDs: Array(Set(visible.map(\.targetID))).sorted(),
+        return ReadingVisibleObjectsSnapshot(rendererID: rendererIdentity.isEmpty ? store.route : rendererIdentity, objectIDs: Array(Set(visible.map(\.targetID))).sorted(),
             partial: partial || ambientMotion, description: "渲染节点矩形与视口相交，排除浮窗完全遮挡；部分遮挡单独标明。可见不代表正文已读。", nodeIDs: visible.map(\.id))
+    }
+    private func worldViewport(in size: CGSize) -> CGRect {
+        let origin = camera.world(.zero, in: size)
+        return CGRect(origin: origin, size: CGSize(width: size.width / camera.scale, height: size.height / camera.scale))
     }
     private func labelVisible(_ edge: RenderedGraphLine, in size: CGSize) -> Bool {
         if editingLineID == edge.id { return true }
@@ -370,43 +416,46 @@ struct GraphSurface: View {
                 Text(statusText).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                     .frame(height: 18).padding(.horizontal, 8).help(statusText)
             }
-            HStack(spacing: ReadingLayout.groupSpacing) {
+            ReadingDockSurface {
                 if mode != .menu { zoomControls }
                 if mode == .full { expandedCameraActions }
                 else { cameraActionsMenu(includeZoom: mode == .menu) }
+            }.contextMenu {
+                Button("工具栏停靠左侧") { settleControls(.bottomLeading) }
+                Button("工具栏停靠中央") { settleControls(.bottomCenter) }
+                Button("工具栏停靠右侧") { settleControls(.bottomTrailing) }
             }
         }
-        .buttonStyle(ReadingToolbarButtonStyle()).padding(7).readingGlass(radius: 30)
         .disabled(!canNavigate).help("拖动空白或双指平移 · 捏合或 ⌘ 滚轮缩放")
     }
     @ViewBuilder private var zoomControls: some View {
-        Button { zoomViewport(by: 1 / 1.25, at: usableCenter) } label: { Image(systemName: "minus") }
-            .help("缩小画布").accessibilityLabel("缩小画布")
+        DockIconButton(title: "缩小画布", icon: "minus") { zoomViewport(by: 1 / 1.25, at: usableCenter) }
         Button { zoomViewport(by: 1 / camera.scale, at: usableCenter) } label: {
             Text(Double(camera.scale).formatted(.percent.precision(.fractionLength(camera.scale < 0.01 ? 2 : 0))))
-                .monospacedDigit().font(.system(size: 13, weight: .medium)).frame(minWidth: 50)
-        }.help("恢复 100% 缩放")
-        Button { zoomViewport(by: 1.25, at: usableCenter) } label: { Image(systemName: "plus") }
-            .help("放大画布").accessibilityLabel("放大画布")
+                .monospacedDigit().font(.system(size: 14, weight: .medium)).frame(minWidth: 54, minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(ReadingToolbarButtonStyle()).help("恢复 100% 缩放")
+        DockIconButton(title: "放大画布", icon: "plus") { zoomViewport(by: 1.25, at: usableCenter) }
     }
     @ViewBuilder private var expandedCameraActions: some View {
-        Divider().frame(height: 18).padding(.horizontal, 2)
-        Button { fitAll() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-            .help("显示全部节点").accessibilityLabel("显示全部节点")
-        Button { centerSelection() } label: { Image(systemName: "scope") }
-            .disabled(selectedPhysicalID == nil).help("定位选中节点").accessibilityLabel("定位选中节点")
+        DockDivider()
+        DockIconButton(title: "显示全部节点", icon: "arrow.up.left.and.arrow.down.right") { fitAll() }
+        DockIconButton(title: "定位选中节点", icon: "scope") { centerSelection() }.disabled(selectedPhysicalID == nil)
+        if let browserControls {
+            DockDivider()
+            DockIconButton(title: "节点列表", icon: "sidebar.right", isSelected: browserControls.isPresented, action: browserControls.toggle)
+        }
         if let scopeTitle, let toggleScope {
-            Divider().frame(height: 18).padding(.horizontal, 2)
-            Button(action: toggleScope) { Label(scopeTitle, systemImage: "line.3.horizontal.decrease") }.help("切换全书关系与当前原文关系")
+            DockIconButton(title: scopeTitle, icon: "line.3.horizontal.decrease", isSelected: scopeTitle == "当前原文", action: toggleScope)
         }
         if let createDocument {
-            Divider().frame(height: 18).padding(.horizontal, 2)
-            Button(action: createDocument) { Label("新建节点", systemImage: "plus") }.help("新建 Markdown 笔记与节点")
+            DockDivider()
+            DockIconButton(title: "新建节点", icon: "plus.square", action: createDocument)
         }
     }
     private func cameraActionsMenu(includeZoom: Bool) -> some View {
         Menu {
-            Text(statusText)
+            Text("\(items.count) 个节点 · \(lines.count) 条连线")
+            if !statusText.isEmpty { Text(statusText) }
             Divider()
             if includeZoom {
                 Button { zoomViewport(by: 1 / 1.25, at: usableCenter) } label: { Label("缩小画布", systemImage: "minus") }
@@ -416,6 +465,7 @@ struct GraphSurface: View {
             }
             Button { fitAll() } label: { Label("显示全部节点", systemImage: "arrow.up.left.and.arrow.down.right") }
             Button { centerSelection() } label: { Label("定位选中节点", systemImage: "scope") }.disabled(selectedPhysicalID == nil)
+            if let browserControls { Button(action: browserControls.toggle) { Label(browserControls.isPresented ? "收起节点列表" : "显示节点列表", systemImage: "sidebar.right") } }
             if let scopeTitle, let toggleScope { Button(action: toggleScope) { Label(scopeTitle, systemImage: "line.3.horizontal.decrease") } }
             if let createDocument { Button(action: createDocument) { Label("新建节点", systemImage: "plus") } }
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
@@ -454,7 +504,8 @@ struct GraphSurface: View {
         var result = ChromeLayout()
         for mode in ControlsMode.allCases {
             guard let measured = chromeSizes[mode.rawValue], measured.width > 0, measured.height > 0 else { continue }
-            let preferred = CGPoint(x: bounds.midX - measured.width / 2, y: bounds.maxY - measured.height)
+            let preferredX: CGFloat = controlsDock == .bottomLeading ? bounds.minX : controlsDock == .bottomTrailing ? bounds.maxX - measured.width : bounds.midX - measured.width / 2
+            let preferred = CGPoint(x: preferredX, y: bounds.maxY - measured.height)
             if let frame = FloatingChromeGeometry.place(size: measured, preferredOrigin: preferred, within: bounds, avoiding: obstacles) {
                 result.mode = mode; result.controls = frame; break
             }
@@ -476,6 +527,12 @@ struct GraphSurface: View {
             }
         }
         return result
+    }
+    private func settleControls(_ dock: FloatingPanelDock) {
+        guard canNavigate else { return }
+        withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { controlsDock = dock }
+        guard let memoryScope else { return }
+        store.updateWorkspaceMemory({ $0.panels["dock.graph.tools." + (title ?? store.route)] = WorkspacePanelMemory(dock: dock.rawValue) }, expectedKey: memoryScope)
     }
     private func chromeBounds(_ layout: ChromeLayout, globalFrame: CGRect) -> [String: CGRect] {
         let identity = title ?? store.route
@@ -535,7 +592,8 @@ struct GraphSurface: View {
     }
     private func setPhysicalSelection(_ id: String?) {
         selectedNodeID = id; selectedNodeIDChanged?(id)
-        store.renderedSelectedNodeIDs = id.map { [$0] } ?? []
+        let selection = id.map { [$0] } ?? []
+        if store.renderedSelectedNodeIDs != selection { store.renderedSelectedNodeIDs = selection }
     }
     private var statusText: String {
         if savingConnection || savingLine { return "正在保存连线…" }
@@ -544,7 +602,7 @@ struct GraphSurface: View {
         }
         if editingLineID != nil { return message.isEmpty ? "关系名称：回车保存，Esc 取消" : message }
         if !message.isEmpty { return message }
-        return title == nil ? "" : "\(items.count) 个节点 · \(lines.count) 条连线"
+        return ""
     }
     private var statusOverlay: some View {
         Text(statusText).font(.system(size: 13)).foregroundStyle(.secondary)
@@ -580,7 +638,7 @@ struct GraphSurface: View {
             Image(systemName: item.subtitle == "Markdown" ? "doc.text" : "circle.hexagongrid")
                 .font(.system(size: 26, weight: .regular)).foregroundStyle(Palette.accent.opacity(0.8)).frame(width: 30)
             VStack(alignment: .leading, spacing: 5) {
-                Text(item.title).font(.system(size: 18, weight: selected ? .semibold : .medium)).foregroundStyle(Palette.ink).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                Text(item.title).font(.system(size: 16, weight: selected ? .semibold : .medium)).foregroundStyle(Palette.ink).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                 Text(item.subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
             }
         }.padding(16).frame(width: nodeSize.width, height: nodeSize.height)
@@ -767,13 +825,8 @@ struct GraphSurface: View {
         let end = target.map { anchor(rect($0), towards: a) } ?? GraphAnchor(point: cursor, normal: CGVector(dx: -1, dy: 0))
         return GraphCurve(start: a, end: end.point, startNormal: CGVector(dx: connectionSide == .leading ? -1 : 1, dy: 0), endNormal: end.normal)
     }
-    private func anchor(_ rect: CGRect, towards point: CGPoint) -> GraphAnchor {
-        let dx = point.x - rect.midX, dy = point.y - rect.midY
-        if abs(dx) / rect.width >= abs(dy) / rect.height {
-            return GraphAnchor(point: CGPoint(x: dx >= 0 ? rect.maxX : rect.minX, y: rect.midY), normal: CGVector(dx: dx >= 0 ? 1 : -1, dy: 0))
-        }
-        return GraphAnchor(point: CGPoint(x: rect.midX, y: dy >= 0 ? rect.maxY : rect.minY), normal: CGVector(dx: 0, dy: dy >= 0 ? 1 : -1))
-    }
+    private func anchor(_ rect: CGRect, towards point: CGPoint) -> GraphAnchor { graphAnchor(rect, towards: point) }
+
 }
 
 /// Render-only drift: the cached layout, saved coordinates and hit identities
@@ -809,27 +862,40 @@ private enum GraphGridTile {
 }
 
 private struct GraphAnchor { let point: CGPoint; let normal: CGVector }
+private func graphAnchor(_ rect: CGRect, towards point: CGPoint) -> GraphAnchor {
+    let dx = point.x - rect.midX, dy = point.y - rect.midY
+    if abs(dx) / rect.width >= abs(dy) / rect.height {
+        return GraphAnchor(point: CGPoint(x: dx >= 0 ? rect.maxX : rect.minX, y: rect.midY), normal: CGVector(dx: dx >= 0 ? 1 : -1, dy: 0))
+    }
+    return GraphAnchor(point: CGPoint(x: rect.midX, y: dy >= 0 ? rect.maxY : rect.minY), normal: CGVector(dx: 0, dy: dy >= 0 ? 1 : -1))
+}
 private struct RenderedGraphLine: Identifiable { let line: GraphLine; let curve: GraphCurve; var id: String { line.id } }
 private struct GraphCurve {
     let start: CGPoint
     let end: CGPoint
     let first: CGPoint
     let second: CGPoint
+    let path: Path
+    let arrow: Path
+    /// A cubic stays in its control-point hull. This conservative rectangle
+    /// retains crossing curves even when both endpoint cards are offscreen.
+    let bounds: CGRect
     init(start: CGPoint, end: CGPoint, startNormal: CGVector, endNormal: CGVector, lane: CGFloat = 0) {
         self.start = start; self.end = end
         let dx = end.x - start.x, dy = end.y - start.y
         let length = max(1, hypot(dx, dy)), distance = min(180, max(40, length * 0.4))
         let offset = CGSize(width: -dy / length * lane, height: dx / length * lane)
-        first = CGPoint(x: start.x + startNormal.dx * distance + offset.width, y: start.y + startNormal.dy * distance + offset.height)
-        second = CGPoint(x: end.x + endNormal.dx * distance + offset.width, y: end.y + endNormal.dy * distance + offset.height)
+        let first = CGPoint(x: start.x + startNormal.dx * distance + offset.width, y: start.y + startNormal.dy * distance + offset.height)
+        let second = CGPoint(x: end.x + endNormal.dx * distance + offset.width, y: end.y + endNormal.dy * distance + offset.height)
+        self.first = first; self.second = second
+        var path = Path(); path.move(to: start); path.addCurve(to: end, control1: first, control2: second); self.path = path
+        let ex = end.x - second.x, ey = end.y - second.y, tail = max(1, hypot(ex, ey))
+        let ux = ex / tail, uy = ey / tail
+        var arrow = Path(); arrow.move(to: end)
+        arrow.addLine(to: CGPoint(x: end.x - ux * 8 - uy * 3.5, y: end.y - uy * 8 + ux * 3.5))
+        arrow.addLine(to: CGPoint(x: end.x - ux * 8 + uy * 3.5, y: end.y - uy * 8 - ux * 3.5)); arrow.closeSubpath(); self.arrow = arrow
+        let xs = [start.x, first.x, second.x, end.x], ys = [start.y, first.y, second.y, end.y]
+        bounds = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!).insetBy(dx: -10, dy: -10)
     }
-    var path: Path { var path = Path(); path.move(to: start); path.addCurve(to: end, control1: first, control2: second); return path }
     var middle: CGPoint { CGPoint(x: (start.x + first.x * 3 + second.x * 3 + end.x) / 8, y: (start.y + first.y * 3 + second.y * 3 + end.y) / 8) }
-    var arrow: Path {
-        let dx = end.x - second.x, dy = end.y - second.y, length = max(1, hypot(end.x - second.x, end.y - second.y))
-        let ux = dx / length, uy = dy / length
-        var path = Path(); path.move(to: end)
-        path.addLine(to: CGPoint(x: end.x - ux * 8 - uy * 3.5, y: end.y - uy * 8 + ux * 3.5))
-        path.addLine(to: CGPoint(x: end.x - ux * 8 + uy * 3.5, y: end.y - uy * 8 - ux * 3.5)); path.closeSubpath(); return path
-    }
 }

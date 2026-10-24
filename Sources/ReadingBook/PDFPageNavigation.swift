@@ -3,6 +3,7 @@ import SwiftUI
 /// Embedded in the floating reading controls above the original page.
 struct PDFPageNavigation: View {
     @EnvironmentObject var pdf: PDFReaderController
+    var onEditingChange: (Bool) -> Void = { _ in }
     @State private var entry = "1"
     @FocusState private var editingPage: Bool
     var body: some View {
@@ -20,6 +21,9 @@ struct PDFPageNavigation: View {
             Button { pdf.command(.next) } label: { Image(systemName: "chevron.right") }
                 .buttonStyle(ReadingToolbarButtonStyle()).help("下一页").disabled(!pdf.isReady || pdf.page >= pdf.pageCount)
         }.fixedSize().onChange(of: pdf.page) { _, page in if !editingPage { entry = String(page) } }
+            .onAppear { entry = String(pdf.page) }
+            .onDisappear { onEditingChange(false) }
             .onChange(of: pdf.isReady) { _, _ in if !editingPage { entry = String(pdf.page) } }
+            .onChange(of: editingPage) { _, value in onEditingChange(value) }
     }
 }

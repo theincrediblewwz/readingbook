@@ -10,9 +10,24 @@ private struct AnswerSaveRequest: Identifiable {
 }
 
 /// Explicit collection only: rendering or selecting an answer never creates a document.
+@MainActor final class QueryComposerDraft: ObservableObject {
+    @Published var text = ""
+}
+
 struct EnhancedBookChatView: View {
     @EnvironmentObject var store: AppStore
-    @State private var question = ""
+    var embedded = false
+    var body: some View { BookChatContent(composerDraft: store.queryComposerDraft, embedded: embedded) }
+}
+
+private struct BookChatContent: View {
+    @EnvironmentObject var store: AppStore
+    @ObservedObject var composerDraft: QueryComposerDraft
+    var embedded = false
+    private var question: String {
+        get { composerDraft.text }
+        nonmutating set { composerDraft.text = newValue }
+    }
     @State private var selectionMode = false
     @State private var selectedAnswers = Set<String>()
     @State private var renderedSelections: [String: RenderedMarkdownSelection] = [:]
@@ -22,6 +37,8 @@ struct EnhancedBookChatView: View {
     @State private var showingMemory = false
     @State private var showingComposerHelp = false
     @State private var memorySourceID: String?
+    @FocusState private var composerFocused: Bool
+    private var composerIsActive: Bool { embedded ? store.readingCompanionVisible && store.readingCompanionTab == "chat" : store.route == "query" }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,7 +50,7 @@ struct EnhancedBookChatView: View {
                             questionEmptyState
                         }
                         ForEach(store.book?.chats ?? []) { message in answerCard(message).id(message.id) }
-                    }.padding(.horizontal, 24).padding(.vertical, 20).frame(maxWidth: 940).frame(maxWidth: .infinity)
+                    }.padding(.horizontal, embedded ? 16 : 24).padding(.vertical, embedded ? 12 : 20).frame(maxWidth: 940).frame(maxWidth: .infinity)
                 }.onChange(of: store.book?.chats.count) { _, _ in
                     if let last = store.book?.chats.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
@@ -42,8 +59,9 @@ struct EnhancedBookChatView: View {
                 }
             }
             composer
-        }.padding(.top, 82).background(Palette.canvas)
+        }.padding(.top, embedded ? 0 : 76).background(embedded ? Color.clear : Palette.canvas)
         .onChange(of: store.bookID) { _, _ in selectionMode = false; selectedAnswers.removeAll(); renderedSelections.removeAll(); saveRequest = nil }
+        .onChange(of: composerIsActive) { _, active in if !active { composerFocused = false } }
         .sheet(item: $saveRequest, onDismiss: {
             if openTrashAfterSheet { openTrashAfterSheet = false; store.showingTrash = true }
         }) { request in
@@ -75,18 +93,15 @@ struct EnhancedBookChatView: View {
     }
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("围绕所选内容，问一个问题…", text: $question, axis: .vertical)
-                .font(.system(size: 15)).lineLimit(1...5).textFieldStyle(.plain).onSubmit { send() }
+            TextField("围绕所选内容，问一个问题…", text: Binding(get: { question }, set: { question = $0 }), axis: .vertical)
+                .font(.system(size: 15)).lineLimit(1...5).textFieldStyle(.plain).focused($composerFocused).onSubmit { send() }
                 .frame(minHeight: 44)
-            HStack(spacing: 10) {
-                QueryScopeControl().help(store.isBusy ? store.lastQuestionContext : store.queryScopePreview)
-                QueryAttachmentsControl()
-                Spacer(minLength: 0)
-                questionOptions
-                Button { send() } label: { Image(systemName: "arrow.up").font(.system(size: 17, weight: .semibold)).frame(width: 30, height: 32) }
-                    .controlSize(.large).buttonStyle(.borderedProminent)
-                    .disabled(store.isBusy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canUseQueryScope(store.queryScope))
-                    .help("发送问题").accessibilityLabel("发送问题")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { scopeControls; Spacer(minLength: 4); questionOptions; sendButton }
+                VStack(spacing: 4) {
+                    HStack(spacing: 8) { scopeControls; Spacer(minLength: 0) }
+                    HStack(spacing: 8) { questionOptions; Spacer(minLength: 0); sendButton }
+                }
             }
             if store.isBusy {
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在阅读所选内容…").font(.system(size: 13)).foregroundStyle(.secondary) }
@@ -105,7 +120,7 @@ struct EnhancedBookChatView: View {
                         .font(.system(size: 15)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundStyle(Palette.accent).disabled(store.isBusy)
             }
-        }.padding(16).readingGlass(radius: 24).frame(maxWidth: 900).padding(.horizontal, 24).padding(.bottom, 22)
+        }.padding(embedded ? 12 : 16).modifier(ChatComposerSurface(embedded: embedded)).frame(maxWidth: 900).padding(.horizontal, embedded ? 12 : 24).padding(.bottom, embedded ? 12 : 22)
             .popover(isPresented: $showingComposerHelp) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("范围、保存与公式").font(.system(size: 16, weight: .semibold))
@@ -114,6 +129,15 @@ struct EnhancedBookChatView: View {
                     Text("整理授权仅用于接下来这次发送。修改正文、移除内容或改变读法仍会先请你审阅。对话记忆计入模型预算，原消息保留。")
                 }.font(.system(size: 13)).foregroundStyle(.secondary).lineSpacing(4).padding(20).frame(width: 320)
             }
+    }
+    private var scopeControls: some View {
+        HStack(spacing: 6) { QueryScopeControl(compact: embedded).help(store.isBusy ? store.lastQuestionContext : store.queryScopePreview); QueryAttachmentsControl() }
+    }
+    private var sendButton: some View {
+        Button(action: send) { Image(systemName: "arrow.up").font(.system(size: 17, weight: .semibold)).frame(width: 28, height: 30) }
+            .controlSize(.large).buttonStyle(.borderedProminent)
+            .disabled(store.isBusy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canUseQueryScope(store.queryScope))
+            .help("发送问题").accessibilityLabel("发送问题")
     }
     private var questionOptions: some View {
         Menu {
@@ -256,9 +280,18 @@ struct EnhancedBookChatView: View {
                                       text: selection.text, kind: .renderedText)], bookID: bookID)
     }
     private func send() {
+        guard composerIsActive else { return }
         guard !store.isBusy, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let input = question; store.ask(input, allowsOrganizing: store.queryAllowsOrganizing)
         if store.isBusy { question = "" }
+    }
+}
+
+private struct ChatComposerSurface: ViewModifier {
+    var embedded: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if embedded { content.background(Palette.surface.opacity(0.65), in: RoundedRectangle(cornerRadius: 16)).overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(Palette.line.opacity(0.65), lineWidth: 0.7) } }
+        else { content.readingGlass(radius: 24) }
     }
 }
 

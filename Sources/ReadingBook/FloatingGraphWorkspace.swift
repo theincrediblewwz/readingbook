@@ -1,10 +1,21 @@
 import SwiftUI
 import ReadingCore
 
+struct GraphBrowserControls {
+    var isPresented: Bool
+    var toggle: () -> Void
+}
+private struct GraphBrowserControlsKey: EnvironmentKey {
+    static let defaultValue: GraphBrowserControls? = nil
+}
 private struct GraphBrowserSettledFrameKey: EnvironmentKey {
     static let defaultValue: CGRect? = nil
 }
 extension EnvironmentValues {
+    var graphBrowserControls: GraphBrowserControls? {
+        get { self[GraphBrowserControlsKey.self] }
+        set { self[GraphBrowserControlsKey.self] = newValue }
+    }
     /// Placement uses the released panel position; pointer exclusion stays live.
     var graphBrowserSettledFrame: CGRect? {
         get { self[GraphBrowserSettledFrameKey.self] }
@@ -49,12 +60,11 @@ struct FloatingGraphWorkspace<Surface: View>: View {
         let origin = clamp(dragPosition ?? savedOrigin ?? CGPoint(x: viewport.width - panelWidth - margin, y: topReserve + 12))
         return CGRect(x: origin.x, y: origin.y, width: panelWidth, height: panelHeight)
     }
-    private var restoreFrame: CGRect { CGRect(x: max(margin, viewport.width - 176 - margin), y: topReserve + 12, width: 176, height: 52) }
-    private var exclusion: CGRect { shown ? panelFrame : restoreFrame }
+    private var exclusion: CGRect { shown ? panelFrame : .zero }
     private var settledFrame: CGRect {
         CGRect(origin: clamp(savedOrigin ?? CGPoint(x: viewport.width - panelWidth - margin, y: topReserve + 12)), size: CGSize(width: panelWidth, height: panelHeight))
     }
-    private var settledExclusion: CGRect { shown ? settledFrame : restoreFrame }
+    private var settledExclusion: CGRect { shown ? settledFrame : .zero }
     private var leadingCover: CGFloat {
         shown && !collapsed && settledFrame.midX < viewport.width / 2 ? min(settledFrame.maxX + margin, viewport.width - 120) : 0
     }
@@ -71,7 +81,10 @@ struct FloatingGraphWorkspace<Surface: View>: View {
                     .allowsHitTesting(false)
                 if viewport.width > 0, viewport.height > 0 {
                     surface(exclusion, leadingCover, trailingCover)
-                        .environment(\.graphBrowserSettledFrame, settledExclusion)
+                        .environment(\.graphBrowserSettledFrame, shown ? settledExclusion : nil)
+                        .environment(\.graphBrowserControls, GraphBrowserControls(isPresented: shown, toggle: {
+                            cancelDrag(); animate { shown.toggle(); if shown { collapsed = false } }
+                        }))
                         .overlay(alignment: .topLeading) { browserOverlay }.readingGlassGroup()
                 }
             }.onAppear {
@@ -102,19 +115,12 @@ struct FloatingGraphWorkspace<Surface: View>: View {
             }
     }
     @ViewBuilder private var browserOverlay: some View {
-        GraphNodeBrowser(items: items, selectedNodeID: selectedNodeID, height: fullHeight, select: select, open: open,
+        if shown {
+            GraphNodeBrowser(items: items, selectedNodeID: selectedNodeID, height: fullHeight, select: select, open: open,
                              close: { animate { shown = false }; cancelDrag() }, collapsed: collapsed,
                              toggleCollapsed: { cancelDrag(); animate { collapsed.toggle() } }, width: panelWidth,
                              dragEpoch: pointerEpoch, beginDrag: beginDrag, drag: updateDrag, cancelDrag: cancelDrag)
-                .position(x: panelFrame.midX, y: panelFrame.midY)
-                .opacity(shown ? 1 : 0).allowsHitTesting(shown).accessibilityHidden(!shown)
-        if !shown {
-            Button { cancelDrag(); animate { shown = true; collapsed = false } } label: {
-                Label("节点 · \(items.count)", systemImage: "sidebar.right")
-            }.buttonStyle(ReadingToolbarButtonStyle()).padding(5).readingGlass(interactive: true)
-                .frame(width: restoreFrame.width, height: restoreFrame.height)
-                .position(x: restoreFrame.midX, y: restoreFrame.midY).transition(.opacity)
-                .help("恢复节点列表与内容预览")
+                .position(x: panelFrame.midX, y: panelFrame.midY).transition(.opacity)
         }
     }
     private func clamp(_ origin: CGPoint) -> CGPoint {

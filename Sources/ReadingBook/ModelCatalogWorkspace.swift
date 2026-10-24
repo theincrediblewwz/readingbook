@@ -16,6 +16,7 @@ import ReadingCore
 struct ModelCatalogManagerView: View {
     @EnvironmentObject private var store: AppStore
     var onClose: () -> Void
+    var availableSize: CGSize? = nil
     @State private var snapshot: ModelCatalogSnapshot?
     @State private var review: ModelCatalogReview?
     @State private var evidence: [CatalogPublicEvidence] = []
@@ -27,15 +28,10 @@ struct ModelCatalogManagerView: View {
     @State private var task: Task<Void, Never>?
     private var catalog: ProviderCatalog { snapshot?.catalog ?? store.providerCatalog }
     @State private var pane = "update"
+    @State private var showRequestDetails = false
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Image(systemName: "square.stack.3d.up").font(.system(size: 18)).foregroundStyle(Palette.accent)
-                Text("模型目录").font(.system(size: 16, weight: .semibold))
-                Spacer(minLength: 8)
-                Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle())
-                    .keyboardShortcut(.cancelAction).accessibilityLabel("关闭模型目录")
-            }.padding(.horizontal, 16).frame(height: 56)
+            SettingsManagementHeader(title: "模型目录", icon: "square.stack.3d.up", dirty: review != nil, onClose: onClose) { EmptyView() }
             Divider().opacity(0.4)
             GeometryReader { geometry in
                 if geometry.size.width >= 880 {
@@ -54,18 +50,16 @@ struct ModelCatalogManagerView: View {
                 }
             }
             Divider().opacity(0.4)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("已保存的连接、模型选择和 Key 保持不变。").font(.system(size: 13)).foregroundStyle(.secondary)
-                HStack(spacing: 10) {
-                    Spacer(minLength: 0)
-                    catalogActions
-                }
-            }.padding(16)
-        }.frame(minWidth: 600, idealWidth: 980, minHeight: 440, idealHeight: 640)
-            .font(.system(size: 15)).background(Palette.surface).task { await load() }.onDisappear { task?.cancel() }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { catalogNote; Spacer(minLength: 8); catalogActions }
+                VStack(alignment: .leading, spacing: 8) { catalogNote; HStack { Spacer(minLength: 0); catalogActions } }
+            }.padding(14)
+        }.frame(width: min(940, max(1, (availableSize?.width ?? 1004) - 64)), height: min(680, max(1, (availableSize?.height ?? 744) - 64)))
+            .font(.system(size: 15)).readingGlass(radius: 22).clipShape(RoundedRectangle(cornerRadius: 22)).task { await load() }.onDisappear { task?.cancel() }
             .onChange(of: review != nil) { _, available in if available { pane = "update" } }
             .onExitCommand(perform: onClose)
     }
+    private var catalogNote: some View { Text("目录独立保存，连接与 Key 保留。").font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
     private var updatePanel: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -110,7 +104,8 @@ struct ModelCatalogManagerView: View {
                                 }.padding(.vertical, 3)
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
-                            .background(Palette.paper.opacity(0.6), in: RoundedRectangle(cornerRadius: 20))
+                            .background(Palette.paper.opacity(0.6), in: RoundedRectangle(cornerRadius: 14))
+                            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line.opacity(0.6), lineWidth: 0.6))
                     }
                 }.padding(.horizontal, 14).padding(.bottom, 18)
             }
@@ -118,20 +113,22 @@ struct ModelCatalogManagerView: View {
     }
     private var updateRequest: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("让目录跟上新模型").font(.system(size: 18, weight: .semibold))
+            Text("更新模型目录").font(.system(size: 16, weight: .semibold))
             Text("AI 查阅官网并生成提案。核对型号、上限与出处后，再由你保存。")
                 .font(.system(size: 15)).foregroundStyle(.secondary).lineSpacing(4)
             TextEditor(text: $request).font(.system(size: 15)).scrollContentBackground(.hidden).padding(12)
                 .frame(height: 130).background(Palette.paper, in: RoundedRectangle(cornerRadius: 14)).disabled(running)
-            Text("补充官网链接 · 可选，每行一个 HTTPS 地址").font(.system(size: 13, weight: .medium))
-            TextField("https://服务商官网/文档", text: $officialURLs, axis: .vertical).textFieldStyle(.plain).lineLimit(2...4)
-                .padding(14).background(Palette.paper, in: RoundedRectangle(cornerRadius: 14)).disabled(running)
+            DisclosureGroup("指定官网链接", isExpanded: $showRequestDetails) {
+                Text("每行一个 HTTPS 地址，可选。").font(.system(size: 13)).foregroundStyle(.secondary).padding(.top, 8)
+                TextField("https://服务商官网/文档", text: $officialURLs, axis: .vertical).textFieldStyle(.plain).lineLimit(2...4)
+                    .padding(14).background(Palette.paper, in: RoundedRectangle(cornerRadius: 12)).disabled(running)
+            }.font(.system(size: 14))
             Text("仅发送公开目录资料。点击检查将使用当前模型的请求额度；未核实的上限保持空缺。").font(.system(size: 13)).foregroundStyle(.secondary)
         }
     }
     private func proposalReview(_ value: ModelCatalogReview) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("检查这次更新").font(.system(size: 18, weight: .semibold))
+            Text("检查这次更新").font(.system(size: 16, weight: .semibold))
             Text(value.proposal.summary).font(.system(size: 15)).lineSpacing(4)
             ForEach(value.differences) { difference in
                 VStack(alignment: .leading, spacing: 8) {

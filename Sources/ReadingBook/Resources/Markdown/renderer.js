@@ -204,21 +204,58 @@
     return html;
   }
 
-  function validatedRange(item) {
+  function validatedRange(item, quoteRanges) {
     if (!item || typeof item.id !== 'string' || typeof item.targetID !== 'string' || typeof item.quote !== 'string' || !item.quote || item.quote.length > 32_768) return null;
     const start = item.rangeLocation, length = item.rangeLength;
     if (Number.isSafeInteger(start) && Number.isSafeInteger(length) && start >= 0 && length > 0 && currentSource.slice(start, start + length) === item.quote) return [start, start + length];
+    if (quoteRanges.has(item.quote)) return quoteRanges.get(item.quote);
     const found = currentSource.indexOf(item.quote);
-    if (found < 0 || currentSource.indexOf(item.quote, found + 1) >= 0) return null;
-    return [found, found + item.quote.length];
+    const result = found < 0 || currentSource.indexOf(item.quote, found + 1) >= 0 ? null : [found, found + item.quote.length];
+    quoteRanges.set(item.quote, result);
+    return result;
+  }
+  // Build once from the original trusted DOM. Marks inserted below do not add
+  // source ranges. Preserve DOM order for literal hosts and shortest-block /
+  // DOM-order ties for the honest paragraph fallback.
+  function sourceIntervalIndex(nodes, startKey, endKey, shortest) {
+    const entries = Array.from(nodes, (node, order) => ({ node, order, start: Number(node.dataset[startKey]), end: Number(node.dataset[endKey]) }))
+      .filter(entry => Number.isFinite(entry.start) && Number.isFinite(entry.end))
+      .sort((a, b) => a.start - b.start || a.order - b.order);
+    const compare = shortest ? (a, b) => (a.end - a.start) - (b.end - b.start) || a.order - b.order : (a, b) => a.order - b.order;
+    function build(first, last) {
+      if (first >= last) return null;
+      const middle = (first + last) >> 1, entry = entries[middle];
+      const left = build(first, middle), right = build(middle + 1, last);
+      let best = entry;
+      if (left && compare(left.best, best) < 0) best = left.best;
+      if (right && compare(right.best, best) < 0) best = right.best;
+      return { entry, left, right, best, minStart: entries[first].start, maxEnd: Math.max(entry.end, left?.maxEnd ?? -Infinity, right?.maxEnd ?? -Infinity) };
+    }
+    const tree = build(0, entries.length);
+    return (from, to) => {
+      let best = null;
+      function visit(branch) {
+        if (!branch || branch.minStart > from || branch.maxEnd < to || (best && compare(branch.best, best) >= 0)) return;
+        const entry = branch.entry;
+        if (entry.start <= from && entry.end >= to && (!best || compare(entry, best) < 0)) best = entry;
+        const a = branch.left, b = branch.right;
+        if (a && b && compare(b.best, a.best) < 0) { visit(b); visit(a); }
+        else { visit(a); visit(b); }
+      }
+      visit(tree);
+      return best?.node ?? null;
+    };
   }
   function addSourceDecorations(root) {
-    const ranges = Array.from(root.querySelectorAll('[data-source-start]'));
+    if (!sourceDecorations.length) return;
+    const findHost = sourceIntervalIndex(root.querySelectorAll('[data-source-start]'), 'sourceStart', 'sourceEnd', false);
+    const findBlock = sourceIntervalIndex(root.querySelectorAll('[data-source-block-start]'), 'sourceBlockStart', 'sourceBlockEnd', true);
+    const quoteRanges = new Map();
     let approximateCount = 0;
     for (const item of sourceDecorations) {
-      const range = validatedRange(item);
+      const range = validatedRange(item, quoteRanges);
       if (!range) continue;
-      const host = ranges.find(node => Number(node.dataset.sourceStart) <= range[0] && Number(node.dataset.sourceEnd) >= range[1]);
+      const host = findHost(range[0], range[1]);
       // One literal source span is sufficient. Never cross a math/link/code node.
       if (host) {
         const from = range[0] - Number(host.dataset.sourceStart), to = range[1] - Number(host.dataset.sourceStart);
@@ -241,8 +278,7 @@
           }
         }
       }
-      const blocks = Array.from(root.querySelectorAll('[data-source-block-start]'));
-      const block = blocks.filter(node => Number(node.dataset.sourceBlockStart) <= range[0] && Number(node.dataset.sourceBlockEnd) >= range[1]).sort((a, b) => (Number(a.dataset.sourceBlockEnd) - Number(a.dataset.sourceBlockStart)) - (Number(b.dataset.sourceBlockEnd) - Number(b.dataset.sourceBlockStart)))[0];
+      const block = findBlock(range[0], range[1]);
       if (block) {
         const marker = document.createElement('button'); marker.className = 'source-paragraph-link';
         marker.dataset.sourceDecoration = item.id; marker.dataset.sourceTarget = item.targetID;

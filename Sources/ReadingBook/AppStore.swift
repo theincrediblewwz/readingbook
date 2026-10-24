@@ -10,7 +10,7 @@ import ReadingCore
     @Published var bookID: String? {
         didSet {
             if oldValue != bookID {
-                queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []
+                queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []; queryComposerDraft.text = ""
                 queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil
                 queryAllowsOrganizing = false; renderedWorkspaceVisibility = nil; renderedSelectedNodeIDs = []
                 smartReadingPlanReady = false
@@ -33,6 +33,8 @@ import ReadingCore
     }
     @Published var sourceReadingSelection: SourceReadingSelection?
     @Published var focusedReadingAnchorID: String?
+    let queryComposerDraft = QueryComposerDraft()
+    @Published var readingCompanionTab = "companion"
     @Published var readingCompanionVisible = false
     @Published var readingCompanionSection = "context"
     @Published var readingSourceMode = "original" { didSet { updateWorkspaceMemory { $0.readingSourceMode = readingSourceMode } } }

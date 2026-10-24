@@ -77,7 +77,7 @@ import ReadingCore
         guard let anchor = readingExperienceIndex.anchors.first(where: { $0.id == id }) else { return }
         focusedReadingAnchorID = anchor.id; sourceReadingSelection = nil; readingContextDocumentID = nil
         selectedObjectID = readingExperienceIndex.mentions.first { $0.anchorID == id }?.targetID
-        readingCompanionSection = selectedObjectID == nil ? "layers" : "mentions"; readingCompanionVisible = true
+        readingCompanionSection = selectedObjectID == nil ? "layers" : "mentions"; readingCompanionVisible = true; readingCompanionTab = "companion"
     }
     func focusReadingAnchor(_ id: String) {
         guard let book, let anchor = readingExperienceIndex.anchors.first(where: { $0.id == id }) ?? book.readingExperience?.anchors.first(where: { $0.id == id }) else { return }
@@ -96,13 +96,14 @@ import ReadingCore
     }
     func showReadingObject(_ id: String) {
         if let document = book?.activeDocuments.first(where: { $0.id == id }) { Task { await openDocument(document) }; return }
-        selectedObjectID = id; readingCompanionSection = "mentions"; readingCompanionVisible = true
+        selectedObjectID = id; readingCompanionSection = "mentions"; readingCompanionVisible = true; readingCompanionTab = "companion"
     }
     func askAboutReadingContext() {
         if let documentID = readingContextDocumentID { queryScope = .notes; queryDocumentIDs = [documentID] }
         else if sourceReadingSelection != nil || selectedSourceAnchor != nil { queryScope = .selection }
         else { queryScope = .page }
-        requestedWorkspaceRoute = "query"
+        if route == "reader" { readingCompanionTab = "chat"; readingCompanionVisible = true }
+        else { requestedWorkspaceRoute = "query" }
     }
     func newReadingNote(title: String, markdown: String, anchorIDs: [String]) {
         guard let book, !editorDirty, !isBusy else { errorMessage = "请先保存当前草稿或等待任务结束。"; return }
@@ -148,7 +149,7 @@ import ReadingCore
         var frozenSettings = settings
         frozenSettings.transportSessionID = "readingbook-\(initial.id)-companion"
         let frozenKey = apiKey
-        isBusy = true; readingExperienceError = nil; readingCompanionVisible = true
+        isBusy = true; readingExperienceError = nil; readingCompanionVisible = true; readingCompanionTab = "companion"
         task = Task {
             defer { activeReadingUnitID = nil; isBusy = false }
             do {

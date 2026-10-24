@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import UniformTypeIdentifiers
 import ReadingCore
 
@@ -10,6 +11,8 @@ struct WorkspaceView: View {
     @State private var showsInspector = false
     @State private var detailWidth: CGFloat = 0
     @State private var servicePopover = false
+    @State private var bookPopover = false
+    @State private var editingPDFPage = false
     @State private var columns: NavigationSplitViewVisibility = .detailOnly
     @StateObject private var pdfController = PDFReaderController()
     @StateObject private var pluginDefinitionDrafts = PluginDefinitionDraftStore()
@@ -38,9 +41,10 @@ struct WorkspaceView: View {
                     .environment(\.workspaceCanvasBlocked, canvasInteractionBlocked)
                     .environment(\.workspaceCanvasExclusionRects, canvasExclusionRects)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .overlay(alignment: .bottom) {
-                        if store.route == "reader", store.selectedUnit != nil {
-                            readerControls.workspaceChromeBounds("reader-tools").padding(.horizontal, 18).padding(.bottom, 22)
+                    .accessibilityHidden(managementRoute != nil)
+                    .overlay {
+                        if store.route == "reader", store.selectedUnit != nil, managementRoute == nil {
+                            FloatingReadingDock(id: "reader-tools", viewport: geometry.size, allowsDragging: !editingPDFPage) { readerControls }
                         }
                     }
                     .clipped()
@@ -63,11 +67,9 @@ struct WorkspaceView: View {
                         .readingGlass(radius: 24).padding(.leading, 16).padding(.top, 88)
                         .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading))).zIndex(10)
                 }
-                FloatingNavigationButton(viewport: geometry.size, isExpanded: navigationExpanded) {
-                    withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { navigationExpanded.toggle(); servicePopover = false }
-                }.opacity(navigationExpanded || managementRoute != nil ? 0 : 1).allowsHitTesting(!navigationExpanded && managementRoute == nil).accessibilityHidden(navigationExpanded || managementRoute != nil).zIndex(11)
+
             }
-            .onPreferenceChange(WorkspaceChromeBoundsPreference.self) { chromeBounds = $0 }
+            .onPreferenceChange(WorkspaceChromeBoundsPreference.self) { if chromeBounds != $0 { chromeBounds = $0 } }
             .onAppear { detailWidth = geometry.size.width; workspaceHeight = geometry.size.height }
             .onChange(of: geometry.size.height) { _, height in workspaceHeight = height }
             .onChange(of: geometry.size.width) { _, width in
@@ -111,6 +113,7 @@ struct WorkspaceView: View {
             }
         }
         .onChange(of: modalSignature) { _, _ in reconcileSheet() }
+        .onChange(of: bookPopover) { _, visible in if !visible { servicePopover = false } }
         .onAppear { repairLegacyManagementRoute(); reconcileSheet(); restoreReaderMemory() }
         .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreReaderMemory() }
         .onChange(of: readerShowsPDF) { _, value in store.updateWorkspaceMemory { $0.readerShowsPDF = value } }
@@ -136,8 +139,8 @@ struct WorkspaceView: View {
         }
         .onChange(of: store.bookID) { _, _ in showsInspector = false; compactInspector = false; progressSize = CGSize(width: 260, height: 52) }
         .onChange(of: store.route) { old, next in
-            if ["models", "plugins"].contains(next) {
-                store.route = ["models", "plugins"].contains(old) ? (store.book == nil ? "library" : "reader") : old
+            if ["models", "plugins", "book.scheme"].contains(next) {
+                store.route = ["models", "plugins", "book.scheme"].contains(old) ? (store.book == nil ? "library" : "reader") : old
                 presentManagement(next)
             } else if viewingGraph || viewingSpatial { showsInspector = false; compactInspector = false }
         }
@@ -282,7 +285,7 @@ struct WorkspaceView: View {
     /// Exclusion rectangles stay in SwiftUI global coordinates. GraphSurface
     /// converts them once into its own canvas coordinates.
     private var canvasInteractionBlocked: Bool {
-        navigationExpanded || servicePopover || compactInspector || activeSheet != nil || sheetClosing || managementRoute != nil
+        navigationExpanded || bookPopover || compactInspector || activeSheet != nil || sheetClosing || managementRoute != nil
             || showsRouteConfirmation || showsModelRouteConfirmation || resolvingNavigation || store.deletionRequest != nil
             || store.errorMessage != nil || store.serviceProfileDraft.pendingChange != nil
     }
@@ -299,57 +302,69 @@ struct WorkspaceView: View {
         return true
     }
     private func topIslands(width: CGFloat) -> some View {
-        let compact = width < 1050
-        let hasPrimaryAction = store.route == "editor" || store.route == "reader" || store.route == "workflow" || store.route == "library" || store.book == nil
-        let titleLimit: CGFloat = compact ? (hasPrimaryAction ? (showsObjectInspector ? 140 : 188) : 240) : 360
-        let serviceLimit: CGFloat = compact ? 108 : 170
+        let limit: CGFloat = width < 900 ? 150 : 240
+        let measured = (String(workspaceTitle.prefix(500)) as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 14, weight: .medium)]).width.rounded(.up)
         return HStack(spacing: 10) {
-            Menu {
-                ForEach(store.books) { book in
-                    Button { navigationExpanded = false; Task { await store.selectBook(book.id) } } label: {
-                        Label(book.title, systemImage: store.bookID == book.id ? "checkmark.circle.fill" : "book.closed")
-                    }.disabled(store.isBusy)
+            HStack(spacing: 2) {
+                DockIconButton(title: navigationExpanded ? "收起导航" : "展开导航", icon: "sidebar.left", isSelected: navigationExpanded) {
+                    withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { navigationExpanded.toggle(); bookPopover = false; servicePopover = false }
                 }
-                Divider()
-                if store.book != nil {
-                    Button { store.openBookScheme() } label: { Label("书本方案…", systemImage: "slider.horizontal.3") }.disabled(store.isBusy || store.editorDirty)
-                    Button { store.resetWorkspaceLayout() } label: { Label("恢复本书默认布局", systemImage: "arrow.counterclockwise") }
-                    Divider()
-                }
-                Button { navigate("library") } label: { Label("打开书库", systemImage: "books.vertical") }
-                Button { store.chooseBook() } label: { Label("导入一本书…", systemImage: "book.badge.plus") }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "book.closed.fill").foregroundStyle(Palette.accent)
-                    Text(workspaceTitle).font(.system(size: 15, weight: .semibold)).lineLimit(1).truncationMode(.middle).frame(maxWidth: titleLimit)
-                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
-                }.padding(.horizontal, 16).frame(minHeight: 46).foregroundStyle(Palette.ink).contentShape(Capsule())
-            }.menuStyle(.borderlessButton).buttonStyle(.plain).menuIndicator(.hidden)
-                .fixedSize(horizontal: true, vertical: true).frame(minHeight: 46).readingGlass(radius: 24, interactive: true)
-                .help(workspaceTitle).workspaceChromeBounds("book")
-            FrostWindowDragRegion().frame(minWidth: 12, maxWidth: .infinity).frame(height: 46).workspaceChromeBounds("window-drag")
+                DockDivider()
+                Button { bookPopover.toggle(); servicePopover = false; navigationExpanded = false } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "book.closed").foregroundStyle(Palette.accent)
+                        Text(workspaceTitle).font(.system(size: 14, weight: .medium)).lineLimit(1).truncationMode(.middle).frame(width: min(limit, max(36, measured)), alignment: .leading)
+                        Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                    }.padding(.horizontal, 10).frame(height: 44).contentShape(Capsule())
+                }.buttonStyle(.plain).help("图书与工作区").accessibilityLabel("图书与工作区菜单")
+                    .popover(isPresented: $bookPopover) {
+                        if servicePopover {
+                            VStack(spacing: 0) {
+                                DockMenuRow(title: "返回图书与工作区", icon: "chevron.left") { servicePopover = false }
+                                servicePicker
+                            }
+                        } else { bookMenu }
+                    }
+            }.padding(.horizontal, 4).readingGlass(radius: 24, interactive: true).fixedSize().workspaceChromeBounds("book")
+            FrostWindowDragRegion().frame(minWidth: 12, maxWidth: .infinity).frame(height: 44).workspaceChromeBounds("window-drag")
             if showsObjectInspector {
-                Button { compactInspector.toggle() } label: { Image(systemName: "info.circle") }.buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 22)
-                    .workspaceChromeBounds("object-inspector")
-                    .help("所选对象详情").popover(isPresented: $compactInspector) {
+                DockIconButton(title: "所选对象详情", icon: "info.circle") { compactInspector.toggle() }.readingGlass(radius: 22)
+                    .workspaceChromeBounds("object-inspector").popover(isPresented: $compactInspector) {
                         if let id = store.selectedObjectID { ObjectInspector(id: id, onClose: { compactInspector = false }).environmentObject(store).frame(width: 370, height: 520) }
                     }
             }
-            Button { servicePopover.toggle() } label: {
-                HStack(spacing: 8) { Circle().fill(Palette.accent).frame(width: 7, height: 7); Text(store.serviceName.isEmpty ? "选择 AI" : store.serviceName).lineLimit(1).truncationMode(.middle).frame(maxWidth: serviceLimit); Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)) }
-                    .font(.system(size: 14)).padding(.horizontal, 16).frame(minHeight: 46)
-            }.buttonStyle(.plain).fixedSize(horizontal: true, vertical: true).readingGlass(radius: 24, interactive: true)
-                .help(store.serviceName.isEmpty ? "选择 AI 服务" : "AI 服务：\(store.serviceName)").workspaceChromeBounds("service")
-                .popover(isPresented: $servicePopover) { servicePicker }
-            if store.route == "editor" {
-                Button { Task { await store.saveCurrentDocument() } } label: { Label(store.isSavingDocument ? "保存中…" : "保存", systemImage: "square.and.arrow.down").padding(.horizontal, 8).frame(minHeight: 34) }
-                    .buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(!store.editorDirty || store.isBusy).fixedSize().workspaceChromeBounds("primary")
-            } else if store.route == "reader", store.book != nil {
-                Button { navigate("workflow") } label: { Label(store.isSmartReadingRunning ? "查看分析" : "智能阅读", systemImage: "sparkles").padding(.horizontal, 5).frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).fixedSize().workspaceChromeBounds("primary")
-            } else if store.route == "library" || store.book == nil {
+            if store.book != nil && store.route != "library" {
+                Button { navigate("workflow") } label: { Label(store.isSmartReadingRunning ? "查看分析" : "智能阅读", systemImage: "sparkles").font(.system(size: 14, weight: .medium)).padding(.horizontal, 6).frame(minHeight: 34) }
+                    .buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).fixedSize().workspaceChromeBounds("primary")
+            } else {
                 Button { store.chooseBook() } label: { Label("导入书籍", systemImage: "plus").frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(store.isBusy).fixedSize().workspaceChromeBounds("primary")
             }
         }.frame(maxWidth: .infinity).readingGlassGroup()
+    }
+    private var bookMenu: some View {
+        VStack(spacing: 2) {
+            if !store.books.isEmpty {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(store.books) { book in
+                            DockMenuRow(title: book.title, icon: "book.closed", selected: store.bookID == book.id) {
+                                bookPopover = false; Task { await store.selectBook(book.id) }
+                            }.disabled(store.isBusy || store.editorDirty)
+                        }
+                    }
+                }.frame(height: min(188, CGFloat(store.books.count) * 46))
+                Divider().padding(.horizontal, 10).padding(.vertical, 4)
+            }
+            DockMenuRow(title: "书库", icon: "books.vertical") { bookPopover = false; navigate("library") }
+            DockMenuRow(title: "导入图书", icon: "book.badge.plus") { bookPopover = false; store.chooseBook() }.disabled(store.isBusy)
+            Divider().padding(.horizontal, 10).padding(.vertical, 4)
+            DockMenuRow(title: "AI 服务", icon: "slider.horizontal.3", detail: store.serviceName.isEmpty ? "尚未配置" : store.serviceName) { servicePopover = true }
+            if store.book != nil {
+                DockMenuRow(title: "本书方案", icon: "slider.horizontal.2.square") { bookPopover = false; presentManagement("book.scheme") }.disabled(store.isBusy || store.editorDirty)
+                DockMenuRow(title: "插件与组件", icon: "puzzlepiece.extension") { bookPopover = false; navigate("plugins") }
+                DockMenuRow(title: "重置布局", icon: "arrow.counterclockwise") { bookPopover = false; store.resetWorkspaceLayout() }
+            }
+        }.padding(8).frame(width: 284)
     }
     private var workspaceTitle: String {
         switch store.route {
@@ -363,17 +378,18 @@ struct WorkspaceView: View {
     }
     private func navigate(_ route: String) {
         guard !store.isSavingDocument, !resolvingNavigation else { return }
-        navigationExpanded = false; servicePopover = false
+        navigationExpanded = false; servicePopover = false; bookPopover = false
         if store.serviceProfileDraft.isDirty(in: store) && managementRoute == "models" && route != "models" { pendingModelRoute = route; showsModelRouteConfirmation = true }
-        else if store.editorDirty && store.route == "editor" && route != "editor" && !["models", "plugins"].contains(route) { pendingRoute = route; showsRouteConfirmation = true }
+        else if store.editorDirty && store.route == "editor" && route != "editor" && !["models", "plugins", "book.scheme"].contains(route) { pendingRoute = route; showsRouteConfirmation = true }
         else { completeNavigation(to: route) }
     }
     private func completeNavigation(to route: String) {
-        if ["models", "plugins"].contains(route) { presentManagement(route) }
+        if ["models", "plugins", "book.scheme"].contains(route) { presentManagement(route) }
         else { closeManagement(); store.route = route }
     }
     private func presentManagement(_ route: String) {
-        navigationExpanded = false; servicePopover = false
+        store.queryAllowsOrganizing = false
+        navigationExpanded = false; servicePopover = false; bookPopover = false
         store.showingSettings = route == "models"; store.showingPlugins = route == "plugins"
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { managementRoute = route }
     }
@@ -382,14 +398,15 @@ struct WorkspaceView: View {
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { managementRoute = nil }
     }
     private func repairLegacyManagementRoute() {
-        guard ["models", "plugins"].contains(store.route) else { return }
+        guard ["models", "plugins", "book.scheme"].contains(store.route) else { return }
         let route = store.route; store.route = store.book == nil ? "library" : "reader"; presentManagement(route)
     }
     @ViewBuilder private func managementOverlay(_ route: String) -> some View {
         ZStack {
             Color.black.opacity(0.025).contentShape(Rectangle()).onTapGesture { }
             if route == "models" { ProviderSettingsView(embedded: true, onClose: closeManagement).environmentObject(store) }
-            else { PluginLibraryView(embedded: true, onClose: closeManagement, draftStore: pluginDefinitionDrafts).environmentObject(store) }
+            else if route == "plugins" { PluginLibraryView(embedded: true, onClose: closeManagement, draftStore: pluginDefinitionDrafts).environmentObject(store) }
+            else { BookSchemeWorkspaceView(onClose: closeManagement).environmentObject(store) }
         }.accessibilityAddTraits(.isModal)
     }
     private func saveDocumentAndNavigate(to destination: String) {
@@ -419,87 +436,70 @@ struct WorkspaceView: View {
             }
         }
     }
-    private var compactReaderControls: Bool { detailWidth < 950 }
     private var readerControls: some View {
-        HStack(spacing: ReadingLayout.groupSpacing) {
-            Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { readerOutline.toggle() } } label: { Image(systemName: "list.bullet") }
-                .buttonStyle(ReadingToolbarButtonStyle(selected: readerOutline)).help("展开或收起原文目录").accessibilityLabel("原文目录")
-            if viewingPDF { PDFPageNavigation().environmentObject(pdfController) }
+        HStack(spacing: 4) {
+            if viewingPDF { PDFPageNavigation(onEditingChange: { editingPDFPage = $0 }).environmentObject(pdfController) }
             else {
-                Button { moveSource(-1) } label: { Image(systemName: "chevron.left") }.help("上一原文单元").disabled(store.selectedUnit?.order == 0)
-                Text(store.selectedUnit?.locator ?? "原文").font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: 155)
-                Button { moveSource(1) } label: { Image(systemName: "chevron.right") }.help("下一原文单元").disabled(store.selectedUnit?.order == (store.book?.units.count ?? 0) - 1)
+                DockIconButton(title: "上一原文单元", icon: "chevron.left") { moveSource(-1) }.disabled(store.selectedUnit?.order == 0)
+                Text(store.selectedUnit?.page.map { "第 \($0) 页" } ?? "原文").font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: 110)
+                DockIconButton(title: "下一原文单元", icon: "chevron.right") { moveSource(1) }.disabled(store.selectedUnit?.order == (store.book?.units.count ?? 0) - 1)
             }
-            Divider().frame(height: 22).padding(.horizontal, 2)
+            DockDivider()
+            DockIconButton(title: "目录与搜索", icon: "list.bullet", isSelected: readerOutline) {
+                withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { readerOutline.toggle() }
+            }
+            DockIconButton(title: "伴读与对话", icon: "sparkles", isSelected: store.readingCompanionVisible) { store.readingCompanionVisible.toggle() }
+            DockDivider()
+            if viewingPDF {
+                Menu {
+                    Button { pdfController.command(.createHighlight) } label: { Label("高亮选中文字", systemImage: "highlighter") }.disabled(!pdfController.hasSelection)
+                    Button { pdfController.command(.createRegion) } label: { Label("框选页面区域", systemImage: "viewfinder") }
+                    Button { pdfController.command(.showAnnotations) } label: { Label("批注与恢复", systemImage: "list.bullet.rectangle") }
+                } label: { Image(systemName: "highlighter").frame(width: 44, height: 44) }.disabled(!pdfController.isReady || store.isBusy).help("高亮与批注").accessibilityLabel("高亮与批注")
+            }
             Menu {
-                Button(store.readingCompanionVisible ? "收起伴读" : "展开伴读") { store.readingCompanionVisible.toggle() }
-                Button("解释与译文") { store.readingCompanionSection = "layers"; store.readingCompanionVisible = true }
-                Button("原文中的对象") { store.readingCompanionSection = "mentions"; store.readingCompanionVisible = true }
-                Menu("原文与译注对照") {
+                if viewingPDF {
+                    Button { pdfController.command(.showSearch) } label: { Label("查找 PDF 文字", systemImage: "magnifyingglass") }.keyboardShortcut("f", modifiers: [.command]).disabled(!pdfController.isReady)
+                }
+                if store.sourceFileURL?.pathExtension.lowercased() == "pdf" {
+                    Button { store.readingSourceMode = "original"; readerShowsPDF = true } label: { Label("原始 PDF", systemImage: "doc.richtext") }
+                    Button { store.readingSourceMode = "original"; readerShowsPDF = false } label: { Label("文本 / OCR 识别稿", systemImage: "doc.text") }
+                    Button { store.showingOCR = true } label: { Label("识别页面…", systemImage: "viewfinder") }.disabled(store.isBusy)
+                    if viewingPDF {
+                        Divider()
+                        Button("适合宽度") { pdfController.command(.fitWidth) }
+                        Button("适合整页") { pdfController.command(.fitPage) }
+                        Button("实际大小") { pdfController.command(.actualSize) }
+                        Button("放大") { pdfController.command(.zoomIn) }
+                        Button("缩小") { pdfController.command(.zoomOut) }
+                        Button("缩略图") { pdfController.command(.toggleThumbnails) }
+                        Button("连续 / 单页") { pdfController.command(.toggleContinuous) }
+                    }
+                }
+                Menu("原文与译注") {
                     Button("原书阅读") { store.readingSourceMode = "original" }
                     Button("逐段对照") { store.readingSourceMode = "stacked" }
-                    Button("左右并排，随段滚动") { store.readingSourceMode = "parallel" }
-                    Button("只读译注，缺失处保留原文") { store.readingSourceMode = "layers" }
+                    Button("左右并排") { store.readingSourceMode = "parallel" }
+                    Button("只读译注") { store.readingSourceMode = "layers" }
                 }
                 Divider()
-                Button("增强当前片段") { store.enhanceCurrentSource() }.disabled(store.isBusy)
-                Button("把选段写成笔记") { store.noteSelectedSource() }.disabled(store.sourceReadingSelection == nil || store.isBusy)
-                Button("问 AI 当前选段与对象") { store.askAboutReadingContext() }
-            } label: { Image(systemName: "text.book.closed").frame(width: 40, height: 40) }.help("伴读、解释与当前选段")
-            if store.route == "reader", let unit = store.selectedUnit {
-                if viewingPDF, !compactReaderControls {
-                    Menu {
-                        Button("高亮选中文字…") { pdfController.command(.createHighlight) }.disabled(!pdfController.hasSelection)
-                        Button("框选页面区域…") { pdfController.command(.createRegion) }
-                        Divider()
-                        Button("批注列表与恢复…") { pdfController.command(.showAnnotations) }
-                    } label: { Label("批注", systemImage: "highlighter").frame(minHeight: ReadingLayout.controlHeight) }.help("高亮、区域批注与批注列表").accessibilityLabel("批注选项").disabled(!pdfController.isReady || store.isBusy)
+                if store.sourceReadingSelection != nil || store.selectedSourceAnchor != nil {
+                    Button { store.askAboutReadingContext() } label: { Label("问所选内容", systemImage: "bubble.left") }
+                    Button { store.noteSelectedSource() } label: { Label("把选段写成笔记", systemImage: "square.and.pencil") }.disabled(store.isBusy)
                 }
-                Menu {
-                    if viewingPDF, compactReaderControls {
-                        Button("高亮选中文字…") { pdfController.command(.createHighlight) }.disabled(!pdfController.hasSelection || store.isBusy)
-                        Button("框选页面区域…") { pdfController.command(.createRegion) }.disabled(store.isBusy)
-                        Button("批注列表与恢复…") { pdfController.command(.showAnnotations) }
-                        Divider()
-                    }
-                    if store.sourceFileURL?.pathExtension.lowercased() == "pdf" {
-                        Button("原始 PDF") { store.readingSourceMode = "original"; readerShowsPDF = true }
-                        Button("文本 / OCR 识别稿") { store.readingSourceMode = "original"; readerShowsPDF = false }
-                        Button("用视觉模型识别页面…") { store.showingOCR = true }.disabled(store.isBusy)
-                        if viewingPDF {
-                            Divider()
-                            Button("适合宽度") { pdfController.command(.fitWidth) }
-                            Button("适合整页") { pdfController.command(.fitPage) }
-                            Button("实际大小") { pdfController.command(.actualSize) }
-                            Button("放大") { pdfController.command(.zoomIn) }
-                            Button("缩小") { pdfController.command(.zoomOut) }
-                            Button("显示 / 收起缩略图") { pdfController.command(.toggleThumbnails) }
-                            Button("连续 / 单页") { pdfController.command(.toggleContinuous) }
-                        }
-                    }
+                if let unit = store.selectedUnit {
                     Button(store.book?.bookmarks.contains(unit.id) == true ? "移除书签" : "添加书签") { Task { await store.toggleBookmark(unit.id) } }.disabled(store.isBusy)
                     Button("对这一段记一笔") { store.newNote(for: unit) }.disabled(store.isRecognizingPDF)
-                    if let message = unit.warning { Text(String(message.prefix(70))) }
-                } label: {
-                    HStack(spacing: 6) { Image(systemName: "textformat.size"); if viewingPDF { Text("\(pdfController.zoomPercent)%").font(.system(size: 13).monospacedDigit()) } }.frame(minWidth: 40, minHeight: ReadingLayout.controlHeight)
-                }.help("阅读模式、缩放、目录与书签").accessibilityLabel("阅读模式与缩放")
-                if viewingPDF {
-                    Button { pdfController.command(.showSearch) } label: { Image(systemName: "magnifyingglass") }
-                        .keyboardShortcut("f", modifiers: [.command])
-                        .help("查找 PDF 文字（⌘F）").accessibilityLabel("查找 PDF 文字").buttonStyle(ReadingToolbarButtonStyle(selected: pdfController.isSearchVisible)).disabled(!pdfController.isReady)
                 }
-            }
-
-        }.buttonStyle(ReadingToolbarButtonStyle()).menuStyle(.borderlessButton).controlSize(.regular)
-            .padding(8).readingGlass(radius: 22, interactive: true)
-            .fixedSize(horizontal: true, vertical: true)
-            .accessibilityElement(children: .contain).accessibilityLabel("阅读工具")
+                Button("模型设置") { navigate("models") }
+            } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.help("阅读模式与更多工具").accessibilityLabel("更多阅读工具")
+        }.buttonStyle(ReadingToolbarButtonStyle()).menuStyle(.borderlessButton).font(.system(size: 14)).fixedSize()
     }
     private var servicePicker: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("自己的 AI", systemImage: "sparkles").font(.headline)
             Text("已保存的服务").font(.system(size: 13, weight: .medium))
-            Picker("已保存的服务", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0); if store.serviceProfileDraft.pendingChange != nil { servicePopover = false } })) {
+            Picker("已保存的服务", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0); if store.serviceProfileDraft.pendingChange != nil { servicePopover = false; bookPopover = false } })) {
                 if store.selectedServiceID == nil { Text("未保存配置").tag("") }
                 ForEach(store.savedServices) { service in Text(service.name).tag(service.id) }
             }.labelsHidden().accessibilityLabel("已保存的服务").lineLimit(1).truncationMode(.middle)
@@ -545,7 +545,7 @@ struct WorkspaceView: View {
     }
     private func reconcileSheet() {
         guard !sheetClosing else { return }
-        if managementRoute != nil && !store.showingSettings && !store.showingPlugins { managementRoute = nil }
+        if ["models", "plugins"].contains(managementRoute ?? "") && !store.showingSettings && !store.showingPlugins { managementRoute = nil }
         if let activeSheet {
             let supersededByPassword: Bool
             if case .password = activeSheet { supersededByPassword = false }

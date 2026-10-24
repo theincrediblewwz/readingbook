@@ -178,7 +178,8 @@ struct ReadingCompanionPanel: View {
         store.queryScope = scope == "book" ? .book : (frozenScope?.scope ?? companionScope)
         // This is an explicit transfer. General question controls keep their
         // independent scope until the reader presses this action.
-        store.requestedWorkspaceRoute = "query"
+        if store.route == "reader" { store.readingCompanionTab = "chat"; store.readingCompanionVisible = true }
+        else { store.requestedWorkspaceRoute = "query" }
     }
     private var selectedQuote: String? {
         guard let anchor = store.selectedSourceAnchor, sourceUnits.contains(where: { $0.id == anchor.unitID }), !anchor.quote.isEmpty else { return nil }

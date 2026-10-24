@@ -11,39 +11,36 @@ struct ProviderSettingsView: View {
     @State private var showAdvanced = false
     @State private var showNotes = false
     @State private var showServices = true
-    @State private var configuredWidth = false
     @State private var confirmingClose = false
     @State private var showingCatalog = false
     @State private var showingGuide = false
-    @State private var activeCard = "configuration"
+    @State private var presentationSize = CGSize(width: 960, height: 720)
 
     var body: some View {
         GeometryReader { geometry in
-            let wide = embedded && geometry.size.width >= 1000
-            let inset: CGFloat = 16
-            let topInset: CGFloat = embedded ? 52 : inset
-            let canvas = CGSize(width: max(1, geometry.size.width - inset * 2), height: max(1, geometry.size.height - topInset - inset))
-            let listWidth: CGFloat = 300
-            let showList = wide && showServices
-            ZStack(alignment: .topLeading) {
-                if showList {
-                    SettingsFloatingCard(title: "我的服务", subtitle: "本机保存 · 随时切换", icon: "link", viewport: canvas,
-                                         width: listWidth, height: min(560, canvas.height), initial: .zero,
-                                         onActivate: { activeCard = "services" }, onClose: { showServices = false }) {
-                        serviceList
-                    }.zIndex(activeCard == "services" ? 2 : 1)
+            let cardWidth = min(860, max(1, geometry.size.width - 40))
+            let cardHeight = min(680, max(1, geometry.size.height - 40))
+            let wide = cardWidth >= 800
+            VStack(spacing: 0) {
+                SettingsManagementHeader(title: "模型设置", icon: "sparkles", dirty: store.serviceProfileDraft.isDirty(in: store), onClose: requestClose) {
+                    if wide {
+                        DockIconButton(title: showServices ? "收起我的服务" : "展开我的服务", icon: "sidebar.left", isSelected: showServices) { showServices.toggle() }
+                    }
                 }
-                SettingsFloatingCard(title: "模型设置",
-                                     subtitle: store.serviceProfileDraft.isDirty(in: store) ? "有未保存更改" : "",
-                                     icon: "sparkles", viewport: canvas,
-                                     width: showList ? max(300, canvas.width - listWidth - 22) : canvas.width,
-                                     height: canvas.height, initial: CGPoint(x: showList ? listWidth + 22 : 0, y: 0),
-                                     movable: embedded, canCollapse: embedded, onActivate: { activeCard = "configuration" }, onClose: requestClose) {
-                    modelConfiguration(wide: wide)
-                }.zIndex(activeCard == "configuration" ? 2 : 1)
-            }.frame(width: canvas.width, height: canvas.height, alignment: .topLeading).padding(.horizontal, inset).padding(.top, topInset).padding(.bottom, inset)
-                .onAppear { if !configuredWidth { showServices = wide; configuredWidth = true } }
-                .onChange(of: wide) { _, value in if !value { showServices = false } }
+                Divider().opacity(0.4)
+                HStack(spacing: 0) {
+                    if wide && showServices {
+                        serviceList.frame(width: 240)
+                        Divider().opacity(0.4)
+                    }
+                    modelConfiguration(wide: wide && showServices).frame(maxWidth: .infinity)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }.frame(width: cardWidth, height: cardHeight)
+                .font(.system(size: 15))
+                .readingGlass(radius: 22).clipShape(RoundedRectangle(cornerRadius: 22))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear { presentationSize = geometry.size }
+                .onChange(of: geometry.size) { _, size in presentationSize = size }
         }
         .confirmationDialog("删除已保存的服务配置与其密钥？", isPresented: $deletingService) {
             Button("删除配置", role: .destructive) { if let id = store.selectedServiceID { store.removeService(id) } }
@@ -63,12 +60,14 @@ struct ProviderSettingsView: View {
         } message: { Text("本次修改尚未保存。保存失败时会留在这里，并保留输入。") }
         .onAppear { store.serviceProfileDraft.settingsPresentationCount += 1 }
         .onDisappear { store.serviceProfileDraft.settingsPresentationCount = max(0, store.serviceProfileDraft.settingsPresentationCount - 1) }
-        .sheet(isPresented: $showingCatalog) { ModelCatalogManagerView(onClose: { showingCatalog = false }).environmentObject(store) }
+        .sheet(isPresented: $showingCatalog) { ModelCatalogManagerView(onClose: { showingCatalog = false }, availableSize: presentationSize).environmentObject(store) }
         .sheet(isPresented: $showingGuide) { ReadingGuideView(onClose: { showingGuide = false }) }
     }
 
     private var serviceList: some View {
         VStack(spacing: 0) {
+            Text("我的服务").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).frame(height: 44)
             ScrollView {
                 LazyVStack(spacing: 5) {
                     ForEach(store.savedServices) { service in
@@ -76,12 +75,12 @@ struct ProviderSettingsView: View {
                             HStack(spacing: 12) {
                                 Image(systemName: "link").font(.system(size: 20)).foregroundStyle(Palette.accent).frame(width: 26)
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(service.name).font(.system(size: 16, weight: .medium)).lineLimit(2)
+                                Text(service.name).font(.system(size: 15, weight: .medium)).lineLimit(2)
                                     Text(service.settings.model).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                                 }
                                 Spacer(minLength: 0)
                                 if service.id == store.selectedServiceID { Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.accent) }
-                            }.padding(12).frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+                            }.padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
                                 .background(Palette.accent.opacity(service.id == store.selectedServiceID ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 12))
                                 .contentShape(Rectangle())
                         }.buttonStyle(.plain).disabled(store.isBusy)
@@ -97,7 +96,7 @@ struct ProviderSettingsView: View {
     private func modelConfiguration(wide: Bool) -> some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 20) {
                     HStack(spacing: 8) {
                         if wide {
                             Text(store.serviceName.isEmpty ? "选择或新建服务" : store.serviceName).font(.system(size: 15, weight: .medium)).lineLimit(1)
@@ -109,10 +108,9 @@ struct ProviderSettingsView: View {
                             newServiceMenu
                         }
                         Spacer(minLength: 0)
-                        Button { showingGuide = true } label: { Image(systemName: "questionmark.circle") }
-                            .buttonStyle(ReadingToolbarButtonStyle()).help("使用指南 · 导入、智能阅读与 AI 整理").accessibilityLabel("打开使用指南")
-                        Button { deletingService = true } label: { Image(systemName: "trash") }
-                            .buttonStyle(ReadingToolbarButtonStyle()).help("删除当前服务配置及密钥").disabled(store.selectedServiceID == nil || store.isBusy)
+                        DockIconButton(title: "使用指南", icon: "questionmark.circle", isSelected: false) { showingGuide = true }
+                        DockIconButton(title: "删除当前服务配置及密钥", icon: "trash", isSelected: false) { deletingService = true }
+                            .disabled(store.selectedServiceID == nil || store.isBusy)
                     }
                     ServiceProfileLocalError(draft: store.serviceProfileDraft)
                     connectionFields
@@ -128,8 +126,7 @@ struct ProviderSettingsView: View {
                 }.padding(16)
             }
             Divider().opacity(0.5)
-            HStack(spacing: 12) {
-                if wide { Button { showServices = true; activeCard = "services" } label: { Label("我的服务", systemImage: "sidebar.left") }.buttonStyle(ReadingToolbarButtonStyle()).help("显示并置顶已保存服务") }
+            HStack(spacing: 8) {
                 Button { showingCatalog = true } label: { Label("模型目录", systemImage: "square.stack.3d.up") }.buttonStyle(ReadingToolbarButtonStyle())
                 Button { store.testConnection() } label: { Label("测试连接", systemImage: "play") }
                     .buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy || store.settings.model.isEmpty)
@@ -168,20 +165,21 @@ struct ProviderSettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("精确模型 API ID", text: $store.settings.model).settingsTextField()
                     if let preset = store.matchingPreset {
-                        Menu { ForEach(preset.models) { model in Button(model.name) { store.chooseModel(model) } } } label: { Label("选择已核实预设", systemImage: "chevron.down") }
+                        Menu { ForEach(preset.models) { model in Button { store.chooseModel(model) } label: { Label(model.name, systemImage: "cpu") } } } label: { Label("选择已核实预设", systemImage: "cpu") }
                             .menuStyle(.borderlessButton).font(.system(size: 13)).fixedSize()
                     }
                 }
             }
             if let note = store.matchingPreset?.note, !note.isEmpty {
-                Text(note).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                DisclosureGroup("服务说明") { Text(note).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 8) }
+                    .font(.system(size: 14))
             }
         }.disabled(store.isBusy)
     }
 
     private var budgetFields: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("输出与能力").font(.system(size: 18, weight: .semibold))
+            Text("输出与能力").font(.system(size: 16, weight: .semibold))
             SettingsFormRow("最大输出 Token") {
                 HStack(spacing: 10) {
                     TextField("输出上限", value: $store.settings.maxOutputTokens, format: .number).settingsTextField()
@@ -228,7 +226,7 @@ struct ProviderSettingsView: View {
 
     private var ocrFields: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("PDF 视觉识别").font(.system(size: 18, weight: .semibold))
+            Text("PDF 视觉识别").font(.system(size: 16, weight: .semibold))
             SettingsFormRow("图像模型服务") {
                 Picker("图像模型服务", selection: Binding(get: { store.ocrServiceID ?? "" }, set: { store.ocrServiceID = $0.isEmpty ? nil : $0; UserDefaults.standard.set(store.ocrServiceID, forKey: "ocr-service") })) {
                     Text("当前阅读服务").tag("")
@@ -262,14 +260,12 @@ private struct PluginLibraryWorkspace: View {
     var onClose: (() -> Void)? = nil
     @State private var search = ""
     @State private var tab = "installed"
-    @State private var showDetails = true
+    @State private var showDetails = false
     @ObservedObject var definitionDraft: PluginDefinitionDraft
-    @State private var configuredWidth = false
     @State private var importError = ""
     @State private var componentError = ""
     @State private var componentNotice = ""
     @State private var pendingAddition: String?
-    @State private var activeCard = "plugins"
 
     private var available: [WorkspaceComponentDescriptor] {
         WorkspaceComponentRegistry.shared.components.filter { !$0.permanent && !$0.requiresDefinition && store.savedComponent(for: $0) == nil && matches($0.title) }
@@ -278,33 +274,24 @@ private struct PluginLibraryWorkspace: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let wide = embedded && geometry.size.width >= 1100
-            let inset: CGFloat = 16
-            let topInset: CGFloat = embedded ? 52 : inset
-            let canvas = CGSize(width: max(1, geometry.size.width - inset * 2), height: max(1, geometry.size.height - topInset - inset))
-            let asideWidth: CGFloat = 350
-            let withAside = wide && showDetails
-            ZStack(alignment: .topLeading) {
-                SettingsFloatingCard(title: "插件与组件", subtitle: "按书组合类型、方法和视图", icon: "puzzlepiece.extension", viewport: canvas,
-                                     width: withAside ? max(350, canvas.width - asideWidth - 22) : canvas.width,
-                                     height: canvas.height, initial: .zero, movable: embedded, canCollapse: embedded, onActivate: { activeCard = "plugins" }, onClose: { requestDefinitionAction(.close) }) {
-                    pluginList
-                }.zIndex(activeCard == "plugins" ? 2 : 1)
-                if withAside {
-                    SettingsFloatingCard(title: definitionDraft.tab == "types" ? "卡片类型" : "阅读方法", subtitle: definitionDraft.isDirty ? "有未保存更改" : "随书保存", icon: definitionDraft.tab == "types" ? "square.stack" : "checklist", viewport: canvas,
-                                         width: asideWidth, height: canvas.height, initial: CGPoint(x: canvas.width - asideWidth, y: 0), onActivate: { activeCard = "definitions" }, onClose: { requestDefinitionAction(.hide) }) {
-                        definitionPanel
-                    }.zIndex(activeCard == "definitions" ? 2 : 1)
-                }
-            }.frame(width: canvas.width, height: canvas.height, alignment: .topLeading).padding(.horizontal, inset).padding(.top, topInset).padding(.bottom, inset)
-                .onAppear { if !configuredWidth { showDetails = wide; configuredWidth = true } }
-                .modifier(PluginDefinitionConfirmation(draft: definitionDraft, store: store,
-                    active: !(configuredWidth && showDetails && !wide), perform: performDefinitionAction))
-                .sheet(isPresented: Binding(get: { configuredWidth && showDetails && !wide }, set: { if !$0 && !wide { requestDefinitionAction(.hide) } })) {
+            let cardWidth = min(900, max(1, geometry.size.width - 40))
+            let cardHeight = min(680, max(1, geometry.size.height - 40))
+            VStack(spacing: 0) {
+                SettingsManagementHeader(title: "插件与组件", icon: "puzzlepiece.extension", dirty: definitionDraft.isDirty, onClose: { requestDefinitionAction(.close) }) { EmptyView() }
+                Divider().opacity(0.4)
+                pluginList
+            }.frame(width: cardWidth, height: cardHeight)
+                .font(.system(size: 15))
+                .readingGlass(radius: 22).clipShape(RoundedRectangle(cornerRadius: 22))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(PluginDefinitionConfirmation(draft: definitionDraft, store: store, active: !showDetails, perform: performDefinitionAction))
+                .sheet(isPresented: Binding(get: { showDetails }, set: { if !$0 { requestDefinitionAction(.hide) } })) {
                     VStack(spacing: 0) {
-                        HStack { Text("类型与阅读方法").font(.system(size: 16, weight: .semibold)); Spacer(); Button { requestDefinitionAction(.hide) } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("关闭定义编辑") }.padding(.horizontal, 16).frame(height: 56)
+                        SettingsManagementHeader(title: "类型与阅读方法", icon: "slider.horizontal.3", dirty: definitionDraft.isDirty, onClose: { requestDefinitionAction(.hide) }) { EmptyView() }
+                        Divider().opacity(0.4)
                         definitionPanel
-                    }.frame(width: min(540, max(1, geometry.size.width - 40)), height: min(620, max(1, geometry.size.height - 40)))
+                    }.frame(width: min(540, max(1, geometry.size.width - 64)), height: min(620, max(1, geometry.size.height - 64)))
+                        .background(Palette.surface).clipShape(RoundedRectangle(cornerRadius: 22))
                         .interactiveDismissDisabled(definitionDraft.isDirty || definitionDraft.saving)
                         .onExitCommand { requestDefinitionAction(.hide) }
                         .modifier(PluginDefinitionConfirmation(draft: definitionDraft, store: store, active: true, perform: performDefinitionAction))
@@ -323,7 +310,6 @@ private struct PluginLibraryWorkspace: View {
             pendingAddition = nil
         }
     }
-
     private var pluginList: some View {
         VStack(spacing: 0) {
             ViewThatFits(in: .horizontal) {
@@ -360,10 +346,9 @@ private struct PluginLibraryWorkspace: View {
             }
             Divider().opacity(0.5)
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { footerExplanation; Spacer(minLength: 0); definitionButtons; importButton }
-                VStack(alignment: .leading, spacing: 8) { footerExplanation; HStack { definitionButtons; Spacer(minLength: 0); importButton } }
+                HStack(spacing: 8) { definitionButtons; Spacer(minLength: 0); importButton }
+                VStack(alignment: .leading, spacing: 8) { definitionButtons; importButton }
             }.padding(14)
-            if !embedded { HStack { Spacer(); Button("完成") { requestDefinitionAction(.close) }.keyboardShortcut(.defaultAction).buttonStyle(ReadingToolbarButtonStyle()) }.padding(.horizontal, 16).padding(.bottom, 8) }
         }
     }
 
@@ -397,7 +382,7 @@ private struct PluginLibraryWorkspace: View {
     }
     private func performDefinitionAction(_ action: PluginDefinitionAction) {
         switch action {
-        case .tab(let tab): definitionDraft.selectFirst(in: store.book, tab: tab); showDetails = true; activeCard = "definitions"
+        case .tab(let tab): definitionDraft.selectFirst(in: store.book, tab: tab); showDetails = true
         case .selection(let id): definitionDraft.load(in: store.book, id: id, tab: definitionDraft.tab)
         case .hide: showDetails = false
         case .close: close()
@@ -409,13 +394,15 @@ private struct PluginLibraryWorkspace: View {
         }
     }
 
-    private var footerExplanation: some View { Label("停用保留已有内容", systemImage: "info.circle").font(.system(size: 13)).foregroundStyle(.secondary).fixedSize() }
     private var definitionButtons: some View {
-        HStack(spacing: 4) {
+        Menu {
             Button { requestDefinitionAction(.scheme) } label: { Label("书本方案", systemImage: "slider.horizontal.3") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || store.isBusy)
-            Button { if definitionDraft.tab == "types" { showDetails = true; activeCard = "definitions" } else { requestDefinitionAction(.tab("types")) } } label: { Label("类型", systemImage: "square.stack") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || definitionDraft.saving)
-            Button { if definitionDraft.tab == "methods" { showDetails = true; activeCard = "definitions" } else { requestDefinitionAction(.tab("methods")) } } label: { Label("读法", systemImage: "checklist") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || definitionDraft.saving)
-        }
+            Button { if definitionDraft.tab == "types" { showDetails = true } else { requestDefinitionAction(.tab("types")) } } label: { Label("类型", systemImage: "square.stack") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || definitionDraft.saving)
+            Button { if definitionDraft.tab == "methods" { showDetails = true } else { requestDefinitionAction(.tab("methods")) } } label: { Label("读法", systemImage: "checklist") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || definitionDraft.saving)
+            Divider()
+            Text("停用声明包会保留已有内容")
+        } label: { Label("类型与阅读方法", systemImage: "slider.horizontal.3") }
+            .menuStyle(.borderlessButton).fixedSize().padding(.horizontal, 10).frame(minHeight: 44)
     }
     private var importButton: some View {
         Button { requestDefinitionAction(.importPlugin) } label: { Label("导入 / 升级…", systemImage: "plus") }
@@ -426,9 +413,9 @@ private struct PluginLibraryWorkspace: View {
         let retainedByDisabledPack = !installed && store.savedComponent(for: component) != nil
         return HStack(spacing: 12) {
             Image(systemName: component.icon).font(.system(size: 22, weight: .regular)).foregroundStyle(Palette.accent)
-                .frame(width: 48, height: 48).background(Palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                .frame(width: 32, height: 44)
             VStack(alignment: .leading, spacing: 5) {
-                Text(component.title).font(.system(size: 16, weight: .semibold)).lineLimit(2)
+                Text(component.title).font(.system(size: 15, weight: .medium)).lineLimit(2)
                 Text(retainedByDisabledPack ? "已保存，请启用所属声明包。" : capabilityDescription(component)).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }.frame(maxWidth: .infinity, alignment: .leading)
             if component.permanent { Text("常驻").font(.system(size: 13)).foregroundStyle(.secondary) }
@@ -439,7 +426,7 @@ private struct PluginLibraryWorkspace: View {
                     else { pendingAddition = component.id; componentNotice = "正在添加\(component.title)…"; store.activate(component, open: false, onError: { componentError = $0; componentNotice = ""; pendingAddition = nil }) }
                 }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || store.isBusy || retainedByDisabledPack)
             }
-        }.padding(.vertical, 16).overlay(alignment: .bottom) { Divider().opacity(0.45) }
+        }.padding(.vertical, 12).frame(minHeight: 64).overlay(alignment: .bottom) { Divider().opacity(0.4) }
     }
     private func capabilityDescription(_ component: WorkspaceComponentDescriptor) -> String {
         switch component.rendererID ?? "" {
@@ -471,7 +458,7 @@ private struct CompactPluginRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "shippingbox").font(.system(size: 22)).foregroundStyle(Palette.accent).frame(width: 48, height: 48).background(Palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                Image(systemName: "shippingbox").font(.system(size: 22)).foregroundStyle(Palette.accent).frame(width: 32, height: 44)
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 14) {
                         Text(plugin.description).font(.system(size: 14)).foregroundStyle(.secondary).textSelection(.enabled)
@@ -481,7 +468,7 @@ private struct CompactPluginRow: View {
                     }.padding(.top, 12)
                 } label: {
                     VStack(alignment: .leading, spacing: 7) {
-                        Text(plugin.name).font(.system(size: 16, weight: .semibold)).lineLimit(2)
+                        Text(plugin.name).font(.system(size: 15, weight: .medium)).lineLimit(2)
                         Text("声明包 · \(plugin.types.count) 类型 · \(plugin.methods.filter(PluginEngine.isActiveMethod).count) 方法 · \(plugin.views.filter { !PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }.count) 视图").font(.system(size: 13)).foregroundStyle(.secondary)
                     }
                 }
@@ -490,7 +477,7 @@ private struct CompactPluginRow: View {
                 })).labelsHidden().accessibilityLabel("启用\(plugin.name)").toggleStyle(.switch).controlSize(.large).disabled(store.isBusy)
             }
             if !operationError.isEmpty { settingsError(operationError) }
-        }.padding(.vertical, 16).overlay(alignment: .bottom) { Divider().opacity(0.45) }
+        }.padding(.vertical, 12).overlay(alignment: .bottom) { Divider().opacity(0.4) }
     }
 }
 
@@ -631,49 +618,51 @@ private struct PluginDefinitionPanel: View {
     private var selectedMethod: ReadingMethod? { methods.first { $0.id == selectedID } }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Picker("定义类型", selection: Binding(get: { draft.tab }, set: onTabChange)) { Text("卡片类型").tag("types"); Text("阅读方法").tag("methods") }.pickerStyle(.segmented).labelsHidden()
-                Text(store.book?.title ?? "先选择一本书").font(.system(size: 15, weight: .medium)).lineLimit(2)
-                Picker(selectedTab == "types" ? "选择类型" : "选择方法", selection: Binding(get: { draft.selectedID }, set: onSelectionChange)) {
-                    Text("＋ 新建定义").tag("")
-                    if selectedTab == "types" { ForEach(store.book?.types ?? []) { Text($0.name).tag($0.id) } }
-                    else { ForEach(methods) { Text($0.name).tag($0.id) } }
-                }
-                Divider().opacity(0.5)
-                VStack(alignment: .leading, spacing: 8) { Text("名称").font(.system(size: 15)); TextField(selectedTab == "types" ? "例如：定理、战役" : "读书法名称", text: $draft.name).settingsTextField() }
-                if selectedTab == "types" {
-                    Text("按书定义，不限定为人物。每行一个字段，已有字段键会在另存时保留。")
-                        .font(.system(size: 13)).foregroundStyle(.secondary)
-                } else {
-                    VStack(alignment: .leading, spacing: 8) { Text("目标").font(.system(size: 15)); TextField("阅读目标", text: $draft.goal, axis: .vertical).settingsTextField() }
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(selectedTab == "types" ? "字段 · 每行一项" : "步骤 · 每行一步").font(.system(size: 14))
-                    TextEditor(text: $draft.detail).font(.system(size: 15)).scrollContentBackground(.hidden).padding(8).frame(minHeight: selectedTab == "types" ? 140 : 180)
-                        .background(Palette.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.line, lineWidth: 0.7))
-                }
-                if selectedTab == "methods" {
-                    Picker("新步骤执行动作", selection: $draft.actionID) { ForEach(PluginEngine.activeWorkflowActions, id: \.id) { Text($0.title).tag($0.id) } }
-                    Text("已有步骤保留各自动作；新增或改写步骤使用上面的动作。宿主仍先核对逐段回执。")
-                        .font(.system(size: 13)).foregroundStyle(.secondary)
-                    if let method = selectedMethod {
-                        DisclosureGroup("原方法执行绑定", isExpanded: $showExecutions) { CompactMethodRow(method: method) }.font(.system(size: 13))
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Picker("定义类型", selection: Binding(get: { draft.tab }, set: onTabChange)) { Text("卡片类型").tag("types"); Text("阅读方法").tag("methods") }.pickerStyle(.segmented).labelsHidden()
+                    Picker(selectedTab == "types" ? "选择类型" : "选择方法", selection: Binding(get: { draft.selectedID }, set: onSelectionChange)) {
+                        Label("新建定义", systemImage: "plus").tag("")
+                        if selectedTab == "types" { ForEach(store.book?.types ?? []) { Label($0.name, systemImage: $0.icon).tag($0.id) } }
+                        else { ForEach(methods) { Label($0.name, systemImage: "checklist").tag($0.id) } }
+                    }.frame(minHeight: 44)
+                    VStack(alignment: .leading, spacing: 8) { Text("名称").font(.system(size: 14)); TextField(selectedTab == "types" ? "例如：定理、战役" : "读书法名称", text: $draft.name).settingsTextField() }
+                    if selectedTab == "methods" {
+                        VStack(alignment: .leading, spacing: 8) { Text("目标").font(.system(size: 14)); TextField("阅读目标", text: $draft.goal, axis: .vertical).settingsTextField() }
                     }
-                }
-                if !error.isEmpty { settingsError(error) }
-                if !notice.isEmpty { Label(notice, systemImage: "checkmark.circle").font(.system(size: 14)).foregroundStyle(Palette.accent) }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(selectedTab == "types" ? "字段 · 每行一项" : "步骤 · 每行一步").font(.system(size: 14))
+                        TextEditor(text: $draft.detail).font(.system(size: 15)).scrollContentBackground(.hidden).padding(8).frame(minHeight: selectedTab == "types" ? 140 : 180)
+                            .background(Palette.paper.opacity(0.75), in: RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.line, lineWidth: 0.6))
+                    }
+                    if selectedTab == "methods" {
+                        Picker("新步骤执行动作", selection: $draft.actionID) { ForEach(PluginEngine.activeWorkflowActions, id: \.id) { Label($0.title, systemImage: "arrow.triangle.branch").tag($0.id) } }.frame(minHeight: 44)
+                        if let method = selectedMethod {
+                            DisclosureGroup("原方法执行绑定", isExpanded: $showExecutions) { CompactMethodRow(method: method) }.font(.system(size: 14))
+                        }
+                    }
+                    DisclosureGroup("保存规则与兼容性") {
+                        Text(selectedTab == "types" ? "按书定义，不限定为人物。每行一个字段，已有字段键会在另存时保留。" : "已有步骤保留各自动作；新增或改写步骤使用所选动作。宿主仍先核对逐段回执。")
+                            .font(.system(size: 13)).foregroundStyle(.secondary).padding(.top, 8)
+                        Text("保存为本书声明包。已有类型、引用、阅读方案与回执保持原版本；新方法可在预读时由 AI 选择。")
+                            .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 8)
+                    }.font(.system(size: 14))
+                    if !error.isEmpty { settingsError(error) }
+                    if !notice.isEmpty { Label(notice, systemImage: "checkmark.circle").font(.system(size: 14)).foregroundStyle(Palette.accent) }
+                }.padding(18).disabled(store.isBusy || draft.saving)
+            }
+            Divider().opacity(0.4)
+            HStack {
+                Text(store.book?.title ?? "先选择一本书").font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 8)
                 Button { draft.save(in: store) } label: { Label(draft.saving ? "保存中…" : selectedID.isEmpty ? "保存定义" : "保存为新版本", systemImage: "checkmark") }
-                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(store.book == nil || store.isBusy)
-                Text("保存为本书声明包。已有类型、引用、阅读方案与回执保持原版本；新方法可在预读时由 AI 选择。")
-                    .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }.padding(16).disabled(store.isBusy || draft.saving)
+                    .buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44).disabled(store.book == nil || store.isBusy || draft.saving)
+            }.padding(14)
         }
     }
-
 }
-
 private struct CompactTypeRow: View {
     let type: EntityType
     var body: some View {
@@ -730,71 +719,27 @@ private struct SettingsTextField: ViewModifier {
 private extension View { func settingsTextField() -> some View { modifier(SettingsTextField()) } }
 private func settingsError(_ message: String) -> some View { Label(message, systemImage: "exclamationmark.circle").font(.system(size: 14)).foregroundStyle(.red).textSelection(.enabled).fixedSize(horizontal: false, vertical: true) }
 
-/// Retained AppKit pointer coordinates keep floating forms steady while dragging.
-private struct SettingsFloatingCard<Content: View>: View {
+/// Management has one stationary title bar; its body and footer own their scrolling.
+struct SettingsManagementHeader<Actions: View>: View {
     let title: String
-    var subtitle = ""
-    var icon = "square.stack"
-    let viewport: CGSize
-    let width: CGFloat
-    let height: CGFloat
-    let initial: CGPoint
-    var movable = true
-    var canClose = true
-    var canCollapse = true
-    var onActivate: () -> Void = {}
-    var onClose: () -> Void = {}
-    let content: Content
-    @State private var position: CGPoint?
-    @State private var dragStart: CGPoint?
-    @State private var collapsed = false
-    @State private var epoch = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    init(title: String, subtitle: String = "", icon: String = "square.stack", viewport: CGSize, width: CGFloat, height: CGFloat, initial: CGPoint, movable: Bool = true, canClose: Bool = true, canCollapse: Bool = true, onActivate: @escaping () -> Void = {}, onClose: @escaping () -> Void = {}, @ViewBuilder content: () -> Content) {
-        self.title = title; self.subtitle = subtitle; self.icon = icon; self.viewport = viewport; self.width = width; self.height = height; self.initial = initial; self.movable = movable; self.canClose = canClose; self.canCollapse = canCollapse; self.onActivate = onActivate; self.onClose = onClose; self.content = content()
+    let icon: String
+    var dirty = false
+    var onClose: () -> Void
+    let actions: Actions
+    init(title: String, icon: String, dirty: Bool = false, onClose: @escaping () -> Void, @ViewBuilder actions: () -> Actions) {
+        self.title = title; self.icon = icon; self.dirty = dirty; self.onClose = onClose; self.actions = actions()
     }
-    private var cardSize: CGSize { CGSize(width: min(width, viewport.width), height: collapsed ? 56 : min(height, viewport.height)) }
-    private var origin: CGPoint { clamp(position ?? initial) }
-    private func clamp(_ point: CGPoint) -> CGPoint { CGPoint(x: min(max(0, point.x), max(0, viewport.width - cardSize.width)), y: min(max(0, point.y), max(0, viewport.height - cardSize.height))) }
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                HStack(spacing: 10) {
-                    Image(systemName: icon).font(.system(size: 18)).foregroundStyle(Palette.accent)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title).font(.system(size: 16, weight: .semibold)).lineLimit(1)
-                        if !subtitle.isEmpty { Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1) }
-                    }
-                    Spacer(minLength: 0)
-                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-                    .overlay {
-                        if movable {
-                            FloatingPanelPointerInput(epoch: epoch, begin: { onActivate(); dragStart = origin }, drag: { translation, ended in
-                                let start = dragStart ?? origin
-                                var transaction = Transaction(); transaction.disablesAnimations = true
-                                withTransaction(transaction) { position = clamp(CGPoint(x: start.x + translation.width, y: start.y + translation.height)) }
-                                if ended { dragStart = nil }
-                            }, cancel: { if let dragStart { position = clamp(dragStart) }; dragStart = nil }).accessibilityHidden(true)
-                        }
-                    }.help(movable ? "拖动标题移动\(title)" : title)
-                    .accessibilityHint(movable ? "拖动标题可移动面板；右侧可收起或关闭" : "")
-                if canCollapse {
-                    Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { collapsed.toggle() } } label: { Image(systemName: collapsed ? "plus" : "minus") }
-                        .buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开面板" : "收起面板").accessibilityLabel(collapsed ? "展开\(title)" : "收起\(title)")
-                }
-                if canClose { Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭面板").accessibilityLabel("关闭\(title)") }
-            }.padding(.leading, 16).padding(.trailing, 8).frame(height: 56).layoutPriority(1)
-            Divider().opacity(collapsed ? 0 : 0.4).frame(height: collapsed ? 0 : 1)
-            content.frame(maxWidth: .infinity, maxHeight: .infinity)
-                .frame(height: collapsed ? 0 : max(0, cardSize.height - 57))
-                .opacity(collapsed ? 0 : 1).clipped().allowsHitTesting(!collapsed).accessibilityHidden(collapsed)
-        }.frame(width: cardSize.width, height: cardSize.height).readingGlass(radius: 24).clipShape(RoundedRectangle(cornerRadius: 24))
-            .simultaneousGesture(TapGesture().onEnded { _ in onActivate() })
-            .offset(x: origin.x, y: origin.y)
-            .onChange(of: viewport) { _, _ in epoch += 1; dragStart = nil; if let position { self.position = clamp(position) } }
+        HStack(spacing: 10) {
+            Image(systemName: icon).font(.system(size: 18)).foregroundStyle(Palette.accent)
+            Text(title).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+            if dirty { Circle().fill(Palette.accent).frame(width: 6, height: 6).accessibilityLabel("有未保存更改") }
+            Spacer(minLength: 8)
+            actions
+            DockIconButton(title: "关闭\(title)", icon: "xmark", isSelected: false, action: onClose)
+        }.padding(.leading, 18).padding(.trailing, 6).frame(height: 56)
     }
 }
-
 /// Shared by OCR sheets; footer actions remain outside scrolling content.
 struct CompactSettingsSection<Content: View>: View {
     let title: String

@@ -25,15 +25,15 @@ struct GraphNodeBrowser: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            VStack(spacing: 0) {
-                searchField
-                nodeList
-                Divider().opacity(0.45)
-                preview
+            if !collapsed {
+                VStack(spacing: 0) {
+                    searchField
+                    nodeList
+                    Divider().opacity(0.45)
+                    preview
+                }.transition(.opacity)
             }
-            .frame(height: collapsed ? 0 : nil).opacity(collapsed ? 0 : 1).clipped()
-            .allowsHitTesting(!collapsed).accessibilityHidden(collapsed)
-        }.frame(width: width, height: collapsed ? 56 : height).contentShape(Rectangle()).onTapGesture { }.readingGlass(radius: 24)
+        }.frame(width: width, height: collapsed ? 56 : height).contentShape(Rectangle()).onTapGesture { }.readingGlass(radius: 20)
     }
     private var header: some View {
         HStack(spacing: 8) {
@@ -52,7 +52,7 @@ struct GraphNodeBrowser: View {
                     .buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开节点面板" : "收起节点面板内容")
                     .accessibilityLabel(collapsed ? "展开节点面板" : "收起节点面板内容")
             }
-            Button(action: close) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭节点面板，可从右侧恢复").accessibilityLabel("关闭节点面板")
+            Button(action: close) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭节点面板，可从底部工具栏恢复").accessibilityLabel("关闭节点面板")
         }.padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 6).frame(height: 56).layoutPriority(1)
     }
     private var searchField: some View {

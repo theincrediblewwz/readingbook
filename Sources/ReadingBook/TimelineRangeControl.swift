@@ -13,11 +13,12 @@ struct TimelineRangeControl: View {
     var cursor: Binding<Double>? = nil
     var label: (Double) -> String = { TimelineRangeControl.yearLabel(Int($0)) }
     @State private var cursorOrigin: Double?
+    @State private var cursorMapping: AxisMapping?
     @State private var interaction: DragSnapshot?
     @State private var pointerEpoch = 0
     @FocusState private var focused: Endpoint?
     private enum Endpoint: Hashable { case lower, upper }
-    private let inset: CGFloat = 12
+    private let inset: CGFloat = 22
     private let axisY: CGFloat = 22
 
     private struct AxisMapping: Equatable {
@@ -25,10 +26,10 @@ struct TimelineRangeControl: View {
         let width: CGFloat
         var span: Double { bounds.upperBound - bounds.lowerBound }
         func x(_ value: Double) -> CGFloat {
-            12 + CGFloat(min(1, max(0, (value - bounds.lowerBound) / max(1, span)))) * width
+            22 + CGFloat(min(1, max(0, (value - bounds.lowerBound) / max(1, span)))) * width
         }
         func year(at position: CGFloat) -> Double {
-            let fraction = Double(min(1, max(0, (position - 12) / max(1, width))))
+            let fraction = Double(min(1, max(0, (position - 22) / max(1, width))))
             return (bounds.lowerBound + fraction * span).rounded()
         }
     }
@@ -69,26 +70,29 @@ struct TimelineRangeControl: View {
                 ForEach(0...4, id: \.self) { index in
                     let year = bounds.lowerBound + mapping.span * Double(index) / 4
                     Text(label(year.rounded()))
-                        .font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
+                        .font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary)
                         .fixedSize().frame(width: 0, alignment: index == 0 ? .leading : index == 4 ? .trailing : .center)
                         .position(x: inset + mapping.width * CGFloat(index) / 4, y: 51)
                 }
                 if let cursor {
                     let x = mapping.x(cursor.wrappedValue)
                     let text = label(cursor.wrappedValue)
-                    let labelWidth = min(max(44, ceil((text as NSString).size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)]).width) + 18), max(0, geometry.size.width))
+                    let labelWidth = min(max(44, ceil((text as NSString).size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .medium)]).width) + 18), max(0, geometry.size.width))
                     let labelX = min(max(labelWidth / 2, x), max(labelWidth / 2, geometry.size.width - labelWidth / 2))
                     Rectangle().fill(Palette.copper).frame(width: 2, height: 37).offset(x: x - 1, y: axisY)
                         .allowsHitTesting(false)
-                    Text(text).font(.system(size: 12, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
+                    Text(text).font(.system(size: 15, weight: .medium)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
                         .padding(.horizontal, 9).padding(.vertical, 6).frame(width: labelWidth).background(Palette.surface, in: Capsule())
                         .overlay(Capsule().stroke(Palette.copper.opacity(0.6)))
                         .frame(height: 44).contentShape(Rectangle())
-                        .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                            if cursorOrigin == nil { cursorOrigin = cursor.wrappedValue }
-                            let next = (cursorOrigin ?? cursor.wrappedValue) + Double(value.translation.width / max(1, mapping.width)) * mapping.span
-                            cursor.wrappedValue = min(upper, max(lower, next.rounded()))
-                        }.onEnded { _ in cursorOrigin = nil })
+                        .overlay {
+                            // Window-space movement remains stable while this
+                            // capsule follows the cursor along the same axis.
+                            GraphPointerBridge(enabled: true, movable: true, resetID: pointerEpoch,
+                                click: { _ in }, drag: { delta, ended in
+                                    moveCursor(cursor, by: delta.width, ended: ended, mapping: mapping)
+                                }, cancel: { cursorOrigin = nil; cursorMapping = nil })
+                        }
                         .accessibilityRepresentation {
                             Slider(value: cursor, in: lower...max(lower, upper), step: 1) { Text("当前时间") }
                                 .accessibilityValue(label(cursor.wrappedValue))
@@ -123,18 +127,18 @@ struct TimelineRangeControl: View {
             .overlay(Circle().stroke(Palette.surface, lineWidth: 3))
             .overlay(Circle().stroke(focused == endpoint || interaction?.endpoint == endpoint ? Palette.copper : Palette.accent.opacity(0.55), lineWidth: 1))
             .shadow(color: Palette.accent.opacity(0.14), radius: 4, y: 1)
-            .frame(width: 20, height: 20).padding(6).contentShape(TimelineThumbHit(isLower: isLower, crowded: crowded))
+            .frame(width: 20, height: 20).padding(12).contentShape(TimelineThumbHit(isLower: isLower, crowded: crowded))
             .focusable().focused($focused, equals: endpoint)
             .focusEffectDisabled()
             .onKeyPress(.leftArrow) { adjust(endpoint, by: -1); return .handled }
             .onKeyPress(.rightArrow) { adjust(endpoint, by: 1); return .handled }
-            .help("\(isLower ? "起点" : "终点")：\(Self.yearLabel(Int(current)))；可拖动或使用方向键")
+            .help("\(isLower ? "起点" : "终点")：\(label(current))；可拖动或使用方向键")
             .accessibilityRepresentation {
                 Slider(value: Binding(get: { endpoint == .lower ? lower : upper }, set: {
                     cancelInteraction(); set(endpoint, to: $0)
                 }), in: bounds, step: 1) {
                     Text(isLower ? "时间范围起点" : "时间范围终点")
-                }.accessibilityValue(Self.yearLabel(Int(current)))
+                }.accessibilityValue(label(current))
             }.position(x: position, y: thumbY(endpoint, crowded: crowded))
     }
 
@@ -142,7 +146,7 @@ struct TimelineRangeControl: View {
         crowded ? axisY + (endpoint == .lower ? -8 : 8) : axisY
     }
     private func thumbRect(_ endpoint: Endpoint, at position: CGFloat, crowded: Bool) -> CGRect {
-        let rect = CGRect(x: position - 16, y: thumbY(endpoint, crowded: crowded) - 16, width: 32, height: 32)
+        let rect = CGRect(x: position - 22, y: thumbY(endpoint, crowded: crowded) - 22, width: 44, height: 44)
         return TimelineThumbHit.hitRect(in: rect, isLower: endpoint == .lower, crowded: crowded)
     }
     private func begin(at point: CGPoint, mapping: AxisMapping) {
@@ -174,7 +178,7 @@ struct TimelineRangeControl: View {
         // Width, date span and year origin belong to the mouse-down snapshot.
         // A moving thumb or a model update never becomes the next drag origin.
         if snapshot.didAdjust || abs(delta.width) > 3 {
-            snapshot.didAdjust = true; interaction = snapshot
+            if !snapshot.didAdjust { snapshot.didAdjust = true; interaction = snapshot }
             let year = snapshot.onThumb
                 ? snapshot.originYear + Double(delta.width / max(1, snapshot.mapping.width)) * snapshot.mapping.span
                 : snapshot.mapping.year(at: snapshot.startX + delta.width)
@@ -195,14 +199,28 @@ struct TimelineRangeControl: View {
         // Keep the last displayed filter; only end ownership of this gesture.
         // Changing the epoch also drops AppKit's origin, so later events from
         // the same held mouse button cannot start another interaction.
-        interaction = nil; pointerEpoch &+= 1
+        interaction = nil; cursorOrigin = nil; cursorMapping = nil; pointerEpoch &+= 1
     }
     private func adjust(_ endpoint: Endpoint, by delta: Double) {
         cancelInteraction(); set(endpoint, to: (endpoint == .lower ? lower : upper) + delta)
     }
     private func set(_ endpoint: Endpoint, to value: Double) {
         let value = min(bounds.upperBound, max(bounds.lowerBound, value.rounded()))
-        if endpoint == .lower { lower = min(value, upper) } else { upper = max(value, lower) }
+        // Rounded years/narrative positions often stay unchanged across many
+        // pointer events. Avoid publishing an identical shared time snapshot.
+        if endpoint == .lower {
+            let next = min(value, upper); if lower != next { lower = next }
+        } else {
+            let next = max(value, lower); if upper != next { upper = next }
+        }
+    }
+    private func moveCursor(_ cursor: Binding<Double>, by delta: CGFloat, ended: Bool, mapping: AxisMapping) {
+        if cursorOrigin == nil { cursorOrigin = cursor.wrappedValue; cursorMapping = mapping }
+        guard cursorMapping == mapping, let cursorOrigin else { cancelInteraction(); return }
+        let year = cursorOrigin + Double(delta / max(1, mapping.width)) * mapping.span
+        let next = min(upper, max(lower, year.rounded()))
+        if cursor.wrappedValue != next { cursor.wrappedValue = next }
+        if ended { self.cursorOrigin = nil; cursorMapping = nil }
     }
     static func yearLabel(_ year: Int) -> String { year < 0 ? "公元前\(-year)年" : "\(year)年" }
 }

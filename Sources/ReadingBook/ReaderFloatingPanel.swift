@@ -17,6 +17,9 @@ struct ReaderFloatingPanel<Content: View>: View {
     var avoidRects: [CGRect] = []
     var restoreNearTop = false
     var elevated = false
+    var showsRestoreButton = true
+    var unifiedDismiss = false
+    var resizable = false
     var onExpansionChange: (Bool) -> Void = { _ in }
     var onFrameChange: (CGRect) -> Void = { _ in }
     @ViewBuilder var content: () -> Content
@@ -31,12 +34,16 @@ struct ReaderFloatingPanel<Content: View>: View {
     @State private var initialPresented: Bool?
     @State private var transientPresentation: PanelPresentation?
     @State private var lastReportedFrame: CGRect?
+    @State private var preferredSize: CGSize?
+    @State private var resizeStart: CGSize?
+    @State private var resizeOrigin: CGPoint?
+    @State private var resizePreferredStart: CGSize?
     private struct PanelPresentation: Equatable { var presented: Bool; var collapsed: Bool }
     private var memoryID: String { memoryIDOverride ?? (trailing ? "reader.companion" : "reader.outline") }
 
-    private var panelWidth: CGFloat { min(width, max(240, viewport.width - 100)) }
+    private var panelWidth: CGFloat { min(preferredSize?.width ?? width, max(240, viewport.width - 48)) }
     private var headerHeight: CGFloat { ReadingLayout.panelHeaderHeight }
-    private var wantedHeight: CGFloat { collapsed ? headerHeight : min(height, max(headerHeight, viewport.height - 88 - bottomReserve)) }
+    private var wantedHeight: CGFloat { collapsed ? headerHeight : min(preferredSize?.height ?? height, max(headerHeight, viewport.height - 88 - bottomReserve)) }
     private var panelHeight: CGFloat { presentationPlacement().height }
     private var origin: CGPoint { presentationPlacement().origin }
     private struct PanelPlacement { var origin: CGPoint; var height: CGFloat }
@@ -47,6 +54,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     /// Avoidance is presentation only. Keep the reader's saved position intact
     /// so it returns when the other floating surface closes or moves away.
     private func presentationPlacement() -> PanelPlacement {
+        if let resizeOrigin { return PanelPlacement(origin: resizeOrigin, height: wantedHeight) }
         if let dragOrigin { return PanelPlacement(origin: dragOrigin, height: dragHeight ?? wantedHeight) }
         let proposed = savedOrigin ?? CGPoint(x: trailing ? viewport.width - panelWidth - 24 : 24, y: 100)
         let start = clamp(proposed, height: wantedHeight)
@@ -131,12 +139,12 @@ struct ReaderFloatingPanel<Content: View>: View {
     /// The host can establish one-way avoidance priorities. Publish only the
     /// settled frame, never the pointer's intermediate positions.
     private func reportStableFrame() {
-        guard dragOrigin == nil && dragStart == nil else { return }
+        guard dragOrigin == nil && dragStart == nil && resizeStart == nil else { return }
         let frame: CGRect
         if isPresented {
             let placement = presentationPlacement()
             frame = CGRect(origin: placement.origin, size: CGSize(width: panelWidth, height: placement.height))
-        } else if hasOpened {
+        } else if hasOpened && showsRestoreButton {
             let center = restoreButtonPosition
             frame = CGRect(x: center.x - 90, y: center.y - 22, width: 180, height: 44)
         } else { frame = .zero }
@@ -163,19 +171,40 @@ struct ReaderFloatingPanel<Content: View>: View {
                                 }, cancel: { dragStart = nil; dragOrigin = nil; dragHeight = nil; reportStableFrame() }).accessibilityHidden(true)
                             }
                             .help("拖动标题移动\(title)面板").accessibilityLabel(title).accessibilityHint("拖动标题可移动面板；右侧可收起或关闭")
-                        Button { transientPresentation = nil; collapsed.toggle() } label: { Image(systemName: collapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开\(title)" : "收起\(title)")
-                        Button { transientPresentation = nil; isPresented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭\(title)")
+                        if unifiedDismiss {
+                            DockIconButton(title: collapsed ? "展开\(title)" : "收起\(title)", icon: collapsed ? "plus" : "minus") {
+                                transientPresentation = nil
+                                if collapsed { collapsed = false } else { isPresented = false }
+                            }
+                        } else {
+                            Button { transientPresentation = nil; collapsed.toggle() } label: { Image(systemName: collapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开\(title)" : "收起\(title)")
+                            Button { transientPresentation = nil; isPresented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭\(title)")
+                        }
                     }.padding(.leading, 16).padding(.trailing, 8).frame(height: headerHeight).layoutPriority(1)
                     content().frame(maxWidth: .infinity).frame(minHeight: 0, maxHeight: collapsed ? 0 : .infinity)
-                        .opacity(collapsed ? 0 : 1).clipped().allowsHitTesting(!collapsed).accessibilityHidden(collapsed || panelHeight <= headerHeight)
+                        .opacity(collapsed ? 0 : 1).clipped().allowsHitTesting(!collapsed).disabled(collapsed || !isPresented).accessibilityHidden(collapsed || panelHeight <= headerHeight)
                 }.frame(width: panelWidth, height: panelHeight).readingGlass(radius: 24)
                     .overlay {
                         RoundedRectangle(cornerRadius: 24).strokeBorder(Palette.accent.opacity(elevated ? 0.13 : 0), lineWidth: 0.7).allowsHitTesting(false)
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 24)).position(x: origin.x + panelWidth / 2, y: origin.y + panelHeight / 2)
+                    .clipShape(RoundedRectangle(cornerRadius: 24))
+                    .overlay(alignment: .bottomTrailing) {
+                        if resizable && !collapsed {
+                            Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11)).foregroundStyle(.tertiary)
+                                .frame(width: 24, height: 24).contentShape(Rectangle())
+                                .overlay { FloatingPanelPointerInput(epoch: epoch, begin: {
+                                    resizePreferredStart = preferredSize; resizeStart = CGSize(width: panelWidth, height: panelHeight); resizeOrigin = origin
+                                }, drag: { delta, ended in
+                                    guard let start = resizeStart, let anchor = resizeOrigin else { return }
+                                    preferredSize = CGSize(width: min(max(320, start.width + delta.width), max(320, viewport.width - anchor.x - 24)), height: min(max(260, start.height + delta.height), max(260, viewport.height - anchor.y - bottomReserve)))
+                                    if ended { savedOrigin = anchor; resizeStart = nil; resizeOrigin = nil; resizePreferredStart = nil; saveMemory(); reportStableFrame() }
+                                }, cancel: cancelResize).accessibilityHidden(true) }
+                                .help("调整\(title)面板大小")
+                        }
+                    }.position(x: origin.x + panelWidth / 2, y: origin.y + panelHeight / 2)
                     .opacity(isPresented ? 1 : 0).scaleEffect(isPresented || reduceMotion ? 1 : 0.97, anchor: trailing ? .topTrailing : .topLeading)
                     .allowsHitTesting(isPresented).accessibilityHidden(!isPresented)
-            if !isPresented && hasOpened {
+            if !isPresented && hasOpened && showsRestoreButton {
                 Button { transientPresentation = nil; collapsed = false; isPresented = true } label: { Label(title, systemImage: icon).lineLimit(1).frame(maxWidth: 140) }
                     .buttonStyle(ReadingToolbarButtonStyle()).readingGlass(radius: 18)
                     .position(restoreButtonPosition)
@@ -200,20 +229,26 @@ struct ReaderFloatingPanel<Content: View>: View {
             .onChange(of: isPresented) { _, value in if value { hasOpened = true }; onExpansionChange(value && !collapsed); saveMemory(); reportStableFrame() }
             .onChange(of: savedOrigin) { _, _ in saveMemory(); reportStableFrame() }
             .onChange(of: avoidRects) { _, _ in reportStableFrame() }
-            .onDisappear { saveMemory(); lastReportedFrame = nil; onFrameChange(.zero) }
+            .onDisappear { cancelResize(); saveMemory(); lastReportedFrame = nil; onFrameChange(.zero) }
             .onChange(of: viewport) { old, value in
-                epoch += 1; dragStart = nil; dragOrigin = nil; dragHeight = nil
+                epoch += 1; dragStart = nil; dragOrigin = nil; dragHeight = nil; cancelResize()
                 if old.width >= 1050, value.width < 1050, trailing { isPresented = false }
                 reportStableFrame()
             }
+    }
+    private func cancelResize() {
+        if resizeStart != nil { preferredSize = resizePreferredStart }
+        resizeStart = nil; resizeOrigin = nil; resizePreferredStart = nil
+        reportStableFrame()
     }
     private func restoreMemory() {
         transientPresentation = nil
         if memoryScope != store.workspaceMemoryKey { lastReportedFrame = nil }
         memoryScope = store.workspaceMemoryKey
         let saved = store.workspaceMemory.panels[memoryID]
-        collapsed = saved?.collapsed ?? false
+        collapsed = unifiedDismiss ? false : (saved?.collapsed ?? false)
         savedOrigin = saved?.origin.map { CGPoint(x: $0.x, y: $0.y) }
+        preferredSize = resizable ? saved?.size.map { CGSize(width: $0.width, height: $0.height) } : nil
         isPresented = saved?.isPresented ?? initialPresented ?? false
         if isPresented || saved != nil { hasOpened = true }
         onExpansionChange(isPresented && !collapsed)
@@ -222,7 +257,8 @@ struct ReaderFloatingPanel<Content: View>: View {
         guard let memoryScope else { return }
         if transientPresentation == PanelPresentation(presented: isPresented, collapsed: collapsed) { return }
         transientPresentation = nil
-        let memory = WorkspacePanelMemory(origin: savedOrigin.map { WorkspacePoint(x: $0.x, y: $0.y) }, isPresented: isPresented, collapsed: collapsed)
+        let memory = WorkspacePanelMemory(origin: savedOrigin.map { WorkspacePoint(x: $0.x, y: $0.y) }, isPresented: isPresented, collapsed: collapsed,
+            size: preferredSize.map { WorkspaceSize(width: $0.width, height: $0.height) })
         store.updateWorkspaceMemory({ $0.panels[memoryID] = memory }, expectedKey: memoryScope)
     }
     private func receivePanelCommand(_ command: WorkspaceAICommand?) {
