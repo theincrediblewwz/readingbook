@@ -28,6 +28,7 @@ struct SpatialTimelineView: View {
     @State private var timelineCollapsed = false
     @State private var viewport = CGSize(width: 900, height: 650)
     @AppStorage("readingbook.timelinePanelDock") private var dockRaw = FloatingPanelDock.bottomLeading.rawValue
+    @AppStorage("frost-navigation-dock-v1") private var navigationDockRaw = NavigationOrbDock.topLeading.rawValue
     @State private var measuredPanelSize = CGSize(width: 740, height: 214)
     @State private var personFrame = CGRect.zero
     @State private var dragOrigin: CGPoint?
@@ -176,7 +177,15 @@ struct SpatialTimelineView: View {
         CGSize(width: panelWidth, height: timelineCollapsed ? timelineHeaderHeight : min(max(timelineHeaderHeight, measuredPanelSize.height), maximumTimelineHeight))
     }
     private func dockFrame(_ position: FloatingPanelDock) -> CGRect {
-        FloatingPanelGeometry.frame(at: position, viewport: workingViewport, panel: panelSize, margin: 24).offsetBy(dx: 0, dy: topReserve)
+        var frame = FloatingPanelGeometry.frame(at: position, viewport: workingViewport, panel: panelSize, margin: 24).offsetBy(dx: 0, dy: topReserve)
+        let navigationDock = NavigationOrbDock(rawValue: navigationDockRaw) ?? .topLeading
+        let center = NavigationOrbGeometry.center(in: viewport, dock: navigationDock)
+        let diameter = NavigationOrbGeometry.buttonDiameter
+        let navigation = CGRect(x: center.x - diameter / 2, y: center.y - diameter / 2, width: diameter, height: diameter)
+        if frame.intersects(navigation.insetBy(dx: -12, dy: -12)) {
+            frame.origin.x = min(max(frame.minX, max(80, navigation.maxX + 12)), max(24, viewport.width - frame.width - 24))
+        }
+        return frame
     }
     private func clampedPanelCenter(_ center: CGPoint) -> CGPoint {
         let local = FloatingPanelGeometry.clampedCenter(CGPoint(x: center.x, y: center.y - topReserve), viewport: workingViewport, panel: panelSize, margin: 24)
