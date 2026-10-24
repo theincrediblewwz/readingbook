@@ -8,7 +8,11 @@
 
 参考 Lumen 本地 `desktop/src/ai/aiClient.ts`、`components/AiChat.tsx` 的请求与工具阶段，接入真实流式接收、思考/输出字符计数、组件操作步骤、保存与停止状态；不显示思考原文，不把字符数当 Token 或虚构百分比。进度计数只刷新局部视图，原文依据索引移出主线程并支持取消和短期缓存。诊断在本机显式采样十秒，记录主线程响应间隔，不等于渲染帧率，不含书名、正文、路径、问题或密钥。
 
-本轮构建结果待下方补充；[Mac 验收流程](MAC_TEST_CHECKLIST.md)全部仍待真机。未操作真实用户书库或调用付费模型；后台 AI 与手动编辑并行留待下一批。
+流式接收支持 Chat Completions SSE（LF/CRLF）和服务端 JSON 回退；JSON 只能在返回后计数。未提供思考内容时不估算思考字符，拒绝流式时不自动追加付费重试。仅 CR 分行，或缺类型且先返回 `retry:` 的非标准网关仍有兼容限制；响应和工具参数大小、取消、权限及预算保护保留。
+
+[直接下载 0.19.0/build25 Mac 安装 ZIP](dist/ReadingBook-0.19.0-Mac.zip) · [Actions 40100018701](https://github.com/theincrediblewwz/readingbook/actions/runs/40100018701) · [GitHub 产物](https://github.com/theincrediblewwz/readingbook/actions/runs/40100018701/artifacts/12562399386) · [Mac 验收流程](MAC_TEST_CHECKLIST.md)。最终原生源码 `56c82a7b70d08146dd5622918ef4361ff92fc99d`，分支 `codex/library-settings-0.19`。282 项 Core 测试零失败、无编译警告，arm64/x86_64 Release、临时签名及资源自检通过；下载后核对 artifact 摘要、ZIP CRC/SHA、版本/源码、实际双架构/0755 和全部 32 个资源逐字节一致，含 20 个公式字体。ZIP 16,911,054 字节，SHA-256 `dc58d0d5b8f5c4bc5387054f5aa071af5e7554bfe9df17c66d5bf6467f00ea9e`。
+
+删除与派生导览写入已串行化，新增临时数据回归覆盖排队刷新不能在移走后重建空目录，放回后正文与关联不丢。新版 UI、PDFKit 手势、真实服务进度和流畅度仍待 Mac，不能据编译与诊断入口认定卡顿根治。未操作真实用户书库或调用付费模型；后台 AI 与手动编辑并行留待下一批。
 
 ---
 
