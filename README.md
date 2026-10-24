@@ -1,4 +1,18 @@
-# 0.17.2 · 三套控件布局试稿与原生小修（2026-10-24）
+# 0.18 · 阅读底座统一全应用（2026-10-24）
+
+按用户选定的第一套“阅读底座”，将霜银/钴蓝、成组工具、统一浮卡与按需菜单应用到真实 Mac App：阅读、地图、思维导图、关系图谱、笔记、插件、书本方案、模型服务和模型目录一起调整。导航/书名合组，服务切换收进书本菜单；伴读/对话合用一张可移动、可调大小的浮卡，从底座恢复。地图保留单时间轴，导图列表和笔记操作合组，管理卡下面保留原页面；小窗列表底部避开底座。
+
+继续排查卡顿并减少实际重复工作：目录检索输入局部化、延迟和取消；PDF 引文按页复用；Markdown 原文标记共用 DOM 索引；图谱复用静态曲线并跳过屏外连线，关闭节点面板时释放预览。离线渲染 17 项回归通过；实际滚动帧率及 Liquid Glass 合成仍待 Mac，不能据源码或浏览器认定卡顿根治。
+
+书项目和数据模型未迁移；原 PDF、真实 Markdown、批注、节点坐标与挂载、实体/事件关联、回收恢复、Keychain/Max 和 AI 修改审阅继续使用原链路。隐藏对话不接收发送，服务菜单退出不再残留画布锁定，底座取消拖动不保存临时偏移。
+
+[0.18.0/build23 安装 ZIP](dist/download-40074129325/ReadingBook-macos-universal.zip) · [GitHub 下载产物](https://github.com/theincrediblewwz/readingbook/actions/runs/40074129325/artifacts/12553415092) · [Actions 40074129325](https://github.com/theincrediblewwz/readingbook/actions/runs/40074129325) · [按顺序的 Mac 测试清单](MAC_TEST_CHECKLIST.md)。最终原生源码 `eecd71a604c1b1bd86d0ba98b16b8d21d36aa9fd`，分支 `codex/reading-dock-0.18`。本轮实际 256 项 Core 测试零失败、arm64/x86_64 Release、临时签名通过，无编译警告；下载后复核 artifact 摘要、ZIP CRC/SHA、版本/源码、双架构/0755 与全部 32 个资源，含 20 个公式字体。ZIP 16,016,076 字节，SHA-256 `de67953b5bb70bdff8cd1c8f1fba677418bd741ba71e7d092a4e782d08045c7a`。
+
+[完整交互稿](http://127.0.0.1:4178/?book=math&route=reader) 已同步统一布局，宽窄窗实际操作见 [浏览器检查](Design/prototype-frost/design-qa.md)。它演示示例数据与交互，不替代 [原生视觉/手势验收](Design/native-frost/design-qa.md)。开发未调用真实付费模型、改写用户正文或更改主机网络。
+
+---
+
+# 0.17.2 · 三套控件布局试稿与原生小修（2026-10-24，历史）
 
 [打开三套可交互方案](http://127.0.0.1:4178/?study=controls&layout=base)：阅读底座、右侧工具坞、沉浸胶囊。沿用霜银/钴蓝风格，对比成组吸附、浮卡、菜单与小窗；可切换阅读、地图、笔记，并打开简化的插件/模型管理浮层。新布局尚待选择，未直接替换 Mac App；原型说明及边界见 [交互稿](Design/prototype-frost/README.md)。
 

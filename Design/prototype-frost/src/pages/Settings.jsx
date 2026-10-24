@@ -83,8 +83,8 @@ export function PluginsPage() {
   const width = useWindowWidth();
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState('installed');
-  const [typesOpen, setTypesOpen] = useState(() => window.innerWidth >= 1100);
-  const [typesVisible, setTypesVisible] = useState(() => window.innerWidth >= 1100);
+  const [typesOpen, setTypesOpen] = useState(false);
+  const [typesVisible, setTypesVisible] = useState(false);
   const [selectedType, setSelectedType] = useState('');
   const [typeName, setTypeName] = useState('');
   const [typeFields, setTypeFields] = useState('');
@@ -213,9 +213,9 @@ export function PluginsPage() {
 
   return <section className="settings-page ps-plugins sp-settings" aria-label="插件与组件交互稿">
     <SettingsPolishStyles />
-    <div className="ps-workspace" style={{ paddingRight: typesVisible && width >= 1100 ? 380 : 0 }}>
+    <div className="ps-workspace" >
       <div className="ps-main-surface glass">
-        <header className="sp-main-header"><Icon name="plugins" size={20} /><h1>插件与组件</h1><Button icon="upload" variant="quiet" onClick={() => { setImportError(''); setImportOpen(true); }}>导入</Button><Button icon="close" variant="quiet" aria-label="关闭插件与组件" onClick={() => navigate(state.route)} /></header>
+        <header className="sp-main-header"><Icon name="plugins" size={20} /><h1>插件与组件</h1><Button icon="close" variant="quiet" aria-label="关闭插件与组件" onClick={() => navigate(state.route)} /></header>
         <div className="ps-list-heading">
           <label className="ps-search"><Icon name="search" /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索插件或组件…" aria-label="搜索插件或组件" />{query && <button onClick={() => setQuery('')} aria-label="清空插件搜索"><Icon name="close" size={16} /></button>}</label>
           <div className="ps-segments" aria-label="插件显示范围"><button className={tab === 'installed' ? 'is-active' : ''} onClick={() => setTab('installed')}>插件</button><button className={tab === 'addable' ? 'is-active' : ''} onClick={() => setTab('addable')}>可添加 <span>{available.length}</span></button></div>
@@ -228,11 +228,11 @@ export function PluginsPage() {
             {plugin.fixed ? <span className="ps-fixed-tag">常驻</span> : <Switch checked={enabled.includes(plugin.id)} label={`${enabled.includes(plugin.id) ? '停用' : '启用'}${plugin.name}`} onChange={() => togglePlugin(plugin)} />}
           </article>) : <Empty icon="plugins" title="没有匹配的插件">换个名称，或清空搜索。</Empty> : visibleComponents.length ? visibleComponents.map(component => <article key={component.id} className="ps-plugin-row ps-component-row"><div className="ps-icon-tile"><Icon name={component.icon} size={30} /></div><div className="ps-plugin-copy"><h2>{component.name}</h2><p>{enabled.includes(component.plugin) ? '尚未添加到当前书；添加后出现在主导航。' : '所属插件已停用；请先回到插件页启用。'}</p></div><Button icon="plus" disabled={!enabled.includes(component.plugin)} onClick={() => addComponent(component)}>添加</Button></article>) : <Empty icon="check" title={query ? '没有匹配的可添加组件' : '本书组件已经齐全'}>{query ? '试试其他关键词。' : '已添加的项目不会再次出现在这里。'}</Empty>}
         </div>
-        <div className="ps-panel-note"><span><Icon name="info" size={18} />停用插件保留已有内容</span><Button variant="quiet" onClick={() => { setTypesOpen(true); setTypesVisible(true); window.dispatchEvent(new CustomEvent('prototype-panel-open', { detail: { id: 'plugin-types' } })); }} icon="cards">卡片类型</Button><Button variant="quiet" onClick={() => navigate('workflow')} icon="workflow">阅读方法</Button></div>
+        <div className="ps-panel-note"><details className="settings-advanced-menu"><summary><Icon name="settings"/>类型与阅读方法</summary><div className="glass settings-action-menu"><Button aria-label="编辑卡片类型" variant="quiet" onClick={event => { event.currentTarget.closest("details")?.removeAttribute("open"); setTypesOpen(true); setTypesVisible(true); window.dispatchEvent(new CustomEvent('prototype-panel-open', { detail: { id: 'plugin-types' } })); }} icon="cards">卡片类型</Button><Button aria-label="打开智能阅读方法" variant="quiet" onClick={() => navigate('workflow')} icon="workflow">阅读方法</Button></div></details><Button icon="upload" variant="primary" onClick={() => { setImportError(''); setImportOpen(true); }}>导入 / 升级</Button></div>
       </div>
     </div>
-    {typesOpen && <Panel id="plugin-types" title="本书卡片类型" width={360} dock="right" initial={{ x: Math.max(20, width - 380), y: 88 }} onVisibilityChange={setTypesVisible} onRequestClose={closeTypes}
-      footer={<div className="sp-footer-actions"><Button variant="quiet" onClick={() => { if (closeTypes()) window.dispatchEvent(new CustomEvent('prototype-panel-close', { detail: { id: 'plugin-types' } })); }}>关闭</Button><Button className="sp-push" variant="primary" icon="save" onClick={saveType}>保存类型</Button></div>}>
+    {typesOpen && <Panel stationary singleDismiss id="plugin-types" title="本书卡片类型" width={360} dock="right" initial={{ x: Math.max(20, width - 380), y: 88 }} onVisibilityChange={setTypesVisible} onRequestClose={closeTypes}
+      footer={<div className="sp-footer-actions"><Button className="sp-push" variant="primary" icon="save" onClick={saveType}>保存类型</Button></div>}>
       <div className="ps-type-form">
         <div className="sp-settings-state"><small>{book.title}</small><small>{typeDirty ? '有未保存修改' : selectedType === 'new' ? '新建定义' : '已保存定义'}</small></div>
         <label>选择类型<select value={selectedType} onChange={e => { const id = e.target.value; requestTypeChange(() => selectType(id)); }}>{types.map(type => <option key={type.id} value={type.id}>{type.name}</option>)}<option value="new">＋ 新建类型</option></select></label>
@@ -410,17 +410,17 @@ export function ModelsPage() {
   }
 
   const setField = (field, value) => { clearTimeout(testTimer.current); setDraft(current => ({ ...current, [field]: value })); setError(''); if (testState !== 'idle') setTestState('idle'); };
-  const profileWidth = Math.max(240, Math.min(1180, width - 40));
+  const profileWidth = Math.max(240, Math.min(860, width - 40));
   const showServiceList = width >= 1000;
   const requestNew = () => dirty ? setPending({ kind: 'new' }) : setNewOpen(true);
   const closeSettings = () => app.navigate(state.route);
 
   return <section className="settings-page ps-models sp-settings" aria-label="模型设置交互稿">
     <SettingsPolishStyles />
-    <Panel id="model-config" title={draft.name || '模型设置'} className="ps-model-config sp-model-config" width={profileWidth} dock="right" initial={{ x: Math.max(20, (width - profileWidth) / 2), y: 88 }}
-      actions={<Button icon="plus" variant="quiet" onClick={requestNew}>新建服务</Button>}
+    <Panel stationary singleDismiss maximumHeight={680} id="model-config" title="模型设置" className="ps-model-config sp-model-config" width={profileWidth} dock="right" initial={{ x: Math.max(20, (width - profileWidth) / 2), y: 88 }}
+      actions={<Button icon="plus" variant="quiet" aria-label="新建服务" title="新建服务" onClick={requestNew}/>}
       onRequestClose={() => { closeSettings(); return false; }}
-      footer={<div className="sp-footer-actions"><Button onClick={closeSettings}>关闭</Button><Button icon="play" disabled={testState === 'testing'} onClick={testConfig}>{testState === 'testing' ? '测试中…' : '测试连接 · 演示'}</Button><Button icon="trash" variant="quiet" disabled={!selectedId} onClick={deleteProfile} aria-label="删除当前示例配置" /><Button className="sp-push" icon="save" variant="primary" onClick={save}>保存配置</Button></div>}>
+      footer={<div className="sp-footer-actions"><Button icon="play" disabled={testState === 'testing'} onClick={testConfig}>{testState === 'testing' ? '测试中…' : '测试连接 · 演示'}</Button><Button icon="trash" variant="quiet" disabled={!selectedId} onClick={deleteProfile} aria-label="删除当前示例配置" /><Button className="sp-push" icon="save" variant="primary" onClick={save}>保存配置</Button></div>}>
       <div className="sp-model-layout">
       {showServiceList && <aside className="sp-service-list" aria-label="我的服务"><h3>我的服务 · {state.profiles?.length || 0}</h3><div className="ps-profile-list">{(state.profiles || []).map(profile => <button className={`ps-profile-row ${selectedId === profile.id ? 'is-selected' : ''}`} key={profile.id} onClick={() => requestLoad(profile)}><Icon name="link" size={22} /><span>{profile.name}</span>{state.activeProfileId === profile.id && <small>当前</small>}</button>)}{!state.profiles?.length && <p className="ps-helper">还没有保存的服务，可从上方新建。</p>}</div></aside>}
       <div className="sp-form-scroll">
@@ -483,8 +483,8 @@ export function WorkflowPage() {
   const width = useWindowWidth();
   const workflow = state.workflow?.bookId && state.workflow.bookId !== book.id ? {status:'idle',receipts:[],pluginLog:[],methodId:book.id==='math'?'proof':'close',cursor:0} : state.workflow || { status: 'idle', receipts: [], pluginLog: [], methodId: 'close', cursor: 0 };
   const methods = state.readingMethods || [];
-  const [methodOpen, setMethodOpen] = useState(() => window.innerWidth >= 1100);
-  const [methodVisible, setMethodVisible] = useState(() => window.innerWidth >= 1100);
+  const [methodOpen, setMethodOpen] = useState(false);
+  const [methodVisible, setMethodVisible] = useState(false);
   const [editingMethodId, setEditingMethodId] = useState(workflow.methodId || methods[0]?.id || 'close');
   const [methodName, setMethodName] = useState('');
   const [methodDescription, setMethodDescription] = useState('');
