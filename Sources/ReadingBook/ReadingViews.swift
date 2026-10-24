@@ -301,7 +301,7 @@ struct DocumentEditorView: View {
             }
             .background {
                 let stable = clampedListOrigin(listDragging ? dragOrigin : listOrigin, viewport: geometry.size)
-                let height = listCollapsed ? ReadingLayout.panelHeaderHeight : min(640, max(180, geometry.size.height - 124))
+                let height = listPanelHeight(viewport: geometry.size)
                 let frame = showingDocuments ? CGRect(x: stable.x, y: stable.y, width: 340, height: height) : CGRect.zero
                 let offset = geometry.frame(in: .global).origin
                 Color.clear.preference(key: WorkspaceChromeBoundsPreference.self, value: frame.isEmpty ? [:] : ["notes-list": frame.offsetBy(dx: offset.x, dy: offset.y)])
@@ -423,7 +423,7 @@ struct DocumentEditorView: View {
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("草稿、导图与文档管理")
     }
     private func documentPanel(viewport: CGSize) -> some View {
-        let height = listCollapsed ? ReadingLayout.panelHeaderHeight : min(640, max(180, viewport.height - 124))
+        let height = listPanelHeight(viewport: viewport)
         let origin = clampedListOrigin(listOrigin, viewport: viewport)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
@@ -438,9 +438,12 @@ struct DocumentEditorView: View {
             if !listCollapsed { documentPicker }
         }.frame(width: 340, height: height).readingGlass(radius: 20).position(x: origin.x + 170, y: origin.y + height / 2)
     }
+    private func listPanelHeight(viewport: CGSize) -> CGFloat {
+        listCollapsed ? ReadingLayout.panelHeaderHeight : min(640, max(180, viewport.height - 96 - 88))
+    }
     private func clampedListOrigin(_ value: CGPoint, viewport: CGSize) -> CGPoint {
-        let height = listCollapsed ? ReadingLayout.panelHeaderHeight : min(640, max(180, viewport.height - 124))
-        return CGPoint(x: min(max(12, value.x), max(12, viewport.width - 352)), y: min(max(96, value.y), max(96, viewport.height - height - 12)))
+        let height = listPanelHeight(viewport: viewport)
+        return CGPoint(x: min(max(12, value.x), max(12, viewport.width - 352)), y: min(max(96, value.y), max(96, viewport.height - height - 88)))
     }
     private var documentPicker: some View {
         VStack(alignment: .leading, spacing: 12) {
