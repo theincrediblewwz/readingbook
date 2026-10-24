@@ -35,8 +35,51 @@ function Switch({ checked, onChange, label }) {
   return <button type="button" role="switch" aria-checked={checked} aria-label={label} onClick={onChange} className={`ps-switch ${checked ? 'is-on' : ''}`}><span /></button>;
 }
 
+// Page-local refinements keep the shared floating-panel interaction intact.
+function SettingsPolishStyles() {
+  return <style>{`
+    .settings-page.sp-settings{font-size:15px;line-height:1.5}
+    .settings-page.sp-settings .panel-header{height:56px;min-height:56px;padding:6px 8px 6px 16px}
+    .settings-page.sp-settings .panel-header h2{font-size:16px;line-height:1.4}
+    .settings-page.sp-settings .panel-header .button{min-width:44px;min-height:44px}
+    .settings-page.sp-settings .panel-body{padding:16px;overscroll-behavior:contain}
+    .settings-page.sp-settings .panel-footer{padding:12px 16px}
+    .settings-page.sp-settings .button{min-height:44px;font-size:15px}
+    .sp-main-header{display:flex;align-items:center;gap:10px;height:56px;min-height:56px;padding:6px 8px 6px 16px;border-bottom:1px solid var(--line);flex-shrink:0}
+    .sp-main-header>svg{color:var(--accent)}.sp-main-header h1{font-size:16px;font-weight:600;margin:0;flex:1;min-width:0}
+    .settings-page.sp-settings .ps-workspace{inset:88px 20px 20px;transition:none}
+    .settings-page.sp-settings .ps-list-heading{padding:16px;gap:12px}
+    .settings-page.sp-settings .ps-search{min-height:44px}.settings-page.sp-settings .ps-search button{width:44px;height:44px}
+    .settings-page.sp-settings .ps-list-scroll{padding:0 16px;overscroll-behavior:contain}
+    .settings-page.sp-settings .ps-plugin-row{min-height:96px;gap:16px;padding:16px 0}
+    .settings-page.sp-settings .ps-icon-tile{width:48px;height:52px;border-radius:13px}
+    .settings-page.sp-settings .ps-plugin-copy h2{font-size:16px}.settings-page.sp-settings .ps-plugin-copy p{font-size:15px}
+    .settings-page.sp-settings .ps-panel-note{padding:8px 16px;min-height:60px;gap:8px}
+    .settings-page.sp-settings .ps-type-form{padding:0;gap:16px}
+    .settings-page.sp-settings .ps-type-suggestion{margin:0}.settings-page.sp-settings .ps-type-suggestion .button{height:44px!important;min-height:44px!important;font-size:15px}
+    .settings-page.sp-settings .ps-helper,.settings-page.sp-settings .ps-caption{font-size:13px!important}
+    .sp-footer-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sp-footer-actions .sp-push{margin-left:auto}
+    .settings-page.sp-settings .sp-model-config:not(.is-collapsed){height:var(--panel-available-height);max-height:var(--panel-available-height)!important}
+    .settings-page.sp-settings .sp-model-config>.panel-body{padding:0;display:flex;flex:1;min-height:0;overflow:hidden}
+    .sp-model-layout{display:flex;flex:1;min-height:0;min-width:0;width:100%}
+    .sp-service-list{width:260px;flex-shrink:0;padding:16px 12px;border-right:1px solid var(--line);overflow:auto;overscroll-behavior:contain}
+    .sp-service-list h3{font-size:15px;margin:0 4px 12px}.sp-service-list .ps-profile-row{min-height:64px;gap:12px;padding:10px 12px}
+    .sp-service-list .ps-profile-row>span{font-size:15px}.sp-service-list .ps-profile-row small{font-size:12px}
+    .sp-form-scroll{flex:1;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;padding:16px}
+    .settings-page.sp-settings .ps-model-form{padding:0;gap:16px}
+    .settings-page.sp-settings .ps-model-form .ps-form-line{grid-template-columns:114px minmax(0,1fr);gap:16px;font-size:15px}
+    .settings-page.sp-settings .ps-model-form input,.settings-page.sp-settings .ps-model-form select{font-size:15px}
+    .settings-page.sp-settings .ps-model-form h3{font-size:16px}
+    .sp-service-select{display:flex;align-items:center;gap:12px}.sp-service-select>span{font-size:15px;flex-shrink:0}.sp-service-select select{min-width:0;margin:0!important}
+    .sp-settings-state{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.sp-settings-state small{font-size:13px;color:var(--muted)}
+    .settings-page.sp-settings .ps-test-options{gap:12px}.settings-page.sp-settings .ps-test-options>label{margin:0;min-height:44px}
+    .settings-page.sp-settings .ps-test-options select{min-height:44px}
+    @media(max-width:760px){.settings-page.sp-settings .ps-model-form .ps-form-line{display:flex;flex-direction:column;gap:6px}.settings-page.sp-settings .ps-form-line>span{padding-top:0}.settings-page.sp-settings .ps-form-line>div{width:100%}.settings-page.sp-settings .ps-list-heading{flex-wrap:wrap}.settings-page.sp-settings .ps-panel-note>span{display:none}}
+  `}</style>;
+}
+
 export function PluginsPage() {
-  const { state, update, navigate, notify, book } = useApp();
+  const { state, update, navigate, notify, registerGuard, book } = useApp();
   const width = useWindowWidth();
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState('installed');
@@ -46,6 +89,13 @@ export function PluginsPage() {
   const [typeName, setTypeName] = useState('');
   const [typeFields, setTypeFields] = useState('');
   const [typeError, setTypeError] = useState('');
+  const [typeBaseline, setTypeBaseline] = useState('');
+  const [typePending, setTypePending] = useState(null);
+  const typeDirtyRef = useRef(false);
+  const typePendingRef = useRef(null);
+  const typeDraftRef = useRef(null);
+  const saveTypeRef = useRef(null);
+  const typeErrorRef = useRef(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importError, setImportError] = useState('');
   const [packageText, setPackageText] = useState(JSON.stringify({ id: 'translation', name: '译注对照', version: '1.0', capabilities: ['reading.layers'] }, null, 2));
@@ -53,14 +103,47 @@ export function PluginsPage() {
   const enabled = state.enabledPlugins || [];
   const added = state.addedComponents || [];
   const available = COMPONENTS.filter(c => !added.includes(c.id));
+  const typeDirty = JSON.stringify([selectedType, typeName, typeFields]) !== typeBaseline;
+  typeDirtyRef.current = typeDirty;
+  typePendingRef.current = typePending;
+  typeDraftRef.current = { selectedType, typeName, typeFields, types, bookID: book.id };
 
   useEffect(() => {
     const type = types.find(t => t.id === selectedType) || types[0];
     setSelectedType(type?.id || 'new');
     setTypeName(type?.name || '');
     setTypeFields(type?.fields?.join('、') || '');
+    setTypeBaseline(JSON.stringify([type?.id || 'new', type?.name || '', type?.fields?.join('、') || '']));
+    typeDirtyRef.current = false;
     setTypeError('');
   }, [book.id]);
+
+  useEffect(() => registerGuard?.(() => requestTypeChange()), [registerGuard]);
+  useEffect(() => () => { typePendingRef.current?.resolve?.(false); }, []);
+  useEffect(() => { if (typeError) typeErrorRef.current?.scrollIntoView({ block: 'nearest' }); }, [typeError]);
+
+  function requestTypeChange(action) {
+    if (!typeDirtyRef.current) { action?.(); return Promise.resolve(true); }
+    if (typePendingRef.current) return Promise.resolve(false);
+    return new Promise(resolve => {
+      const next = { action, resolve };
+      typePendingRef.current = next; setTypePending(next);
+    });
+  }
+  function resolveTypeChange(choice) {
+    const next = typePendingRef.current;
+    if (choice === 'save' && !saveTypeRef.current()) return;
+    if (choice === 'cancel') { next?.resolve(false); typePendingRef.current = null; setTypePending(null); return; }
+    if (choice === 'discard') selectType(typeDraftRef.current.selectedType);
+    typeDirtyRef.current = false;
+    typePendingRef.current = null; setTypePending(null);
+    next?.action?.(); next?.resolve(true);
+  }
+  function closeTypes() {
+    if (!typeDirtyRef.current) return true;
+    requestTypeChange(() => window.dispatchEvent(new CustomEvent('prototype-panel-close', { detail: { id: 'plugin-types' } })));
+    return false;
+  }
 
   useEffect(() => {
     const primary = () => { setImportError(''); setImportOpen(true); };
@@ -73,6 +156,8 @@ export function PluginsPage() {
     setSelectedType(id);
     setTypeName(type?.name || '');
     setTypeFields(type?.fields?.join('、') || '');
+    setTypeBaseline(JSON.stringify([id, type?.name || '', type?.fields?.join('、') || '']));
+    typeDirtyRef.current = false;
     setTypeError('');
   }
 
@@ -85,16 +170,21 @@ export function PluginsPage() {
   }
 
   function saveType() {
-    const name = typeName.trim();
-    const fields = [...new Set(typeFields.split(/[、,，\n]/).map(s => s.trim()).filter(Boolean))];
-    if (!name || !fields.length) { setTypeError('请填写类型名称和至少一个字段。'); return; }
-    if (types.some(t => t.name === name && t.id !== selectedType)) { setTypeError('本书已经有这个类型，请选择现有类型编辑。'); return; }
-    const id = selectedType === 'new' ? `type-${Date.now()}` : selectedType;
-    update(prev => ({ ...prev, typeDefinitions: [...(prev.typeDefinitions || []).filter(t => t.id !== id), { id, bookId: book.id, name, fields, origin: selectedType === 'new' ? '自定义' : types.find(t => t.id === id)?.origin || '自定义' }] }));
+    const current = typeDraftRef.current;
+    const name = current.typeName.trim();
+    const fields = [...new Set(current.typeFields.split(/[、,，\n]/).map(s => s.trim()).filter(Boolean))];
+    if (!name || !fields.length) { setTypeError('请填写类型名称和至少一个字段。'); return false; }
+    if (current.types.some(t => t.name === name && t.id !== current.selectedType)) { setTypeError('本书已经有这个类型，请选择现有类型编辑。'); return false; }
+    const id = current.selectedType === 'new' ? `type-${Date.now()}` : current.selectedType;
+    update(prev => ({ ...prev, typeDefinitions: [...(prev.typeDefinitions || []).filter(t => t.id !== id), { id, bookId: current.bookID, name, fields, origin: current.selectedType === 'new' ? '自定义' : current.types.find(t => t.id === id)?.origin || '自定义' }] }));
     setSelectedType(id);
+    setTypeName(name); setTypeFields(fields.join('、'));
+    setTypeBaseline(JSON.stringify([id, name, fields.join('、')])); typeDirtyRef.current = false;
     setTypeError('');
     notify(`已保存“${name}”示例类型，精读流程会使用本书类型。`);
+    return true;
   }
+  saveTypeRef.current = saveType;
 
   function togglePlugin(plugin) {
     update(prev => ({ ...prev, enabledPlugins: (prev.enabledPlugins || []).includes(plugin.id) ? prev.enabledPlugins.filter(id => id !== plugin.id) : [...(prev.enabledPlugins || []), plugin.id] }));
@@ -121,9 +211,11 @@ export function PluginsPage() {
   const visiblePlugins = PLUGINS.filter(p => p.name.includes(query) || p.description.includes(query));
   const visibleComponents = available.filter(c => c.name.includes(query));
 
-  return <section className="settings-page ps-plugins" aria-label="插件与组件交互稿">
-    <div className={`ps-workspace ${typesVisible && width >= 1100 ? 'ps-with-aside' : ''}`}>
-      <div className="ps-main-surface">
+  return <section className="settings-page ps-plugins sp-settings" aria-label="插件与组件交互稿">
+    <SettingsPolishStyles />
+    <div className="ps-workspace" style={{ paddingRight: typesVisible && width >= 1100 ? 380 : 0 }}>
+      <div className="ps-main-surface glass">
+        <header className="sp-main-header"><Icon name="plugins" size={20} /><h1>插件与组件</h1><Button icon="upload" variant="quiet" onClick={() => { setImportError(''); setImportOpen(true); }}>导入</Button><Button icon="close" variant="quiet" aria-label="关闭插件与组件" onClick={() => navigate(state.route)} /></header>
         <div className="ps-list-heading">
           <label className="ps-search"><Icon name="search" /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索插件或组件…" aria-label="搜索插件或组件" />{query && <button onClick={() => setQuery('')} aria-label="清空插件搜索"><Icon name="close" size={16} /></button>}</label>
           <div className="ps-segments" aria-label="插件显示范围"><button className={tab === 'installed' ? 'is-active' : ''} onClick={() => setTab('installed')}>插件</button><button className={tab === 'addable' ? 'is-active' : ''} onClick={() => setTab('addable')}>可添加 <span>{available.length}</span></button></div>
@@ -139,9 +231,21 @@ export function PluginsPage() {
         <div className="ps-panel-note"><span><Icon name="info" size={18} />停用插件保留已有内容</span><Button variant="quiet" onClick={() => { setTypesOpen(true); setTypesVisible(true); window.dispatchEvent(new CustomEvent('prototype-panel-open', { detail: { id: 'plugin-types' } })); }} icon="cards">卡片类型</Button><Button variant="quiet" onClick={() => navigate('workflow')} icon="workflow">阅读方法</Button></div>
       </div>
     </div>
-    {typesOpen && <Panel id="plugin-types" title="AI 定义的类型" width={360} dock="right" initial={{ x: Math.max(76, width - 390), y: 110 }} onVisibilityChange={setTypesVisible}>
-      <div className="ps-type-form"><label>当前图书<span className="ps-read-value">{book.title}</span></label><label>选择类型<select value={selectedType} onChange={e => selectType(e.target.value)}>{types.map(type => <option key={type.id} value={type.id}>{type.name}</option>)}<option value="new">＋ 新建类型</option></select></label><div className="ps-type-suggestion"><Button variant="quiet" icon="sparkle" onClick={suggestType}>AI 建议 · 演示</Button></div><div className="ps-form-rule" /><label>名称<input value={typeName} onChange={e => setTypeName(e.target.value)} placeholder="由书决定，例如定理、战役" /></label><p className="ps-helper">按书定义，不限定为人物卡片。</p><label>字段<textarea value={typeFields} onChange={e => setTypeFields(e.target.value)} placeholder="用顿号或换行分隔" rows={4} /></label>{typeError && <p className="ps-error" role="alert">{typeError}</p>}<Button variant="primary" icon="save" onClick={saveType}>保存类型</Button><p className="ps-caption">此处修改示例数据；正式 App 实现另行验收。</p></div>
+    {typesOpen && <Panel id="plugin-types" title="本书卡片类型" width={360} dock="right" initial={{ x: Math.max(20, width - 380), y: 88 }} onVisibilityChange={setTypesVisible} onRequestClose={closeTypes}
+      footer={<div className="sp-footer-actions"><Button variant="quiet" onClick={() => { if (closeTypes()) window.dispatchEvent(new CustomEvent('prototype-panel-close', { detail: { id: 'plugin-types' } })); }}>关闭</Button><Button className="sp-push" variant="primary" icon="save" onClick={saveType}>保存类型</Button></div>}>
+      <div className="ps-type-form">
+        <div className="sp-settings-state"><small>{book.title}</small><small>{typeDirty ? '有未保存修改' : selectedType === 'new' ? '新建定义' : '已保存定义'}</small></div>
+        <label>选择类型<select value={selectedType} onChange={e => { const id = e.target.value; requestTypeChange(() => selectType(id)); }}>{types.map(type => <option key={type.id} value={type.id}>{type.name}</option>)}<option value="new">＋ 新建类型</option></select></label>
+        <div className="ps-type-suggestion"><Button variant="quiet" icon="sparkle" onClick={() => requestTypeChange(suggestType)}>AI 建议 · 演示</Button></div>
+        <div className="ps-form-rule" />
+        <label>名称<input value={typeName} onChange={e => setTypeName(e.target.value)} placeholder="由书决定，例如定理、战役" /></label>
+        <p className="ps-helper">按书定义，不限定为人物卡片。</p>
+        <label>字段<textarea value={typeFields} onChange={e => setTypeFields(e.target.value)} placeholder="用顿号或换行分隔" rows={5} /></label>
+        {typeError && <p ref={typeErrorRef} className="ps-error" role="alert">{typeError}</p>}
+        <p className="ps-caption">只保存本地示例；折叠、缩窗保留输入，不调用真实 AI。</p>
+      </div>
     </Panel>}
+    {typePending && <Modal title="这份定义还没有保存" onClose={() => resolveTypeChange('cancel')} footer={<><Button onClick={() => resolveTypeChange('cancel')}>继续编辑</Button><Button onClick={() => resolveTypeChange('discard')}>放弃并继续</Button><Button variant="primary" onClick={() => resolveTypeChange('save')}>保存并继续</Button></>}><p>先处理名称与字段的修改，再切换定义或离开。保存失败会保留全部输入。</p>{typeError && <p className="ps-error" role="alert">{typeError}</p>}</Modal>}
     {importOpen && <Modal title="导入声明式插件 · 演示" onClose={() => setImportOpen(false)} footer={<><Button onClick={() => setImportOpen(false)}>取消</Button><Button variant="primary" icon="upload" onClick={importPackage}>导入示例</Button></>}><div className="ps-modal-body"><p>查看声明包如何提供类型、读书法和组件。交互稿仅接收下方示例，不执行代码。</p><label>插件声明<textarea className="ps-code" value={packageText} onChange={e => setPackageText(e.target.value)} rows={9} spellCheck={false} /></label>{importError && <p className="ps-error" role="alert">{importError}</p>}</div></Modal>}
   </section>;
 }
@@ -178,11 +282,10 @@ export function ModelsPage() {
   const [testState, setTestState] = useState('idle');
   const [testOutcome, setTestOutcome] = useState('success');
   const [advanced, setAdvanced] = useState(false);
-  const [listOpen, setListOpen] = useState(() => window.innerWidth > 1100);
-  const [listVisible, setListVisible] = useState(() => window.innerWidth > 1100);
   const [newOpen, setNewOpen] = useState(false);
   const [pending, setPending] = useState(null);
   const testTimer = useRef(null);
+  const errorRef = useRef(null);
   const knownLimits = useRef(null);
   if (!knownLimits.current) {
     knownLimits.current = new Map();
@@ -199,7 +302,7 @@ export function ModelsPage() {
   pendingRef.current = pending;
 
   useEffect(() => () => { clearTimeout(testTimer.current); pendingRef.current?.resolve?.(false); }, []);
-  useEffect(() => { if (width <= 1100) { setListOpen(false); setListVisible(false); } }, [width]);
+  useEffect(() => { if (error) errorRef.current?.scrollIntoView({ block: 'nearest' }); }, [error]);
   useEffect(() => {
     for (const profile of state.profiles || []) {
       if (Number(profile.maxOutputTokens) > 0) knownLimits.current.set(`${profile.provider}:${profile.modelId.trim()}`, Number(profile.maxOutputTokens));
@@ -244,12 +347,12 @@ export function ModelsPage() {
     const next = profileDraft(profile);
     setSelectedId(profile?.id || '');
     setDraft(next);
+    draftRef.current = next; dirtyRef.current = false;
     setSaved(JSON.stringify(next));
     setError('');
     setTestState('idle');
     clearTimeout(testTimer.current);
     if (profile?.id) update(prev => ({ ...prev, activeProfileId: profile.id }));
-    if (width <= 1100) { setListOpen(false); setListVisible(false); }
   }
 
   function requestLoad(profile) {
@@ -262,6 +365,10 @@ export function ModelsPage() {
     const next = pending;
     if (choice === 'save' && !save()) return;
     if (choice === 'cancel') { next?.resolve?.(false); setPending(null); return; }
+    if (choice === 'discard') {
+      const original = profileDraft((state.profiles || []).find(profile => profile.id === selectedId));
+      setDraft(original); draftRef.current = original; setSaved(JSON.stringify(original)); dirtyRef.current = false; setError('');
+    }
     setPending(null);
     if (next?.kind === 'leave') { dirtyRef.current = false; next.resolve(true); }
     else if (next?.kind === 'load') loadProfile(next.profile);
@@ -303,13 +410,22 @@ export function ModelsPage() {
   }
 
   const setField = (field, value) => { clearTimeout(testTimer.current); setDraft(current => ({ ...current, [field]: value })); setError(''); if (testState !== 'idle') setTestState('idle'); };
-  const profileWidth = width > 1100 ? Math.min(850, width - 485) : Math.max(420, width - 112);
+  const profileWidth = Math.max(240, Math.min(1180, width - 40));
+  const showServiceList = width >= 1000;
+  const requestNew = () => dirty ? setPending({ kind: 'new' }) : setNewOpen(true);
+  const closeSettings = () => app.navigate(state.route);
 
-  return <section className="settings-page ps-models" aria-label="模型设置交互稿">
-    {(!listOpen || !listVisible) && <div className="ps-service-reopen"><Button icon="models" onClick={() => { setListOpen(true); setListVisible(true); window.dispatchEvent(new CustomEvent('prototype-panel-open', { detail: { id: 'model-services' } })); }}>我的服务 · {state.profiles?.length || 0}</Button></div>}
-    {listOpen && <Panel id="model-services" title="我的服务" width={350} className="ps-model-services" dock="left" initial={{ x: 80, y: 110 }} onVisibilityChange={setListVisible}><div className="ps-profile-list">{(state.profiles || []).map(profile => <button className={`ps-profile-row ${selectedId === profile.id ? 'is-selected' : ''}`} key={profile.id} onClick={() => requestLoad(profile)}><Icon name="link" size={26} /><span>{profile.name}</span>{state.activeProfileId === profile.id && <small>当前</small>}</button>)}{!state.profiles?.length && <p className="ps-helper">还没有保存的服务。</p>}<div className="ps-form-rule" /><Button variant="quiet" icon="plus" onClick={() => dirty ? setPending({ kind: 'new' }) : setNewOpen(true)}>新建服务</Button>{width <= 1100 && <Button variant="quiet" icon="collapse" onClick={() => { setListOpen(false); setListVisible(false); }}>返回配置</Button>}</div></Panel>}
-    {(width > 1100 || !listOpen || !listVisible) && <Panel id="model-config" title={draft.name || '新服务配置'} className="ps-model-config" width={profileWidth} dock="right" initial={{ x: width > 1100 ? 455 : 78, y: width > 1100 ? 110 : 126 }}>
+  return <section className="settings-page ps-models sp-settings" aria-label="模型设置交互稿">
+    <SettingsPolishStyles />
+    <Panel id="model-config" title={draft.name || '模型设置'} className="ps-model-config sp-model-config" width={profileWidth} dock="right" initial={{ x: Math.max(20, (width - profileWidth) / 2), y: 88 }}
+      actions={<Button icon="plus" variant="quiet" onClick={requestNew}>新建服务</Button>}
+      onRequestClose={() => { closeSettings(); return false; }}
+      footer={<div className="sp-footer-actions"><Button onClick={closeSettings}>关闭</Button><Button icon="play" disabled={testState === 'testing'} onClick={testConfig}>{testState === 'testing' ? '测试中…' : '测试连接 · 演示'}</Button><Button icon="trash" variant="quiet" disabled={!selectedId} onClick={deleteProfile} aria-label="删除当前示例配置" /><Button className="sp-push" icon="save" variant="primary" onClick={save}>保存配置</Button></div>}>
+      <div className="sp-model-layout">
+      {showServiceList && <aside className="sp-service-list" aria-label="我的服务"><h3>我的服务 · {state.profiles?.length || 0}</h3><div className="ps-profile-list">{(state.profiles || []).map(profile => <button className={`ps-profile-row ${selectedId === profile.id ? 'is-selected' : ''}`} key={profile.id} onClick={() => requestLoad(profile)}><Icon name="link" size={22} /><span>{profile.name}</span>{state.activeProfileId === profile.id && <small>当前</small>}</button>)}{!state.profiles?.length && <p className="ps-helper">还没有保存的服务，可从上方新建。</p>}</div></aside>}
+      <div className="sp-form-scroll">
       <div className="ps-model-form">
+        {!showServiceList && <label className="sp-service-select"><span>我的服务</span><select value={selectedId} onChange={e => requestLoad((state.profiles || []).find(profile => profile.id === e.target.value))}>{!selectedId && <option value="">新的未保存配置</option>}{(state.profiles || []).map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>}
         <div role="status" className={`ps-save-state ${dirty ? 'is-dirty' : ''}`}><i />{dirty ? '未保存的更改' : '已保存'} · 示例配置</div>
         <label className="ps-form-line"><span>服务名称</span><input value={draft.name} onChange={e => setField('name', e.target.value)} placeholder="给这份配置命名" /></label>
         <label className="ps-form-line"><span>接口地址</span><input value={draft.baseURL} onChange={e => setField('baseURL', e.target.value)} placeholder="https://…/chat/completions" spellCheck={false} /></label>
@@ -322,11 +438,13 @@ export function ModelsPage() {
         <div className="ps-form-rule" />
         <button className="ps-disclosure" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}><Icon name={advanced ? 'chevronDown' : 'chevronRight'} size={18} />高级设置</button>
         {advanced && <div className="ps-advanced"><label className="ps-form-line"><span>提供商预设</span><select value={draft.provider} onChange={e => applyPreset(e.target.value)}>{PROVIDER_PRESETS.map(preset => <option key={preset.provider} value={preset.provider}>{preset.name}</option>)}</select></label><label className="ps-form-line"><span>上下文 Token</span><input type="number" min="1" placeholder="未知时留空" value={draft.contextTokens} onChange={e => setField('contextTokens', e.target.value)} /></label><label className="ps-form-line"><span>输出参数</span><select value={draft.tokenParameter} onChange={e => setField('tokenParameter', e.target.value)}><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></select></label><label className="ps-form-line"><span>每轮请求预算</span><input type="number" min="1" max="2000" value={draft.requests} onChange={e => setField('requests', Math.max(1, Math.min(2000, Number(e.target.value) || 1)))} /></label><p className="ps-caption">预设数值取自项目示例目录（2026-10-14），不是实时规格。真实使用前需核对官方模型文档。更高 Token 上限不保证理解正确。</p></div>}
-        {error && <p className="ps-error" role="alert"><Icon name="warning" size={18} />{error}</p>}
+        {error && <p ref={errorRef} className="ps-error" role="alert"><Icon name="warning" size={18} />{error}</p>}
         {testState !== 'idle' && <div className={`ps-test-result ${testState === 'error' ? 'is-error' : ''}`} role="status"><Icon name={testState === 'testing' ? 'refresh' : testState === 'success' ? 'check' : 'warning'} size={20} /><div><strong>{testState === 'testing' ? '正在演示测试…' : testState === 'success' ? '演示连接成功' : '演示连接失败'}</strong><p>{testState === 'error' ? '示例错误：模型 ID 未被服务接受。请检查输入后重试，草稿仍在。' : '仅演示界面状态，没有发起真实请求，也没有验证 OCR。'}</p></div></div>}
-        <div className="ps-model-actions"><Button icon="play" variant="primary" disabled={testState === 'testing'} onClick={testConfig}>{testState === 'testing' ? '演示测试中…' : '测试配置 · 演示'}</Button><Button icon="trash" variant="quiet" disabled={!selectedId} onClick={deleteProfile} aria-label="删除当前示例配置" /></div><div className="ps-test-options"><Icon name="info" size={17} /><span>不发真实请求</span><label>演示结果<select value={testOutcome} onChange={e => setTestOutcome(e.target.value)}><option value="success">成功</option><option value="error">失败</option></select></label></div>
+        <div className="ps-test-options"><Icon name="info" size={17} /><span>不发真实请求</span><label>演示结果<select value={testOutcome} onChange={e => setTestOutcome(e.target.value)}><option value="success">成功</option><option value="error">失败</option></select></label></div>
       </div>
-    </Panel>}
+      </div>
+      </div>
+    </Panel>
     {newOpen && <Modal title="新建服务 · 选择示例预设" onClose={() => setNewOpen(false)}><div className="ps-provider-grid">{PROVIDER_PRESETS.map(preset => <button key={preset.provider} onClick={() => newFromPreset(preset)}><Icon name="link" size={23} /><span>{preset.name}</span><Icon name="chevronRight" size={18} /></button>)}</div><p className="ps-modal-disclaimer">创建的是内存示例配置。密钥框保持只读。</p></Modal>}
     {pending && <Modal title="这份配置还没有保存" onClose={() => resolvePending('cancel')} footer={<><Button onClick={() => resolvePending('cancel')}>继续编辑</Button><Button onClick={() => resolvePending('discard')}>放弃并继续</Button><Button variant="primary" onClick={() => resolvePending('save')}>保存并继续</Button></>}><div className="ps-modal-body"><p>先处理当前草稿，再{pending.kind === 'leave' ? '离开设置' : pending.kind === 'new' ? '新建服务' : '切换服务'}。保存失败时会保留输入。</p>{error && <p className="ps-error" role="alert">{error}</p>}</div></Modal>}
   </section>;

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useApp, Icon, Button, Panel, Toolbar, Modal, Markdown, Empty } from '../shared.jsx';
+import { useApp, Icon, Button, Panel, Toolbar, Modal, Markdown, Empty, placeFloatingChrome } from '../shared.jsx';
 import './spatial.css';
 
 export const SPATIAL_EVENTS = [
@@ -45,17 +45,82 @@ const textSummary = (value = '') => value.replace(/[#*`>$]/g, '').replace(/\s+/g
 const openPanel = (id) => window.dispatchEvent(new CustomEvent('prototype-panel-open', { detail: { id } }));
 
 function useViewport(ref) {
-  const [size, setSize] = useState({ width: 0, height: 0, ready: false });
+  const [size, setSize] = useState({ x: 0, y: 0, width: 0, height: 0, ready: false });
   useLayoutEffect(() => {
     const node = ref.current;
     if (!node) return undefined;
-    const rect = node.getBoundingClientRect();
-    setSize({ width: rect.width, height: rect.height, ready: true });
-    const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height, ready: true }));
+    const measure = () => {
+      const rect = node.getBoundingClientRect();
+      setSize((previous) => previous.x === rect.x && previous.y === rect.y && previous.width === rect.width && previous.height === rect.height && previous.ready
+        ? previous : { x: rect.x, y: rect.y, width: rect.width, height: rect.height, ready: true });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
   }, [ref]);
   return size;
+}
+
+const sameFrame = (a, b) => a === b || Boolean(a && b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h);
+function useStableFrame() {
+  const [frame, setFrame] = useState(null);
+  const receive = useCallback((next) => setFrame((previous) => sameFrame(previous, next) ? previous : next), []);
+  return [frame, receive];
+}
+function useIntrinsicSize(ref) {
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return undefined;
+    const measure = () => { const rect = element.getBoundingClientRect(); setSize((previous) => previous.w === rect.width && previous.h === rect.height ? previous : { w: rect.width, h: rect.height }); };
+    measure();
+    const observer = new ResizeObserver(measure); observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+  return size;
+}
+function useNavigationObstacle() {
+  const [frame, receiveFrame] = useStableFrame();
+  useLayoutEffect(() => {
+    let request = 0;
+    const measure = () => { const rect = document.querySelector('.nav-handle,.nav-dot')?.getBoundingClientRect(); receiveFrame(rect ? { x: rect.x, y: rect.y, w: rect.width, h: rect.height } : null); };
+    const settled = () => { cancelAnimationFrame(request); request = requestAnimationFrame(measure); };
+    measure();
+    window.addEventListener('pointerup', settled); window.addEventListener('resize', settled);
+    return () => { cancelAnimationFrame(request); window.removeEventListener('pointerup', settled); window.removeEventListener('resize', settled); };
+  }, [receiveFrame]);
+  return frame;
+}
+const chromeBounds = (size) => ({ x: size.x + 20, y: size.y + 88, w: Math.max(0, size.width - 40), h: Math.max(0, size.height - 112) });
+const fixedFrameStyle = (frame) => frame ? { left: frame.x, top: frame.y, width: frame.w, height: frame.h } : { visibility: 'hidden' };
+function SpatialChrome({ viewport, obstacles, full, compact, menu, status, statusText = '', align = 'center', onToolbarFrameChange }) {
+  const fullRef = useRef(null), compactRef = useRef(null), menuRef = useRef(null), statusRef = useRef(null);
+  const fullSize = useIntrinsicSize(fullRef), compactSize = useIntrinsicSize(compactRef), menuSize = useIntrinsicSize(menuRef), statusSize = useIntrinsicSize(statusRef);
+  const navigationFrame = useNavigationObstacle();
+  const blocked = [...obstacles, navigationFrame].filter(Boolean);
+  const bounds = chromeBounds(viewport);
+  let toolbarFrame = null, mode = 'menu';
+  for (const [candidateMode, size] of [['full', fullSize], ['compact', compactSize], ['menu', menuSize]]) {
+    const preferred = { x: align === 'right' ? bounds.x + bounds.w - size.w : bounds.x + (bounds.w - size.w) / 2, y: bounds.y + bounds.h - size.h };
+    const candidate = placeFloatingChrome(size, preferred, bounds, blocked);
+    if (candidate) { toolbarFrame = candidate; mode = candidateMode; break; }
+  }
+  const statusFrame = status ? placeFloatingChrome(statusSize, { x: bounds.x, y: bounds.y + bounds.h - statusSize.h }, bounds, [...blocked, toolbarFrame].filter(Boolean)) : null;
+  const toolbarToken = JSON.stringify(toolbarFrame), statusToken = JSON.stringify(statusFrame);
+  const callback = useRef(onToolbarFrameChange); callback.current = onToolbarFrameChange;
+  useLayoutEffect(() => { callback.current?.(toolbarFrame); }, [toolbarToken]);
+  useEffect(() => { window.dispatchEvent(new CustomEvent('prototype-chrome-settled')); }, [toolbarToken, statusToken]);
+  return <>
+    <div className="spatial-chrome-measure" aria-hidden="true">
+      <div ref={fullRef}><Toolbar className="spatial-measured-toolbar">{full}</Toolbar></div>
+      <div ref={compactRef}><Toolbar className="spatial-measured-toolbar">{compact}</Toolbar></div>
+      <div ref={menuRef}><Toolbar className="spatial-measured-toolbar">{menu}</Toolbar></div>
+      <div ref={statusRef} className="glass spatial-placed-status spatial-measured-status" style={{ maxWidth: Math.min(300, Math.max(0, bounds.w)) }}>{status}</div>
+    </div>
+    {toolbarFrame ? <div className="spatial-placed-toolbar" style={fixedFrameStyle(toolbarFrame)} data-settled-frame={toolbarToken} title={statusText}><Toolbar>{mode === 'full' ? full : mode === 'compact' ? compact : menu}</Toolbar></div> : null}
+    {statusFrame ? <div className="glass spatial-placed-status" style={fixedFrameStyle(statusFrame)} data-settled-frame={statusToken}>{status}</div> : null}
+  </>;
 }
 
 function TimeAxis({ range, onChange, cursor, onCursor, events, selectedId, onSelect }) {
@@ -112,6 +177,10 @@ export function MapPage() {
   const { state, update, navigate, book } = useApp();
   const viewportRef = useRef(null);
   const size = useViewport(viewportRef);
+  const mapNavigationFrame = useNavigationObstacle();
+  const [timelineFrame, receiveTimelineFrame] = useStableFrame();
+  const [personFrame, receivePersonFrame] = useStableFrame();
+  const [mapToolbarFrame, receiveMapToolbarFrame] = useStableFrame();
   const [camera, setCamera] = useState({ x: 720, y: 512, scale: 1 });
   const panRef = useRef(null);
   const [selectedId, setSelectedId] = useState('h-redcliff');
@@ -124,6 +193,16 @@ export function MapPage() {
   const [rangeError, setRangeError] = useState('');
   const [showUndated, setShowUndated] = useState(true);
   const [inspectedPerson, setInspectedPerson] = useState(null);
+  const [mapToolsOpen, setMapToolsOpen] = useState(false);
+  const timelineIsTop = timelineFrame ? timelineFrame.y < size.y + 132 : false;
+  let maximumTimelineHeight = Math.min(520, Math.max(56, size.height - 120));
+  if (size.width < 1050 && inspectedPerson && personFrame) {
+    maximumTimelineHeight = Math.min(maximumTimelineHeight, Math.max(56, size.height - (timelineIsTop ? 296 : 272)));
+    // A previously dragged example panel may be between the snap points.
+    // Keep a complete 140pt person slot without changing that saved position.
+    if (timelineFrame && timelineFrame.y - size.y - 100 < 140) maximumTimelineHeight = Math.min(maximumTimelineHeight, Math.max(56, size.y + size.height - 176 - timelineFrame.y));
+  }
+  const inspectPerson = (person) => { setInspectedPerson(person); openPanel('map-person'); };
   const range = state.timeRange || [208, 209];
   const cursor = clamp(state.timeCursor ?? 208, range[0], range[1]);
   const personEvents = inspectedPerson ? EVENTS.filter((event) => event.people.includes(inspectedPerson) && event.year === cursor) : [];
@@ -187,24 +266,29 @@ export function MapPage() {
       </div>
     </div>
     <div className="spatial-map-evidence">示例地形，非测绘依据<br />虚线为示例叙事顺序，非考证路线</div>
-    <Panel id="map-time" title="时间与地图" autoCollapseBelow={900} width={Math.min(740,Math.max(300,size.width-144))} dock="bottom-left" initial={{ x: 80, y: Math.max(96, window.innerHeight - 410) }} snap className="spatial-time-panel" actions={<Button icon="more" variant="quiet" aria-label="时间与地图选项" onClick={() => setOptionsOpen(true)} />} footer={selected && detailOpen ? <div className="spatial-source-row"><span>{selected.chapter}</span><Button icon="book" onClick={() => navigate('reader', { page: selected.page, source: selected.source })}>回到原句</Button></div> : null}>
+    <Panel id="map-time" title="时间与地图" autoCollapseBelow={900} width={Math.min(740,Math.max(300,size.width-144))} maximumHeight={maximumTimelineHeight} avoidRects={mapNavigationFrame ? [{ ...mapNavigationFrame, w: mapNavigationFrame.w + 16 }] : []} onFrameChange={receiveTimelineFrame} dock="bottom-left" initial={{ x: 24, y: Math.max(96, window.innerHeight - (window.innerWidth < 900 ? 56 : 420) - 24) }} snap className="spatial-time-panel" actions={<Button icon="more" variant="quiet" aria-label="时间与地图选项" onClick={() => setOptionsOpen(true)} />}>
       <div className="spatial-time-summary"><button className="spatial-range-label" onClick={() => { setRangeDraft(range.map(String)); setRangeError(''); setRangeEditor(true); }}>{range[0]}年 — {range[1]}年 <Icon name="chevronDown" size={15} /></button><button className="spatial-text-button" onClick={() => setEventListOpen(true)}>{state.readingScope === 'current' ? '当前原文' : '全书'} · {filteredEvents.length} 个事件 <Icon name="chevronRight" size={15} /></button></div>
       <TimeAxis range={range} cursor={cursor} onCursor={(next) => update({ timeCursor: next })} onChange={(next) => update({ timeRange: next, timeCursor: clamp(cursor, next[0], next[1]) })} events={scopedEvents} selectedId={selectedId} onSelect={selectEvent} />
       {selected && detailOpen && <section className="spatial-event-detail"><div className="spatial-detail-kicker"><span>{selected.year ? `${selected.year}年` : '年代待考'} · {selected.place}</span><Button icon="collapse" variant="quiet" aria-label="收起事件详情" onClick={() => setDetailOpen(false)} /></div><div className="spatial-event-content"><div className="spatial-event-copy"><h2>{selected.name}</h2><p>{selected.text}</p>
         {!selectedVisible && <div className="spatial-inline-warning"><Icon name="filter" size={18} /><span>此事件不在当前范围。</span><button className="spatial-text-button" onClick={() => { update({ readingScope: 'book', ...(selected.year ? { timeRange: [selected.year, selected.year], timeCursor: selected.year } : {}) }); setShowUndated(true); }}>显示此事件</button></div>}
         {selected.x === null && <p className="spatial-muted">尚未确认坐标，未在地图上标点。</p>}
-        </div><div className="spatial-person-links">{selected.people.map((person) => <button key={person} onClick={() => setInspectedPerson(person)}>{person}</button>)}</div></div>
+        </div><div className="spatial-person-links">{selected.people.map((person) => <button key={person} onClick={() => inspectPerson(person)}>{person}</button>)}</div></div>
+        <div className="spatial-source-row"><span>{selected.chapter}</span><Button icon="book" onClick={() => navigate('reader', { page: selected.page, source: selected.source })}>回到原句</Button></div>
       </section>}
       {!detailOpen && <button className="spatial-restore-detail" onClick={() => setDetailOpen(true)}><Icon name="info" size={18} />{selected?.name || '查看事件详情'}<Icon name="chevronDown" size={16} /></button>}
     </Panel>
-    <Toolbar className="spatial-map-toolbar"><Button icon="target" aria-label="显示全部地图标记" onClick={fitMap} /><span className="spatial-tool-divider" /><Button icon="minus" aria-label="缩小地图" onClick={() => zoom(1 / 1.25)} /><Button icon="plus" aria-label="放大地图" onClick={() => zoom(1.25)} /></Toolbar>
+    <SpatialChrome viewport={size} obstacles={[timelineFrame].filter(Boolean)} align="right" onToolbarFrameChange={receiveMapToolbarFrame}
+      full={<><Button icon="target" aria-label="显示全部地图标记" onClick={fitMap} /><span className="spatial-tool-divider" /><Button icon="minus" aria-label="缩小地图" onClick={() => zoom(1 / 1.25)} /><Button icon="plus" aria-label="放大地图" onClick={() => zoom(1.25)} /></>}
+      compact={<><Button icon="target" aria-label="显示全部地图标记" onClick={fitMap} /><Button icon="more" aria-label="地图工具" onClick={() => setMapToolsOpen(true)} /></>}
+      menu={<Button icon="more" aria-label="地图工具" onClick={() => setMapToolsOpen(true)} />} />
+    {mapToolsOpen ? <Modal title="地图工具" onClose={() => setMapToolsOpen(false)}><div className="spatial-menu-actions"><Button icon="target" onClick={fitMap}>显示全部标记</Button><Button icon="minus" onClick={() => zoom(1 / 1.25)}>缩小地图</Button><Button icon="plus" onClick={() => zoom(1.25)}>放大地图</Button></div></Modal> : null}
     {eventListOpen && <Modal title="当前时间范围的事件" onClose={() => setEventListOpen(false)}><label className="spatial-search"><Icon name="search" size={20} /><input autoFocus placeholder="搜索事件、人物或地点" aria-label="搜索事件" value={query} onChange={(event) => setQuery(event.target.value)} />{query && <Button icon="close" variant="quiet" aria-label="清空事件搜索" onClick={() => setQuery('')} />}</label><div className="spatial-modal-list">{filteredEvents.filter((event) => `${event.name}${event.people.join('')}${event.place}`.includes(query)).map((event) => <button className="spatial-event-row" key={event.id} onClick={() => selectEvent(event)}><Icon name="clock" /><span><strong>{event.name}</strong><small>{event.year ? `${event.year}年` : '年代待考'} · {event.place}</small></span><Icon name="chevronRight" size={18} /></button>)}{!filteredEvents.some((event) => `${event.name}${event.people.join('')}${event.place}`.includes(query)) && <Empty icon="search" title="没有匹配的事件">调整搜索词或时间范围。</Empty>}</div></Modal>}
     {rangeEditor && <Modal title="精确时间范围" onClose={() => setRangeEditor(false)} footer={<><Button onClick={() => setRangeEditor(false)}>取消</Button><Button variant="primary" onClick={() => { const from = Number(rangeDraft[0]); const to = Number(rangeDraft[1]); if (!rangeDraft.every((value) => value.trim()) || !Number.isInteger(from) || !Number.isInteger(to) || from < MIN_YEAR || to > MAX_YEAR || from > to) { setRangeError('请输入 207–211 范围内的整数年份，起点不能晚于终点。'); return; } update({ timeRange: [from, to] }); setRangeEditor(false); }}>应用</Button></>}><p className="spatial-muted">这里编辑的仍是同一根时间轴上的两个端点。</p><div className="spatial-range-fields"><label>起点年份<input value={rangeDraft[0]} inputMode="numeric" onChange={(event) => setRangeDraft([event.target.value, rangeDraft[1]])} /></label><span>至</span><label>终点年份<input value={rangeDraft[1]} inputMode="numeric" onChange={(event) => setRangeDraft([rangeDraft[0], event.target.value])} /></label></div>{rangeError && <p className="spatial-error" role="alert">{rangeError}</p>}</Modal>}
     {optionsOpen && <Modal title="时间与地图选项" onClose={() => setOptionsOpen(false)}><div className="spatial-option-list"><label><input type="checkbox" checked={state.readingScope === 'current'} onChange={(event) => update({ readingScope: event.target.checked ? 'current' : 'book' })} /><span>只看当前原文相关事件<small>关系图谱同步使用这一范围</small></span></label><label><input type="checkbox" checked={showUndated} onChange={(event) => setShowUndated(event.target.checked)} /><span>保留年代待考的事件<small>未知坐标的事件只在清单中展示</small></span></label><Button icon="expand" onClick={() => { update({ timeRange: [MIN_YEAR, MAX_YEAR] }); setOptionsOpen(false); }}>显示全部时间</Button><Button icon="target" onClick={() => { fitMap(); setOptionsOpen(false); }}>地图适合全部标记</Button></div><p className="spatial-muted">从时间框标题拖动，松手可吸附四个角或下方中间。</p></Modal>}
-    <Panel id="map-person" title={inspectedPerson || '人物与时间'} width={340} initial={{ x: Math.max(24, window.innerWidth - 364), y: 106 }} dock="top-right" className="spatial-person-panel">
+    {inspectedPerson ? <Panel id="map-person" title={inspectedPerson} width={340} maximumHeight={490} avoidRects={[timelineFrame, mapToolbarFrame, mapNavigationFrame].filter(Boolean)} onFrameChange={receivePersonFrame} initial={{ x: Math.max(24, window.innerWidth - 364), y: 106 }} dock="top-right" className="spatial-person-panel">
       <label className="spatial-person-select">跟随人物<select aria-label="跟随人物" value={inspectedPerson || ''} onChange={(event) => setInspectedPerson(event.target.value || null)}><option value="">全部人物</option>{Object.keys(PEOPLE).map((person) => <option key={person}>{person}</option>)}</select></label>
       {inspectedPerson ? <><p className="spatial-type-tag">{inspectedPerson} · {cursor}年</p><p>{PEOPLE[inspectedPerson]}</p><h3>此时的线索</h3>{personEvents.length ? personEvents.map((event) => <button key={event.id} className="spatial-person-event" onClick={() => selectEvent(event)}><strong>{event.name}</strong><small>{(explicitPresenceIds[inspectedPerson] || []).includes(event.id) ? `示例出现记录 · ${event.place}` : '有参与记录，位置尚待核对'}</small></button>) : <p className="spatial-muted">此时没有已记录的行动或位置；不会沿用其他年份的位置。</p>}<p className="spatial-muted">拖动同一时间轴上的指针，卡片与地图一起更新。示例记录用于交互设计。</p></> : <p className="spatial-muted">选一位人物，沿时间查看他的事件、出现地点与出处。</p>}
-    </Panel>
+    </Panel> : null}
   </div>;
 }
 
@@ -239,6 +323,7 @@ function GraphPage({ editable }) {
   const { state, update, navigate, notify, confirm, book } = useApp();
   const viewportRef = useRef(null);
   const size = useViewport(viewportRef);
+  const [browserFrame, receiveBrowserFrame] = useStableFrame();
   const [camera, setCamera] = useState({ x: 400, y: 260, scale: 1 });
   const cameraRef = useRef(camera);
   cameraRef.current = camera;
@@ -253,6 +338,7 @@ function GraphPage({ editable }) {
   const [renameEdge, setRenameEdge] = useState(null);
   const [edgeDraft, setEdgeDraft] = useState('');
   const [objectOpen, setObjectOpen] = useState(null);
+  const [graphToolsOpen, setGraphToolsOpen] = useState(false);
   const [browserVisible, setBrowserVisible] = useState(true);
   const pointerRef = useRef(null);
   const suppressClick = useRef(0);
@@ -381,6 +467,10 @@ function GraphPage({ editable }) {
   const selectedMarkdown = selected ? (editable ? docIndex.get(selected.docId)?.markdown : selected.markdown) : '';
   const previewHeading = selectedMarkdown?.match(/^# ([^\n]+)/)?.[1] || selected?.title;
   const selectedPreview = selectedMarkdown?.replace(/^# [^\n]+\n?/, '').trimStart();
+  const statusText = connection ? `从“${nodeIndex.get(connection)?.title}”连线 · 点击目标节点，Esc 取消`
+    : editable ? `${nodes.length} 个文档 · ${edges.length} 条连线` : `关系图谱 · ${state.readingScope === 'current' ? '当前原文' : '全书'}`;
+  const zoomButtons = <><Button icon="minus" aria-label="缩小画布" onClick={() => zoom(1 / 1.2)} /><button className="spatial-zoom-value" title="恢复 100% 缩放" onClick={() => zoom(1 / camera.scale)}>{Math.round(camera.scale * 100)}%</button><Button icon="plus" aria-label="放大画布" onClick={() => zoom(1.2)} /></>;
+  const moreTools = <Button icon="more" aria-label="画布工具与状态" onClick={() => setGraphToolsOpen(true)} />;
   return <div className="spatial-page spatial-graph-page" ref={viewportRef}>
     <div className="spatial-graph-viewport" aria-label={editable ? '无限文档导图，可拖动节点或空白画布' : '只读关系图谱，可平移和缩放'} style={{ backgroundSize: `${26 * camera.scale}px ${26 * camera.scale}px`, backgroundPosition: `${size.width / 2 - camera.x * camera.scale}px ${size.height / 2 - camera.y * camera.scale}px` }} onPointerDown={(event) => {
       if (event.button !== 0 || event.target.closest('.spatial-graph-node,.spatial-edge-label,button,input')) return;
@@ -412,14 +502,16 @@ function GraphPage({ editable }) {
         </div>)}
       </div>
     </div>
-    <div className="spatial-graph-status"><span>{editable ? `${nodes.length} 个文档 · ${edges.length} 条连线` : `关系图谱 · ${state.readingScope === 'current' ? '当前原文' : '全书'}`}</span>{!editable && <button className="spatial-text-button" onClick={() => update({ readingScope: state.readingScope === 'current' ? 'book' : 'current' })}>切换范围</button>}</div>
-    {connection && <div className="spatial-connection-hint" role="status"><Icon name="link" size={18} /><span>从“{nodeIndex.get(connection)?.title}”连线 · 点击目标节点，Esc 取消</span><Button icon="close" variant="quiet" aria-label="取消连线" onClick={() => { setConnection(null); setPreview(null); }} /></div>}
-    <Panel id={panelId} title={editable ? '节点' : '对象与关系'} width={370} dock="right" className="spatial-node-panel" onVisibilityChange={setBrowserVisible} autoCloseBelow={1050}>
+    <Panel id={panelId} title={editable ? '节点' : '对象与关系'} width={370} dock="right" className="spatial-node-panel" onFrameChange={receiveBrowserFrame} onVisibilityChange={setBrowserVisible} autoCloseBelow={1050}>
       <label className="spatial-search"><Icon name="search" size={20} /><input placeholder="搜索节点…" aria-label="搜索节点" value={query} onChange={(event) => setQuery(event.target.value)} />{query && <Button icon="close" variant="quiet" aria-label="清空节点搜索" onClick={() => setQuery('')} />}</label>
       <div className="spatial-node-list">{nodes.filter((node) => `${node.title}${node.markdown}`.toLowerCase().includes(query.toLowerCase())).map((node) => <button className={`spatial-node-row ${selectedId === node.id ? 'is-selected' : ''}`} key={node.id} onClick={() => focusNode(node)} onDoubleClick={() => openNode(node)}><Icon name={editable ? 'file' : 'cards'} size={25} /><span><strong>{node.title}</strong><small>{editable ? textSummary(node.markdown) : node.subtitle}</small></span></button>)}{!nodes.some((node) => `${node.title}${node.markdown}`.toLowerCase().includes(query.toLowerCase())) && <p className="spatial-muted spatial-no-results">{query ? '没有匹配的节点' : '当前范围还没有节点'}</p>}</div>
       <section className="spatial-node-preview">{selected ? <><h3>{previewHeading}</h3><Markdown text={selectedPreview || '这篇文档还没有正文。'} /><p className="spatial-interaction-caption">单击预览 · 双击{editable ? '打开文档' : '查看详情'}</p></> : <><h3>{editable ? '每一篇理解，都可以连接' : '从原文看见关联'}</h3><p className="spatial-muted">单击节点预览，双击打开。{editable ? '拖动节点移动位置，从边缘圆点拖出连线。' : '这是 AI 分析产生的只读关系，浏览不会改写分析。'}</p></>}</section>
     </Panel>
-    <Toolbar className="spatial-graph-toolbar"><Button icon="minus" aria-label="缩小画布" onClick={() => zoom(1 / 1.2)} /><button className="spatial-zoom-value" title="恢复 100% 缩放" onClick={() => zoom(1 / camera.scale)}>{Math.round(camera.scale * 100)}%</button><Button icon="plus" aria-label="放大画布" onClick={() => zoom(1.2)} /><span className="spatial-tool-divider" /><Button icon="expand" aria-label="显示全部节点" onClick={fit} />{editable ? <><span className="spatial-tool-divider" /><Button icon="plus" onClick={() => setNodePicker(true)}>新建节点</Button></> : <span className="spatial-readonly-label"><Icon name="lock" size={15} />只读关系</span>}</Toolbar>
+    <SpatialChrome viewport={size} obstacles={[browserFrame].filter(Boolean)} statusText={statusText}
+      full={<>{zoomButtons}<span className="spatial-tool-divider" /><Button icon="expand" aria-label="显示全部节点" onClick={fit} />{editable ? <><span className="spatial-tool-divider" /><Button icon="plus" onClick={() => setNodePicker(true)}>新建节点</Button></> : <span className="spatial-readonly-label"><Icon name="lock" size={15} />只读关系</span>}{moreTools}</>}
+      compact={<>{zoomButtons}{moreTools}</>} menu={moreTools}
+      status={<div className="spatial-status-content" role="status"><span>{statusText}</span>{connection ? <Button icon="close" variant="quiet" aria-label="取消连线" onClick={() => { setConnection(null); setPreview(null); }} /> : !editable ? <button className="spatial-text-button" onClick={() => update({ readingScope: state.readingScope === 'current' ? 'book' : 'current' })}>切换范围</button> : null}</div>} />
+    {graphToolsOpen ? <Modal title="画布工具与状态" onClose={() => setGraphToolsOpen(false)}><p className="spatial-muted">{statusText}</p><div className="spatial-menu-actions"><Button icon="minus" onClick={() => zoom(1 / 1.2)}>缩小画布</Button><Button icon="refresh" onClick={() => zoom(1 / camera.scale)}>恢复100%</Button><Button icon="plus" onClick={() => zoom(1.2)}>放大画布</Button><Button icon="expand" onClick={fit}>显示全部节点</Button>{editable ? <Button icon="plus" onClick={() => { setGraphToolsOpen(false); setNodePicker(true); }}>新建节点</Button> : <Button icon="filter" onClick={() => update({ readingScope: state.readingScope === 'current' ? 'book' : 'current' })}>切换到{state.readingScope === 'current' ? '全书' : '当前原文'}</Button>}{connection ? <Button icon="close" onClick={() => { setConnection(null); setPreview(null); }}>取消连线</Button> : null}</div></Modal> : null}
     {nodes.length === 0 && <div className="spatial-canvas-empty"><Empty icon={editable ? 'mindmap' : 'relations'} title={editable ? '从第一篇理解开始' : '当前范围还没有关系'} action={editable ? <Button icon="plus" variant="primary" onClick={() => setNodePicker(true)}>创建第一篇笔记</Button> : <Button onClick={() => update({ readingScope: 'book' })}>查看全书范围</Button>}>{editable ? '新建笔记，或将已有 Markdown 文档加入导图。' : '返回原文继续阅读，已保存的数据不会因为筛选消失。'}</Empty></div>}
     {menu && <><button className="spatial-context-dismiss" aria-label="关闭图谱菜单" onClick={() => setMenu(null)} /><div className="spatial-context-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
       {menu.edgeId ? <><button role="menuitem" onClick={() => { const edge = edges.find((item) => item.id === menu.edgeId); setRenameEdge(edge); setEdgeDraft(edge.label); setMenu(null); }}><Icon name="edit" size={18} />修改关系名称</button><button role="menuitem" onClick={() => { update((previous) => ({ ...previous, graphEdges: previous.graphEdges.filter((edge) => edge.id !== menu.edgeId) })); setMenu(null); notify('已移除连线，节点与文档保留。'); }}><Icon name="minus" size={18} />移除连线</button></> : menu.nodeId ? <><button role="menuitem" onClick={() => { openNode(nodeIndex.get(menu.nodeId)); setMenu(null); }}><Icon name="file" size={18} />打开文档</button><button role="menuitem" onClick={() => { setConnection(menu.nodeId); setPreview(null); setMenu(null); }}><Icon name="link" size={18} />从这里连线</button>{connection && connection !== menu.nodeId && <button role="menuitem" onClick={() => { connect(connection, menu.nodeId); setMenu(null); }}><Icon name="check" size={18} />连接到这里</button>}<hr /><button role="menuitem" onClick={() => removeNode(nodeIndex.get(menu.nodeId))}><Icon name="minus" size={18} />移除节点，保留文档</button><button role="menuitem" className="spatial-danger-text" onClick={() => trashDocument(nodeIndex.get(menu.nodeId))}><Icon name="trash" size={18} />将文档移入回收站</button></> : <button role="menuitem" onClick={() => { setNodePicker(true); setMenu(null); }}><Icon name="plus" size={18} />新建节点</button>}

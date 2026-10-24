@@ -180,3 +180,26 @@
 .spatial-person-panel h3{font-size:14px}
 .spatial-person-event{display:flex;flex-direction:column;gap:5px;text-align:left;width:100%;padding:12px;margin:7px 0;border:1px solid #dde5f1;border-radius:12px;background:#f7faff;color:#233c61;cursor:pointer}
 .spatial-person-event small{color:#6c7c91}
+
+/* Settled floating chrome is measured independently from its eventual slot. */
+.spatial-chrome-measure{position:fixed;left:0;top:0;display:flex;flex-direction:column;align-items:flex-start;width:max-content;visibility:hidden!important;pointer-events:none!important;z-index:-1}
+.spatial-chrome-measure>div{display:inline-flex}
+.spatial-chrome-measure .toolbar,.spatial-placed-toolbar>.toolbar{position:static!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;transform:none!important;max-width:none!important;width:max-content;gap:8px!important;padding:7px 10px!important;border-radius:24px;font-size:15px;box-sizing:border-box}
+.spatial-placed-toolbar{position:fixed;z-index:15}
+.spatial-placed-status{position:fixed;display:flex;align-items:center;min-height:44px;padding:8px 12px;border-radius:16px;z-index:15;font-size:13px}
+.spatial-chrome-measure .spatial-placed-status{position:static;width:max-content;max-width:300px}
+.spatial-status-content{display:flex;align-items:center;gap:8px;min-width:0;max-width:100%}
+.spatial-status-content>span{min-width:0;overflow-wrap:anywhere;line-height:1.5}
+.spatial-status-content>.button,.spatial-status-content>.spatial-text-button{flex:none}
+.spatial-menu-actions{display:flex;flex-wrap:wrap;gap:10px}
+.spatial-page .spatial-event-detail h2,.spatial-page .spatial-person-panel>.panel-body h2{font-family:var(--sans);font-size:20px;letter-spacing:0}
+.spatial-page .spatial-time-panel .spatial-event-detail p,.spatial-page .spatial-person-panel p{font-size:15px}
+.spatial-page .spatial-source-row{margin-top:12px;padding-top:8px;border-top:1px solid var(--line);font-size:13px;flex-wrap:wrap}
+.spatial-page .spatial-person-links button,.spatial-page .spatial-text-button{min-height:44px;font-size:13px}
+.spatial-page .spatial-node-panel .spatial-node-row strong{font-size:15px}
+.spatial-page .spatial-node-panel .spatial-node-preview h3{font:600 16px/1.5 var(--sans)}
+.spatial-page .spatial-node-panel .spatial-node-preview{min-height:70px;overflow:auto;overscroll-behavior:contain}
+.spatial-page .spatial-node-panel .spatial-node-list{max-height:250px;min-height:88px;overscroll-behavior:contain}
+.spatial-page .spatial-marker-caption,.spatial-page .spatial-marker-event{max-width:240px;overflow:hidden;text-overflow:ellipsis}
+.spatial-page .spatial-person-select{font-size:15px;min-height:44px}
+@media(max-width:1050px){.spatial-page .spatial-event-content{flex-wrap:wrap;gap:12px}.spatial-page .spatial-time-panel .spatial-person-links{width:100%;grid-template-columns:repeat(auto-fit,minmax(96px,1fr))}.spatial-page .spatial-time-summary{flex-wrap:wrap}.spatial-page .spatial-time-summary>.spatial-text-button{margin-left:auto}.spatial-page .spatial-node-panel .spatial-node-list{max-height:180px}.spatial-page .spatial-time-panel>.panel-body{overscroll-behavior:contain}}

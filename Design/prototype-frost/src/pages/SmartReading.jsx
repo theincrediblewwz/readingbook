@@ -1,5 +1,5 @@
-import React,{useEffect,useState} from 'react';
-import {useApp,Button,Icon} from '../shared.jsx';
+import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {useApp,Button,Icon,placeFloatingChrome} from '../shared.jsx';
 import './smart-reading.css';
 
 const genres=[['history','历史','clock'],['warfare','战争','map'],['fiction','小说','book'],['argument','论述','file'],['textbook','教材','knowledge']];
@@ -40,8 +40,33 @@ export function SmartReadingPage(){
 
 export function SmartReadingProgress(){
   const {state,update,navigate}=useApp();const [expanded,setExpanded]=useState(false),[minimized,setMinimized]=useState(false);
+  const ref=useRef(null),[placement,setPlacement]=useState(null);
+  const visible=!!state.workflow.smart&&state.workflow.bookId===state.currentBookId;
+  useLayoutEffect(()=>{
+    if(!visible)return;
+    let pending=0;
+    const measure=()=>{
+      if(!ref.current)return;
+      const own=ref.current.getBoundingClientRect(),obstacles=[];
+      document.querySelectorAll('[data-settled-frame],.toolbar,.question-floater,.navigation,.nav-handle,.restore-chip').forEach(el=>{
+        if(el.closest('[inert]')||el===ref.current||el.getClientRects().length===0)return;
+        const css=getComputedStyle(el);if(css.visibility==='hidden'||css.display==='none'||css.opacity==='0')return;
+        const stable=el.dataset.settledFrame?JSON.parse(el.dataset.settledFrame):null,r=stable||el.getBoundingClientRect();
+        obstacles.push(stable||{x:r.x,y:r.y,w:r.width,h:r.height});
+      });
+      const preferred={x:80,y:innerHeight-104-own.height},bounds={x:20,y:88,w:innerWidth-40,h:innerHeight-112};
+      let next=placeFloatingChrome({w:own.width,h:own.height},preferred,bounds,obstacles);
+      if(!next){const compact=placeFloatingChrome({w:52,h:52},preferred,bounds,obstacles);if(compact)next={...compact,compact:true};}
+      setPlacement(old=>JSON.stringify(old)===JSON.stringify(next)?old:next);
+    };
+    const schedule=()=>{cancelAnimationFrame(pending);pending=requestAnimationFrame(measure);};
+    measure();const observer=new ResizeObserver(schedule);if(ref.current)observer.observe(ref.current);
+    window.addEventListener('resize',schedule);window.addEventListener('prototype-chrome-settled',schedule);window.addEventListener('pointerup',schedule);
+    return()=>{observer.disconnect();cancelAnimationFrame(pending);window.removeEventListener('resize',schedule);window.removeEventListener('prototype-chrome-settled',schedule);window.removeEventListener('pointerup',schedule);};
+  },[visible,expanded,minimized,state.route]);
   if(!state.workflow.smart||state.workflow.bookId!==state.currentBookId)return null;
   const running=state.workflow.status==='running';
-  if(minimized)return <Button className="smart-progress-orb glass" icon="sparkle" aria-label="展开智能阅读进度" onClick={()=>{setMinimized(false);setExpanded(true);}}/>;
-  return <aside className={'smart-progress glass '+(expanded?'expanded':'')} aria-label="智能阅读进度"><header><button className="smart-progress-summary" aria-label={expanded?'收起智能阅读详情':'展开智能阅读详情'} aria-expanded={expanded} onClick={()=>setExpanded(!expanded)}><Icon name={running?'sparkle':'pause'}/><b>{running?'分析中':'已暂停'}</b><small>1/{state.workflow.total||3}</small></button><Button variant="quiet" icon={running?'pause':'play'} aria-label={running?'暂停分析':'继续分析'} onClick={()=>update({workflow:{...state.workflow,status:running?'paused':'running'}})}/><Button variant="quiet" icon="minus" aria-label="缩为智能阅读图标" onClick={()=>setMinimized(true)}/></header>{expanded&&<div className="smart-progress-detail"><p><Icon name="check"/>预读并确定阅读方案</p><p><Icon name="check"/>第 {state.workflow.first||1} 页 · 逐段阅读</p><p><Icon name="sparkle"/>正在整理要素与联系</p><Button icon="workflow" variant="quiet" onClick={()=>navigate('workflow')}>阅读方案与结果</Button></div>}</aside>;
+  const style={left:placement?.x||80,top:placement?.y||88,bottom:'auto',visibility:placement&&!placement.compact?'visible':'hidden'};
+  if(minimized)return <span ref={ref} className="smart-progress-orb-wrap" style={style}><Button className="smart-progress-orb glass" icon="sparkle" aria-label="展开智能阅读进度" onClick={()=>{setMinimized(false);setExpanded(true);}}/></span>;
+  return <><aside ref={ref} style={style} className={'smart-progress glass '+(expanded?'expanded':'')} aria-label="智能阅读进度"><header><button className="smart-progress-summary" aria-label={expanded?'收起智能阅读详情':'展开智能阅读详情'} aria-expanded={expanded} onClick={()=>setExpanded(!expanded)}><Icon name={running?'sparkle':'pause'}/><b>{running?'分析中':'已暂停'}</b><small>1/{state.workflow.total||3}</small></button><Button variant="quiet" icon={running?'pause':'play'} aria-label={running?'暂停分析':'继续分析'} onClick={()=>update({workflow:{...state.workflow,status:running?'paused':'running'}})}/><Button variant="quiet" icon="minus" aria-label="缩为智能阅读图标" onClick={()=>setMinimized(true)}/></header>{expanded&&<div className="smart-progress-detail"><p><Icon name="check"/>预读并确定阅读方案</p><p><Icon name="check"/>第 {state.workflow.first||1} 页 · 逐段阅读</p><p><Icon name="sparkle"/>正在整理要素与联系</p><Button icon="workflow" variant="quiet" onClick={()=>navigate('workflow')}>阅读方案与结果</Button></div>}</aside>{placement?.compact&&<span className="smart-progress-orb-wrap" style={{left:placement.x,top:placement.y}}><Button className="smart-progress-orb glass" icon={running?'sparkle':'pause'} aria-label="查看智能阅读进度" title="空间有限；查看进度与结果" onClick={()=>navigate('workflow')}/></span>}</>;
 }
