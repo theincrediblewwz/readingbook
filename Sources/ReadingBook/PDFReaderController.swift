@@ -1,9 +1,11 @@
 import SwiftUI
+import ReadingCore
 
 enum PDFReaderCommand {
     case prev, next, jump(Int), zoomIn, zoomOut, fitPage, fitWidth, actualSize
     case showSearch, toggleSearch, toggleThumbnails, toggleContinuous, createHighlight, createRegion, showAnnotations
     case hideSearch, setThumbnails(Bool), setContinuous(Bool)
+    case setDirection(PDFReadingDirection)
     /// Offsets from an extracted SourceUnit must never be reused as PDF offsets.
     case focusQuote(page: Int, quote: String)
 }
@@ -17,6 +19,7 @@ enum PDFReaderCommand {
     @Published var hasSelection = false
     @Published var isSearchVisible = false
     @Published var isContinuous = true
+    @Published var direction = PDFReadingDirection.vertical
     @Published var thumbnailsVisible = false
     @Published var fitMode = "width"
     /// Visible native chrome in the PDF container's top-left coordinate space.
@@ -28,7 +31,7 @@ enum PDFReaderCommand {
 
     func command(_ command: PDFReaderCommand) { handler?(command) }
     func bind(id: UUID, handler: @escaping (PDFReaderCommand) -> Void) { bindingID = id; self.handler = handler }
-    func update(id: UUID, page: Int, pageCount: Int, zoomPercent: Int, isReady: Bool, hasSelection: Bool, canEditAnnotations: Bool, isSearchVisible: Bool, isContinuous: Bool, thumbnailsVisible: Bool, fitMode: String, chromeFrame: CGRect, thumbnailFrame: CGRect) {
+    func update(id: UUID, page: Int, pageCount: Int, zoomPercent: Int, isReady: Bool, hasSelection: Bool, canEditAnnotations: Bool, isSearchVisible: Bool, isContinuous: Bool, direction: PDFReadingDirection, thumbnailsVisible: Bool, fitMode: String, chromeFrame: CGRect, thumbnailFrame: CGRect) {
         guard bindingID == id else { return }
         if self.page != page { self.page = page }
         if self.pageCount != pageCount { self.pageCount = pageCount }
@@ -37,6 +40,7 @@ enum PDFReaderCommand {
         if self.hasSelection != hasSelection { self.hasSelection = hasSelection }
         if self.isSearchVisible != isSearchVisible { self.isSearchVisible = isSearchVisible }
         if self.isContinuous != isContinuous { self.isContinuous = isContinuous }
+        if self.direction != direction { self.direction = direction }
         if self.thumbnailsVisible != thumbnailsVisible { self.thumbnailsVisible = thumbnailsVisible }
         if self.fitMode != fitMode { self.fitMode = fitMode }
         if self.chromeFrame != chromeFrame { self.chromeFrame = chromeFrame }

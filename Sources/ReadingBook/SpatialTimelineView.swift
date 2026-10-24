@@ -14,7 +14,7 @@ private struct ReadingMapPoint: Identifiable {
 /// existing axis; changing a filter never inserts a second timeline.
 struct SpatialTimelineView: View {
     @EnvironmentObject var store: AppStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @State private var camera: MapCameraPosition = .automatic
     @State private var showingEvents = false
     @State private var editingRange = false

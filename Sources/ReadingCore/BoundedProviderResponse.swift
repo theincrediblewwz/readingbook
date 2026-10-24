@@ -12,9 +12,18 @@ final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecke
     private var response: URLResponse?
     private var data = Data()
     private var terminal = false
+    private let onResponse: (@Sendable (HTTPURLResponse) -> Void)?
+    private let onChunk: (@Sendable (Data) throws -> Void)?
 
-    static func read(_ request: URLRequest, configuration: URLSessionConfiguration) async throws -> (Data, URLResponse) {
-        let receiver = BoundedProviderResponse()
+    init(onResponse: (@Sendable (HTTPURLResponse) -> Void)? = nil, onChunk: (@Sendable (Data) throws -> Void)? = nil) {
+        self.onResponse = onResponse; self.onChunk = onChunk
+        super.init()
+    }
+
+    static func read(_ request: URLRequest, configuration: URLSessionConfiguration,
+                     onResponse: (@Sendable (HTTPURLResponse) -> Void)? = nil,
+                     onChunk: (@Sendable (Data) throws -> Void)? = nil) async throws -> (Data, URLResponse) {
+        let receiver = BoundedProviderResponse(onResponse: onResponse, onChunk: onChunk)
         let session = URLSession(configuration: configuration, delegate: receiver, delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         return try await withTaskCancellationHandler {
@@ -58,6 +67,7 @@ final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecke
         let active = !terminal
         if active { self.response = response }
         lock.unlock()
+        if active { onResponse?(http) }
         completionHandler(active ? .allow : .cancel)
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
@@ -67,6 +77,7 @@ final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecke
         if !overflow { data.append(chunk) }
         lock.unlock()
         if overflow { finish(error: ReadingError.invalid("模型响应超过 4 MiB 限制。")) }
+        else { do { try onChunk?(chunk) } catch { finish(error: error) } }
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) { finish(error: error) }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,

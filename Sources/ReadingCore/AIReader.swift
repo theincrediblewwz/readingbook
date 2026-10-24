@@ -8,8 +8,14 @@ public actor AIReader {
     private var operationTokenLimit = 196_000
     private let roundLimit = 12
     private let registry: PluginToolRegistry
+    private var progressHandler: AIProgressHandler?
 
     public init(registry: PluginToolRegistry = PluginEngine.registry) { self.registry = registry }
+
+    public func setProgressHandler(_ handler: AIProgressHandler?) {
+        guard !operationActive else { return }
+        progressHandler = handler
+    }
 
     /// Call explicitly at the start of a new user-authorized run, never per unit.
     /// An in-flight operation cannot have its budget reset underneath it.
@@ -390,7 +396,7 @@ public actor AIReader {
             documentIDs: documentIDs, loader: documentLoader, operationLimit: operationTokenLimit,
             remainingRequests: max(0, settings.maxRequestsPerRun - requestCount), appendedDocumentIDs: appendedDocumentIDs,
             authorizedNodeIDs: authorizedNodeIDs, hostOperationContext: hostOperationContext, workspace: workspace,
-            hostTools: hostTools, proposalAccess: proposalAccess) { messages, tools, remaining, finalOnly in
+            hostTools: hostTools, proposalAccess: proposalAccess, progress: progressHandler) { messages, tools, remaining, finalOnly in
                 try await self.queryRequest(messages: messages, tools: tools, settings: settings, apiKey: apiKey,
                                             remainingTokens: remaining, finalOnly: finalOnly)
             }
@@ -404,7 +410,7 @@ public actor AIReader {
             return try await request(messages: messages, tools: tools, settings: settings, apiKey: apiKey, remainingTokens: remainingTokens)
         }
         try Task.checkCancellation()
-        let prepared = try ProviderClient.prepare(messages: messages, tools: tools, settings: settings, apiKey: apiKey, remainingTokens: remainingTokens)
+        let prepared = try ProviderClient.prepare(messages: messages, tools: tools, settings: settings, apiKey: apiKey, remainingTokens: remainingTokens, stream: progressHandler != nil)
         var outgoing = prepared.request
         guard let data = outgoing.httpBody, var body = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ReadingError.invalid("只读问答请求编码失败。")
@@ -413,7 +419,7 @@ public actor AIReader {
         outgoing.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         guard requestCount < settings.maxRequestsPerRun else { throw ReadingError.invalid("本轮问答请求预算已用完。") }
         requestCount += 1
-        return try await ProviderClient.perform(ProviderClient.Prepared(request: outgoing, estimatedInputTokens: prepared.estimatedInputTokens))
+        return try await performRequest(ProviderClient.Prepared(request: outgoing, estimatedInputTokens: prepared.estimatedInputTokens))
     }
 
     private func toolConversation(project: BookProject, messages initialMessages: [[String: Any]],
@@ -446,7 +452,7 @@ public actor AIReader {
             guard !calls.isEmpty, calls.count <= 32 else { throw ReadingError.invalid("模型返回了无效的工具调用批次。") }
             messages.append(response.message.conversationValue)
             var seenCallIDs = Set<String>()
-            for call in calls {
+            for (callIndex, call) in calls.enumerated() {
                 try Task.checkCancellation()
                 guard call.type == "function", !call.id.isEmpty, call.id.count <= 200,
                       seenCallIDs.insert(call.id).inserted else {
@@ -454,6 +460,7 @@ public actor AIReader {
                 }
                 let name = call.function.name
                 let result: String
+                var reportedStart = false
                 do {
                     guard !(["workflow_step_complete", "reading_enrich"].contains(requiredTool) && requiredSucceeded) else { throw ReadingError.invalid("当前步骤已提交，不能在完成工具后继续调用；请把完成工具放在最后。") }
                     guard allowedNames.contains(name) else { throw ReadingError.invalid("当前阶段不允许工具 \(String(name.prefix(80)))。") }
@@ -461,13 +468,17 @@ public actor AIReader {
                           let data = call.function.arguments.data(using: .utf8) else {
                         throw ReadingError.invalid("工具参数过大或不是 UTF-8。")
                     }
+                    progressHandler?(AIProgressEvent(.performingTool, toolName: name, toolIndex: callIndex + 1, toolTotal: calls.count))
+                    reportedStart = true
                     var candidate = staged
                     result = try PluginEngine.apply(name: name, arguments: data, to: &candidate, allowedUnitIDs: allowedUnitIDs, registry: registry, phase: phase)
                     ReadingWorkflowRuntime.recordTool(name, in: &candidate, previous: staged)
                     staged = candidate
                     unresolvedErrors.remove(name)
                     if name == requiredTool { requiredSucceeded = true }
+                    progressHandler?(AIProgressEvent(.toolCompleted, toolName: name, toolIndex: callIndex + 1, toolTotal: calls.count, toolSucceeded: true))
                 } catch {
+                    if reportedStart { progressHandler?(AIProgressEvent(.toolCompleted, toolName: name, toolIndex: callIndex + 1, toolTotal: calls.count, toolSucceeded: false)) }
                     unresolvedErrors.insert(name)
                     result = try jsonString(["ok": false, "error": String(error.localizedDescription.prefix(1200)),
                                              "instruction": "修正此工具的参数并成功重试；未修复时不能结束。"])
@@ -522,18 +533,33 @@ public actor AIReader {
                          apiKey: String, remainingTokens: Int) async throws -> ProviderClient.Result {
         try Task.checkCancellation()
         let prepared = try ProviderClient.prepare(messages: messages, tools: tools, settings: settings,
-                                                   apiKey: apiKey, remainingTokens: remainingTokens)
+                                                   apiKey: apiKey, remainingTokens: remainingTokens, stream: progressHandler != nil)
         guard requestCount < settings.maxRequestsPerRun else {
             throw ReadingWorkflowBudgetPause(message: "已达到本轮 \(settings.maxRequestsPerRun) 次模型请求预算，阅读已暂停；当前单元未提交。")
         }
         requestCount += 1
-        return try await ProviderClient.perform(prepared)
+        return try await performRequest(prepared)
+    }
+
+    private func performRequest(_ prepared: ProviderClient.Prepared) async throws -> ProviderClient.Result {
+        let handler = progressHandler, requestID = UUID(), number = requestCount
+        handler?(AIProgressEvent(.waitingForResponse, requestID: requestID, requestNumber: number))
+        let observer: (@Sendable (ProviderStreamSnapshot) -> Void)?
+        if let callback = handler {
+            observer = { value in callback(AIProgressEvent(value.phase, requestID: requestID, requestNumber: number,
+                reasoningCharacters: value.reasoningCharacters, answerCharacters: value.answerCharacters, receivedBytes: value.receivedBytes)) }
+        } else { observer = nil }
+        let result = try await ProviderClient.perform(prepared, progress: observer)
+        try Task.checkCancellation()
+        handler?(AIProgressEvent(.requestCompleted, requestID: requestID, requestNumber: number))
+        return result
     }
 
     private func beginOperation(settings: ProviderSettings) throws {
         guard !operationActive else { throw ReadingError.invalid("已有模型任务正在运行，请先等待或暂停。") }
         operationTokenLimit = try ReadingTokenBudget.operationLimit(for: settings)
         operationActive = true
+        progressHandler?(AIProgressEvent(.preparing))
     }
 
     private func baseMessages(_ prompt: String) -> [[String: Any]] {

@@ -2,12 +2,10 @@ import SwiftUI
 import ReadingCore
 
 @MainActor extension AppStore {
-    static let modelCatalogRepository = ModelCatalogRepository(rootURL:
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ReadingBook/ModelCatalog", isDirectory: true))
     func loadModelCatalog() async {
-        do { providerCatalog = try await Self.modelCatalogRepository.load(baseline: .current).catalog }
-        catch { connectionStatus = "自定义模型目录未能读取，已保留文件并使用内置目录：\(error.localizedDescription)" }
+        let root = libraryRootURL
+        do { let value = try await modelCatalogRepository.load(baseline: .current).catalog; if libraryRootURL == root { providerCatalog = value } }
+        catch { if libraryRootURL == root { providerCatalog = .current; connectionStatus = "自定义模型目录未能读取，已保留文件并使用内置目录：\(error.localizedDescription)" } }
     }
 }
 
@@ -55,7 +53,7 @@ struct ModelCatalogManagerView: View {
                 VStack(alignment: .leading, spacing: 8) { catalogNote; HStack { Spacer(minLength: 0); catalogActions } }
             }.padding(14)
         }.frame(width: min(940, max(1, (availableSize?.width ?? 1004) - 64)), height: min(680, max(1, (availableSize?.height ?? 744) - 64)))
-            .font(.system(size: 15)).readingGlass(radius: 22, prominent: true).task { await load() }.onDisappear { task?.cancel() }
+            .font(.system(size: 15)).readingGlass(radius: 22, prominent: true).task(id: store.libraryRootURL) { review = nil; evidence = []; await load() }.onDisappear { task?.cancel() }
             .onChange(of: review != nil) { _, available in if available { pane = "update" } }
             .onExitCommand(perform: onClose)
     }
@@ -148,48 +146,57 @@ struct ModelCatalogManagerView: View {
         }
     }
     private func load() async {
+        guard !store.storageState.working else { return }
+        let root = store.libraryRootURL, repository = store.modelCatalogRepository
         do {
-            let value = try await AppStore.modelCatalogRepository.load(baseline: .current)
+            let value = try await repository.load(baseline: .current)
+            guard store.libraryRootURL == root else { return }
             snapshot = value; store.providerCatalog = value.catalog
         } catch { status = error.localizedDescription }
     }
     private func inspect() {
-        guard !running, let snapshot else { return }
+        guard !running, !store.storageState.working, let snapshot else { return }
         guard store.providerReady else { status = "请先配置可用的模型与 Key。"; return }
         let configuration = store.settings, key = store.apiKey, instruction = request
         let urls = officialURLs.split(whereSeparator: \.isNewline).map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         running = true; status = "准备核对官网…"
+        store.catalogOperations += 1
+        let repository = store.modelCatalogRepository
         task = Task {
-            defer { running = false }
+            defer { running = false; store.catalogOperations -= 1 }
             do {
                 let reader = try ModelCatalogPublicReader(additionalOfficialURLs: urls)
                 let assistant = ModelCatalogAssistant(reader: reader)
                 let result = try await assistant.inspect(request: instruction, catalog: snapshot.catalog, settings: configuration, apiKey: key, progress: { message in await MainActor.run { status = message } })
                 try Task.checkCancellation()
-                review = try await AppStore.modelCatalogRepository.prepare(proposal: result.proposal, evidence: result.evidence, expectedRevision: snapshot.revision, baseline: .current)
+                review = try await repository.prepare(proposal: result.proposal, evidence: result.evidence, expectedRevision: snapshot.revision, baseline: .current)
                 evidence = result.evidence; status = "尝试读取 \(result.readsUsed) 次，保留 \(result.evidence.count) 个资料片段；请检查差异后再应用。"
             } catch is CancellationError { status = "已停止，原目录保留。" }
             catch { status = error.localizedDescription }
         }
     }
     private func applyReview() {
-        guard !running, let review else { return }
+        guard !running, !store.storageState.working, let review else { return }
         running = true
+        store.catalogOperations += 1
+        let repository = store.modelCatalogRepository
         task = Task {
-            defer { running = false }
+            defer { running = false; store.catalogOperations -= 1 }
             do {
-                let value = try await AppStore.modelCatalogRepository.apply(review: review, baseline: .current)
+                let value = try await repository.apply(review: review, baseline: .current)
                 snapshot = value; store.providerCatalog = value.catalog; self.review = nil; evidence = []; status = "模型目录已更新。原有连接保持不变。"
             } catch { status = error.localizedDescription }
         }
     }
     private func rollback() {
-        guard !running, let snapshot else { return }
+        guard !running, !store.storageState.working, let snapshot else { return }
         running = true
+        store.catalogOperations += 1
+        let repository = store.modelCatalogRepository
         task = Task {
-            defer { running = false }
+            defer { running = false; store.catalogOperations -= 1 }
             do {
-                let value = try await AppStore.modelCatalogRepository.rollback(expectedRevision: snapshot.revision, baseline: .current)
+                let value = try await repository.rollback(expectedRevision: snapshot.revision, baseline: .current)
                 self.snapshot = value; store.providerCatalog = value.catalog; status = "已回退上次公共目录，连接和 Key 保留。"
             } catch { status = error.localizedDescription }
         }

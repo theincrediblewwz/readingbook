@@ -194,20 +194,23 @@ extension AppStore {
         let runSettings = configuration, runKey = key
         isBusy = true; isRecognizingPDF = true; showingOCR = false
         task = Task {
-            defer { isBusy = false; isRecognizingPDF = false }
+            let aiRunID = await beginAIProgress(title: "识别 PDF", ocr: true)
+            defer { finishAIProgress(aiRunID); isBusy = false; isRecognizingPDF = false }
             await pdfOCRReader.resetBudget()
             do {
                 let source = await repository.sourceURL(for: current)
-                guard try await ensurePDFSession(bookID: current.id, sourceURL: source, resumeOCRPages: candidates) else { return }
+                guard try await ensurePDFSession(bookID: current.id, sourceURL: source, resumeOCRPages: candidates) else { finishAIProgress(aiRunID, error: CancellationError()); return }
                 let sourcePassword = pdfPassword(for: current.id)
                 for (index, page) in runPages.enumerated() {
                     try Task.checkCancellation()
                     guard let latest = book, latest.id == current.id else { throw CancellationError() }
                     try await repository.checkOCRPage(project: latest, page: page)
                     activity = "正在识别 PDF 第 \(page) 页（\(index + 1)/\(runPages.count)）…"
+                    updateAIProgressDetail(aiRunID, detail: "第 \(page) 页 · 本轮 \(index + 1)/\(runPages.count) 页")
                     let result = try await pdfOCRReader.recognizePage(sourceURL: source, page: page, settings: runSettings, apiKey: runKey, password: sourcePassword)
                     try Task.checkCancellation()
                     let oldPage = selectedUnit?.page
+                    markAIProgressSaving(aiRunID)
                     let updated = try await repository.saveOCRPage(project: latest, result: result)
                     publish(updated)
                     if oldPage == page { selectedUnitID = updated.units.first { $0.page == page }?.id }
@@ -216,7 +219,7 @@ extension AppStore {
                 activity = runPages.count < candidates.count
                     ? "本轮 \(runPages.count) 页已识别并保存，另有 \(candidates.count - runPages.count) 页可续跑；请在识别面板选择剩余页。"
                     : "所选页面已逐页识别并保存；请对照 PDF 核对，再预读与分析。"
-            } catch { handle(error) }
+            } catch { finishAIProgress(aiRunID, error: error); handle(error) }
             requestsUsed = await pdfOCRReader.requestCount
         }
     }

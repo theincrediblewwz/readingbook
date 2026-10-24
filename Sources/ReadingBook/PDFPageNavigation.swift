@@ -8,7 +8,7 @@ struct PDFPageNavigation: View {
     @FocusState private var editingPage: Bool
     var body: some View {
         HStack(spacing: 4) {
-            Button { pdf.command(.prev) } label: { Image(systemName: "chevron.left") }
+            Button { pdf.command(.prev) } label: { Image(systemName: pdf.direction == .vertical ? "chevron.up" : "chevron.left") }
                 .buttonStyle(ReadingToolbarButtonStyle()).help("上一页").disabled(!pdf.isReady || pdf.page <= 1)
             TextField("页码", text: $entry).textFieldStyle(.plain).multilineTextAlignment(.trailing)
                 .font(.system(size: 14).monospacedDigit()).frame(width: 42, height: ReadingLayout.controlHeight).focused($editingPage)
@@ -19,7 +19,7 @@ struct PDFPageNavigation: View {
                 }.onExitCommand { entry = String(pdf.page); editingPage = false }
                 .disabled(!pdf.isReady).accessibilityLabel("PDF 页码，回车定位")
             Text("/ \(pdf.pageCount)").font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
-            Button { pdf.command(.next) } label: { Image(systemName: "chevron.right") }
+            Button { pdf.command(.next) } label: { Image(systemName: pdf.direction == .vertical ? "chevron.down" : "chevron.right") }
                 .buttonStyle(ReadingToolbarButtonStyle()).help("下一页").disabled(!pdf.isReady || pdf.page >= pdf.pageCount)
         }.fixedSize().onChange(of: pdf.page) { _, page in if !editingPage { entry = String(page) } }
             .onAppear { entry = String(pdf.page) }

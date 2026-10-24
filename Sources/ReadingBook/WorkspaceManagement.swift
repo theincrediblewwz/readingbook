@@ -2,14 +2,18 @@ import SwiftUI
 import ReadingCore
 
 struct WorkspaceDeletion {
-    enum Kind: Equatable { case book, document, entity, event }
+    enum Kind: Equatable { case book, bookLocal, document, entity, event }
     var kind: Kind
     var id: String
     var title: String
     var bookID: String?
+    var bytes: Int64? = nil
+    var confirmationTitle: String { kind == .book ? "从书库移除？" : kind == .bookLocal ? "删除本机项目副本？" : "移入回收站？" }
+    var actionTitle: String { kind == .book ? "移出书库，保留文件" : kind == .bookLocal ? "移到系统废纸篓" : "移入回收站" }
     var detail: String {
         switch kind {
-        case .book: return "整本书及本机副本中的文档将移入回收站，可以恢复。导入前的原始文件保持原样。"
+        case .book: return "只移除书库入口。原书副本、笔记和分析保留，可重新加入。"
+        case .bookLocal: return "包含 App 管理的原书副本、笔记、分析与关联。" + (bytes.map { "本地内容 " + ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) + "。" } ?? "") + "导入前的原文件不动；可从系统废纸篓放回。"
         case .document: return "Markdown 将移入回收站，画布和知识库暂时隐藏它；恢复后保留原内容与节点。聊天记录保留。"
         case .entity, .event: return "对象与受影响的结构化关联将一起移入回收站，暂时从地图、时间轴和导图隐藏。恢复时会核对关联；原书与 Markdown 正文保留。"
         }
@@ -19,7 +23,20 @@ struct WorkspaceDeletion {
 extension AppStore {
     func requestDeletion(_ kind: WorkspaceDeletion.Kind, id: String, title: String) {
         guard !isBusy else { return }
+        guard pendingAIChanges.isEmpty else { errorMessage = "请先处理待审阅修改。"; return }
         guard !editorDirty else { errorMessage = "请先保存正在编辑的 Markdown，再移入回收站。"; return }
+        if kind == .bookLocal {
+            let owner = repository
+            isBusy = true; activity = "核对本机项目副本…"
+            task = Task {
+                defer { isBusy = false }
+                do {
+                    let info = try await owner.storageBook(id: id)
+                    deletionRequest = WorkspaceDeletion(kind: kind, id: id, title: title, bookID: bookID, bytes: info.bytes)
+                } catch { errorMessage = error.localizedDescription }
+            }
+            return
+        }
         deletionRequest = WorkspaceDeletion(kind: kind, id: id, title: title, bookID: bookID)
     }
     func confirmDeletion(_ request: WorkspaceDeletion) {
@@ -30,20 +47,33 @@ extension AppStore {
         task = Task {
             defer { isBusy = false }
             do {
-                if request.kind == .book {
+                if request.kind == .book || request.kind == .bookLocal {
                     guard let project = books.first(where: { $0.id == request.id }) else { return }
-                    try await repository.archiveBook(project: project)
+                    if request.kind == .book {
+                        try await repository.removeBookFromLibrary(project: project)
+                    } else {
+                        let info = try await repository.prepareLocalBookRemoval(id: project.id, archived: false)
+                        let url = info.directoryURL
+                        lastTrashedProjectURL = try await Task.detached(priority: .userInitiated) {
+                            var result: NSURL?
+                            try FileManager.default.trashItem(at: url, resultingItemURL: &result)
+                            return result as URL?
+                        }.value
+                        try? await repository.forgetRemovedBook(id: project.id)
+                    }
                     books.removeAll { $0.id == project.id }
+                    _ = try? await repository.refreshReadableLibraryIndex()
+                    storageState.overview = nil
                     pdfSessionPasswords.removeValue(forKey: project.id); pdfUnlockedBookIDs.remove(project.id)
-                    if bookID == project.id { bookID = nil; selectedUnitID = nil; selectedObjectID = nil; selectedDocumentID = nil; sourceFileURL = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = [] }
-                    activity = "书籍已移入回收站。"
+                    if bookID == project.id { bookID = nil; selectedUnitID = nil; selectedObjectID = nil; selectedDocumentID = nil; sourceFileURL = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; route = "library" }
+                    activity = request.kind == .book ? "已移出书库，文件保留。" : "本机项目已移到系统废纸篓；导入前原文件未动。"
                 } else if let project = books.first(where: { $0.id == request.bookID }) {
                     let updated: BookProject
                     switch request.kind {
                     case .document: updated = try await repository.setDocumentTrashed(project: project, documentID: request.id, trashed: true)
                     case .entity: updated = try await repository.trashManualItem(project: project, kind: .entity, id: request.id)
                     case .event: updated = try await repository.trashManualItem(project: project, kind: .event, id: request.id)
-                    case .book: return
+                    case .book, .bookLocal: return
                     }
                     publish(updated)
                     reconcileSelectionAfterTrash(in: updated)
@@ -52,13 +82,17 @@ extension AppStore {
                 await reloadTrash()
             } catch {
                 let message = error.localizedDescription
-                if request.kind != .book, let targetBookID = request.bookID { await refreshBookAfterManualTrashFailure(targetBookID) }
+                if request.kind != .book && request.kind != .bookLocal, let targetBookID = request.bookID { await refreshBookAfterManualTrashFailure(targetBookID) }
                 errorMessage = message
             }
         }
     }
     func reloadTrash() async {
-        do { let report = try await repository.trashReport(); archivedBooks = report.projects; if !report.issues.isEmpty { errorMessage = libraryLoadIssueSummary(report.issues) } } catch { errorMessage = error.localizedDescription }
+        do {
+            let report = try await repository.trashReport(); archivedBooks = report.projects
+            let removed = try await repository.removedBooksReport(); removedBooks = removed.projects
+            if !report.issues.isEmpty || !removed.issues.isEmpty { errorMessage = libraryLoadIssueSummary(report.issues + removed.issues) }
+        } catch { errorMessage = error.localizedDescription }
     }
     func restoreBook(_ id: String) async {
         guard !isBusy else { return }

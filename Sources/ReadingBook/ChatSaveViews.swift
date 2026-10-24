@@ -44,6 +44,9 @@ private struct BookChatContent: View {
     var body: some View {
         VStack(spacing: 0) {
             if selectionMode { selectionBar }
+            if store.aiProgress.hasActivity, store.aiProgress.bookID == store.bookID {
+                AIProgressStatusView(state: store.aiProgressState, compact: true).padding(.horizontal, embedded ? 16 : 24).padding(.vertical, 10)
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 20) {

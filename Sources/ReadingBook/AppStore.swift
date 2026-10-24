@@ -103,6 +103,20 @@ import ReadingCore
     @Published var ocrServiceID: String?
     @Published var connectionStatus = ""
     @Published var archivedBooks: [BookProject] = []
+    @Published var removedBooks: [BookProject] = []
+    let aiProgressState = AIProgressObservableState()
+    var aiProgress: AIProgressPresentationState {
+        get { aiProgressState.value }
+        set {
+            let old = aiProgressState.value
+            if old.runID != newValue.runID || old.bookID != newValue.bookID || old.status != newValue.status || old.phase != newValue.phase || old.toolName != newValue.toolName { objectWillChange.send() }
+            aiProgressState.value = newValue
+        }
+    }
+    @Published var catalogOperations = 0
+    @Published var libraryRootURL: URL
+    @Published var lastTrashedProjectURL: URL?
+    let storageState = StorageSettingsState()
     @Published var deletionRequest: WorkspaceDeletion?
     @Published var settings = ProviderSettings()
     @Published var providerCatalog = ProviderCatalog.current
@@ -114,7 +128,13 @@ import ReadingCore
     @Published var selectedTemporalEntityID: String?
     @Published var temporalAxis = "legacy"
     @Published var timeCursor = 0.0
-    let repository: LibraryRepository
+    var repository: LibraryRepository
+    var modelCatalogRepository: ModelCatalogRepository
+    var readingIndexTask: Task<Void, Never>?
+    var readingIndexGeneration = 0
+    var readingIndexCache: [String: ReadingExperienceState] = [:]
+    var readingIndexCacheOrder: [String] = []
+    var readableRefreshTask: Task<Void, Never>?
     let serviceProfileDraft = ServiceProfileDraftState()
     let reader = AIReader()
     let pdfOCRReader = PDFOCRReader()
@@ -132,19 +152,26 @@ import ReadingCore
         }.sorted { ($0.startYear ?? Int.max) < ($1.startYear ?? Int.max) }
     }
     init() {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("ReadingBook", isDirectory: true)
+        let root = AppDataLocations.rootURL
+        libraryRootURL = root
         repository = LibraryRepository(rootURL: root)
+        modelCatalogRepository = ModelCatalogRepository(rootURL: root.appendingPathComponent("ModelCatalog", isDirectory: true))
         if let data = UserDefaults.standard.data(forKey: "provider"), let saved = try? JSONDecoder().decode(ProviderSettings.self, from: data) { settings = saved }
         loadServiceProfiles()
     }
     func load() async {
         guard !loaded else { return }; loaded = true
+        guard AppDataLocations.configuredRootAvailable else {
+            errorMessage = "书库位置暂不可用。请连接原磁盘，或在设置中打开已有书库。"; route = "library"; return
+        }
         await loadModelCatalog()
         do {
             let report = try await repository.loadReport()
             books = report.projects; libraryLoadIssues = report.issues
+            removedBooks = try await repository.removedBooksReport().projects
             let lastID = UserDefaults.standard.string(forKey: "workspace-last-book-v1")
             if let first = books.first(where: { $0.id == lastID }) ?? books.first { await selectBook(first.id) }
+            refreshMissingReadableFiles()
             if !report.issues.isEmpty { errorMessage = libraryLoadIssueSummary(report.issues) }
         }
         catch { errorMessage = "书库读取失败，原文件已保留：\(error.localizedDescription)" }
@@ -185,6 +212,8 @@ import ReadingCore
         workspaceMemoryRevision &+= 1
         rememberWorkspaceNavigation()
         refreshReadingExperienceIndex()
+        let owner = repository
+        Task { try? await owner.refreshReadableViews(id: id, archived: false) }
     }
     func publish(_ project: BookProject) {
         projectRevision += 1
@@ -338,8 +367,9 @@ import ReadingCore
         let userMessage = ChatMessage(role: "user", content: question)
         let previousChangeIDs = Set(current.controlledChanges?.receipts.map(\.operationID) ?? [])
         task = Task {
+            let aiRunID = await beginAIProgress(title: "回答问题")
             var writeGrant: ControlledWriteGrant?
-            defer { isBusy = false }
+            defer { finishAIProgress(aiRunID); isBusy = false }
             defer {
                 if let grant = writeGrant, !pendingAIChanges.contains(where: { $0.grant.id == grant.id }) {
                     Task { await repository.revokeChangeGrant(grant.id) }
@@ -369,11 +399,13 @@ import ReadingCore
                 guard var result = book, result.id == current.id, result.sourceHash == current.sourceHash,
                       result.chats.map(\.id) == current.chats.map(\.id) + [userMessage.id] else { throw ReadingError.invalid("对话或原书已改变，本次回答未写入其他版本，请重试。") }
                 result.chats.append(answer.message)
+                markAIProgressSaving(aiRunID)
                 try await repository.save(result); publish(result); requestsUsed = await reader.requestCount
                 queryDisclosure = ([answer.diagnostics.disclosure] + answer.diagnostics.notices).joined(separator: "\n")
                 if memoryEnabled { saveQueryMemory(answer.memory, for: snapshot) }
                 activity = "回答已生成；你可以选择保存为 Markdown。"
             } catch {
+                finishAIProgress(aiRunID, error: error)
                 queryRetryQuestion = question; handle(error)
                 let saved = book?.id == current.id ? (book?.controlledChanges?.receipts.filter { !previousChangeIDs.contains($0.operationID) && $0.undoneAt == nil }.count ?? 0) : 0
                 if saved > 0 {

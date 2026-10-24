@@ -2,6 +2,20 @@ import XCTest
 @testable import ReadingCore
 
 final class WorkspaceMemoryTests: XCTestCase {
+    func testPDFDirectionDecodesOldMemoryWithoutChangingPosition() throws {
+        let old = Data(#"{"page":8,"location":{"x":0.2,"y":0.6},"scale":2.5,"fitMode":"custom","continuous":false,"thumbnails":true}"#.utf8)
+        let memory = try JSONDecoder().decode(WorkspacePDFMemory.self, from: old)
+        XCTAssertNil(memory.direction)
+        XCTAssertEqual(memory.page, 8); XCTAssertEqual(memory.location, WorkspacePoint(x: 0.2, y: 0.6))
+        XCTAssertEqual(memory.scale, 2.5); XCTAssertFalse(memory.continuous); XCTAssertTrue(memory.thumbnails)
+        var changed = memory; changed.direction = .horizontal
+        XCTAssertEqual(try JSONDecoder().decode(WorkspacePDFMemory.self, from: JSONEncoder().encode(changed)), changed)
+    }
+    func testUnknownDirectionDoesNotDiscardBookReadingPosition() throws {
+        let future = Data(#"{"page":12,"scale":1.5,"fitMode":"width","continuous":true,"thumbnails":false,"direction":"future-axis"}"#.utf8)
+        let memory = try JSONDecoder().decode(WorkspacePDFMemory.self, from: future)
+        XCTAssertEqual(memory.page, 12); XCTAssertEqual(memory.scale, 1.5); XCTAssertNil(memory.direction)
+    }
     func testHiddenPDFCannotReplaceTextOrParallelReadingPosition() throws {
         var memory = BookWorkspaceMemory(bookID: "a", sourceHash: "s")
         memory.pdf = WorkspacePDFMemory(page: 8)

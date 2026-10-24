@@ -4,7 +4,7 @@ import ReadingCore
 
 struct ReaderWorkspaceView: View {
     @EnvironmentObject var store: AppStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @Binding var showPDF: Bool
     @Binding var showOutline: Bool
     @Binding var bookmarksOnly: Bool

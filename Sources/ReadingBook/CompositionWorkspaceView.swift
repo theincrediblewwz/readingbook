@@ -7,7 +7,7 @@ import ReadingCore
 /// existing full-page workspaces. All data comes from the scoped Core projection.
 struct CompositionWorkspaceView: View {
     @EnvironmentObject private var store: AppStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     var definition: ViewDefinition?
     @State private var projections: [String: CompositionProjection] = [:]
     @State private var baseline: [String: CompositionProjection] = [:]

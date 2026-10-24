@@ -4,7 +4,7 @@ import ReadingCore
 /// Only the title handle drags. The original PDF keeps its own scroll and selection.
 struct ReaderFloatingPanel<Content: View>: View {
     @EnvironmentObject private var store: AppStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     let title: String
     let icon: String
     var width: CGFloat = 410

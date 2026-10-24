@@ -46,6 +46,11 @@ struct ReaderNavigationPanel: View {
                         choice("单页", icon: "doc", selected: !pdf.isContinuous) { pdf.command(.setContinuous(false)) }
                         choice("连续", icon: "rectangle.portrait.on.rectangle.portrait", selected: pdf.isContinuous) { pdf.command(.setContinuous(true)) }
                     }.disabled(!pdf.isReady)
+                    sectionLabel("翻页方向")
+                    HStack(spacing: 8) {
+                        choice("上下", icon: "arrow.up.arrow.down", selected: pdf.direction == .vertical) { pdf.command(.setDirection(.vertical)) }
+                        choice("左右", icon: "arrow.left.arrow.right", selected: pdf.direction == .horizontal) { pdf.command(.setDirection(.horizontal)) }
+                    }.disabled(!pdf.isReady)
                 }
             }
             Divider().opacity(0.55)

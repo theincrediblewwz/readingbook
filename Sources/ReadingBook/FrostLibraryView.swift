@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import ReadingCore
 
 struct FrostLibraryView: View {
@@ -53,7 +54,10 @@ struct FrostLibraryView: View {
                             }.readingGlass(radius: 20)
                                 .overlay(alignment: .topTrailing) {
                                     Menu {
-                                        Button(role: .destructive) { store.requestDeletion(.book, id: book.id, title: book.title) } label: { Label("移入回收站", systemImage: "trash") }
+                                        Button { store.showBookFolder(book.id) } label: { Label("在 Finder 显示", systemImage: "folder") }
+                                        Button { store.requestDeletion(.book, id: book.id, title: book.title) } label: { Label("移出书库，保留文件", systemImage: "books.vertical") }
+                                        Divider()
+                                        Button(role: .destructive) { store.requestDeletion(.bookLocal, id: book.id, title: book.title) } label: { Label("删除本机项目副本…", systemImage: "trash") }
                                     } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
                                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(6).disabled(store.isBusy).help("管理\(book.title)")
                                 }
@@ -63,6 +67,9 @@ struct FrostLibraryView: View {
                 HStack(spacing: 16) {
                     Button { store.importProject() } label: { Label("导入书项目", systemImage: "square.and.arrow.down") }.buttonStyle(ReadingToolbarButtonStyle())
                     Button { store.route = "trash" } label: { Label("回收站", systemImage: "trash") }.buttonStyle(ReadingToolbarButtonStyle())
+                    if let url = store.lastTrashedProjectURL {
+                        Button { NSWorkspace.shared.activateFileViewerSelecting([url]) } label: { Label("显示系统废纸篓", systemImage: "arrow.up.forward.square") }.buttonStyle(ReadingToolbarButtonStyle())
+                    }
                 }.controlSize(.large).disabled(store.isBusy)
             }.padding(.horizontal, 24).padding(.top, 104).padding(.bottom, 32)
         }.background(Palette.canvas)

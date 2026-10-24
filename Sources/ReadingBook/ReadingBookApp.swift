@@ -5,7 +5,7 @@ struct ReadingBookApp: App {
     @StateObject private var store = AppStore()
     var body: some Scene {
         Window("ReadingBook", id: "main") {
-            WorkspaceView().environmentObject(store)
+            WorkspaceView().environmentObject(store).modifier(ReadingPreferencesEnvironment())
                 .background(FrostWindowAppearance())
                 .frame(minWidth: 800, minHeight: 600)
                 .task { await store.load() }
@@ -23,7 +23,7 @@ struct ReadingBookApp: App {
             CommandMenu("阅读") {
                 Button("预读并制定计划") { store.makePlan() }.disabled(store.book == nil || store.isBusy)
                 Button("开始 / 继续分析") { store.startReading() }.disabled(store.book == nil || store.isBusy)
-                Button("暂停任务") { store.pause() }.keyboardShortcut(".").disabled(!store.isBusy)
+                Button("暂停任务") { store.pause() }.keyboardShortcut(".").disabled(!store.isBusy || store.storageState.working)
             }
             CommandMenu("工作台") {
                 Button("原文阅读") { store.requestedWorkspaceRoute = "reader" }.keyboardShortcut("1")
@@ -32,7 +32,7 @@ struct ReadingBookApp: App {
                 Button("我的笔记") { store.requestedWorkspaceRoute = "editor" }.keyboardShortcut("4")
             }
         }
-        Settings { ProviderSettingsView().environmentObject(store).frame(minWidth: 760, idealWidth: 1060, minHeight: 620, idealHeight: 760) }
+        Settings { AppSettingsView().environmentObject(store).modifier(ReadingPreferencesEnvironment()).frame(minWidth: 760, idealWidth: 960, minHeight: 600, idealHeight: 720) }
     }
 }
 

@@ -7,7 +7,7 @@ struct FloatingNavigationButton: View {
     var isExpanded: Bool
     var activate: () -> Void
     @AppStorage("frost-navigation-dock-v1") private var dockName = NavigationOrbDock.topLeading.rawValue
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @State private var origin: CGPoint?
     @State private var movingCenter: CGPoint?
     @State private var epoch = 0

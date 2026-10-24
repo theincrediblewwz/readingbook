@@ -4,7 +4,7 @@ import ReadingCore
 struct SmartReadingProgressPanel: View {
     var maximumExpandedHeight: CGFloat = 360
     @EnvironmentObject private var store: AppStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @State private var expanded = false
     @State private var minimized = false
     private var session: SmartReadingSession? { store.book?.smartReading }
@@ -16,6 +16,7 @@ struct SmartReadingProgressPanel: View {
         return (try? ReadingLedger.receipts(for: unit, in: book)) ?? []
     }
     private var title: String {
+        if store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID { return store.aiProgress.title }
         if store.isSmartReadingRunning { return session?.status == .planning ? "正在制定阅读方案" : "正在分析" }
         if awaiting { return "阅读方案待确认" }
         if session?.status == .completed { return "本轮已结束" }
@@ -27,7 +28,7 @@ struct SmartReadingProgressPanel: View {
         return session?.status == .completed ? "已结束" : session == nil ? "智能阅读" : "已暂停"
     }
     private var statusIcon: String {
-        store.isSmartReadingRunning ? "sparkles" : session?.status == .completed ? "checkmark.circle" : "book.pages"
+        (store.isSmartReadingRunning || store.aiProgress.isRunning) ? "sparkles" : session?.status == .completed ? "checkmark.circle" : "book.pages"
     }
     private var countText: String? {
         guard let progress, session?.isPlanConfirmed == true else { return nil }
@@ -44,7 +45,7 @@ struct SmartReadingProgressPanel: View {
                 .accessibilityLabel("展开智能阅读进度")
                 .accessibilityValue(title + (countText.map { "，已处理 " + $0 } ?? ""))
                 .contextMenu {
-                    if store.isSmartReadingRunning { Button("暂停分析，保留检查点") { store.pause() } }
+                    if store.isSmartReadingRunning || store.aiProgress.isRunning { Button("停止任务，保留已保存内容") { store.pause() } }
                 }
         } else {
         VStack(spacing: 0) {
@@ -53,6 +54,10 @@ struct SmartReadingProgressPanel: View {
                 Divider().opacity(0.3)
                 ScrollView {
                   VStack(alignment: .leading, spacing: 12) {
+                    if store.aiProgress.hasActivity, store.aiProgress.bookID == store.bookID {
+                        AIProgressStatusView(state: store.aiProgressState)
+                        Divider().opacity(0.3)
+                    }
                     if let scope = session?.scopeTitle { Text(scope).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                     statusRow("预读并确定阅读方案", completed: store.book?.plan != nil && !awaiting)
                     statusRow("逐段阅读 · \(progress.receiptCount)/\(progress.receiptTotal)", completed: progress.receiptTotal > 0 && progress.receiptCount == progress.receiptTotal)
@@ -82,9 +87,12 @@ struct SmartReadingProgressPanel: View {
                 }.frame(maxHeight: maximumExpandedHeight)
             } else if expanded {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(session?.lastMessage ?? (awaiting ? "预读不计入正文覆盖。确认方案后，才开始所选范围的逐段分析。" : "上次预读尚未确认，可重新制定方案，原文与已有分析仍保留。"))
+                    if store.aiProgress.hasActivity, store.aiProgress.bookID == store.bookID { AIProgressStatusView(state: store.aiProgressState) }
+                    if session != nil || !store.aiProgress.hasActivity {
+                      Text(session?.lastMessage ?? (awaiting ? "预读不计入正文覆盖。确认方案后，才开始所选范围的逐段分析。" : "上次预读尚未确认，可重新制定方案，原文与已有分析仍保留。"))
                         .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(4)
                     Button { store.requestedWorkspaceRoute = awaiting ? "book.scheme" : "workflow" } label: { Label(awaiting ? "查看并确认方案" : "重新设置范围", systemImage: "slider.horizontal.3") }.buttonStyle(ReadingToolbarButtonStyle())
+                    }
                 }.padding(17)
             }
         }.frame(width: expanded ? 306 : 260).readingGlass(radius: expanded ? 23 : 26)
@@ -99,16 +107,16 @@ struct SmartReadingProgressPanel: View {
             Button { expanded.toggle() } label: {
                 HStack(spacing: 7) {
                     Image(systemName: statusIcon).font(.system(size: 18)).foregroundStyle(Palette.accent)
-                    Text(compactTitle).font(.system(size: 14, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
+                    Text(store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID ? store.aiProgress.phaseTitle : compactTitle).font(.system(size: 14, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
                     Spacer(minLength: 0)
                     if let countText { Text(countText).font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85).layoutPriority(1) }
                 }.padding(.leading, 15).padding(.trailing, 5).frame(maxWidth: .infinity, minHeight: 52).contentShape(Rectangle())
             }.buttonStyle(.plain).help("\(title)；点击\(expanded ? "收起" : "展开")检查点")
                 .accessibilityLabel(expanded ? "收起智能阅读详情" : "展开智能阅读详情")
                 .accessibilityValue(title + (countText.map { "，已处理 " + $0 } ?? ""))
-            if store.isSmartReadingRunning {
+            if store.isSmartReadingRunning || (store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID) {
                 Button { store.pause() } label: { Image(systemName: "pause") }
-                    .buttonStyle(ReadingToolbarButtonStyle()).help("暂停分析，保留检查点").accessibilityLabel("暂停分析")
+                    .buttonStyle(ReadingToolbarButtonStyle()).help("停止任务，保留已保存内容").accessibilityLabel("停止任务")
             }
             Button { expanded = false; minimized = true } label: { Image(systemName: "minus") }
                 .buttonStyle(ReadingToolbarButtonStyle()).help("缩为悬浮图标，不影响分析").accessibilityLabel("缩为智能阅读图标")

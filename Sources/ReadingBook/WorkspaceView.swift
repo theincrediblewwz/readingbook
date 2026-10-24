@@ -5,7 +5,7 @@ import ReadingCore
 
 struct WorkspaceView: View {
     @EnvironmentObject var store: AppStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @Namespace private var navigationSelection
     @State private var compactInspector = false
     @State private var showsInspector = false
@@ -34,6 +34,8 @@ struct WorkspaceView: View {
     @State private var resolvingNavigation = false
     @State private var chromeBounds: [String: CGRect] = [:]
     @State private var managementRoute: String?
+    @AppStorage("reading.showProgress") private var showReadingPosition = true
+    @State private var readingPageCount = 0
     private var workspaceContent: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
@@ -57,8 +59,11 @@ struct WorkspaceView: View {
                 topIslands(width: geometry.size.width).padding(.top, 14).padding(.leading, 104).padding(.trailing, 24)
                     .allowsHitTesting(managementRoute == nil)
                     .opacity(managementRoute == nil ? 1 : 0).accessibilityHidden(managementRoute != nil)
-                if store.book?.smartReading != nil && managementRoute == nil && !navigationExpanded && store.route != "library" {
+                if (store.book?.smartReading != nil || (store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID && store.route != "query" && !(store.route == "reader" && store.readingCompanionVisible))) && !store.storageState.working && managementRoute == nil && !navigationExpanded && store.route != "library" {
                     floatingProgress(in: geometry).zIndex(6)
+                }
+                if showReadingPosition && store.route == "reader" && store.book != nil && managementRoute == nil {
+                    readingPosition(in: geometry).zIndex(5)
                 }
                 if let managementRoute {
                     managementOverlay(managementRoute)
@@ -138,7 +143,8 @@ struct WorkspaceView: View {
     }
     private var persistedWorkspace: some View {
         presentedWorkspace
-        .onAppear { repairLegacyManagementRoute(); reconcileSheet(); restoreReaderMemory() }
+        .onAppear { repairLegacyManagementRoute(); reconcileSheet(); restoreReaderMemory(); refreshReadingPageCount() }
+        .onChange(of: store.book?.units.count) { _, _ in refreshReadingPageCount() }
         .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreReaderMemory() }
         .onChange(of: readerShowsPDF) { _, value in store.updateWorkspaceMemory { $0.readerShowsPDF = value } }
         .onChange(of: readerOutline) { _, value in store.updateWorkspaceMemory { $0.readerOutline = value } }
@@ -150,8 +156,8 @@ struct WorkspaceView: View {
     }
     private var guardedWorkspace: some View {
         persistedWorkspace
-        .confirmationDialog("移入回收站？", isPresented: deletionPresented, presenting: store.deletionRequest) { request in
-            Button("移入回收站", role: .destructive) { store.confirmDeletion(request) }
+        .confirmationDialog(Text(store.deletionRequest?.confirmationTitle ?? "移入回收站？"), isPresented: deletionPresented, presenting: store.deletionRequest) { request in
+            Button(request.actionTitle, role: request.kind == .book ? nil : .destructive) { store.confirmDeletion(request) }
             Button("取消", role: .cancel) { store.deletionRequest = nil }
         } message: { request in Text("“\(request.title)”\n" + request.detail) }
         .alert("需要处理", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
@@ -167,19 +173,36 @@ struct WorkspaceView: View {
     }
     var body: some View {
         guardedWorkspace
-        .onChange(of: store.bookID) { _, _ in showsInspector = false; compactInspector = false; readerPopover = nil; readerBookmarks = false; progressSize = CGSize(width: 260, height: 52) }
+        .onChange(of: store.bookID) { _, _ in showsInspector = false; compactInspector = false; readerPopover = nil; readerBookmarks = false; progressSize = CGSize(width: 260, height: 52); refreshReadingPageCount() }
         .onChange(of: store.route) { old, next in
             readerPopover = nil
-            if ["models", "plugins", "book.scheme"].contains(next) {
-                store.route = ["models", "plugins", "book.scheme"].contains(old) ? (store.book == nil ? "library" : "reader") : old
+            if ["models", "plugins", "book.scheme", "preferences"].contains(next) {
+                store.route = ["models", "plugins", "book.scheme", "preferences"].contains(old) ? (store.book == nil ? "library" : "reader") : old
                 presentManagement(next)
             } else if viewingGraph || viewingSpatial { showsInspector = false; compactInspector = false }
+        }
+    }
+    private func refreshReadingPageCount() { readingPageCount = store.book?.units.compactMap(\.page).max() ?? 0 }
+    private var positionPercent: Int {
+        if viewingPDF, pdfController.isReady, pdfController.pageCount > 0 { return min(100, max(0, Int((Double(pdfController.page) / Double(pdfController.pageCount) * 100).rounded()))) }
+        if let page = store.selectedUnit?.page, readingPageCount > 0 { return min(100, max(0, Int((Double(page) / Double(readingPageCount) * 100).rounded()))) }
+        guard let unit = store.selectedUnit, let count = store.book?.units.count, count > 0 else { return 0 }
+        return min(100, max(0, Int((Double(unit.order + 1) / Double(count) * 100).rounded())))
+    }
+    @ViewBuilder private func readingPosition(in geometry: GeometryProxy) -> some View {
+        let global = geometry.frame(in: .global)
+        let obstacles = chromeBounds.filter { $0.key != "reading-position" && $0.key != "window-drag" }.values.map { $0.offsetBy(dx: -global.minX, dy: -global.minY) }
+        let area = CGRect(x: 16, y: 88, width: max(0, geometry.size.width - 32), height: max(0, geometry.size.height - 104))
+        if let frame = FloatingChromeGeometry.place(size: CGSize(width: 56, height: 24), preferredOrigin: CGPoint(x: 20, y: geometry.size.height - 42), within: area, avoiding: obstacles) {
+            Text("\(positionPercent)%").font(.system(size: 12, weight: .regular, design: .monospaced)).foregroundStyle(.secondary).opacity(0.6)
+                .frame(width: 56, height: 24).allowsHitTesting(false).accessibilityLabel("阅读位置 \(positionPercent)%")
+                .workspaceChromeBounds("reading-position").position(x: frame.midX, y: frame.midY)
         }
     }
     private func floatingProgress(in geometry: GeometryProxy) -> some View {
         let global = geometry.frame(in: .global)
         let available = CGRect(x: 20, y: 88, width: max(0, geometry.size.width - 40), height: max(0, geometry.size.height - 112))
-        let obstacles = chromeBounds.filter { $0.key != "smart-progress" && $0.key != "window-drag" }.map {
+        let obstacles = chromeBounds.filter { $0.key != "smart-progress" && $0.key != "window-drag" && $0.key != "reading-position" }.map {
             $0.value.offsetBy(dx: -global.minX, dy: -global.minY)
         }
         let preferred = CGPoint(x: geometry.size.width < 700 ? 68 : 80, y: geometry.size.height - 104 - progressSize.height)
@@ -264,7 +287,7 @@ struct WorkspaceView: View {
                     }
                     Divider().padding(.vertical, 8)
                     routeButton("插件与组件", icon: "puzzlepiece.extension", route: "plugins")
-                    routeButton("模型设置", icon: "slider.horizontal.3", route: "models")
+                    routeButton("设置", icon: "gearshape", route: "preferences")
                     routeButton("搜索", icon: "magnifyingglass", route: "librarySearch").help("搜索本书与书库")
                     routeButton("回收站", icon: "trash", route: "trash")
                     Menu {
@@ -417,11 +440,11 @@ struct WorkspaceView: View {
         guard !store.isSavingDocument, !resolvingNavigation else { return }
         navigationExpanded = false; servicePopover = false; bookPopover = false; readerPopover = nil
         if store.serviceProfileDraft.isDirty(in: store) && managementRoute == "models" && route != "models" { pendingModelRoute = route; showsModelRouteConfirmation = true }
-        else if store.editorDirty && store.route == "editor" && route != "editor" && !["models", "plugins", "book.scheme"].contains(route) { pendingRoute = route; showsRouteConfirmation = true }
+        else if store.editorDirty && store.route == "editor" && route != "editor" && !["models", "plugins", "book.scheme", "preferences"].contains(route) { pendingRoute = route; showsRouteConfirmation = true }
         else { completeNavigation(to: route) }
     }
     private func completeNavigation(to route: String) {
-        if ["models", "plugins", "book.scheme"].contains(route) { presentManagement(route) }
+        if ["models", "plugins", "book.scheme", "preferences"].contains(route) { presentManagement(route) }
         else { closeManagement(); store.route = route }
     }
     private func presentManagement(_ route: String) {
@@ -435,13 +458,14 @@ struct WorkspaceView: View {
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { managementRoute = nil }
     }
     private func repairLegacyManagementRoute() {
-        guard ["models", "plugins", "book.scheme"].contains(store.route) else { return }
+        guard ["models", "plugins", "book.scheme", "preferences"].contains(store.route) else { return }
         let route = store.route; store.route = store.book == nil ? "library" : "reader"; presentManagement(route)
     }
     @ViewBuilder private func managementOverlay(_ route: String) -> some View {
         ZStack {
             Color.black.opacity(0.025).contentShape(Rectangle()).onTapGesture { }
             if route == "models" { ProviderSettingsView(embedded: true, onClose: closeManagement).environmentObject(store) }
+            else if route == "preferences" { AppSettingsView(onClose: closeManagement).environmentObject(store) }
             else if route == "plugins" { PluginLibraryView(embedded: true, onClose: closeManagement, draftStore: pluginDefinitionDrafts).environmentObject(store) }
             else { BookSchemeWorkspaceView(onClose: closeManagement).environmentObject(store) }
         }.accessibilityAddTraits(.isModal)

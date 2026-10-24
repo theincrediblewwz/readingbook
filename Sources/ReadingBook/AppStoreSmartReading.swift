@@ -34,6 +34,9 @@ import ReadingCore
             isBusy = true; isSmartReadingRunning = true; smartReadingPlanReady = false
             activity = "AI 正在预读所选范围，并选择适合这本书的方法…"
             task = Task {
+                let aiRunID = await beginAIProgress(title: "制定阅读方案")
+                updateAIProgressDetail(aiRunID, detail: frozen.smartReading?.scopeTitle ?? "所选范围")
+                defer { finishAIProgress(aiRunID) }
                 do {
                     try Task.checkCancellation()
                     try await repository.save(frozen); publish(frozen)
@@ -44,10 +47,11 @@ import ReadingCore
                     planned.smartReading?.status = .awaitingConfirmation
                     planned.smartReading?.updatedAt = Date()
                     planned.smartReading?.lastMessage = "预读方案已生成，确认后才分析原文。"
+                    markAIProgressSaving(aiRunID)
                     try await repository.save(planned); publish(planned)
                     smartReadingPlanReady = true
                     activity = "预读方案已生成，请确认方法与组件；原文覆盖尚未增加。"
-                } catch { await finishSmartReadingAfterError(error, bookID: frozen.id) }
+                } catch { finishAIProgress(aiRunID, error: error); await finishSmartReadingAfterError(error, bookID: frozen.id) }
                 requestsUsed = await reader.requestCount
                 activeReadingUnitID = nil; isSmartReadingRunning = false; isBusy = false
             }
@@ -142,6 +146,8 @@ import ReadingCore
             let requestKey = apiKey
             isBusy = true; isSmartReadingRunning = true; activity = "准备在后台分析\(session.scopeTitle)…"
             task = Task {
+                let aiRunID = await beginAIProgress(title: "智能阅读 · \(frozen.smartReading?.scopeTitle ?? "所选范围")")
+                defer { finishAIProgress(aiRunID) }
                 do {
                     try Task.checkCancellation(); try await repository.save(frozen); publish(frozen)
                     await reader.resetBudget()
@@ -150,6 +156,7 @@ import ReadingCore
                         try requireSmartReadingSession(latest, bookID: readingBookID, sessionID: sessionID)
                         guard let unit = try SmartReadingRuntime.nextUnit(in: latest, allowedUnitIDs: unitIDs) else { break }
                         activeReadingUnitID = unit.id
+                        updateAIProgressDetail(aiRunID, detail: unit.page.map { "第 \($0) 页" } ?? unit.chapter)
                         activity = "后台分析：\(unit.locator)；你可以继续翻阅原书。"
                         var input = latest
                         input.smartReading?.currentUnitID = unit.id
@@ -158,6 +165,7 @@ import ReadingCore
                         result.smartReading?.updatedAt = Date()
                         let nextUnitID = try SmartReadingRuntime.nextUnit(in: result, allowedUnitIDs: unitIDs)?.id
                         result.smartReading?.currentUnitID = nextUnitID
+                        markAIProgressSaving(aiRunID)
                         try await repository.save(result); publish(result)
                         requestsUsed = await reader.requestCount
                         if let failure = ReadingWorkflowRuntime.failureMessage(in: result, unitID: unit.id) { throw ReadingError.invalid(failure) }
@@ -167,8 +175,10 @@ import ReadingCore
                         try Task.checkCancellation()
                         try requireSmartReadingSession(latest, bookID: readingBookID, sessionID: sessionID)
                         activity = "正在整理所选范围的读后综合…"
+                        updateAIProgressDetail(aiRunID, detail: "整理所选范围的读后综合")
                         var result = try await reader.synthesizeNext(project: latest, settings: requestSettings, apiKey: requestKey, allowedUnitIDs: analysisIDs)
                         try Task.checkCancellation(); result.smartReading?.updatedAt = Date()
+                        markAIProgressSaving(aiRunID)
                         try await repository.save(result); publish(result); requestsUsed = await reader.requestCount
                     }
                     guard var latest = book else { throw CancellationError() }
@@ -183,7 +193,7 @@ import ReadingCore
                         (reviewCount > 0 ? "其中 \(reviewCount) 处仍需核对原文。" : "处理覆盖不等于理解无遗漏。")
                     latest.smartReading?.lastMessage = message
                     try await repository.save(latest); publish(latest); activity = message
-                } catch { await finishSmartReadingAfterError(error, bookID: readingBookID) }
+                } catch { finishAIProgress(aiRunID, error: error); await finishSmartReadingAfterError(error, bookID: readingBookID) }
                 requestsUsed = await reader.requestCount
                 activeReadingUnitID = nil; isSmartReadingRunning = false; isBusy = false
             }

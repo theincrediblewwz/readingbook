@@ -40,8 +40,7 @@ import ReadingCore
     private func queryMemoryURL(for snapshot: ReadingQuerySnapshot) -> URL {
         let identity = snapshot.bookID + "|" + snapshot.scopeFingerprint
         let name = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ReadingBook/ConversationMemory", isDirectory: true).appendingPathComponent(name + ".json")
+        return libraryRootURL.appendingPathComponent("ConversationMemory", isDirectory: true).appendingPathComponent(name + ".json")
     }
     func loadQueryMemory(for snapshot: ReadingQuerySnapshot) -> ConversationMemory? {
         let url = queryMemoryURL(for: snapshot)

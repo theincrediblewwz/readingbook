@@ -38,8 +38,21 @@ public struct WorkspacePDFMemory: Codable, Equatable, Sendable {
     public var fitMode: String
     public var continuous: Bool
     public var thumbnails: Bool
-    public init(page: Int, location: WorkspacePoint? = nil, scale: Double = 1, fitMode: String = "width", continuous: Bool = true, thumbnails: Bool = false) {
-        self.page = page; self.location = location; self.scale = scale; self.fitMode = fitMode; self.continuous = continuous; self.thumbnails = thumbnails
+    /// Missing in older workspaces; those books retain the original vertical direction.
+    public var direction: PDFReadingDirection?
+    public init(page: Int, location: WorkspacePoint? = nil, scale: Double = 1, fitMode: String = "width", continuous: Bool = true, thumbnails: Bool = false, direction: PDFReadingDirection? = nil) {
+        self.page = page; self.location = location; self.scale = scale; self.fitMode = fitMode; self.continuous = continuous; self.thumbnails = thumbnails; self.direction = direction
+    }
+    private enum CodingKeys: String, CodingKey { case page, location, scale, fitMode, continuous, thumbnails, direction }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(page: try values.decode(Int.self, forKey: .page),
+                  location: try values.decodeIfPresent(WorkspacePoint.self, forKey: .location),
+                  scale: try values.decode(Double.self, forKey: .scale),
+                  fitMode: try values.decode(String.self, forKey: .fitMode),
+                  continuous: try values.decode(Bool.self, forKey: .continuous),
+                  thumbnails: try values.decode(Bool.self, forKey: .thumbnails),
+                  direction: try? values.decodeIfPresent(PDFReadingDirection.self, forKey: .direction))
     }
     public var isValid: Bool { page > 0 && page <= 1_000_000 && scale.isFinite && (0.05...12).contains(scale) && ["page", "width", "actual", "custom"].contains(fitMode) && (location == nil || location!.isValid) }
 }
@@ -100,7 +113,7 @@ public struct BookWorkspaceMemory: Codable, Equatable, Sendable {
     public mutating func resetLayout() {
         graphs = [:]; panels = [:]; map = nil; timelineDock = nil
         readerOutline = false
-        if pdf != nil { pdf!.scale = 1; pdf!.fitMode = "width"; pdf!.continuous = true; pdf!.thumbnails = false }
+        if pdf != nil { pdf!.scale = 1; pdf!.fitMode = "width"; pdf!.continuous = true; pdf!.thumbnails = false; pdf!.direction = .vertical }
     }
 }
 

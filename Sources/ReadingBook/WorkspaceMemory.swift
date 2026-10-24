@@ -10,8 +10,7 @@ import ReadingCore
     private var workspaceMemoryURL: URL? {
         guard let key = workspaceMemoryKey else { return nil }
         let name = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("ReadingBook/Workspace", isDirectory: true).appendingPathComponent(name + ".json")
+        return libraryRootURL.appendingPathComponent("Workspace", isDirectory: true).appendingPathComponent(name + ".json")
     }
     func loadWorkspaceMemory() {
         guard let book else { workspaceMemory = BookWorkspaceMemory(); return }
@@ -24,7 +23,7 @@ import ReadingCore
         UserDefaults.standard.set(book.id, forKey: "workspace-last-book-v1")
     }
     func updateWorkspaceMemory(_ mutate: (inout BookWorkspaceMemory) -> Void, expectedKey: String? = nil) {
-        guard !restoringWorkspaceMemory, let book, expectedKey == nil || expectedKey == workspaceMemoryKey,
+        guard !restoringWorkspaceMemory, !storageState.working, let book, expectedKey == nil || expectedKey == workspaceMemoryKey,
               workspaceMemory.bookID == book.id, workspaceMemory.sourceHash == book.sourceHash else { return }
         var next = workspaceMemory; mutate(&next)
         next = next.sanitized(bookID: book.id, sourceHash: book.sourceHash)
@@ -38,7 +37,7 @@ import ReadingCore
     }
     func flushWorkspaceMemory() {
         workspaceMemorySaveTask?.cancel(); workspaceMemorySaveTask = nil
-        guard !restoringWorkspaceMemory, let book, workspaceMemory.bookID == book.id,
+        guard !restoringWorkspaceMemory, !storageState.working, let book, workspaceMemory.bookID == book.id,
               workspaceMemory.sourceHash == book.sourceHash, let url = workspaceMemoryURL else { return }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

@@ -8,7 +8,7 @@ enum ReadingAnswerEngine {
                     memoryEnabled: Bool, documentIDs: [String]?, loader: ReadingDocumentLoader?, operationLimit: Int,
                     remainingRequests: Int, appendedDocumentIDs: [String] = [], authorizedNodeIDs: [String] = [],
                     hostOperationContext: String? = nil, workspace: ReadingWorkspaceSnapshot? = nil, hostTools: ReadingHostToolAccess? = nil,
-                    proposalAccess: ReadingProposalToolAccess? = nil, request: Request) async throws -> ReadingAnswerResult {
+                    proposalAccess: ReadingProposalToolAccess? = nil, progress: AIProgressHandler? = nil, request: Request) async throws -> ReadingAnswerResult {
         guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, question.count <= 4000 else { throw ReadingError.invalid("问题不能为空，且最多4000字；未截断或发送原问题。") }
         guard history.count <= 10_000, Set(history.map(\.id)).count == history.count,
               history.allSatisfy({ ["user", "assistant"].contains($0.role) && !$0.id.isEmpty }) else { throw ReadingError.invalid("当前会话消息ID、角色或数量无效。") }
@@ -149,15 +149,23 @@ enum ReadingAnswerEngine {
             for (index, call) in calls.enumerated() {
                 try Task.checkCancellation()
                 let result: String
+                var reportedStart = false
                 do {
                     guard allowedNames.contains(call.function.name) else { throw ReadingError.invalid("该工具未在本轮冻结能力中授权。") }
                     let argumentLimit = ReadingQueryToolCatalog.proposalNames.contains(call.function.name) ? 262_144 : 32_768
                     guard call.function.arguments.utf8.count <= argumentLimit, let data = call.function.arguments.data(using: .utf8),
                           let arguments = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ReadingError.invalid("只读工具参数不是有界JSON对象。") }
                     let room = min(window, operationLimit - used) - (try measure(messages, tools: tools)) - outputReserve - (calls.count - index) * 700
+                    progress?(AIProgressEvent(.performingTool, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count))
+                    reportedStart = true
                     result = try await session.execute(name: call.function.name, arguments: arguments, maximumBytes: max(0, room / 2))
+                    let receipt = result.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                    let status = receipt?["status"] as? String
+                    progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count,
+                        toolSucceeded: receipt?["ok"] as? Bool != false && !["needs_confirmation", "busy", "unsupported", "failed"].contains(status ?? ""), toolStatus: status))
                 } catch {
                     try QueryBudget.propagateControl(error)
+                    if reportedStart { progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count, toolSucceeded: false)) }
                     result = String(decoding: try JSONSerialization.data(withJSONObject: ["ok": false, "error": String(error.localizedDescription.prefix(400))], options: [.sortedKeys]), as: UTF8.self) }
                 messages.append(["role": "tool", "tool_call_id": call.id, "content": result])
             }

@@ -26,7 +26,7 @@ struct ReadingGlassSurface: ViewModifier {
     var radius: CGFloat = 22
     var interactive = false
     var prominent = false
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.readingReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
@@ -58,7 +58,7 @@ struct ReadingGlassSurface: ViewModifier {
 
 struct ReadingToolbarButtonStyle: ButtonStyle {
     var selected = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var enabled
     @State private var hovered = false
 
@@ -92,7 +92,7 @@ struct ReadingToolbarButtonStyle: ButtonStyle {
 struct ReadingActionButtonStyle: ButtonStyle {
     var prominent = false
     @Environment(\.isEnabled) private var enabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.system(size: 15, weight: .medium)).padding(.horizontal, 12)
             .frame(minHeight: 44).frame(maxWidth: .infinity)

@@ -267,6 +267,7 @@ public enum ReadingExperienceRuntime {
         var mentionIDs = Set(result.mentions.map(\.id))
         let entries: [(String, [String], [Evidence])] = project.entities.map { ($0.id, [$0.name] + $0.aliases, $0.evidence) } + project.events.map { ($0.id, [$0.name], $0.evidence) }
         for (targetID, names, evidence) in entries {
+            if Task.isCancelled { return result }
             for source in evidence where unitIDs?.contains(source.unitID) ?? true {
                 guard let evidenceAnchor = try? createAnchor(sourceHash: project.sourceHash, unitID: source.unitID, quote: source.quote, in: project),
                       let unit = project.units.first(where: { $0.id == source.unitID }),

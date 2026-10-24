@@ -105,6 +105,9 @@ struct ReadingCompanionPanel: View {
             }.padding(.horizontal, 16).padding(.bottom, 4)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
+                    if store.aiProgress.hasActivity, store.aiProgress.bookID == store.bookID {
+                        AIProgressStatusView(state: store.aiProgressState, compact: true)
+                    }
                     if let error = store.readingExperienceError { Text(error).font(.system(size: 13)).foregroundStyle(Palette.copper) }
                     if crossScopeCount > 0 {
                         Button { if let component = WorkspaceComponentRegistry.shared.component(id: "reading.layers") { store.activate(component) } } label: {

@@ -103,7 +103,7 @@ struct GraphSurface: View {
     var toggleScope: (() -> Void)? = nil
     var ambientMotion = false
     var openPhysicalNode: ((String) -> Void)? = nil
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @State private var canvasHovered = false
     @Environment(\.workspaceCanvasBlocked) private var workspaceCanvasBlocked

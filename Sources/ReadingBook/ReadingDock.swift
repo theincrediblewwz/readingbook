@@ -36,7 +36,7 @@ struct DockIconButton: View {
 /// the existing disposable workspace memory; books and documents are untouched.
 struct FloatingReadingDock<Content: View>: View {
     @EnvironmentObject private var store: AppStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     let id: String
     let viewport: CGSize

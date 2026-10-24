@@ -34,7 +34,7 @@ struct FloatingGraphWorkspace<Surface: View>: View {
     var select: (GraphItem) -> Void
     var open: (GraphItem) -> Void
     var surface: (CGRect, CGFloat, CGFloat) -> Surface
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @State private var shown = true
     @State private var collapsed = false
     @State private var viewport = CGSize.zero

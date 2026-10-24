@@ -21,8 +21,8 @@ public struct DocumentContentSnapshot: Sendable {
 /// Local, file-backed library. Markdown files are the only document body source;
 /// project.json contains references and structured book analysis, never a body mirror.
 public actor LibraryRepository {
-    private let rootURL: URL
-    private let files = FileManager.default
+    let rootURL: URL
+    let files = FileManager.default
     private static let metadataLimit = 64 * 1_024 * 1_024
     private static let documentLimit = 16 * 1_024 * 1_024
     private static let packageLimit = 512 * 1_024 * 1_024
@@ -36,6 +36,7 @@ public actor LibraryRepository {
     }
     private var documentValidationCache: [String: DocumentValidationStamp] = [:]
     private var mathValidationCache = MathVerificationValidationCache()
+    var readableAutomaticRefresh: [String: Date] = [:]
     private struct ChangeGrantSession { var grant: ControlledWriteGrant; var latestRevision: String }
     private var changeGrants: [String: ChangeGrantSession] = [:]
     private var changeProposals: [String: PreparedControlledChange] = [:]
@@ -67,8 +68,11 @@ public actor LibraryRepository {
         let children = try files.contentsOfDirectory(at: books, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         var projects: [BookProject] = []
         var issues: [LibraryLoadIssue] = []
+        let removed: Set<String>
+        do { removed = Set(try libraryMembership().removed.keys) }
+        catch { removed = []; issues.append(LibraryLoadIssue(folder: rootURL.path, message: "书库显示状态未能读取，文件保留：\(error.localizedDescription)")) }
         for directory in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            if directory.lastPathComponent == ".DS_Store" { continue }
+            if directory.lastPathComponent == ".DS_Store" || removed.contains(directory.lastPathComponent) { continue }
             // Incomplete imports have not entered the committed book namespace. Keep them
             // on disk and surface them rather than quietly discarding possible recovery data.
             guard UUID(uuidString: directory.lastPathComponent) != nil else {
@@ -102,6 +106,8 @@ public actor LibraryRepository {
         try writePackage(project, source: sourceURL, documentsFrom: nil, to: staging)
         try validatePackageFiles(project, in: staging, strictContents: true, verifySourceHash: true)
         try files.moveItem(at: staging, to: destination)
+        refreshReadableAfterCommit(id: project.id)
+        try? refreshReadableLibraryIndex()
     }
 
     public func save(_ project: BookProject) throws {
@@ -127,6 +133,7 @@ public actor LibraryRepository {
         let metadata = try encode(updated)
         try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false, encodedMetadataSize: metadata.count, reuseDocumentValidation: true)
         try atomicWrite(metadata, to: try child(directory, "project.json"))
+        refreshReadableAfterCommit(id: updated.id)
     }
 
     public func readDocument(bookID: String, document: DocumentRecord) throws -> String {
@@ -197,6 +204,7 @@ public actor LibraryRepository {
                                       markdownHash: try BookImporter.sha256(data), previousMarkdownHash: previousMarkdownHash, project: updated)
         try atomicWrite(encode(journal), to: marker)
         try recoverDocument(in: directory)
+        refreshReadableAfterCommit(id: updated.id)
         return updated
     }
 
@@ -314,6 +322,7 @@ public actor LibraryRepository {
         try requireVacant(destination)
         do { try files.moveItem(at: source, to: destination) }
         catch { throw ReadingError.invalid("书籍未能完整移入回收站。原书及可能的目标文件均已保留，请检查 books/\(project.id) 与 trash/\(project.id)：\(error.localizedDescription)") }
+        try? refreshReadableLibraryIndex()
     }
 
     public func archivedBooks() throws -> [BookProject] {
@@ -351,8 +360,11 @@ public actor LibraryRepository {
         try validateArchiveTree(source)
         let destination = try bookDirectory(id, mustExist: false)
         try requireVacant(destination)
+        try forgetRemovedBook(id: id)
         do { try files.moveItem(at: source, to: destination) }
         catch { throw ReadingError.invalid("书籍恢复未完成。回收目录及可能的目标文件均已保留，请检查 trash/\(id) 与 books/\(id)：\(error.localizedDescription)") }
+        try? refreshReadableViews(id: id)
+        try? refreshReadableLibraryIndex()
         return project
     }
 
@@ -433,12 +445,14 @@ public actor LibraryRepository {
         // Recheck copied content, not just the external package before copying it.
         try validatePackageFiles(project, in: staging, strictContents: true, verifySourceHash: true)
         try files.moveItem(at: staging, to: destination)
+        try? refreshReadableViews(id: project.id)
+        try? refreshReadableLibraryIndex()
         return project
     }
 
     // MARK: Recoverable document commit
 
-    private func recoverDocument(in directory: URL) throws {
+    func recoverDocument(in directory: URL) throws {
         try recoverControlledChanges(in: directory)
         let journalDirectory = try child(directory, ".journal")
         guard files.fileExists(atPath: journalDirectory.path) else { return }
@@ -483,7 +497,7 @@ public actor LibraryRepository {
 
     // MARK: Package validation
 
-    private func validate(_ project: BookProject) throws {
+    func validate(_ project: BookProject) throws {
         try ReaderAnnotationValidator.validateAll(in: project)
         guard project.schemaVersion == 1 else { throw ReadingError.invalid("不支持此项目 schemaVersion：\(project.schemaVersion)。") }
         guard UUID(uuidString: project.id) != nil, project.id.count == 36,
@@ -651,7 +665,7 @@ public actor LibraryRepository {
         }
     }
 
-    private func validatePackageFiles(_ project: BookProject, in directory: URL, strictContents: Bool,
+    func validatePackageFiles(_ project: BookProject, in directory: URL, strictContents: Bool,
                                       verifySourceHash: Bool, pendingDocumentID: String? = nil, pendingDocumentBytes: Int = 0,
                                       encodedMetadataSize: Int? = nil, reuseDocumentValidation: Bool = false, pendingDocumentSizes: [String: Int] = [:]) throws {
         try requireDirectory(directory)
@@ -714,34 +728,34 @@ public actor LibraryRepository {
 
     // MARK: Restricted filesystem helpers
 
-    private func booksDirectory() throws -> URL {
+    func booksDirectory() throws -> URL {
         guard rootURL.isFileURL else { throw ReadingError.invalid("书库必须使用本地文件夹。") }
         _ = try ensureDirectory(rootURL)
         return try ensureDirectory(try child(rootURL, "books"))
     }
 
-    private func trashDirectory() throws -> URL {
+    func trashDirectory() throws -> URL {
         guard rootURL.isFileURL else { throw ReadingError.invalid("书库必须使用本地文件夹。") }
         _ = try ensureDirectory(rootURL)
         return try ensureDirectory(try child(rootURL, "trash"))
     }
 
-    private func archivedBookDirectory(_ id: String, mustExist: Bool) throws -> URL {
+    func archivedBookDirectory(_ id: String, mustExist: Bool) throws -> URL {
         guard id.count == 36, UUID(uuidString: id) != nil else { throw ReadingError.invalid("回收书籍 ID 必须为 UUID。") }
         let url = try child(try trashDirectory(), id)
         if mustExist { try requireDirectory(url) }
         return url
     }
 
-    private func requireVacant(_ url: URL) throws {
+    func requireVacant(_ url: URL) throws {
         let symbolic = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
         guard !files.fileExists(atPath: url.path), !symbolic else { throw ReadingError.invalid("目标已存在；不会覆盖已有书籍或回收数据。") }
     }
 
     /// Verify the complete moved tree, including undeclared recovery files, without following links.
-    private func validateArchiveTree(_ directory: URL) throws {
+    func validateArchiveTree(_ directory: URL) throws {
         try requireDirectory(directory)
-        var pending = [directory], count = 0, total = 0
+        var pending = [directory], count = 0, total = 0, readableTotal = 0
         while let parent = pending.popLast() {
             for entry in try files.contentsOfDirectory(at: parent, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]) {
                 count += 1
@@ -751,22 +765,30 @@ public actor LibraryRepository {
                 guard values.isSymbolicLink != true else { throw ReadingError.invalid("回收目录不允许符号链接。") }
                 if values.isDirectory == true { pending.append(checked) }
                 else {
-                    guard values.isRegularFile == true, let size = values.fileSize, size >= 0,
-                          size <= Self.packageLimit, total <= Self.packageLimit - size else { throw ReadingError.invalid("书籍目录含特殊文件或总大小超过 512 MiB。") }
-                    total += size
+                    guard values.isRegularFile == true, let size = values.fileSize, size >= 0 else { throw ReadingError.invalid("书籍目录含特殊文件。") }
+                    let relative = String(checked.path.dropFirst(directory.path.count + 1))
+                    let readable = relative.hasPrefix("AI分析/") || relative == ".readingbook-readable.json" || (relative.hasPrefix("阅读导航") && relative.hasSuffix(".md") && !relative.contains("/"))
+                    if readable {
+                        let limit = 32 * 1_024 * 1_024
+                        guard size <= 16 * 1_024 * 1_024, readableTotal <= limit - size else { throw ReadingError.invalid("可读导览总大小超过 32 MiB，原文件保留。") }
+                        readableTotal += size
+                    } else {
+                        guard size <= Self.packageLimit, total <= Self.packageLimit - size else { throw ReadingError.invalid("书籍目录总大小超过 512 MiB。") }
+                        total += size
+                    }
                 }
             }
         }
     }
 
-    private func bookDirectory(_ id: String, mustExist: Bool) throws -> URL {
+    func bookDirectory(_ id: String, mustExist: Bool) throws -> URL {
         guard id.count == 36, UUID(uuidString: id) != nil else { throw ReadingError.invalid("书籍 ID 必须为 UUID。") }
         let url = try child(try booksDirectory(), id)
         if mustExist { try requireDirectory(url) }
         return url
     }
 
-    private func child(_ parent: URL, _ name: String) throws -> URL {
+    func child(_ parent: URL, _ name: String) throws -> URL {
         guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\\"), !name.contains(":"),
               !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { throw ReadingError.invalid("拒绝越界文件路径。") }
         let url = parent.appendingPathComponent(name).standardizedFileURL
@@ -779,13 +801,13 @@ public actor LibraryRepository {
         return url
     }
 
-    private func ensureDirectory(_ url: URL) throws -> URL {
+    func ensureDirectory(_ url: URL) throws -> URL {
         if files.fileExists(atPath: url.path) { try requireDirectory(url) }
         else { try files.createDirectory(at: url, withIntermediateDirectories: true); try requireDirectory(url) }
         return url
     }
 
-    private func requireDirectory(_ url: URL) throws {
+    func requireDirectory(_ url: URL) throws {
         let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard values.isDirectory == true, values.isSymbolicLink != true else { throw ReadingError.invalid("预期为普通文件夹且不能是符号链接：\(url.lastPathComponent)") }
     }
@@ -795,7 +817,7 @@ public actor LibraryRepository {
         return try child(try child(directory, "docs"), "\(document.id).md")
     }
 
-    private func regularFileSize(_ url: URL, limit: Int) throws -> Int {
+    func regularFileSize(_ url: URL, limit: Int) throws -> Int {
         let value = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
         guard value.isRegularFile == true, value.isSymbolicLink != true, let size = value.fileSize, size >= 0, size <= limit else {
             throw ReadingError.invalid("文件缺失、不是普通文件，或超过大小上限：\(url.lastPathComponent)")
@@ -803,7 +825,7 @@ public actor LibraryRepository {
         return size
     }
 
-    private func readLimited(_ url: URL, limit: Int) throws -> Data {
+    func readLimited(_ url: URL, limit: Int) throws -> Data {
         let size = try regularFileSize(url, limit: limit)
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         guard data.count == size, data.count <= limit else { throw ReadingError.invalid("读取时文件发生变化：\(url.lastPathComponent)") }
@@ -824,11 +846,11 @@ public actor LibraryRepository {
 
     private func decode<T: Decodable>(_ data: Data) throws -> T { try JSONDecoder().decode(T.self, from: data) }
 
-    private func readProject(in directory: URL) throws -> BookProject {
+    func readProject(in directory: URL) throws -> BookProject {
         try decode(readLimited(try child(directory, "project.json"), limit: Self.metadataLimit))
     }
 
-    private func atomicWrite(_ data: Data, to url: URL) throws {
+    func atomicWrite(_ data: Data, to url: URL) throws {
         // Foundation writes a sibling temporary file and atomically replaces the destination.
         _ = try child(url.deletingLastPathComponent(), url.lastPathComponent)
         try data.write(to: url, options: .atomic)
@@ -837,7 +859,7 @@ public actor LibraryRepository {
         try handle.synchronize()
     }
 
-    private func temporaryDirectory(near parent: URL, prefix: String) throws -> URL {
+    func temporaryDirectory(near parent: URL, prefix: String) throws -> URL {
         try requireDirectory(parent)
         let url = try child(parent, prefix + UUID().uuidString)
         guard !files.fileExists(atPath: url.path) else { throw ReadingError.invalid("临时目录冲突，请重试。") }
@@ -845,7 +867,7 @@ public actor LibraryRepository {
         return url
     }
 
-    private func removeOwnTemporary(_ url: URL) {
+    func removeOwnTemporary(_ url: URL) {
         // Callers pass only the fresh UUID directory returned by temporaryDirectory.
         if files.fileExists(atPath: url.path) { try? files.removeItem(at: url) }
     }

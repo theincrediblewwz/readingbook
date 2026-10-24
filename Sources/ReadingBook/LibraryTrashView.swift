@@ -14,6 +14,11 @@ import ReadingCore
     @State private var restoring = false
     @State private var checking = false
 
+    private var removedRows: [BookProject] {
+        guard filter == .all || filter == .books else { return [] }
+        return store.removedBooks.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
+    }
+
     private var archivedRows: [TrashDisplayItem] {
         store.archivedBooks.map { book in
             TrashDisplayItem(id: "book-" + book.id, title: book.title, category: .books,
@@ -54,6 +59,17 @@ import ReadingCore
             if let localError { errorBanner(localError) }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
+                    if !removedRows.isEmpty {
+                        sectionHeading("已移出书库 · 文件保留", count: removedRows.count)
+                        ForEach(removedRows) { book in
+                            HStack(spacing: 12) {
+                                Image(systemName: "books.vertical").foregroundStyle(Palette.accent)
+                                Text(book.title).font(.system(size: 15, weight: .medium)).lineLimit(2)
+                                Spacer(minLength: 8)
+                                Button("重新加入") { Task { await store.restoreRemovedBook(book.id) } }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy || store.editorDirty)
+                            }.padding(14).readingGlass(radius: 16)
+                        }
+                    }
                     if !archivedRows.isEmpty {
                         sectionHeading("已回收的书籍", count: archivedRows.count)
                         ForEach(archivedRows) { item in trashRow(item) }
@@ -62,7 +78,7 @@ import ReadingCore
                         sectionHeading(section.title, count: section.rows.count).padding(.top, 10)
                         ForEach(section.rows) { item in trashRow(item) }
                     }
-                    if archivedRows.isEmpty && bookSections.isEmpty {
+                    if archivedRows.isEmpty && bookSections.isEmpty && removedRows.isEmpty {
                         EmptyState(title: query.isEmpty && filter == .all ? "回收站是空的" : "没有匹配的内容",
                                    detail: query.isEmpty && filter == .all ? "回收的书籍、笔记、对象、连线和组件会保留在这里。" : "换一个标题、书名或类型试试。", icon: "trash")
                             .frame(minHeight: 190)

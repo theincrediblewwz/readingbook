@@ -4,7 +4,7 @@ import ReadingCore
 /// The overlay never changes PDF layout. Collapsing keeps its editor mounted.
 struct ReaderQuestionComposer: View {
     @EnvironmentObject private var store: AppStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @FocusState private var inputFocused: Bool
     @State private var question = ""
     @Binding var isExpanded: Bool

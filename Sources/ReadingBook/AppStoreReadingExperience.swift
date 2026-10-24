@@ -9,8 +9,23 @@ import ReadingCore
     }
     func refreshReadingExperienceIndex() {
         readingContextCacheKey = nil
+        readingIndexTask?.cancel(); readingIndexGeneration &+= 1
         guard let book else { readingExperienceIndex = ReadingExperienceState(); return }
-        readingExperienceIndex = ReadingExperienceRuntime.indexEvidence(in: book, unitIDs: Set(visibleSourceUnits.map(\.id)))
+        let unitIDs = Set(visibleSourceUnits.map(\.id))
+        let key = book.id + "|" + book.sourceHash + "|" + String(projectRevision) + "|" + unitIDs.sorted().joined(separator: ",")
+        if let cached = readingIndexCache[key] { readingExperienceIndex = cached; return }
+        readingExperienceIndex = ReadingExperienceState()
+        let generation = readingIndexGeneration
+        readingIndexTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 45_000_000) } catch { return }
+            guard !Task.isCancelled else { return }
+            let calculation = Task.detached(priority: .userInitiated) { ReadingExperienceRuntime.indexEvidence(in: book, unitIDs: unitIDs) }
+            let value = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
+            guard !Task.isCancelled, let self, self.readingIndexGeneration == generation, self.bookID == book.id else { return }
+            self.readingIndexCache[key] = value; self.readingIndexCacheOrder.append(key)
+            while self.readingIndexCacheOrder.count > 6 { self.readingIndexCache.removeValue(forKey: self.readingIndexCacheOrder.removeFirst()) }
+            self.readingExperienceIndex = value; self.readingContextCacheKey = nil
+        }
     }
     var currentReadingContext: ReadingContext {
         let object = selectedObjectID.flatMap { id in
@@ -151,7 +166,8 @@ import ReadingCore
         let frozenKey = apiKey
         isBusy = true; readingExperienceError = nil; readingCompanionVisible = true; readingCompanionTab = "companion"
         task = Task {
-            defer { activeReadingUnitID = nil; isBusy = false }
+            let aiRunID = await beginAIProgress(title: "生成伴读 · \(snapshot.displayTitle)")
+            defer { finishAIProgress(aiRunID); activeReadingUnitID = nil; isBusy = false }
             do {
                 if unfinished == nil {
                     try Task.checkCancellation()
@@ -170,6 +186,7 @@ import ReadingCore
                         guard let current = book, current.id == snapshot.bookID, current.sourceHash == snapshot.sourceHash,
                               let source = current.units.first(where: { $0.id == unitID }) else { throw CancellationError() }
                         activeReadingUnitID = unitID
+                        updateAIProgressDetail(aiRunID, detail: source.page.map { "第 \($0) 页" } ?? source.chapter)
                         activity = "正在准备伴读 · \(actionableIDs.count - remainingIDs.count + index + 1)/\(actionableIDs.count) · \(source.locator)"
                         let previousReceipts = try ReadingLedger.receipts(for: source, in: current).count
                         // enrichCurrent first checkpoints bounded paragraph receipts,
@@ -181,6 +198,7 @@ import ReadingCore
                         let receiptCount = try ReadingLedger.receipts(for: source, in: result).count
                         guard completed || receiptCount > previousReceipts else { throw ReadingError.invalid("这部分没有新增核对回执或伴读结果，已停止以避免重复请求。") }
                         if completed { result.audit.append(try progress.audit("companion_scope_checkpoint", unitID: unitID)) }
+                        markAIProgressSaving(aiRunID)
                         try await repository.save(result); publish(result)
                         requestsUsed = await reader.requestCount
                         if completed { break }
@@ -191,7 +209,7 @@ import ReadingCore
                 finished.audit.append(try progress.audit("companion_scope_finished"))
                 try await repository.save(finished); publish(finished)
                 activity = "\(snapshot.displayTitle)的伴读已保存，请结合原文核对。"
-            } catch { readingExperienceError = error is CancellationError ? nil : error.localizedDescription; handle(error) }
+            } catch { finishAIProgress(aiRunID, error: error); readingExperienceError = error is CancellationError ? nil : error.localizedDescription; handle(error) }
         }
         return snapshot
     }
