@@ -1,3 +1,13 @@
+# 0.17.2 · 标题与交互收拢的原生对照状态
+
+原生视觉、手势和性能验收：**待 Mac**。构建与下载包核对：**通过**。[0.17.2/build22 安装包](../../dist/download-40067031262/ReadingBook-macos-universal.zip)来自源码 `32ec4d2a8ce0450f86983e72e5ec06bbfb947a43`；[Actions 40067031262](https://github.com/theincrediblewwz/readingbook/actions/runs/40067031262) 成功，256 项 Core 测试零失败，arm64/x86_64 Release 通过。包内 32 个资源核对通过，含 20 个公式字体；ZIP SHA-256：`875b9b9fdd3786fafe978a4bed1d37f061ce28443cb72b16d8198ba4f91ccf88`。
+
+本轮原生仅移除重复拖柄，标题继续承担拖动，收起、关闭与辅助功能名称保留；导航悬停状态局部化，地图时间边界改为一次计算。未替换全局布局，也未将菜单大改纳入 Mac 包。按根 [Mac 集中清单](../../MAC_TEST_CHECKLIST.md) 顶部 5 步核对标题拖动/按钮/VoiceOver、侧栏滚动与缩窗、时空及权限边界、旧数据和回收恢复。
+
+三种可交互布局位于独立原型入口 `?study=controls`，**尚待用户选择，未替换原生界面**。全文搜索重复计算、画布屏外连线、Markdown/PDF 装饰仅是待测性能候选，尚未认定为 Mac 卡顿根因。浏览器原型、Core 测试和编译结果均不替代 Mac 实际验收；下方历史记录保留。
+
+---
+
 # 0.17.1 · 全应用精修的原生对照状态
 
 原生视觉/手势验收：**待Mac**。构建与下载包校验：**通过**。[0.17.1/build21 安装包](../../dist/download-40062140991/ReadingBook-macos-universal.zip)与[Actions 40062140991](https://github.com/theincrediblewwz/readingbook/actions/runs/40062140991)已核对，原生源码`8f35c6748d89f85d7ec80717d673193fa367c541`。256项Core检查、arm64/x86_64 Release、临时签名与资源自检通过，无编译警告。下载包15961565字节，SHA-256 `d7a9be96b2e8aa0c195da1d27a510db682cf0a0e0cf649da26747b73c41ccd98`；artifact摘要、ZIP CRC、版本/源码、架构/0755及32个资源逐字节核对通过，含20个公式字体。Mac原生视觉、手势、Liquid Glass、PDFKit与性能仍待集中验收，浏览器交互稿不替代Mac结果。 未用浏览器截图冒充Mac截图。
