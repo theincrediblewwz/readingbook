@@ -78,6 +78,59 @@ final class LibraryStorageTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: f.original), sourceData)
     }
 
+    private final class ScheduledReadableRefresh: @unchecked Sendable {
+        let started = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var task: Task<Bool, Never>?
+        func schedule(repository: LibraryRepository, id: String) {
+            let pending = Task.detached { [started] in
+                started.signal()
+                do { _ = try await repository.refreshReadableViews(id: id); return true }
+                catch { return false }
+            }
+            lock.lock(); task = pending; lock.unlock()
+        }
+        func pending() -> Task<Bool, Never>? {
+            lock.lock(); defer { lock.unlock() }
+            return task
+        }
+    }
+
+    func testLocalMoveSerializesReadableRefreshAndKeepsRestorableAssociations() async throws {
+        let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.temporary) }
+        let repository = f.repository, id = f.book.id, refresh = ScheduledReadableRefresh()
+        let destination = f.temporary.appendingPathComponent("recoverable-local-copy")
+        let original = try Data(contentsOf: f.original)
+        let metadata = try Data(contentsOf: f.directory.appendingPathComponent("project.json"))
+        let note = try Data(contentsOf: f.directory.appendingPathComponent(f.note.relativePath))
+        try await repository.removeBookFromLibrary(project: f.book)
+        let moved = try await repository.moveLocalBook(id: id) { source in
+            refresh.schedule(repository: repository, id: id)
+            guard refresh.started.wait(timeout: .now() + 5) == .success else {
+                throw ReadingError.invalid("后台刷新测试任务未启动。")
+            }
+            try FileManager.default.moveItem(at: source, to: destination)
+            return destination
+        }
+        XCTAssertEqual(moved, destination)
+        let pending = try XCTUnwrap(refresh.pending())
+        let refreshed = await pending.value
+        XCTAssertFalse(refreshed, "排队的导览刷新应在项目移走后停止")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.directory.path), "不能重建缺少项目真源的残目录")
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("project.json")), metadata)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent(f.note.relativePath)), note)
+        XCTAssertEqual(try Data(contentsOf: f.original), original)
+        let removed = try await repository.removedBooksReport()
+        XCTAssertTrue(removed.projects.isEmpty); XCTAssertTrue(removed.issues.isEmpty)
+        try FileManager.default.moveItem(at: destination, to: f.directory)
+        let restoredBooks = try await repository.loadAll()
+        let restored = try XCTUnwrap(restoredBooks.first)
+        XCTAssertEqual(restored.documents, f.book.documents); XCTAssertEqual(restored.nodes, f.book.nodes)
+        XCTAssertEqual(restored.entities, f.book.entities); XCTAssertEqual(restored.events, f.book.events)
+        XCTAssertEqual(restored.relations, f.book.relations)
+        XCTAssertEqual(try Data(contentsOf: f.directory.appendingPathComponent(f.note.relativePath)), note)
+    }
+
     func testWholeBackupAndMigrationPreserveHiddenTrashSidecarsAndIDs() async throws {
         let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.temporary) }
         var archived = f.book; archived.id = UUID().uuidString; archived.documents = []; archived.nodes = []

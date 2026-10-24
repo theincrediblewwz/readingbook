@@ -8,6 +8,8 @@ struct WorkspaceDeletion {
     var title: String
     var bookID: String?
     var bytes: Int64? = nil
+    var libraryRoot: URL? = nil
+    var sourceHash: String? = nil
     var confirmationTitle: String { kind == .book ? "从书库移除？" : kind == .bookLocal ? "删除本机项目副本？" : "移入回收站？" }
     var actionTitle: String { kind == .book ? "移出书库，保留文件" : kind == .bookLocal ? "移到系统废纸篓" : "移入回收站" }
     var detail: String {
@@ -25,6 +27,8 @@ extension AppStore {
         guard !isBusy else { return }
         guard pendingAIChanges.isEmpty else { errorMessage = "请先处理待审阅修改。"; return }
         guard !editorDirty else { errorMessage = "请先保存正在编辑的 Markdown，再移入回收站。"; return }
+        let root = libraryRootURL
+        let expectedHash = books.first(where: { $0.id == (kind == .book || kind == .bookLocal ? id : bookID) })?.sourceHash
         if kind == .bookLocal {
             let owner = repository
             isBusy = true; activity = "核对本机项目副本…"
@@ -32,34 +36,35 @@ extension AppStore {
                 defer { isBusy = false }
                 do {
                     let info = try await owner.storageBook(id: id)
-                    deletionRequest = WorkspaceDeletion(kind: kind, id: id, title: title, bookID: bookID, bytes: info.bytes)
+                    guard libraryRootURL == root else { return }
+                    deletionRequest = WorkspaceDeletion(kind: kind, id: id, title: title, bookID: bookID, bytes: info.bytes, libraryRoot: root, sourceHash: expectedHash)
                 } catch { errorMessage = error.localizedDescription }
             }
             return
         }
-        deletionRequest = WorkspaceDeletion(kind: kind, id: id, title: title, bookID: bookID)
+        deletionRequest = WorkspaceDeletion(kind: kind, id: id, title: title, bookID: bookID, libraryRoot: root, sourceHash: expectedHash)
     }
     func confirmDeletion(_ request: WorkspaceDeletion) {
         guard !isBusy else { return }
         deletionRequest = nil
+        guard request.libraryRoot == nil || request.libraryRoot == libraryRootURL else { errorMessage = "书库位置已改变，请重新选择要移除的内容。"; return }
         guard !editorDirty else { errorMessage = "请先保存正在编辑的 Markdown，再移入回收站。"; return }
+        guard pendingAIChanges.isEmpty else { errorMessage = "请先处理待审阅修改。"; return }
         isBusy = true
         task = Task {
             defer { isBusy = false }
             do {
                 if request.kind == .book || request.kind == .bookLocal {
                     guard let project = books.first(where: { $0.id == request.id }) else { return }
+                    guard request.sourceHash == nil || request.sourceHash == project.sourceHash else { throw ReadingError.invalid("原书已变化，请重新确认。") }
                     if request.kind == .book {
                         try await repository.removeBookFromLibrary(project: project)
                     } else {
-                        let info = try await repository.prepareLocalBookRemoval(id: project.id, archived: false)
-                        let url = info.directoryURL
-                        lastTrashedProjectURL = try await Task.detached(priority: .userInitiated) {
+                        lastTrashedProjectURL = try await repository.moveLocalBook(id: project.id) { url in
                             var result: NSURL?
                             try FileManager.default.trashItem(at: url, resultingItemURL: &result)
                             return result as URL?
-                        }.value
-                        try? await repository.forgetRemovedBook(id: project.id)
+                        }
                     }
                     books.removeAll { $0.id == project.id }
                     _ = try? await repository.refreshReadableLibraryIndex()

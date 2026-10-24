@@ -193,6 +193,7 @@ private final class StorageProgressRelay: @unchecked Sendable {
         bookID = nil; selectedUnitID = nil; selectedDocumentID = nil; selectedObjectID = nil; sourceFileURL = nil
         pdfSessionPasswords = [:]; pdfUnlockedBookIDs = []
         workspaceMemory = BookWorkspaceMemory(); workspaceMemoryRevision &+= 1
+        deletionRequest = nil; lastTrashedProjectURL = nil
         AppDataLocations.selectRoot(url); libraryRootURL = url; repository = next
         storageState.overview = nil
         modelCatalogRepository = ModelCatalogRepository(rootURL: url.appendingPathComponent("ModelCatalog", isDirectory: true))

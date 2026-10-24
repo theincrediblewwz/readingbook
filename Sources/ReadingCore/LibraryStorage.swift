@@ -171,6 +171,21 @@ extension LibraryRepository {
         return try storageBook(id: id, archived: archived)
     }
 
+    /// Validation and the caller's synchronous move share one actor turn. A
+    /// queued derived refresh cannot recreate the directory during the move.
+    /// The caller chooses its recoverable destination; Core only supplies the
+    /// validated App-managed project, never the original import location.
+    public func moveLocalBook(id: String, archived: Bool = false, using move: @Sendable (URL) throws -> URL?) throws -> URL? {
+        let prepared = try prepareLocalBookRemoval(id: id, archived: archived)
+        let destination = try move(prepared.directoryURL)
+        guard !files.fileExists(atPath: prepared.directoryURL.path) else {
+            throw ReadingError.invalid("项目仍在原目录，未完成本机副本移除；原登记保留。")
+        }
+        try? forgetRemovedBook(id: id)
+        try? refreshReadableLibraryIndex()
+        return destination
+    }
+
     func storageProject(in directory: URL, expectedID: String, recoverTransactions: Bool = true) throws -> BookProject {
         if recoverTransactions { try recoverDocument(in: directory) }
         else { try requireSettledStorageTransactions(in: directory) }

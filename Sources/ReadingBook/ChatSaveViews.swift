@@ -22,6 +22,7 @@ struct EnhancedBookChatView: View {
 
 private struct BookChatContent: View {
     @EnvironmentObject var store: AppStore
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @Environment(\.workspaceCanvasBlocked) private var workspaceBlocked
     @ObservedObject var composerDraft: QueryComposerDraft
     var embedded = false
@@ -56,10 +57,10 @@ private struct BookChatContent: View {
                         ForEach(store.book?.chats ?? []) { message in answerCard(message).id(message.id) }
                     }.padding(.horizontal, embedded ? 16 : 24).padding(.vertical, embedded ? 12 : 20).frame(maxWidth: 940).frame(maxWidth: .infinity)
                 }.onChange(of: store.book?.chats.count) { _, _ in
-                    if let last = store.book?.chats.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                    if let last = store.book?.chats.last { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
                 .onChange(of: memorySourceID) { _, id in
-                    guard let id else { return }; withAnimation { proxy.scrollTo(id, anchor: .center) }; memorySourceID = nil
+                    guard let id else { return }; withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { proxy.scrollTo(id, anchor: .center) }; memorySourceID = nil
                 }
             }
             composer
