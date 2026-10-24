@@ -89,7 +89,7 @@ struct WorkspaceView: View {
     private var deletionPresented: Binding<Bool> {
         Binding(get: { store.deletionRequest != nil }, set: { visible in if !visible { store.deletionRequest = nil } })
     }
-    var body: some View {
+    private var navigationConfirmedWorkspace: some View {
         workspaceContent
         .onOpenURL { url in Task { await store.openInternalURL(url) } }
         .confirmationDialog("保存当前 Markdown 后离开？", isPresented: $showsRouteConfirmation, presenting: pendingRoute) { destination in
@@ -111,6 +111,9 @@ struct WorkspaceView: View {
         .onChange(of: showsModelRouteConfirmation) { _, visible in
             if !visible && !resolvingNavigation { pendingModelRoute = nil }
         }
+    }
+    private var presentedWorkspace: some View {
+        navigationConfirmedWorkspace
         .sheet(item: sheetBinding, onDismiss: finishSheetDismissal) { sheet in
             switch sheet {
             case .settings: ProviderSettingsView(onClose: { closeSheet(.settings) }).environmentObject(store).frame(width: min(860, max(300, detailWidth - 40)), height: min(660, max(300, workspaceHeight - 40)))
@@ -132,6 +135,9 @@ struct WorkspaceView: View {
             if !visible, readerPopover != .navigation { readerPopover = nil }
         }
         .onChange(of: bookPopover) { _, visible in if !visible { servicePopover = false } }
+    }
+    private var persistedWorkspace: some View {
+        presentedWorkspace
         .onAppear { repairLegacyManagementRoute(); reconcileSheet(); restoreReaderMemory() }
         .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreReaderMemory() }
         .onChange(of: readerShowsPDF) { _, value in store.updateWorkspaceMemory { $0.readerShowsPDF = value } }
@@ -141,6 +147,9 @@ struct WorkspaceView: View {
         .onChange(of: store.requestedWorkspaceRoute) { _, route in
             guard let route else { return }; store.requestedWorkspaceRoute = nil; navigate(route)
         }
+    }
+    private var guardedWorkspace: some View {
+        persistedWorkspace
         .confirmationDialog("移入回收站？", isPresented: deletionPresented, presenting: store.deletionRequest) { request in
             Button("移入回收站", role: .destructive) { store.confirmDeletion(request) }
             Button("取消", role: .cancel) { store.deletionRequest = nil }
@@ -155,6 +164,9 @@ struct WorkspaceView: View {
             }
             return true
         }
+    }
+    var body: some View {
+        guardedWorkspace
         .onChange(of: store.bookID) { _, _ in showsInspector = false; compactInspector = false; readerPopover = nil; readerBookmarks = false; progressSize = CGSize(width: 260, height: 52) }
         .onChange(of: store.route) { old, next in
             readerPopover = nil

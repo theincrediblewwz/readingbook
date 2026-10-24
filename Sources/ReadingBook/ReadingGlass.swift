@@ -41,7 +41,7 @@ struct ReadingGlassSurface: ViewModifier {
             .shadow(color: .black.opacity(scheme == .dark ? (prominent ? 0.38 : 0.27) : (prominent ? 0.15 : 0.085)), radius: prominent ? 28 : 20, x: 0, y: prominent ? 14 : 8)
             .shadow(color: .black.opacity(scheme == .dark ? 0.14 : (prominent ? 0.075 : 0.04)), radius: 4, x: 0, y: 2)
     }
-    @ViewBuilder private func surface(_ content: Content) -> some View {
+    @ViewBuilder private func surface<Surface: View>(_ content: Surface) -> some View {
         if reduceTransparency {
             content.background(Palette.surface, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
         } else if #available(macOS 26.0, *) {
