@@ -39,7 +39,13 @@ final class ReadingSentenceAnchorsTests: XCTestCase {
         for anchor in values {
             let resolved = try ReadingExperienceRuntime.resolve(anchor, in: project)
             XCTAssertTrue((text as NSString).substring(with: resolved.range).utf8.elementsEqual(anchor.quote.utf8))
-            XCTAssertFalse(anchor.quote.contains("é"))
+            // String.contains compares canonically equivalent Characters, so
+            // it cannot test whether the original decomposed bytes survived.
+            XCTAssertTrue(anchor.quote.unicodeScalars.contains { $0.value == 0x301 })
+            XCTAssertFalse(anchor.quote.unicodeScalars.contains { $0.value == 0xE9 })
+            var normalized = anchor
+            normalized.quote = anchor.quote.precomposedStringWithCanonicalMapping
+            XCTAssertThrowsError(try ReadingExperienceRuntime.resolve(normalized, in: project), "规范等价的替换仍不是原文字节。")
         }
     }
     func testVisiblePagesWinBeforeNeighborsAndWorkIsBounded() {

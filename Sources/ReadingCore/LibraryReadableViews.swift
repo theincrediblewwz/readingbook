@@ -126,7 +126,7 @@ extension LibraryRepository {
         let manifest = try JSONDecoder().decode(ReadableManifest.self, from: readLimited(url, limit: 1_024 * 1_024))
         guard manifest.version == 1, manifest.files.count <= 32 else { throw ReadingError.invalid("导览生成记录无效，保留现有文件。") }
         for (name, record) in manifest.files {
-            let allowed: Set<String> = ["阅读导航.md", "书库目录.md", "AI分析/阅读摘要.md", "AI分析/对象与事件.md", "AI分析/关系与组件.md", "AI分析/问答.md"]
+            let allowed: Set<String> = ["阅读导航.md", "书库目录.md", "AI分析/阅读摘要.md", "AI分析/对象与事件.md", "AI分析/人物背景.md", "AI分析/句旁译注.md", "AI分析/关系与组件.md", "AI分析/问答.md"]
             let base = (name as NSString).deletingPathExtension
             guard allowed.contains(name), record.path == name || record.path.hasPrefix(base + " · AI新稿"),
                   record.path.hasSuffix(".md"), record.generatedHash.count == 64,

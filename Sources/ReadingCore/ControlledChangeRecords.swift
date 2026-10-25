@@ -7,6 +7,10 @@ enum ControlledChangeRecords {
         var value = project
         value.chats = []; value.audit = []; value.lastUnitID = nil
         value.bookmarks = []; value.readerAnnotations = nil
+        // Transport counters and host-only explanation caches do not change
+        // what the reader reviewed or grant new write authority. Actual source,
+        // object, document and layout changes remain part of this revision.
+        value.aiRequestHistory = nil; value.readingKnowledge = nil
         return try ControlledChangeCoding.hash(value)
     }
 

@@ -38,15 +38,15 @@ struct SavedKnowledgeReuse {
         if admits(original.evidence), let current = projection.entitySnapshot(original) { return current }
         guard !original.evidence.isEmpty else { return nil }
         if let prior = versions.entity(original.id), let safe = projection.entitySnapshot(prior), admits(safe.evidence) { return safe }
-        guard let value = projection.entity(original), admits(value.evidence) else { return nil }
-        return value
+        // A redacted identity is still useful to the scope's object lookup, but
+        // clipping a mixed aggregate is not a saved, source-complete past fact.
+        return nil
     }
     func event(_ original: KnowledgeEvent) -> KnowledgeEvent? {
         if admits(original.evidence), let current = projection.eventSnapshot(original) { return current }
         guard !original.evidence.isEmpty else { return nil }
         if let prior = versions.event(original.id), let safe = projection.eventSnapshot(prior), admits(safe.evidence) { return safe }
-        guard let value = projection.event(original), admits(value.evidence) else { return nil }
-        return value
+        return nil
     }
 
     func admits(_ evidence: [Evidence]) -> Bool {

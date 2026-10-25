@@ -3,6 +3,15 @@ import XCTest
 @testable import ReadingCore
 
 final class AIProjectMergeTests: XCTestCase {
+    func testHostExplanationCacheAndTransportHistoryDoNotInvalidateReviewedAuthority() throws {
+        let base = BookProject(title: "旧功能", originalName: "book.txt", sourceHash: String(repeating: "a", count: 64), units: [])
+        var derived = base; derived.readingKnowledge = ReadingKnowledgeState()
+        derived.aiRequestHistory = [AIRequestHistoryRecord(id: "request", title: "老师讲解", number: 1,
+            startedAt: Date(), finishedAt: Date(), status: "returned", reasoningCharacters: 12, answerCharacters: 20)]
+        XCTAssertEqual(try ControlledChangeRecords.revision(base), try ControlledChangeRecords.revision(derived))
+        derived.entities.append(KnowledgeEntity(id: "new", typeID: "person", name: "真正的对象变化"))
+        XCTAssertNotEqual(try ControlledChangeRecords.revision(base), try ControlledChangeRecords.revision(derived), "不能把真实知识变更也排除出审阅版本。")
+    }
     private struct Fixture {
         let directory: URL
         let source: URL

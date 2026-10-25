@@ -89,6 +89,11 @@ final class AnalysisContextTests: XCTestCase {
     func testAggregateWithFutureOrInvalidSourceNeverBecomesReusablePastFact() async throws {
         var book = try project()
         book.units.append(SourceUnit(id: "u3", order: 2, chapter: "后续", page: 3, text: "神秘人再次出现。"))
+        let local = book.entities[0].evidence[0], future = book.entities[0].evidence[1]
+        book.events = [KnowledgeEvent(id: "mixed-event", name: "神秘人路过", summary: "后文揭晓身份与结局", evidence: [local, future])]
+        let earlyReuse = try XCTUnwrap(SavedKnowledgeReuse(project: book, currentUnitIDs: ["u1"]))
+        XCTAssertNil(earlyReuse.record(id: "person1"), "局部身份投影不能把混合聚合包装为此前保存的事实。")
+        XCTAssertNil(earlyReuse.record(id: "mixed-event"), "事件与人物须遵守相同的完整来源边界。")
         let mixed = try PluginEngine.analysisContextProject(book, allowedUnitIDs: ["u1"])
         XCTAssertFalse(mixed.entities.contains(where: { !$0.summary.isEmpty }))
         let snapshot = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u1", page: 1))
