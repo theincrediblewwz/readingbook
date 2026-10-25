@@ -552,7 +552,8 @@ public actor LibraryRepository {
         try ReadingLedger.validateStoredRecords(in: project, mathCache: &mathValidationCache)
         try BookSchemeRuntime.validateStoredState(in: project)
         let sourceManifest: SourceManifest
-        if let cached = sourceManifests[project.id], cached.sourceHash == project.sourceHash, cached.units == project.units {
+        if let cached = sourceManifests[project.id], cached.sourceHash == project.sourceHash, cached.units == project.units,
+           zip(cached.units, project.units).allSatisfy({ $0.text.utf8.elementsEqual($1.text.utf8) }) {
             sourceManifest = cached
         } else {
             sourceManifest = SourceManifest(sourceHash: project.sourceHash, units: project.units,

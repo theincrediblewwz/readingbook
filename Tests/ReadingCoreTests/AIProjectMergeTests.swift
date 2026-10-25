@@ -58,4 +58,39 @@ final class AIProjectMergeTests: XCTestCase {
         var forbidden = f.book; forbidden.documents[0].title = "AI不该覆盖用户标题"
         XCTAssertThrowsError(try AIProjectMerge.merge(base: f.book, result: forbidden, latest: latest))
     }
+
+    func testCanonicalEquivalentSourceBytesInvalidateCachedManifestAndRejectStaleMerge() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ReadingBook-SourceBytes-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let decomposed = "Cafe\u{301} 的原文。", composed = "Caf\u{e9} 的原文。"
+        XCTAssertEqual(decomposed, composed, "此回归必须覆盖Swift规范等价但原始字节不同的情况。")
+        XCTAssertFalse(decomposed.utf8.elementsEqual(composed.utf8))
+        let original = Data(decomposed.utf8), source = directory.appendingPathComponent("book.txt")
+        try original.write(to: source)
+        let library = directory.appendingPathComponent("library", isDirectory: true)
+        let repository = LibraryRepository(rootURL: library)
+        var book = BookProject(title: "原文字节", originalName: "book.txt", sourceHash: try BookImporter.sha256(original),
+            units: [SourceUnit(id: "u1", order: 0, chapter: "一", text: decomposed)])
+        PluginEngine.seed(&book)
+        book.smartReading = try SmartReadingRuntime.freeze(SmartReadingSelection(execution: .init()), in: book)
+        try await repository.create(book, sourceURL: source)
+        try await repository.save(book) // Warm the same repository actor's manifest cache.
+        let managedSource = await repository.sourceURL(for: book)
+        let metadataURL = library.appendingPathComponent("books/\(book.id)/project.json")
+        let metadata = try Data(contentsOf: metadataURL)
+        var changed = book; changed.units[0].text = composed
+        XCTAssertEqual(book.units, changed.units, "Synthesized SourceUnit equality alone cannot protect a byte-derived hash.")
+        do { try await repository.save(changed); XCTFail("不能把旧缓存哈希复用到字节已改变的规范等价原文。") } catch {}
+        XCTAssertEqual(try Data(contentsOf: metadataURL), metadata)
+        XCTAssertEqual(try Data(contentsOf: source), original)
+        XCTAssertEqual(try Data(contentsOf: managedSource), original)
+        let books = try await repository.loadAll(), saved = try XCTUnwrap(books.first)
+        XCTAssertTrue(saved.units[0].text.utf8.elementsEqual(decomposed.utf8))
+        XCTAssertEqual(saved.smartReading?.unitHashes["u1"], try BookImporter.sha256(original))
+        var result = book; result.chats.append(ChatMessage(id: "answer", role: "assistant", content: "旧原文上的回答"))
+        XCTAssertThrowsError(try AIProjectMerge.merge(base: book, result: result, latest: changed), "原文UTF8已变化，旧分析不能跨版本合并。")
+        result.units[0].text = composed
+        XCTAssertThrowsError(try AIProjectMerge.merge(base: book, result: result, latest: book), "分析结果本身也不能偷偷更换为规范等价但字节不同的原文。")
+    }
 }

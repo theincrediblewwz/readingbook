@@ -5,6 +5,10 @@ import Foundation
 enum AIProjectMerge {
     static let writable: Set<String> = ["coverage", "types", "entities", "events", "relations", "views", "methods", "plan", "insights", "syntheses", "nodes", "edges", "chats", "audit", "plugins", "appliedOperationIDs", "lastUnitID", "paragraphReceipts", "readingStepResults", "workflowRuns", "receiptBatch", "smartReading", "readingExperience", "bookSchemes", "mathVerifications", "temporalKnowledge", "graphGroups"]
     static func merge(base: BookProject, result: BookProject, latest: BookProject) throws -> BookProject {
+        func sameSource(_ other: BookProject) -> Bool {
+            base.units == other.units && zip(base.units, other.units).allSatisfy { $0.text.utf8.elementsEqual($1.text.utf8) }
+        }
+        guard sameSource(result), sameSource(latest) else { throw ReadingError.invalid("原文识别或分段已改变，本次分析未应用，请从当前原文继续。") }
         let encoder = JSONEncoder()
         func object(_ project: BookProject) throws -> [String: Any] {
             guard let value = try JSONSerialization.jsonObject(with: encoder.encode(project)) as? [String: Any] else { throw ReadingError.invalid("无法校验分析增量。") }; return value
