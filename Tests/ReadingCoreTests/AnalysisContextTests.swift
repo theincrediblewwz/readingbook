@@ -81,4 +81,30 @@ final class AnalysisContextTests: XCTestCase {
         let invalid = SavedKnowledgeReuse(project: book, currentUnitIDs: ["u3"])
         XCTAssertNil(invalid?.record(id: "person1"), "OCR或来源改变后，旧引文失效就不能复用聚合内容。")
     }
+
+    func testSelectionReuseAdmitsOnlyNamesInsideSliceAndRejectsSameUnitOutsideFacts() async throws {
+        let units = [SourceUnit(id: "u0", order: 0, chapter: "此前", page: 1, text: "贾诩善谋。"),
+                     SourceUnit(id: "u1", order: 1, chapter: "此处", page: 2, text: "贾诩在此。甲地出现了。贾诩后来统领军队。")]
+        var book = BookProject(title: "选段", originalName: "selection.txt", sourceHash: "source", units: units)
+        PluginEngine.seed(&book)
+        book.entities = [
+            KnowledgeEntity(id: "known", typeID: "person", name: "贾诩", summary: "早先是一位善谋的人。", aliases: ["甲地的谋士"], evidence: [Evidence(unitID: "u0", quote: "贾诩善谋。")]),
+            KnowledgeEntity(id: "outside", typeID: "place", name: "甲地", summary: "本页选段外的地点。", evidence: [Evidence(unitID: "u1", quote: "甲地出现了。")]),
+            KnowledgeEntity(id: "mixed", typeID: "person", name: "贾诩", summary: "本页后面才讲到统领军队。", evidence: [Evidence(unitID: "u0", quote: "贾诩善谋。"), Evidence(unitID: "u1", quote: "贾诩后来统领军队。")])
+        ]
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .selection, in: book, context: ReadingContext(unitID: "u1", selectedText: "贾诩在此。", page: 2))
+        var query = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: book)
+        let found = try await query.execute(name: "objects_search", arguments: ["query": "贾诩"], maximumBytes: 8000)
+        XCTAssertTrue(found.contains("known")); XCTAssertTrue(found.contains("早先是一位善谋的人"))
+        XCTAssertFalse(found.contains("mixed")); XCTAssertFalse(found.contains("统领军队")); XCTAssertFalse(found.contains("甲地的谋士"))
+        let alias = try await query.execute(name: "objects_search", arguments: ["query": "甲地的谋士"], maximumBytes: 8000)
+        XCTAssertFalse(alias.contains("known"), "选段外的别名不能成为本次身份命中条件。")
+        for id in ["outside", "mixed"] {
+            do { _ = try await query.execute(name: "object_get", arguments: ["id": id], maximumBytes: 8000); XCTFail("选段不能读取同unit的范围外知识：\(id)") } catch {}
+        }
+        let reused = try await query.execute(name: "object_get", arguments: ["id": "known"], maximumBytes: 8000)
+        XCTAssertTrue(reused.contains("previouslySaved")); XCTAssertFalse(reused.contains("甲地的谋士"))
+        XCTAssertFalse(snapshot.admits(Evidence(unitID: "u0", quote: "贾诩善谋。")))
+        XCTAssertTrue(query.sourceExcerpts.isEmpty)
+    }
 }

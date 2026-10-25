@@ -138,6 +138,8 @@ struct AIProgressPresentationState: Equatable {
         case "source_outline", "source_list": return "查看原书目录"
         case "source_search": return "查找相关原文"
         case "source_read": return "阅读原文片段"
+        case "analysis_outline": return "查看已有分析目录"
+        case "analysis_read": return "阅读已有分析"
         case "documents_list", "documents_search", "document_read": return "查阅授权笔记"
         case "conversation_search", "conversation_read": return "重读本次对话记录"
         case "reading_receipts", "reading_receipt", "read_receipt": return "核对逐段阅读记录"

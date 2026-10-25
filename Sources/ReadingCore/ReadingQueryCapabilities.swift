@@ -225,7 +225,8 @@ extension ReadingQuerySession {
         let boundary = KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs))
         // Construct this index once, rather than rebuilding it per result row.
         // Previous sources stay derived context, never current citation grants.
-        let reuse = ["objects_search", "object_get"].contains(name) ? SavedKnowledgeReuse(project: project, currentUnitIDs: Set(snapshot.unitIDs)) : nil
+        let reuse = ["objects_search", "object_get"].contains(name) ? SavedKnowledgeReuse(project: project, currentUnitIDs: Set(snapshot.unitIDs),
+            currentSlices: Dictionary(snapshot.sources.map { ($0.unitID, $0.text) }, uniquingKeysWith: { first, _ in first })) : nil
         switch name {
         case "capabilities_list":
             if let group = arguments["schemaFor"] as? String {
@@ -259,7 +260,7 @@ extension ReadingQuerySession {
                 return row
             }
             let returned = Set(objects.map(\.id))
-            for candidate in PluginEngine.analysisIdentityCandidates(project, allowedUnitIDs: Set(snapshot.unitIDs)) where !returned.contains(candidate.id) {
+            for candidate in PluginEngine.analysisIdentityCandidates(project, allowedUnitIDs: Set(snapshot.unitIDs), occurrenceTexts: snapshot.sources.map(\.text)) where !returned.contains(candidate.id) {
                 guard types.isEmpty || types.contains(candidate.typeID), let saved = reuse?.record(id: candidate.id),
                       query.isEmpty || ([candidate.name] + candidate.aliases + [saved["summary"] as? String ?? ""]).contains(where: { $0.localizedCaseInsensitiveContains(query) }) else { continue }
                 rows.append(["id": candidate.id, "typeID": candidate.typeID, "kind": candidate.kind, "name": candidate.name, "summary": "", "identityOnly": true,
@@ -269,7 +270,7 @@ extension ReadingQuerySession {
         case "object_get":
             let id = try identifier(arguments)
             guard let object = try TemporalKnowledgeRuntime.object(id: id, in: scoped, boundary: boundary) else {
-                guard let candidate = PluginEngine.analysisIdentityCandidates(project, allowedUnitIDs: Set(snapshot.unitIDs)).first(where: { $0.id == id }), let saved = reuse?.record(id: id) else { throw invalid("对象不在本次原文范围内。") }
+                guard let candidate = PluginEngine.analysisIdentityCandidates(project, allowedUnitIDs: Set(snapshot.unitIDs), occurrenceTexts: snapshot.sources.map(\.text)).first(where: { $0.id == id }), let saved = reuse?.record(id: id) else { throw invalid("对象不在本次原文范围内。") }
                 guard arguments["expectedHash"] == nil else { throw invalid("当前只是待核对身份候选，没有可用于变更的对象版本。") }
                 return try json(["ok": true, "object": ["id": candidate.id, "name": candidate.name, "typeID": candidate.typeID], "identityOnly": true, "previouslySaved": saved,
                     "documentBodiesProvided": false, "note": "当前同名身份尚待核对；旧简介是派生资料，不扩大本次原文与引用范围。"])

@@ -277,8 +277,8 @@ public enum PluginEngine {
     /// A literal occurrence permits offering a stable ID for deduplication,
     /// without revealing its other names or any facts learned on other pages.
     /// These are explicitly candidates, not an assertion that two names coincide.
-    static func analysisIdentityCandidates(_ project: BookProject, allowedUnitIDs: Set<String>) -> [AnalysisIdentityCandidate] {
-        let texts = project.units.filter { allowedUnitIDs.contains($0.id) }.map(\.text)
+    static func analysisIdentityCandidates(_ project: BookProject, allowedUnitIDs: Set<String>, occurrenceTexts: [String]? = nil) -> [AnalysisIdentityCandidate] {
+        let texts = occurrenceTexts ?? project.units.filter { allowedUnitIDs.contains($0.id) }.map(\.text)
         func local(_ names: [String]) -> [String] {
             var seen = Set<String>()
             return names.filter { name in !name.isEmpty && seen.insert(name).inserted && texts.contains(where: { $0.contains(name) }) }

@@ -185,5 +185,123 @@ struct StandardReadingToolPlugin: ReadingToolPlugin {
         try registry.register(RegisteredReadingTool(pluginID: info.id, schema: schema, phases: [.reading]) { data, project, allowed in
             try SmartReadingRuntime.completeAnalysis(arguments: data, in: &project, allowedUnitIDs: allowed)
         })
+        let scope: [String: Any] = ["type": "string", "enum": ["chapter", "book"]]
+        let outline: [String: Any] = ["type": "function", "function": ["name": "analysis_outline",
+            "description": "查看本轮已保存分析的目录，供章末或本轮回顾按需取用。只返回当前原文之前、本轮范围内的记录；chapter限当前章，book需已启用本轮结束步骤。目录不是全文阅读或新原文证据。",
+            "parameters": ["type": "object", "additionalProperties": false, "properties": ["scope": scope,
+                "offset": ["type": "integer", "minimum": 0], "limit": ["type": "integer", "minimum": 1, "maximum": 80]], "required": ["scope"]]]]
+        let read: [String: Any] = ["type": "function", "function": ["name": "analysis_read",
+            "description": "按analysis_outline的ID读取最多3条已保存分析，总响应不超过12KiB。派生资料只用于回顾，不开放其他原文、用户笔记或写入范围；被截断时不能声称已通读全文。",
+            "parameters": ["type": "object", "additionalProperties": false, "properties": ["scope": scope,
+                "checkpointIDs": ["type": "array", "items": id, "minItems": 1, "maxItems": 3]], "required": ["scope", "checkpointIDs"]]]]
+        try registry.register(RegisteredReadingTool(pluginID: info.id, schema: outline, phases: [.reading], readOnly: true) { data, project, allowed in
+            try ReadingAnalysisReviewTools.outline(arguments: data, in: project, allowedUnitIDs: allowed)
+        })
+        try registry.register(RegisteredReadingTool(pluginID: info.id, schema: read, phases: [.reading], readOnly: true) { data, project, allowed in
+            try ReadingAnalysisReviewTools.read(arguments: data, in: project, allowedUnitIDs: allowed)
+        })
+    }
+}
+
+/// These are derived-analysis retrieval capabilities, never source-reading grants.
+/// In particular their returned unit IDs cannot widen a worker's write authority.
+enum ReadingAnalysisReviewTools {
+    private enum Scope: String, Codable { case chapter, book }
+    private struct OutlineRequest: Decodable { var scope: Scope; var offset: Int?; var limit: Int? }
+    private struct ReadRequest: Decodable { var scope: Scope; var checkpointIDs: [String] }
+    private struct Metadata: Codable {
+        var id: String; var title: String; var unitCount: Int; var firstOrder: Int; var lastOrder: Int
+        var configurationMatchesCurrent: Bool
+    }
+    private struct Candidate { var checkpoint: ReadingAnalysisCheckpoint; var metadata: Metadata }
+    private struct OutlineResponse: Encodable {
+        let kind = "derived_analysis_outline"
+        var scope: Scope; var total: Int; var offset: Int; var nextOffset: Int?; var items: [Metadata]
+        let notice = "这只是已保存分析的目录，尚未读取其中内容；不增加已分析覆盖或新原文权限。"
+    }
+    private struct ReadItem: Encodable { var metadata: Metadata; var unitIDs: [String]; var markdown: String; var truncated: Bool }
+    private struct ReadResponse: Encodable {
+        let kind = "derived_saved_analysis"
+        var scope: Scope; var items: [ReadItem]
+        let notice = "以下是先前保存的派生分析，可能仍需核对；不是本次新读原文，不能作为新引用或扩大写入范围。截断的内容不代表已通读。"
+    }
+    private static func decode<T: Decodable>(_ type: T.Type, arguments: Data, keys: Set<String>) throws -> T {
+        guard let raw = try JSONSerialization.jsonObject(with: arguments) as? [String: Any], Set(raw.keys).isSubset(of: keys) else {
+            throw ReadingError.invalid("分析检索参数含有未声明字段。")
+        }
+        return try JSONDecoder().decode(type, from: arguments)
+    }
+    private static func candidates(scope: Scope, in project: BookProject, allowedUnitIDs: Set<String>) throws -> [Candidate] {
+        guard let grant = ReadingAnalysisAuthority.current, let session = project.smartReading,
+              let configuration = session.selection.execution else { throw ReadingError.invalid("只有当前分析块可按已启用步骤查阅先前分析。") }
+        try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
+        let activeSteps = configuration.enabledSteps.filter { grant.chunk.stepIDs.contains($0.id) }
+        let required: ReadingStepFrequency = scope == .chapter ? .chapter : .book
+        guard activeSteps.contains(where: { $0.frequency == required }) else {
+            throw ReadingError.invalid(scope == .chapter ? "本次没有启用章末步骤，未读取其他分析。" : "本次没有启用本轮结束步骤，未读取其他分析。")
+        }
+        let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let current = grant.chunk.unitIDs.compactMap { units[$0] }.sorted { $0.order < $1.order }
+        guard let first = current.first, let last = current.last, current.count == grant.chunk.unitIDs.count else { throw ReadingError.invalid("当前分析块原文缺失。") }
+        let scopeIDs = Set(session.unitIDs)
+        var hashes: [String: String] = [:], result: [Candidate] = []
+        for checkpoint in session.analysisCheckpoints ?? [] {
+            try Task.checkCancellation()
+            let ids = Set(checkpoint.unitIDs)
+            guard !ids.isEmpty, ids.count == checkpoint.unitIDs.count, ids.isSubset(of: scopeIDs),
+                  Set(checkpoint.unitHashes.keys) == ids else { continue }
+            let sources = checkpoint.unitIDs.compactMap { units[$0] }.sorted { $0.order < $1.order }
+            guard sources.count == checkpoint.unitIDs.count, let start = sources.first, let end = sources.last,
+                  end.order < first.order, scope != .chapter || sources.allSatisfy({ $0.chapter == last.chapter }),
+                  Set(checkpoint.evidence.map(\.unitID)) == ids else { continue }
+            var unchanged = true
+            for unit in sources {
+                guard checkpoint.unitHashes[unit.id] == session.unitHashes[unit.id] else { unchanged = false; break }
+                let actual: String
+                if let known = hashes[unit.id] { actual = known }
+                else { actual = try BookImporter.sha256(Data(unit.text.utf8)); hashes[unit.id] = actual }
+                if checkpoint.unitHashes[unit.id] != actual { unchanged = false; break }
+            }
+            guard unchanged, checkpoint.evidence.allSatisfy({ !$0.quote.isEmpty && units[$0.unitID]?.text.contains($0.quote) == true }) else { continue }
+            let pages = Array(Set(sources.compactMap(\.page))).sorted()
+            let title = pages.first.map { page in pages.last == page ? "第 \(page) 页" : "第 \(page)–\(pages.last ?? page) 页" } ?? String(start.chapter.prefix(100))
+            let metadata = Metadata(id: checkpoint.id, title: title, unitCount: sources.count, firstOrder: start.order, lastOrder: end.order,
+                configurationMatchesCurrent: checkpoint.configurationHash == grant.chunk.configurationHash)
+            result.append(Candidate(checkpoint: checkpoint, metadata: metadata))
+        }
+        return result.sorted { left, right in
+            if left.metadata.firstOrder != right.metadata.firstOrder { return left.metadata.firstOrder < right.metadata.firstOrder }
+            if left.metadata.lastOrder != right.metadata.lastOrder { return left.metadata.lastOrder < right.metadata.lastOrder }
+            return left.metadata.id < right.metadata.id
+        }
+    }
+    static func outline(arguments: Data, in project: BookProject, allowedUnitIDs: Set<String>) throws -> String {
+        let request = try decode(OutlineRequest.self, arguments: arguments, keys: ["scope", "offset", "limit"])
+        let offset = request.offset ?? 0, limit = request.limit ?? 40
+        guard (0...100_000).contains(offset), (1...80).contains(limit) else { throw ReadingError.invalid("分析目录页码或数量无效，每次最多80条。") }
+        let records = try candidates(scope: request.scope, in: project, allowedUnitIDs: allowedUnitIDs)
+        let rows = records.dropFirst(offset).prefix(limit).map(\.metadata)
+        let next = offset + rows.count < records.count ? offset + rows.count : nil
+        return String(decoding: try JSONEncoder().encode(OutlineResponse(scope: request.scope, total: records.count, offset: offset, nextOffset: next, items: rows)), as: UTF8.self)
+    }
+    static func read(arguments: Data, in project: BookProject, allowedUnitIDs: Set<String>) throws -> String {
+        let request = try decode(ReadRequest.self, arguments: arguments, keys: ["scope", "checkpointIDs"])
+        guard (1...3).contains(request.checkpointIDs.count), Set(request.checkpointIDs).count == request.checkpointIDs.count else { throw ReadingError.invalid("每次读取1至3条不同的已保存分析。") }
+        let available = Dictionary(try candidates(scope: request.scope, in: project, allowedUnitIDs: allowedUnitIDs).map { ($0.metadata.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var items: [ReadItem] = []
+        for id in request.checkpointIDs {
+            guard let record = available[id] else { throw ReadingError.invalid("所选分析不在当前获准回顾范围，未读取内容。") }
+            items.append(ReadItem(metadata: record.metadata, unitIDs: record.checkpoint.unitIDs, markdown: record.checkpoint.markdown, truncated: false))
+        }
+        let encoder = JSONEncoder()
+        var data = try encoder.encode(ReadResponse(scope: request.scope, items: items))
+        while data.count > 12 * 1024 {
+            guard let index = items.indices.max(by: { items[$0].markdown.utf8.count < items[$1].markdown.utf8.count }), !items[index].markdown.isEmpty else {
+                throw ReadingError.invalid("分析元信息超出12KiB限制，请减少读取条数。")
+            }
+            items[index].markdown = String(items[index].markdown.prefix(items[index].markdown.count / 2)); items[index].truncated = true
+            data = try encoder.encode(ReadResponse(scope: request.scope, items: items))
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 }

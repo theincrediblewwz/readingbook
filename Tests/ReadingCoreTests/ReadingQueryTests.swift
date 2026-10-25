@@ -184,6 +184,8 @@ final class ReadingQueryTests: XCTestCase {
         var session = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: project, hostTools: access)
         let visible = try await session.execute(name: "visible_objects_list", arguments: [:], maximumBytes: 4000)
         XCTAssertTrue(visible.contains("n1")); XCTAssertFalse(visible.contains("n2")); XCTAssertFalse(visible.contains("free")); XCTAssertFalse(visible.contains("place"))
+        let outsideSearch = try await session.execute(name: "objects_search", arguments: ["query": "甲地"], maximumBytes: 4000)
+        XCTAssertFalse(outsideSearch.contains("place"), "身份候选检索也必须遵守精确选段，不能只检查unitID。")
         do { _ = try await session.execute(name: "object_get", arguments: ["id": "place"], maximumBytes: 4000); XCTFail("同unit非选段事实不可读") } catch {}
         do { _ = try await session.execute(name: "view_focus", arguments: ["nodeID": "n2"], maximumBytes: 4000); XCTFail("不能借界面工具定位范围外对象") } catch {}
         XCTAssertThrowsError(try session.validateProposal(name: "graph_changes_propose", data: Data(#"{"batch":{"graph":{"moves":[{"nodeID":"n2","x":1,"y":2}]}}}"#.utf8)), "不能猜一个范围外节点ID来移动")

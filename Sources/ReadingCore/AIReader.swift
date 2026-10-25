@@ -140,6 +140,7 @@ public actor AIReader {
             let units = project.units.filter { allowed.contains($0.id) }.sorted { $0.order < $1.order }
             let steps = configuration.enabledSteps.filter { chunk.stepIDs.contains($0.id) }
             var names: Set<String> = ["knowledge_search", "reading_analysis"]
+            if steps.contains(where: { $0.frequency == .chapter || $0.frequency == .book }) { names.formUnion(["analysis_outline", "analysis_read"]) }
             if steps.contains(where: { $0.actionID == "facts.extract" }) {
                 names.formUnion(["types_define", "cards_upsert", "events_upsert", "relations_link", "map_attach", "timeline_attach", "knowledge_temporal"])
                 if configuration.componentKinds.contains(.mindmap) || project.views.contains(where: { $0.kind == .mindmap }) { names.insert("reading_graph") }
@@ -150,6 +151,7 @@ public actor AIReader {
             本轮精细度：\(configuration.precision.title)。标准阅读不要求逐段复述；精读所需回执已由宿主在前面的真实批次保存。本次不调用read_receipt、workflow_step_complete或reading_finish。一次分析可以包含同页多个单元或同章多页，但引文必须回到原始unitID，不合并或重写原文。
             本次原文块：\(chunk.title)。unitIDs必须精确为\(try encodedString(chunk.unitIDs))。
             本次步骤：\(try encodedString(steps))。最后调用reading_analysis，completedStepIDs精确为\(try encodedString(chunk.stepIDs))，每个unitID至少有一条连续精确引文。
+            章末或本轮结束步骤可先用analysis_outline查看已保存分析目录，再用analysis_read按需读取（每次最多3条、总12KiB）。chapter只看当前章前序，book只看本轮范围内前序；本次当前块另有下方原文。先前分析是派生资料，不是本次新读原文、不可用它伪造新引用或扩大写入unitIDs。看到目录不等于通读，遇到截断如实说明，回顾只概括实际取用内容，不声称已核对所有原文。
             所选组件：\(configuration.componentKinds.map(\.title).joined(separator: "、"))。需要时实际创建实体、事件、关系、时态和导图，不能只在回答中声称创建；用户未启用的步骤不执行。无可靠日期或地点就保留未知，不造坐标。
             先knowledge_search查询本地人物、别名和事件。存在就复用稳定ID和已有介绍，本次只补新的发展和原文出处，不重新堆叠旧摘要。身份不确定保留候选，不按相似名字强行合并。
             reading_enrich用于保存句译、释义与词语提及。背景讲解可自然补充，但应是单独标明背景的解释层，不能把书外知识写成原文事实或虚构引文。背景内容也须遵循防剧透。

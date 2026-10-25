@@ -168,4 +168,80 @@ final class ReadingExecutionTests: XCTestCase {
         configuration.steps = []
         XCTAssertNoThrow(try configuration.validate())
     }
+
+    private func reviewProject() throws -> (BookProject, [ReadingAnalysisChunk]) {
+        let configuration = ReadingExecutionConfiguration(granularity: .page, steps: [
+            ReadingExecutionStep(id: "part", title: "阅读内容"),
+            ReadingExecutionStep(id: "chapter", title: "章末回顾", frequency: .chapter),
+            ReadingExecutionStep(id: "book", title: "本轮回顾", frequency: .book)
+        ])
+        var value = try project(configuration)
+        let chunks = try SmartReadingRuntime.analysisChunks(in: value)
+        let hashes = value.smartReading!.unitHashes, units = value.units
+        value.smartReading?.analysisCheckpoints = chunks.map { chunk in
+            ReadingAnalysisCheckpoint(id: chunk.id, unitIDs: chunk.unitIDs,
+                unitHashes: hashes.filter { chunk.unitIDs.contains($0.key) },
+                configurationHash: chunk.configurationHash, completedStepIDs: chunk.stepIDs,
+                markdown: "这部分已保存的分析：" + chunk.title,
+                evidence: chunk.unitIDs.map { id in Evidence(unitID: id, quote: units.first { $0.id == id }!.text) }, updatedAt: Date())
+        }
+        return (value, chunks)
+    }
+    private func reviewCall(_ name: String, _ arguments: [String: Any], chunk: ReadingAnalysisChunk, project: inout BookProject) throws -> Data {
+        let authorization = try grant(chunk, in: project)
+        let data = try JSONSerialization.data(withJSONObject: arguments)
+        let output = try ReadingAnalysisAuthority.$current.withValue(authorization) {
+            try PluginEngine.registry.apply(name: name, arguments: data, to: &project, allowedUnitIDs: Set(chunk.unitIDs), phase: .reading)
+        }
+        return Data(output.utf8)
+    }
+
+    func testReviewRetrievalIsReadOnlyAndRejectsFutureOrOtherChapter() throws {
+        var (value, chunks) = try reviewProject()
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(value)
+        let result = try reviewCall("analysis_outline", ["scope": "chapter", "limit": 80], chunk: chunks[1], project: &value)
+        let outline = try XCTUnwrap(JSONSerialization.jsonObject(with: result) as? [String: Any])
+        XCTAssertEqual(outline["total"] as? Int, 1)
+        let rows = try XCTUnwrap(outline["items"] as? [[String: Any]])
+        XCTAssertEqual(rows.first?["id"] as? String, chunks[0].id)
+        XCTAssertNil(rows.first?["markdown"], "目录不能冒充读取分析正文。")
+        let text = try reviewCall("analysis_read", ["scope": "chapter", "checkpointIDs": [chunks[0].id]], chunk: chunks[1], project: &value)
+        XCTAssertTrue(String(decoding: text, as: UTF8.self).contains("derived_saved_analysis"))
+        XCTAssertThrowsError(try reviewCall("analysis_read", ["scope": "chapter", "checkpointIDs": [chunks[2].id]], chunk: chunks[1], project: &value), "未来产物不能越阅读位置泄漏。")
+        XCTAssertThrowsError(try reviewCall("analysis_read", ["scope": "chapter", "checkpointIDs": [chunks[0].id]], chunk: chunks[2], project: &value), "章末只能读本章前序。")
+        XCTAssertThrowsError(try reviewCall("analysis_outline", ["scope": "book"], chunk: chunks[1], project: &value), "未启用本轮结束步骤不能扩大为全书回顾。")
+        XCTAssertEqual(try encoder.encode(value), before, "读取不改变产物、审计、笔记或覆盖。")
+    }
+
+    func testReviewRetrievalRejectsOldScopeAndChangedPriorSource() throws {
+        var (value, chunks) = try reviewProject()
+        let sourceCheckpoint = chunks[0].id
+        value.units[0].text += "发生变化。"
+        XCTAssertThrowsError(try reviewCall("analysis_read", ["scope": "book", "checkpointIDs": [sourceCheckpoint]], chunk: chunks[2], project: &value))
+        (value, chunks) = try reviewProject()
+        let old = value.smartReading?.analysisCheckpoints
+        let configuration = try XCTUnwrap(value.smartReading?.selection.execution)
+        var selected = try SmartReadingRuntime.freeze(SmartReadingSelection(scope: .pageRange, pageStart: 2, pageEnd: 3, execution: configuration), in: value, currentUnitID: "u3")
+        selected.analysisCheckpoints = old; value.smartReading = selected
+        let final = try XCTUnwrap(SmartReadingRuntime.analysisChunks(in: value).last)
+        XCTAssertThrowsError(try reviewCall("analysis_read", ["scope": "book", "checkpointIDs": [sourceCheckpoint]], chunk: final, project: &value), "原文虽在前面，也不能读取新范围之外的旧成果。")
+        var denied = value
+        XCTAssertThrowsError(try PluginEngine.registry.apply(name: "analysis_outline", arguments: Data(#"{"scope":"book"}"#.utf8), to: &denied, allowedUnitIDs: Set(final.unitIDs), phase: .reading))
+    }
+
+    func testReviewRetrievalCapsPageCountAndTotalReadBytes() throws {
+        var (value, chunks) = try reviewProject()
+        value.smartReading?.analysisCheckpoints?[0].markdown = String(repeating: "已有分析内容。", count: 2000)
+        let output = try reviewCall("analysis_read", ["scope": "book", "checkpointIDs": [chunks[0].id]], chunk: chunks[2], project: &value)
+        XCTAssertLessThanOrEqual(output.count, 12 * 1024)
+        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: output) as? [String: Any])
+        let items = try XCTUnwrap(decoded["items"] as? [[String: Any]])
+        XCTAssertEqual(items.first?["truncated"] as? Bool, true)
+        XCTAssertThrowsError(try reviewCall("analysis_outline", ["scope": "book", "limit": 81], chunk: chunks[2], project: &value))
+        let page = try reviewCall("analysis_outline", ["scope": "book", "offset": 1, "limit": 1], chunk: chunks[2], project: &value)
+        let pageValue = try XCTUnwrap(JSONSerialization.jsonObject(with: page) as? [String: Any])
+        XCTAssertEqual((pageValue["items"] as? [[String: Any]])?.count, 1)
+        XCTAssertThrowsError(try reviewCall("analysis_read", ["scope": "book", "checkpointIDs": Array(repeating: chunks[0].id, count: 4)], chunk: chunks[2], project: &value))
+    }
 }

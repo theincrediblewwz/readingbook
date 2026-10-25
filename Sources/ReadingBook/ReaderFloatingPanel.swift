@@ -57,7 +57,10 @@ struct ReaderFloatingPanel<Content: View>: View {
     /// Avoidance is presentation only. Keep the reader's saved position intact
     /// so it returns when the other floating surface closes or moves away.
     private func presentationPlacement() -> PanelPlacement {
-        if let resizeOrigin { return PanelPlacement(origin: resizeOrigin, height: wantedHeight) }
+        if let resizeOrigin {
+            let x = trailing ? resizeOrigin.x + (resizeStart?.width ?? panelWidth) - panelWidth : resizeOrigin.x
+            return PanelPlacement(origin: CGPoint(x: max(24, x), y: resizeOrigin.y), height: wantedHeight)
+        }
         if let dragOrigin { return PanelPlacement(origin: dragOrigin, height: dragHeight ?? wantedHeight) }
         let proposed = savedOrigin ?? CGPoint(x: trailing ? viewport.width - panelWidth - 24 : 24, y: 100)
         let start = clamp(proposed, height: wantedHeight)
@@ -190,7 +193,7 @@ struct ReaderFloatingPanel<Content: View>: View {
                     .overlay {
                         RoundedRectangle(cornerRadius: 24).strokeBorder(Palette.accent.opacity(elevated ? 0.13 : 0), lineWidth: 0.7).allowsHitTesting(false)
                     }
-                    .overlay(alignment: .bottomTrailing) {
+                    .overlay(alignment: trailing ? .bottomLeading : .bottomTrailing) {
                         if resizable && !collapsed {
                             Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11)).foregroundStyle(.tertiary)
                                 .frame(width: 24, height: 24).contentShape(Rectangle()).padding(4)
@@ -198,8 +201,13 @@ struct ReaderFloatingPanel<Content: View>: View {
                                     resizePreferredStart = preferredSize; resizeStart = CGSize(width: panelWidth, height: panelHeight); resizeOrigin = origin
                                 }, drag: { delta, ended in
                                     guard let start = resizeStart, let anchor = resizeOrigin else { return }
-                                    preferredSize = CGSize(width: min(max(320, start.width + delta.width), max(320, viewport.width - anchor.x - 24)), height: min(max(260, start.height + delta.height), max(260, viewport.height - anchor.y - bottomReserve)))
-                                    if ended { savedOrigin = anchor; resizeStart = nil; resizeOrigin = nil; resizePreferredStart = nil; saveMemory(); reportStableFrame() }
+                                    let widthLimit = trailing ? anchor.x + start.width - 24 : viewport.width - anchor.x - 24
+                                    let newWidth = min(max(320, start.width + (trailing ? -delta.width : delta.width)), max(320, widthLimit))
+                                    preferredSize = CGSize(width: newWidth, height: min(max(260, start.height + delta.height), max(260, viewport.height - anchor.y - bottomReserve)))
+                                    if ended {
+                                        savedOrigin = CGPoint(x: trailing ? anchor.x + start.width - newWidth : anchor.x, y: anchor.y)
+                                        resizeStart = nil; resizeOrigin = nil; resizePreferredStart = nil; saveMemory(); reportStableFrame()
+                                    }
                                 }, cancel: cancelResize).accessibilityHidden(true) }
                                 .help("调整\(title)面板大小")
                         }
