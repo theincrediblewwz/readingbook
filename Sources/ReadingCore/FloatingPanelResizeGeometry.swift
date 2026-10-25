@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 /// Resize directions use top-left reading coordinates, independently of the
 /// panel's remembered position or the side it originally opened on.
