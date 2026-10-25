@@ -20,3 +20,4 @@
 .rn-companion[hidden]{display:none!important}.rn-bubble{overflow:auto;max-height:calc(100dvh - 145px);scrollbar-width:thin}
 .rn-background-copy{border-top:1px solid #e8edf5;padding-top:12px;font-size:13px!important;color:#77859c!important}.rn-background-copy small{display:block;color:#96a4ba;font-size:11px;margin-bottom:5px}.rn-background-copy a{display:block;font-size:10px;color:#8ca0c0;margin-top:5px}
 .rn-control{min-height:44px}.rn-control.icon{width:44px}.rn-companion{min-height:330px}
+.rn-reading-scene{position:absolute;inset:0}
