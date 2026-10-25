@@ -36,6 +36,13 @@ public enum ReadingGraphTools {
               !allowedUnitIDs.isEmpty, allowedUnitIDs.isSubset(of: Set(project.units.map(\.id))) else { throw invalid("阅读导图的对象、关系或当前原文范围无效或超过上限。") }
         for id in targets + relationIDs { try checkID(id) }
         try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
+        // A redacted label is presentation, not validation of its canonical
+        // record. Reject malformed originals before any graph construction.
+        let canonicalNames = Dictionary((project.entities.map { ($0.id, $0.name) } + project.events.map { ($0.id, $0.name) }), uniquingKeysWith: { first, _ in first })
+        for target in targets {
+            guard let title = canonicalNames[target] else { throw invalid("导图对象不是当前书中已有的实体或事件。") }
+            try ControlledChangeCoding.text(title, maximum: 1600)
+        }
         let safe = try PluginEngine.analysisContextProject(project, allowedUnitIDs: allowedUnitIDs)
         let names = Dictionary((safe.entities.map { ($0.id, $0.name) } + safe.events.map { ($0.id, $0.name) }), uniquingKeysWith: { first, _ in first })
         guard Set(targets).isSubset(of: Set(names.keys)) else { throw invalid("导图只能选择在当前获准原文有真实证据的既有实体或事件；身份候选和外页对象不算当前事实。") }
