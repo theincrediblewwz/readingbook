@@ -12,6 +12,32 @@ import ReadingCore
     static var drafts: [Key: EntityEditDraft] = [:]
 }
 
+private struct ObjectInspectorProjection: Sendable {
+    let owner: String
+    let allowed: Set<String>?
+    let entity: KnowledgeEntity?
+    let event: KnowledgeEvent?
+    let relatedEvents: [String: KnowledgeEvent]
+    let names: [String: String]
+    static func build(owner: String, objectID: String, book: BookProject, allowed: Set<String>?) -> Self {
+        let context = ReadingSpoilerProjection.Context(project: book, allowedUnitIDs: allowed)
+        let entity = book.entities.first { $0.id == objectID }.flatMap { context.entity($0) }
+        let event = book.events.first { $0.id == objectID }.flatMap { context.event($0) }
+        let related = book.events.filter { $0.id == objectID || $0.participantIDs.contains(objectID) || $0.placeIDs.contains(objectID) }
+            .compactMap { context.event($0) }
+        var targetIDs = Set(related.flatMap { $0.participantIDs + $0.placeIDs })
+        for relation in book.relations where relation.fromID == objectID || relation.toID == objectID {
+            targetIDs.insert(relation.fromID); targetIDs.insert(relation.toID)
+        }
+        var names: [String: String] = [:]
+        for value in book.entities where targetIDs.contains(value.id) { if let visible = context.entity(value) { names[value.id] = visible.name } }
+        for value in book.events where targetIDs.contains(value.id) { if let visible = context.event(value) { names[value.id] = visible.name } }
+        for value in book.activeDocuments where targetIDs.contains(value.id) { names[value.id] = value.title }
+        return Self(owner: owner, allowed: allowed, entity: entity, event: event,
+            relatedEvents: Dictionary(related.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }), names: names)
+    }
+}
+
 @MainActor struct ObjectInspector: View {
     @EnvironmentObject var store: AppStore
     let id: String
@@ -24,18 +50,15 @@ import ReadingCore
     @State private var saving = false
     @State private var pendingAction: PendingAction?
     @State private var showsDraftConfirmation = false
+    @State private var projection: ObjectInspectorProjection?
 
     private enum PendingAction { case show(String), close }
     private var objectID: String { displayedID ?? id }
     private var hasChanges: Bool { draft?.isDirty == true }
-    private var presentedEntity: KnowledgeEntity? {
-        guard let book = store.book, let value = book.entities.first(where: { $0.id == objectID }) else { return nil }
-        return ReadingSpoilerProjection.entity(value, in: book, allowedUnitIDs: store.temporalBoundary.allowedUnitIDs)
-    }
-    private var presentedEvent: KnowledgeEvent? {
-        guard let book = store.book, let value = book.events.first(where: { $0.id == objectID }) else { return nil }
-        return ReadingSpoilerProjection.event(value, in: book, allowedUnitIDs: store.temporalBoundary.allowedUnitIDs)
-    }
+    private var projectionOwner: String { store.libraryRootURL.path + "|" + (store.bookID ?? "") + "|" + objectID + "|" + (store.selectedUnitID ?? "") + "|" + (store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false ? "safe" : "open") }
+    private var projectionRequest: String { projectionOwner + "|" + String(store.projectRevision) }
+    private var presentedEntity: KnowledgeEntity? { projection?.owner == projectionOwner ? projection?.entity : nil }
+    private var presentedEvent: KnowledgeEvent? { projection?.owner == projectionOwner ? projection?.event : nil }
     private var draftBinding: Binding<EntityEditDraft> {
         Binding(get: { draft ?? EntityEditDraft(entity: KnowledgeEntity(id: objectID, typeID: "", name: "")) }, set: { next in
             if draft != nil { draft = next }
@@ -103,6 +126,14 @@ import ReadingCore
                 restoreDraft(checkOtherDrafts: true)
             }
             .onDisappear { cacheDraft() }
+            .task(id: projectionRequest) {
+                guard let book = store.book else { projection = nil; return }
+                let owner = projectionOwner, target = objectID, allowed = store.temporalBoundary.allowedUnitIDs
+                let worker = Task.detached(priority: .userInitiated) { ObjectInspectorProjection.build(owner: owner, objectID: target, book: book, allowed: allowed) }
+                let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+                guard !Task.isCancelled, projectionOwner == owner else { return }
+                projection = result
+            }
             .confirmationDialog("保存卡片的修改？", isPresented: $showsDraftConfirmation, titleVisibility: .visible) {
                 Button("保存后继续") { let action = pendingAction; pendingAction = nil; saveDraft(then: action) }.disabled(saving || store.isBusy)
                 Button("放弃修改", role: .destructive) {
@@ -119,6 +150,7 @@ import ReadingCore
         if let entity = presentedEntity {
             Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent.opacity(0.08), in: Capsule())
             Text(entity.name).font(.system(size: 25, weight: .semibold)).textSelection(.enabled)
+            if store.queryAnswerStyle == .mentor { TeacherBackgroundCard(objectID: entity.id) }
             if canShow(entity.evidence), !entity.summary.isEmpty { MarkdownText(markdown: entity.summary).clipShape(RoundedRectangle(cornerRadius: 12)) }
             explanationButton(entity.name)
             HStack(spacing: 12) {
@@ -148,12 +180,15 @@ import ReadingCore
         } else if let event = presentedEvent {
             Text("事件").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent.opacity(0.08), in: Capsule())
             Text(event.name).font(.system(size: 25, weight: .semibold))
+            if store.queryAnswerStyle == .mentor { TeacherBackgroundCard(objectID: event.id) }
             if canShow(event.evidence) { Label(event.dateText, systemImage: "clock").font(.subheadline).foregroundStyle(.secondary) }
             if canShow(event.evidence) { MarkdownText(markdown: event.summary).clipShape(RoundedRectangle(cornerRadius: 12)) }
             explanationButton(event.name)
             if canShow(event.evidence) { linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs) }
             EvidenceList(evidence: visibleEvidence(event.evidence))
             Menu { Button("移入回收站…", role: .destructive) { store.requestDeletion(.event, id: event.id, title: event.name) } } label: { Label("事件管理", systemImage: "ellipsis").frame(minHeight: 44) }.menuStyle(.borderlessButton).fixedSize().font(.system(size: 14)).disabled(store.isBusy)
+        } else if projection?.owner != projectionOwner {
+            HStack(spacing: 8) { ProgressView().controlSize(.small); Text("读取本地介绍…").font(.callout).foregroundStyle(.secondary) }
         } else if store.book?.entities.contains(where: { $0.id == objectID }) == true || store.book?.events.contains(where: { $0.id == objectID }) == true {
             Text("当前阅读位置还没有可显示的介绍。").font(.callout).foregroundStyle(.secondary)
         } else if let document = store.book?.activeDocuments.first(where: { $0.id == objectID }) {
@@ -191,23 +226,22 @@ import ReadingCore
     }
 
     private func visibleEvent(_ event: KnowledgeEvent) -> KnowledgeEvent? {
-        guard let book = store.book else { return nil }
-        return ReadingSpoilerProjection.event(event, in: book, allowedUnitIDs: store.temporalBoundary.allowedUnitIDs)
+        guard projection?.owner == projectionOwner else { return nil }
+        return projection?.relatedEvents[event.id]
     }
     private func visibleObjectTitle(_ id: String) -> String? {
-        guard let book = store.book else { return nil }
-        let allowed = store.temporalBoundary.allowedUnitIDs
-        if let entity = book.entities.first(where: { $0.id == id }) { return ReadingSpoilerProjection.entity(entity, in: book, allowedUnitIDs: allowed)?.name }
-        if let event = book.events.first(where: { $0.id == id }) { return ReadingSpoilerProjection.event(event, in: book, allowedUnitIDs: allowed)?.name }
-        return book.activeDocuments.first(where: { $0.id == id })?.title
+        guard projection?.owner == projectionOwner else { return nil }
+        return projection?.names[id]
     }
 
     private func visibleEvidence(_ evidence: [Evidence]) -> [Evidence] {
-        guard let allowed = store.temporalBoundary.allowedUnitIDs else { return evidence }
+        guard projection?.owner == projectionOwner else { return [] }
+        guard let allowed = projection?.allowed else { return evidence }
         return evidence.filter { allowed.contains($0.unitID) }
     }
     private func canShow(_ evidence: [Evidence]) -> Bool {
-        guard let allowed = store.temporalBoundary.allowedUnitIDs else { return true }
+        guard projection?.owner == projectionOwner else { return false }
+        guard let allowed = projection?.allowed else { return true }
         return !evidence.isEmpty && evidence.allSatisfy { allowed.contains($0.unitID) }
     }
     private func explanationButton(_ name: String) -> some View {

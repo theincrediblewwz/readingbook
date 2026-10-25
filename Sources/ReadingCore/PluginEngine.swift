@@ -325,11 +325,23 @@ public enum PluginEngine {
                 "aliases": candidate.aliases.prefix(3).map { String($0.prefix(60)) }, "summary": "", "identityOnly": true,
                 "notice": "仅供核对同名/称谓并复用ID；不代表确认身份，不能引用范围外事实。"])
         }
+        let matched = Set(matches.compactMap { $0["id"] as? String })
+        var suggestions: [[String: Any]] = []
+        if matches.count < min(3, limit) {
+            suggestions = try KnowledgeIdentitySuggestions.find(query, in: project, allowedUnitIDs: allowed, limit: min(6, limit))
+                .filter { !matched.contains($0.id) }.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) as? [String: Any] ?? [:] }
+        }
         var bounded = false
         while true {
-            let data = try JSONSerialization.data(withJSONObject: ["ok": true, "matches": matches, "limit": limit, "bounded": bounded], options: [.sortedKeys])
+            var output: [String: Any] = ["ok": true, "matches": matches, "limit": limit, "bounded": bounded]
+            if !suggestions.isEmpty {
+                output["identitySuggestions"] = suggestions
+                output["identitySuggestionNotice"] = "名称相近的本地候选，仅供核对稳定ID，不代表同一对象；不要自动合并或增加事实与引用权限。"
+            }
+            let data = try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
             guard let text = String(data: data, encoding: .utf8) else { throw invalid("查询结果编码失败。") }
             if text.count <= 14_000 { return text }
+            if !suggestions.isEmpty { suggestions.removeLast(); bounded = true; continue }
             guard !matches.isEmpty else { throw invalid("查询结果无法满足长度限制。") }
             matches.removeLast(); bounded = true
         }

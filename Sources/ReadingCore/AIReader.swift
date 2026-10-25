@@ -12,10 +12,20 @@ public actor AIReader {
     private var currentRequestID: UUID?
     private let coordinator: AIRequestCoordinator?
     private let lane: AIRequestCoordinator.Lane
+    private var publicationHandler: AIReadingPublicationHandler?
+    private let testTransport: (@Sendable (ProviderClient.Prepared) async throws -> ProviderClient.Result)?
 
     public init(registry: PluginToolRegistry = PluginEngine.registry, coordinator: AIRequestCoordinator? = nil,
                 lane: AIRequestCoordinator.Lane = .background) {
         self.registry = registry; self.coordinator = coordinator; self.lane = lane
+        self.testTransport = nil
+    }
+
+    /// The production initializer always uses the configured provider. Offline
+    /// regression checks inject a deterministic transport, never a real model.
+    init(registry: PluginToolRegistry = PluginEngine.registry,
+         transport: @escaping @Sendable (ProviderClient.Prepared) async throws -> ProviderClient.Result) {
+        self.registry = registry; self.coordinator = nil; self.lane = .background; self.testTransport = transport
     }
 
     public func setProgressHandler(_ handler: AIProgressHandler?) {
@@ -23,11 +33,30 @@ public actor AIReader {
         progressHandler = handler
     }
 
+    public func setPublicationHandler(_ handler: AIReadingPublicationHandler?) {
+        guard !operationActive else { return }
+        publicationHandler = handler
+    }
+
     /// Call explicitly at the start of a new user-authorized run, never per unit.
     /// An in-flight operation cannot have its budget reset underneath it.
     public func resetBudget() {
         guard !operationActive else { return }
         requestCount = 0
+    }
+
+    public func teacherBackground(request: TeacherBackgroundRequest, settings: ProviderSettings, apiKey: String) async throws -> TeacherBackgroundRecord {
+        try beginOperation(settings: settings); defer { operationActive = false }
+        return try await TeacherBackgroundEngine.generate(request: request, settings: settings) { [self] messages, requestSettings, remainingTokens in
+            try await self.request(messages: messages, tools: [], settings: requestSettings, apiKey: apiKey, remainingTokens: remainingTokens)
+        }
+    }
+
+    public func translateSentence(request: SentenceTranslationRequest, settings: ProviderSettings, apiKey: String) async throws -> String {
+        try beginOperation(settings: settings); defer { operationActive = false }
+        return try await SentenceTranslationEngine.generate(request: request, settings: settings) { [self] messages, requestSettings, remainingTokens in
+            try await self.request(messages: messages, tools: [], settings: requestSettings, apiKey: apiKey, remainingTokens: remainingTokens)
+        }
     }
 
     public func plan(project: BookProject, settings: ProviderSettings, apiKey: String,
@@ -118,7 +147,8 @@ public actor AIReader {
         return try await readChunk(project: project, chunk: chunk, settings: settings, apiKey: apiKey)
     }
 
-    public func readChunk(project: BookProject, chunk: ReadingAnalysisChunk, settings: ProviderSettings, apiKey: String) async throws -> BookProject {
+    public func readChunk(project: BookProject, chunk: ReadingAnalysisChunk, settings: ProviderSettings, apiKey: String,
+                          priorityUnitID: String? = nil) async throws -> BookProject {
         guard project.bookSchemes?.pending == nil, let session = project.smartReading,
               let configuration = session.selection.execution else {
             throw ReadingError.invalid("请先确认本轮标准阅读方案。")
@@ -138,6 +168,9 @@ public actor AIReader {
         return try await ReadingAnalysisAuthority.$current.withValue(grant) {
             try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowed, in: project)
             let units = project.units.filter { allowed.contains($0.id) }.sorted { $0.order < $1.order }
+            let priority = units.first { $0.id == priorityUnitID }
+            let timelyResults = priority.map { "读者正在看\($0.locator)（工具unitID：\($0.id)），优先把该处已经可靠的解释和译注保存出来，再继续本块其他内容。" }
+                ?? "按原文顺序尽早保存已经可靠的解释和译注。"
             let steps = configuration.enabledSteps.filter { chunk.stepIDs.contains($0.id) }
             var names: Set<String> = ["knowledge_search", "reading_analysis"]
             if steps.contains(where: { $0.frequency == .chapter || $0.frequency == .book }) { names.formUnion(["analysis_outline", "analysis_read"]) }
@@ -150,6 +183,7 @@ public actor AIReader {
             陪读者阅读本次实际提供的原文块。阅读原文是始终执行的基础动作；附加步骤只做本次启用的部分，不要把答案写成开发记录或逐项核查公文。本次步骤为空时只留下有界的简短阅读摘要和真实引文，不做额外讲解、要素整理或组件操作。
             本轮精细度：\(configuration.precision.title)。标准阅读不要求逐段复述；精读所需回执已由宿主在前面的真实批次保存。本次不调用read_receipt、workflow_step_complete或reading_finish。一次分析可以包含同页多个单元或同章多页，但引文必须回到原始unitID，不合并或重写原文。
             本次原文块：\(chunk.title)。unitIDs必须精确为\(try encodedString(chunk.unitIDs))。
+            \(timelyResults) 已有可用人物、事件、关系或译注就调用相应工具；宿主会在每次响应后发布通过校验的产物，不必等整块结尾。不要为了最后总结而积压已有结果。分批发布不表示本块已完成，reading_analysis仍在真正完成后最后调用。
             本次步骤：\(try encodedString(steps))。最后调用reading_analysis，completedStepIDs精确为\(try encodedString(chunk.stepIDs))，每个unitID至少有一条连续精确引文。
             已确认的阅读方向：\(try encodedString(SmartReadingRuntime.readingDirections(in: project)))；关注问题：\(try encodedString(project.plan?.focus ?? []))。这只是理解内容的方向，不是额外必做流水线；实际工作只执行本次启用步骤，已删掉的步骤不能借方法参考重新启用。
             要素整理、伴读和所选组件必须有实际保存内容或来源仍有效的本地复用。没有适用对象、译文、可靠坐标或年代时，在reading_analysis的noChangesReasons逐项填写step:<步骤ID>或component:<组件kind>的简短原因。不能只报全部stepIDs就声称完成空组件；这些工程key不写进读者Markdown。citations.verify若启用由宿主真实检查引文和对象关联，不代表分析语义正确，也不等于逐段核对。
@@ -506,12 +540,18 @@ public actor AIReader {
         var tokensUsed = 0
         var requiredSucceeded = false
         var unresolvedErrors = Set<String>()
+        // Only the new analysis path has an unchanged canonical input at this
+        // boundary. Legacy receipt/workflow host staging keeps its old atomic
+        // commit semantics and cannot accidentally publish a partial ledger.
+        let canPublish = phase == .reading && requiredTool == "reading_analysis" && publicationHandler != nil
+        let publicationID = UUID().uuidString
+        var published = project
         let tools = registry.schemas(for: phase).filter { tool in
             guard let function = tool["function"] as? [String: Any], let name = function["name"] as? String else { return false }
             return allowedNames.contains(name)
         }
         guard !tools.isEmpty, allowedNames.contains(requiredTool), registry.names(for: phase).contains(requiredTool) else { throw ReadingError.invalid("当前插件没有必要的阶段工具。") }
-        for _ in 0..<roundLimit {
+        for round in 0..<roundLimit {
             try Task.checkCancellation()
             let response = try await request(messages: messages, tools: tools, settings: settings,
                                              apiKey: apiKey, remainingTokens: operationTokenLimit - tokensUsed)
@@ -519,7 +559,7 @@ public actor AIReader {
             let calls = response.message.tool_calls ?? []
             if response.finishReason == "stop" {
                 guard calls.isEmpty, requiredSucceeded, unresolvedErrors.isEmpty else {
-                    throw ReadingError.invalid("模型结束前没有完成必要工具或仍有工具错误；当前分析未提交。")
+                    throw ReadingError.invalid("本部分尚未完成必要步骤或仍有工具错误；已保存的内容保留。")
                 }
                 try validateTerminal(staged, requiredTool: requiredTool, currentUnitID: currentUnitID)
                 try Task.checkCancellation()
@@ -528,6 +568,8 @@ public actor AIReader {
             guard !calls.isEmpty, calls.count <= 32 else { throw ReadingError.invalid("模型返回了无效的工具调用批次。") }
             messages.append(response.message.conversationValue)
             var seenCallIDs = Set<String>()
+            var changedTools: [String] = []
+            do {
             for (callIndex, call) in calls.enumerated() {
                 try Task.checkCancellation()
                 guard call.type == "function", !call.id.isEmpty, call.id.count <= 200,
@@ -535,11 +577,16 @@ public actor AIReader {
                     throw ReadingError.invalid("模型工具调用 ID 或类型无效。")
                 }
                 let name = call.function.name
-                let result: String
+                var result = ""
                 var reportedStart = false
                 do {
                     guard !(["workflow_step_complete", "reading_enrich", "reading_analysis"].contains(requiredTool) && requiredSucceeded) else { throw ReadingError.invalid("当前步骤已提交，不能在完成工具后继续调用；请把完成工具放在最后。") }
                     guard allowedNames.contains(name) else { throw ReadingError.invalid("当前阶段不允许工具 \(String(name.prefix(80)))。") }
+                    if name == requiredTool {
+                        guard callIndex == calls.count - 1, unresolvedErrors.subtracting([name]).isEmpty else {
+                            throw ReadingError.invalid("请先修正此前工具错误，把完成工具放在本次调用的最后；已保存内容保留。")
+                        }
+                    }
                     guard call.function.arguments.utf8.count <= 512 * 1024,
                           let data = call.function.arguments.data(using: .utf8) else {
                         throw ReadingError.invalid("工具参数过大或不是 UTF-8。")
@@ -554,8 +601,13 @@ public actor AIReader {
                         candidate.audit[index].requestNumber = requestCount
                         candidate.audit[index].resultDetails = details.isEmpty ? nil : details
                     }
-                    ReadingWorkflowRuntime.recordTool(name, in: &candidate, previous: staged)
+                    if phase == .workflow { ReadingWorkflowRuntime.recordTool(name, in: &candidate, previous: staged) }
+                    // Do not even stage a terminal marker until the whole
+                    // preceding batch is valid. Later publication can then
+                    // never mistake partial products for completed analysis.
+                    if name == requiredTool { try validateTerminal(candidate, requiredTool: requiredTool, currentUnitID: currentUnitID) }
                     staged = candidate
+                    if registry.definition(named: name)?.readOnly != true { changedTools.append(name) }
                     unresolvedErrors.remove(name)
                     if name == requiredTool { requiredSucceeded = true }
                     progressHandler?(AIProgressEvent(.toolCompleted, toolName: name, toolIndex: callIndex + 1, toolTotal: calls.count, toolSucceeded: true, toolSummary: details.joined(separator: "\n")))
@@ -567,6 +619,20 @@ public actor AIReader {
                 }
                 messages.append(["role": "tool", "tool_call_id": call.id, "content": String(result.prefix(16_000))])
             }
+            } catch {
+                // A cancellation or malformed later call must not discard the
+                // successfully validated earlier products of this response.
+                if canPublish, !changedTools.isEmpty {
+                    try await publishReadingBatch(before: published, after: staged, operationID: "reading-batch-" + publicationID + "-" + String(round),
+                        names: changedTools, complete: false, unitIDs: allowedUnitIDs)
+                }
+                throw error
+            }
+            if canPublish, !changedTools.isEmpty {
+                try await publishReadingBatch(before: published, after: staged, operationID: "reading-batch-" + publicationID + "-" + String(round),
+                    names: changedTools, complete: requiredSucceeded && unresolvedErrors.isEmpty, unitIDs: allowedUnitIDs)
+                published = staged
+            }
             // The validated terminal tool is the explicit completion boundary.
             // Do not spend another request merely asking the model to acknowledge
             // tool success; the whole returned call batch must have passed first.
@@ -576,7 +642,21 @@ public actor AIReader {
                 return staged
             }
         }
-        throw ReadingError.invalid("本次分析达到 12 轮工具调用上限；当前单元未提交，可调整模型或缩小内容后重试。")
+        throw ReadingError.invalid("本次分析达到 12 轮工具调用上限；本部分尚未完成，已保存内容保留，可缩小范围后继续。")
+    }
+
+    private func publishReadingBatch(before: BookProject, after: BookProject, operationID: String,
+                                     names: [String], complete: Bool, unitIDs: Set<String>) async throws {
+        guard let handler = publicationHandler else { return }
+        let orderedIDs = ReadingAnalysisAuthority.current?.chunk.unitIDs ?? unitIDs.sorted()
+        let publication = AIReadingPublication(before: before, after: after, operationID: operationID,
+            toolNames: names, isAnalysisComplete: complete, unitIDs: orderedIDs)
+        progressHandler?(AIProgressEvent(.saving))
+        // The user may have pressed pause after a valid tool was applied. This
+        // bounded commit finishes independently of the cancelled network task.
+        // Persistence errors propagate outside the model-tool retry loop.
+        let save = Task.detached(priority: .userInitiated) { try await handler(publication) }
+        try await save.value
     }
 
     private func validateTerminal(_ project: BookProject, requiredTool: String, currentUnitID: String?) throws {
@@ -619,7 +699,7 @@ public actor AIReader {
         let prepared = try ProviderClient.prepare(messages: messages, tools: tools, settings: settings,
                                                    apiKey: apiKey, remainingTokens: remainingTokens, stream: progressHandler != nil)
         guard requestCount < settings.maxRequestsPerRun else {
-            throw ReadingWorkflowBudgetPause(message: "已达到本轮 \(settings.maxRequestsPerRun) 次模型请求预算，阅读已暂停；当前单元未提交。")
+            throw ReadingWorkflowBudgetPause(message: "已达到本轮 \(settings.maxRequestsPerRun) 次模型请求预算，阅读已暂停；已保存内容保留。")
         }
         requestCount += 1
         return try await performRequest(prepared)
@@ -635,7 +715,8 @@ public actor AIReader {
                 reasoningCharacters: value.reasoningCharacters, answerCharacters: value.answerCharacters, receivedBytes: value.receivedBytes)) }
         } else { observer = nil }
         let result: ProviderClient.Result
-        if let coordinator { result = try await coordinator.perform(prepared, lane: lane, progress: observer, onStart: { sharedNumber in
+        if let testTransport { result = try await testTransport(prepared) }
+        else if let coordinator { result = try await coordinator.perform(prepared, lane: lane, progress: observer, onStart: { sharedNumber in
             handler?(AIProgressEvent(.waitingForResponse, requestID: requestID, requestNumber: sharedNumber))
         }) }
         else { result = try await ProviderClient.perform(prepared, progress: observer) }

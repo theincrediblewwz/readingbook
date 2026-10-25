@@ -28,6 +28,9 @@ struct SourceReadingDecoration: Equatable, Sendable {
     var prefix: String? = nil
     var suffix: String? = nil
     var interaction: Interaction = .passage
+    var page: Int? = nil
+    /// Sentence affordances stay unobtrusive until the pointer reaches them.
+    var passive: Bool = false
 }
 
 struct SourceReadingSelection: Equatable, Sendable {
@@ -260,7 +263,7 @@ private struct MarkdownWebView: NSViewRepresentable {
                     plainText: Bool, decorations: [SourceReadingDecoration], focusedID: String?) {
             pending = State(markdown: markdown, directory: baseDirectory, theme: theme, readingStyle: readingStyle, textScale: textScale.isFinite ? min(1.6, max(0.8, textScale)) : 1,
                             selectionEnabled: onSelectionChange != nil || onSourceSelection != nil,
-                            sourceText: sourceText, plainText: plainText, decorations: Array(decorations.prefix(1_000)))
+                            sourceText: sourceText, plainText: plainText, decorations: Array(decorations.prefix(5_000)))
             self.focusedID = focusedID
             renderPending()
             focusPending()
@@ -299,7 +302,7 @@ private struct MarkdownWebView: NSViewRepresentable {
                 schemeHandler?.authorize(state.directory, revision: revision)
             }
             let decorations: [[String: Any]] = state.decorations.map { decoration in
-                var item: [String: Any] = ["id": decoration.id, "targetID": decoration.targetID, "quote": decoration.quote, "interaction": decoration.interaction.rawValue]
+                var item: [String: Any] = ["id": decoration.id, "targetID": decoration.targetID, "quote": decoration.quote, "interaction": decoration.interaction.rawValue, "passive": decoration.passive]
                 if let location = decoration.rangeLocation, let length = decoration.rangeLength {
                     item["rangeLocation"] = location; item["rangeLength"] = length
                 }

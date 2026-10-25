@@ -9,13 +9,37 @@ enum AIProjectMerge {
             base.units == other.units && zip(base.units, other.units).allSatisfy { $0.text.utf8.elementsEqual($1.text.utf8) }
         }
         guard sameSource(result), sameSource(latest) else { throw ReadingError.invalid("原文识别或分段已改变，本次分析未应用，请从当前原文继续。") }
-        let encoder = JSONEncoder()
-        func object(_ project: BookProject) throws -> [String: Any] {
-            guard let value = try JSONSerialization.jsonObject(with: encoder.encode(project)) as? [String: Any] else { throw ReadingError.invalid("无法校验分析增量。") }; return value
+        // Never encode the entire source three times to merge a small tool
+        // response. Protect host fields explicitly and rebase only changed
+        // metadata fields; the repository still validates the final project.
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let decoder = JSONDecoder()
+        func protect<T: Encodable>(_ key: String, _ path: KeyPath<BookProject, T>) throws {
+            guard try encoder.encode(base[keyPath: path]) == encoder.encode(result[keyPath: path]) else {
+                throw ReadingError.invalid("分析不能修改原书、用户文档或本地管理状态：" + key)
+            }
         }
-        let before = try object(base), after = try object(result)
-        var canonical = try object(latest)
-        guard same(before["units"], canonical["units"]) else { throw ReadingError.invalid("原文识别或分段已改变，本次分析未应用，请从当前原文继续。") }
+        try protect("schemaVersion", \.schemaVersion); try protect("id", \.id)
+        try protect("title", \.title); try protect("originalName", \.originalName)
+        try protect("sourceHash", \.sourceHash); try protect("importedAt", \.importedAt)
+        try protect("documents", \.documents); try protect("disabledPluginIDs", \.disabledPluginIDs)
+        try protect("bookmarks", \.bookmarks); try protect("ocrPages", \.ocrPages)
+        try protect("readerAnnotations", \.readerAnnotations); try protect("manualTrash", \.manualTrash)
+        try protect("aiRequestHistory", \.aiRequestHistory); try protect("readingKnowledge", \.readingKnowledge)
+        try protect("controlledChanges", \.controlledChanges)
+        var canonical = latest
+        func patch<T: Codable>(_ key: String, _ path: WritableKeyPath<BookProject, T>) throws {
+            let before = try encoder.encode(base[keyPath: path]), after = try encoder.encode(result[keyPath: path])
+            guard before != after else { return }
+            guard writable.contains(key) else { throw ReadingError.invalid("分析增量字段无效。") }
+            let current = try encoder.encode(latest[keyPath: path])
+            if current == before || current == after { canonical[keyPath: path] = result[keyPath: path]; return }
+            let old = try JSONSerialization.jsonObject(with: before, options: [.fragmentsAllowed])
+            let proposed = try JSONSerialization.jsonObject(with: after, options: [.fragmentsAllowed])
+            let stored = try JSONSerialization.jsonObject(with: current, options: [.fragmentsAllowed])
+            let value = try rebase(old, proposed, stored, path: key) ?? NSNull()
+            canonical[keyPath: path] = try decoder.decode(T.self, from: JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys]))
+        }
         let originalIDs = Set(base.entities.map(\.id))
         let concurrent = latest.entities.filter { !originalIDs.contains($0.id) }
         for entity in result.entities where !originalIDs.contains(entity.id) {
@@ -23,11 +47,18 @@ enum AIProjectMerge {
                 throw ReadingError.invalid("并行保存了同名对象，请重新查询本地身份后继续；已有内容保留。")
             }
         }
-        for key in Set(before.keys).union(after.keys) where !same(before[key], after[key]) {
-            guard writable.contains(key) else { throw ReadingError.invalid("分析不能修改原书、用户文档或本地管理状态。") }
-            canonical[key] = try rebase(before[key], after[key], canonical[key], path: key)
-        }
-        return try JSONDecoder().decode(BookProject.self, from: JSONSerialization.data(withJSONObject: canonical, options: [.sortedKeys]))
+        try patch("coverage", \.coverage); try patch("types", \.types); try patch("entities", \.entities)
+        try patch("events", \.events); try patch("relations", \.relations); try patch("views", \.views)
+        try patch("methods", \.methods); try patch("plan", \.plan); try patch("insights", \.insights)
+        try patch("syntheses", \.syntheses); try patch("nodes", \.nodes); try patch("edges", \.edges)
+        try patch("chats", \.chats); try patch("audit", \.audit); try patch("plugins", \.plugins)
+        try patch("appliedOperationIDs", \.appliedOperationIDs); try patch("lastUnitID", \.lastUnitID)
+        try patch("paragraphReceipts", \.paragraphReceipts); try patch("readingStepResults", \.readingStepResults)
+        try patch("workflowRuns", \.workflowRuns); try patch("receiptBatch", \.receiptBatch)
+        try patch("smartReading", \.smartReading); try patch("readingExperience", \.readingExperience)
+        try patch("bookSchemes", \.bookSchemes); try patch("mathVerifications", \.mathVerifications)
+        try patch("temporalKnowledge", \.temporalKnowledge); try patch("graphGroups", \.graphGroups)
+        return canonical
     }
     private static func same(_ a: Any?, _ b: Any?) -> Bool {
         if a == nil && b == nil { return true }
@@ -80,16 +111,16 @@ enum AIProjectMerge {
 extension LibraryRepository {
     /// The actor serializes read/rebase/validate/write as one transaction. The
     /// persisted operation ID makes retries idempotent across app restarts.
-    public func commitAIResult(base: BookProject, result: BookProject, operationID: String) throws -> BookProject {
+    public func commitAIResult(base: BookProject, result: BookProject, operationID: String, expectedReadingSessionID: String? = nil) throws -> BookProject {
         guard !operationID.isEmpty, operationID.count <= 120,
               operationID.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) else { throw ReadingError.invalid("分析操作标识无效。") }
         let directory = try bookDirectory(base.id, mustExist: true)
         let latest = try readProject(in: directory)
+        if let expectedReadingSessionID, latest.smartReading?.id != expectedReadingSessionID { throw CancellationError() }
         guard base.id == result.id, latest.id == base.id, base.sourceHash == result.sourceHash, latest.sourceHash == base.sourceHash else { throw ReadingError.invalid("原书已改变，分析结果未应用。") }
         if latest.appliedOperationIDs.contains(operationID) { return latest }
         var merged = try AIProjectMerge.merge(base: base, result: result, latest: latest)
         merged.appliedOperationIDs.append(operationID)
-        try save(merged)
-        return merged
+        return try saveCanonicalProject(merged)
     }
 }

@@ -43,6 +43,7 @@ public actor LibraryRepository {
     }
     private var sourceManifests: [String: SourceManifest] = [:]
     var readableAutomaticRefresh: [String: Date] = [:]
+    var pendingReadableRefresh: [String: Task<Void, Never>] = [:]
     private struct ChangeGrantSession { var grant: ControlledWriteGrant; var latestRevision: String }
     private var changeGrants: [String: ChangeGrantSession] = [:]
     private var changeProposals: [String: PreparedControlledChange] = [:]
@@ -112,14 +113,19 @@ public actor LibraryRepository {
         try writePackage(project, source: sourceURL, documentsFrom: nil, to: staging)
         try validatePackageFiles(project, in: staging, strictContents: true, verifySourceHash: true)
         try files.moveItem(at: staging, to: destination)
-        refreshReadableAfterCommit(id: project.id)
+        _ = try? refreshReadableViews(id: project.id)
         _ = try? refreshReadableLibraryIndex()
     }
 
     public func save(_ project: BookProject) throws {
+        _ = try saveCanonicalProject(project)
+    }
+
+    /// Canonical metadata after host-only caches have been merged. Callers
+    /// publishing a saved result must use this returned value, not their draft.
+    func saveCanonicalProject(_ project: BookProject) throws -> BookProject {
         let directory = try bookDirectory(project.id, mustExist: true)
         try recoverDocument(in: directory)
-        try validate(project)
         let existing = try readProject(in: directory)
         try requireCurrentChangeHistory(project, existing: existing)
         guard existing.id == project.id, existing.originalName == project.originalName, existing.sourceHash == project.sourceHash else {
@@ -136,10 +142,13 @@ public actor LibraryRepository {
         for saved in existing.documents {
             if let index = updated.documents.firstIndex(where: { $0.id == saved.id }) { updated.documents[index].trashedAt = saved.trashedAt }
         }
+        try ReadingKnowledgeRuntime.captureVersions(before: existing, in: &updated)
+        try validate(updated)
         let metadata = try encode(updated)
         try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false, encodedMetadataSize: metadata.count, reuseDocumentValidation: true)
         try atomicWrite(metadata, to: try child(directory, "project.json"))
         refreshReadableAfterCommit(id: updated.id)
+        return updated
     }
 
     public func readDocument(bookID: String, document: DocumentRecord) throws -> String {
@@ -196,6 +205,7 @@ public actor LibraryRepository {
         record.updatedAt = Date()
         if let index = updated.documents.firstIndex(where: { $0.id == record.id }) { updated.documents[index] = record }
         else { updated.documents.append(record) }
+        try ReadingKnowledgeRuntime.captureVersions(before: existing, in: &updated)
         try validate(updated)
         // Validate all pre-existing files; the one being saved is allowed not to exist yet.
         try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false, pendingDocumentID: record.id, pendingDocumentBytes: data.count)
@@ -567,6 +577,7 @@ public actor LibraryRepository {
             try ReadingExperienceRuntime.validateStoredState(experience, in: project)
         }
         try TemporalKnowledgeRuntime.validateStoredState(in: project)
+        try ReadingKnowledgeRuntime.validateStoredState(in: project)
         try ControlledGraphRuntime.validate(in: project)
         try ControlledChangeRecords.validate(in: project)
         try ManualTrashRuntime.validateStoredState(in: project)

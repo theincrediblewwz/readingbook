@@ -199,6 +199,7 @@ extension LibraryRepository {
 
     public func copyLibrary(to destination: URL, progress: (@Sendable (LibraryTransferProgress) -> Void)? = nil) throws -> LibraryTransferResult {
         progress?(LibraryTransferProgress(stage: "预检", completedFiles: 0, totalFiles: 0))
+        flushPendingReadableRefreshes()
         try validateWholeLibrary(at: rootURL)
         let snapshot = try transferTree(at: rootURL, roots: persistentRoots(in: rootURL))
         let target = try transferDestination(destination, disjointFrom: rootURL)
@@ -217,6 +218,7 @@ extension LibraryRepository {
     public func exportLibraryBackup(to destination: URL, progress: (@Sendable (LibraryTransferProgress) -> Void)? = nil) throws -> LibraryTransferResult {
         guard destination.pathExtension.lowercased() == "readingbookbackup" else { throw ReadingError.invalid("请选择 .readingbookbackup 备份文件夹。") }
         progress?(LibraryTransferProgress(stage: "预检", completedFiles: 0, totalFiles: 0))
+        flushPendingReadableRefreshes()
         try validateWholeLibrary(at: rootURL)
         let snapshot = try transferTree(at: rootURL, roots: persistentRoots(in: rootURL))
         let target = try transferDestination(destination, disjointFrom: rootURL)

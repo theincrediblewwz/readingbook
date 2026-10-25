@@ -11,6 +11,7 @@ struct SavedKnowledgeReuse {
     private let events: [String: KnowledgeEvent]
     private let projection: ReadingSpoilerProjection.Context
     private let currentSlices: [String: String]?
+    private let versions: ReadingKnowledgeRuntime.VersionContext
 
     init?(project: BookProject, currentUnitIDs: Set<String>, currentSlices: [String: String]? = nil) {
         let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -23,6 +24,8 @@ struct SavedKnowledgeReuse {
         self.events = Dictionary(project.events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         self.projection = ReadingSpoilerProjection.Context(project: project,
             allowedUnitIDs: Set(units.values.filter { $0.order <= cursor }.map(\.id)))
+        self.versions = ReadingKnowledgeRuntime.VersionContext(project: project,
+            allowed: Set(units.values.filter { $0.order <= cursor }.map(\.id)), slices: currentSlices)
     }
 
     func record(id: String) -> [String: Any]? {
@@ -32,12 +35,14 @@ struct SavedKnowledgeReuse {
     }
 
     func entity(_ original: KnowledgeEntity) -> KnowledgeEntity? {
-        guard admits(original.evidence) else { return nil }
-        return projection.entity(original)
+        if let prior = versions.entity(original.id), let safe = projection.entitySnapshot(prior), admits(safe.evidence) { return safe }
+        guard let value = projection.entity(original), admits(value.evidence) else { return nil }
+        return value
     }
     func event(_ original: KnowledgeEvent) -> KnowledgeEvent? {
-        guard admits(original.evidence) else { return nil }
-        return projection.event(original)
+        if let prior = versions.event(original.id), let safe = projection.eventSnapshot(prior), admits(safe.evidence) { return safe }
+        guard let value = projection.event(original), admits(value.evidence) else { return nil }
+        return value
     }
 
     func admits(_ evidence: [Evidence]) -> Bool {

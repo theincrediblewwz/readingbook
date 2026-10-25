@@ -7,19 +7,24 @@ public enum ReadingSpoilerProjection {
         fileprivate let units: [String: SourceUnit]
         fileprivate let entities: [String: KnowledgeEntity]
         fileprivate let allowed: Set<String>?
+        fileprivate let versions: ReadingKnowledgeRuntime.VersionContext
         public init(project: BookProject, allowedUnitIDs: Set<String>?) {
             units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             entities = Dictionary(project.entities.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             allowed = allowedUnitIDs
+            versions = ReadingKnowledgeRuntime.VersionContext(project: project, allowed: allowedUnitIDs)
         }
         public func entity(_ value: KnowledgeEntity) -> KnowledgeEntity? { ReadingSpoilerProjection.entity(value, context: self) }
         public func event(_ value: KnowledgeEvent) -> KnowledgeEvent? { ReadingSpoilerProjection.event(value, context: self) }
+        public func entitySnapshot(_ value: KnowledgeEntity) -> KnowledgeEntity? { ReadingSpoilerProjection.entity(value, context: self, usesSavedVersions: false) }
+        public func eventSnapshot(_ value: KnowledgeEvent) -> KnowledgeEvent? { ReadingSpoilerProjection.event(value, context: self, usesSavedVersions: false) }
     }
     public static func entity(_ original: KnowledgeEntity, in project: BookProject, allowedUnitIDs: Set<String>?) -> KnowledgeEntity? {
         entity(original, context: Context(project: project, allowedUnitIDs: allowedUnitIDs))
     }
-    private static func entity(_ original: KnowledgeEntity, context: Context) -> KnowledgeEntity? {
-        guard context.allowed != nil else { return original }
+    private static func entity(_ canonical: KnowledgeEntity, context: Context, usesSavedVersions: Bool = true) -> KnowledgeEntity? {
+        guard context.allowed != nil else { return canonical }
+        let original = usesSavedVersions ? (context.versions.entity(canonical.id) ?? canonical) : canonical
         let local = evidence(original.evidence, context: context)
         guard !local.isEmpty else { return nil }
         let names = ([original.name] + original.aliases).filter { name in
@@ -39,8 +44,9 @@ public enum ReadingSpoilerProjection {
     public static func event(_ original: KnowledgeEvent, in project: BookProject, allowedUnitIDs: Set<String>?) -> KnowledgeEvent? {
         event(original, context: Context(project: project, allowedUnitIDs: allowedUnitIDs))
     }
-    private static func event(_ original: KnowledgeEvent, context: Context) -> KnowledgeEvent? {
-        guard context.allowed != nil else { return original }
+    private static func event(_ canonical: KnowledgeEvent, context: Context, usesSavedVersions: Bool = true) -> KnowledgeEvent? {
+        guard context.allowed != nil else { return canonical }
+        let original = usesSavedVersions ? (context.versions.event(canonical.id) ?? canonical) : canonical
         let local = evidence(original.evidence, context: context)
         guard !local.isEmpty else { return nil }
         var result = original

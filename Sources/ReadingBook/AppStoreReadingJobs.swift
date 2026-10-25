@@ -4,7 +4,10 @@ import ReadingCore
 private struct ReadingChunkResult: Sendable {
     var chunk: ReadingAnalysisChunk
     var base: BookProject
-    var result: BookProject
+    var result: BookProject?
+    var failure: String? = nil
+    var cancelled = false
+    var conflict = false
 }
 
 @MainActor extension AppStore {
@@ -16,9 +19,9 @@ private struct ReadingChunkResult: Sendable {
         let chunkTask = Task.detached(priority: .utility) { try SmartReadingRuntime.analysisChunks(in: initial, allowedUnitIDs: allowedUnitIDs) }
         let chunks = try await withTaskCancellationHandler(operation: { try await chunkTask.value }, onCancel: { chunkTask.cancel() })
         let chapters = Dictionary(uniqueKeysWithValues: initial.units.map { ($0.id, $0.chapter) })
-        let steps = Dictionary(uniqueKeysWithValues: configuration.steps.map { ($0.id, $0) })
         let limit = configuration.precision == .close ? 1 : max(1, aiConcurrencyLimit - 1)
         var running = Set<String>(), retries: [String: Int] = [:]
+        var dispatchedCount = 0
         try await withThrowingTaskGroup(of: ReadingChunkResult.self) { group in
             while true {
                 try Task.checkCancellation()
@@ -29,39 +32,47 @@ private struct ReadingChunkResult: Sendable {
                     return checkpoint.unitIDs == chunk.unitIDs && checkpoint.configurationHash == chunk.configurationHash &&
                         Set(checkpoint.completedStepIDs) == Set(chunk.stepIDs) && chunk.unitIDs.allSatisfy { checkpoint.unitHashes[$0] == latest.smartReading?.unitHashes[$0] }
                 }.map(\.id))
-                let pending = chunks.enumerated().filter { !complete.contains($0.element.id) && !running.contains($0.element.id) }
-                // Establish reusable identities before fanning out a new book.
+                // Begin with one identity writer for a new book, then fan out.
                 let capacity = complete.isEmpty && latest.entities.isEmpty ? 1 : limit
-                for (index, chunk) in pending where running.count < capacity {
-                    let frequencies = chunk.stepIDs.compactMap { steps[$0]?.frequency }
-                    let prior = chunks.prefix(index)
-                    if frequencies.contains(.book) && prior.contains(where: { !complete.contains($0.id) }) { continue }
-                    if frequencies.contains(.chapter) {
-                        let ownChapters = Set(chunk.unitIDs.compactMap { chapters[$0] })
-                        if prior.contains(where: { candidate in
-                            !complete.contains(candidate.id) && candidate.unitIDs.contains(where: { ownChapters.contains(chapters[$0] ?? "") })
-                        }) { continue }
-                    }
+                while running.count < capacity, let chunk = ReadingAnalysisScheduler.nextReadyChunk(in: chunks, completed: complete, running: running,
+                    steps: configuration.steps, chapters: chapters, currentUnitID: selectedUnitID, dispatchCount: dispatchedCount) {
                     let worker = AIReader(coordinator: sharedAIRequests)
                     let handler = workerProgressHandler(progressID)
-                    let base = latest
-                    running.insert(chunk.id)
+                    let publisher = readingPublicationHandler(bookID: bookID, sessionID: sessionID, progressID: progressID)
+                    let base = latest, priorityUnitID = selectedUnitID
+                    running.insert(chunk.id); dispatchedCount += 1
                     group.addTask {
                         await worker.setProgressHandler(handler)
-                        let result = try await worker.readChunk(project: base, chunk: chunk, settings: settings, apiKey: apiKey)
-                        return ReadingChunkResult(chunk: chunk, base: base, result: result)
+                        await worker.setPublicationHandler(publisher)
+                        do {
+                            let result = try await worker.readChunk(project: base, chunk: chunk, settings: settings, apiKey: apiKey, priorityUnitID: priorityUnitID)
+                            return ReadingChunkResult(chunk: chunk, base: base, result: result)
+                        } catch {
+                            let message = String(error.localizedDescription.prefix(2000))
+                            return ReadingChunkResult(chunk: chunk, base: base, result: nil, failure: message,
+                                cancelled: Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled,
+                                conflict: message.contains("另一条任务") || message.contains("并行保存"))
+                        }
                     }
                 }
                 if running.isEmpty {
                     guard complete.count == chunks.count else { throw ReadingError.invalid("阅读步骤的先后关系尚未满足，已保存结果保留。") }
                     break
                 }
-                updateAIProgressDetail(progressID, detail: "已保存 \(complete.count)/\(chunks.count) 部分 · \(running.count) 条分析线")
+                updateAIProgressDetail(progressID, detail: "已完成 \(complete.count)/\(chunks.count) 部分 · \(running.count) 条分析线")
                 guard let finished = try await group.next() else { break }
                 running.remove(finished.chunk.id)
                 try Task.checkCancellation()
+                if let failure = finished.failure {
+                    if finished.cancelled { throw CancellationError() }
+                    if finished.conflict, retries[finished.chunk.id, default: 0] < 1 {
+                        retries[finished.chunk.id, default: 0] += 1; continue
+                    }
+                    throw ReadingError.invalid(failure)
+                }
+                guard let result = finished.result else { throw ReadingError.invalid("本部分没有返回有效结果，已保存内容保留。") }
                 do {
-                    let committed = try await repository.commitAIResult(base: finished.base, result: finished.result, operationID: UUID().uuidString)
+                    let committed = try await repository.commitAIResult(base: finished.base, result: result, operationID: UUID().uuidString, expectedReadingSessionID: sessionID)
                     publish(committed)
                     requestsUsed = await sharedAIRequests.requestsUsed
                     activeReadingUnitID = finished.chunk.unitIDs.first
@@ -76,5 +87,19 @@ private struct ReadingChunkResult: Sendable {
                 }
             }
         }
+    }
+
+    func readingPublicationHandler(bookID: String, sessionID: String, progressID: UUID) -> AIReadingPublicationHandler {
+        let owner = repository, root = libraryRootURL
+        return { [weak self] publication in
+            let saved = try await owner.commitAIResult(base: publication.before, result: publication.after,
+                operationID: publication.operationID, expectedReadingSessionID: sessionID)
+            await self?.publishReadingBatch(saved, root: root, bookID: bookID, sessionID: sessionID, firstUnitID: publication.unitIDs.first)
+        }
+    }
+
+    private func publishReadingBatch(_ saved: BookProject, root: URL, bookID: String, sessionID: String, firstUnitID: String?) {
+        guard libraryRootURL == root, self.bookID == bookID, book?.smartReading?.id == sessionID else { return }
+        publish(saved); activeReadingUnitID = firstUnitID
     }
 }

@@ -10,6 +10,7 @@ import ReadingCore
     @Published var bookID: String? {
         didSet {
             if oldValue != bookID {
+                teacherBackground.cancelAll(); sentenceTranslation.cancelAll()
                 queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []; queryComposerDraft.text = ""
                 queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil
                 queryAllowsOrganizing = false; renderedWorkspaceVisibility = nil; renderedSelectedNodeIDs = []
@@ -36,6 +37,8 @@ import ReadingCore
     @Published var sourceReadingSelection: SourceReadingSelection?
     @Published var focusedReadingAnchorID: String?
     let queryComposerDraft = QueryComposerDraft()
+    let teacherBackground = TeacherBackgroundState()
+    let sentenceTranslation = SentenceTranslationState()
     @Published var readingCompanionTab = "companion"
     @Published var readingCompanionVisible = false
     @Published var readingCompanionSection = "context"
@@ -53,6 +56,7 @@ import ReadingCore
         didSet { UserDefaults.standard.set(queryMemoryEnabled, forKey: "query-memory-enabled") }
     }
     @Published var queryDisclosure = ""
+    @Published var queryMemoryRevision = 0
     @Published var queryRetryQuestion: String?
     @Published var queryAllowsOrganizing = false
     @Published var queryInteractionMode: ReadingConversationMode = .reading {
@@ -381,16 +385,8 @@ import ReadingCore
         let documentIDs = queryDocumentIDs.map { Array($0).sorted() }
         let attachedDocumentIDs = scope == .notes ? [] : queryAttachedDocumentIDs.sorted()
         let authorizedNodeIDs = preferences.interaction == .functional ? queryAuthorizedNodeIDs.sorted() : []
-        let snapshot: ReadingQuerySnapshot
-        let chatContext: ReadingChatContext
-        do {
-            snapshot = try currentQueryTaskSnapshot()
-            chatContext = try ReadingChatContext(snapshot: snapshot, avoidsSpoilers: preferences.avoidsSpoilers)
-        }
-        catch { errorMessage = error.localizedDescription; return }
-        let history = queryContextHistory(in: current, preferences: preferences, snapshot: snapshot)
         let memoryEnabled = queryMemoryEnabled
-        let memory = memoryEnabled ? queryMemory(for: snapshot, history: history) : nil
+        let requestRoot = libraryRootURL
         let repository = repository
         var requestSettings = settings
         requestSettings.transportSessionID = "readingbook-" + current.id + "-chat-" + preferences.contextIdentity
@@ -401,11 +397,7 @@ import ReadingCore
         let mayOrganize = allowsOrganizing && preferences.interaction == .functional
         queryAllowsOrganizing = false
         isQueryBusy = true
-        lastQuestionContext = snapshot.displayTitle; queryDisclosure = ""; queryRetryQuestion = nil
-        var userMessage = ChatMessage(role: "user", content: question)
-        userMessage.conversationMode = preferences.interaction; userMessage.answerStyle = preferences.style
-        userMessage.readingContext = chatContext
-        let sentMessage = userMessage
+        lastQuestionContext = queryScopePreview; queryDisclosure = "正在准备阅读内容…"; queryRetryQuestion = nil
         let previousChangeIDs = Set(current.controlledChanges?.receipts.map(\.operationID) ?? [])
         queryTask = Task {
             let aiRunID = await beginQueryProgress(title: "与书对话")
@@ -417,6 +409,24 @@ import ReadingCore
                 }
             }
             do {
+                let worker = Task.detached(priority: .userInitiated) { () throws -> (ReadingQuerySnapshot, ReadingChatContext, [ChatMessage]) in
+                    try Task.checkCancellation()
+                    let snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: current, context: context,
+                        documentIDs: documentIDs, appendedDocumentIDs: attachedDocumentIDs, authorizedNodeIDs: authorizedNodeIDs)
+                        .withContextIdentity(preferences.contextIdentity)
+                    let chatContext = try ReadingChatContext(snapshot: snapshot, avoidsSpoilers: preferences.avoidsSpoilers)
+                    let history = ReadingChatHistory.automaticHistory(in: current, preferences: preferences, snapshot: snapshot)
+                    try Task.checkCancellation()
+                    return (snapshot, chatContext, history)
+                }
+                let (snapshot, chatContext, history) = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                try Task.checkCancellation()
+                guard bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
+                let memory = memoryEnabled ? await loadPreparedQueryMemory(snapshot: snapshot, history: history, root: requestRoot) : nil
+                lastQuestionContext = snapshot.displayTitle; queryDisclosure = ""
+                var sentMessage = ChatMessage(role: "user", content: question)
+                sentMessage.conversationMode = preferences.interaction; sentMessage.answerStyle = preferences.style
+                sentMessage.readingContext = chatContext
                 var pending = current; pending.chats.append(sentMessage)
                 let questionBase = try await repository.commitAIResult(base: current, result: pending, operationID: "question-" + sentMessage.id)
                 publish(questionBase)

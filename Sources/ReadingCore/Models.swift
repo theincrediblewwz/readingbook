@@ -284,6 +284,9 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var controlledChanges: ControlledChangeState? = nil
     /// Host-owned recovery snapshots for ordinary manual removals; absent in older books.
     public var manualTrash: ManualTrashState? = nil
+    /// Host-owned AI knowledge history and clearly separated teacher context.
+    /// Optional so existing projects keep their original objects and documents.
+    public var readingKnowledge: ReadingKnowledgeState? = nil
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units
     }

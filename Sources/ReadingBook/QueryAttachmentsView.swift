@@ -73,10 +73,12 @@ struct QueryMemoryInspector: View {
     @EnvironmentObject private var store: AppStore
     var onClose: () -> Void
     var onSource: (String) -> Void
+    @State private var prepared = QueryMemoryDisplay()
+    @State private var preparedKey: QueryMemoryPreparationKey?
     var body: some View {
-        let memory = store.currentQueryMemory
-        let sourceIDs = Set(((memory?.requirements ?? []) + (memory?.conclusions ?? []) + (memory?.unresolved ?? [])).flatMap(\.sources))
-        let messages = Dictionary(store.currentQueryContextHistory.filter { sourceIDs.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let current = preparedKey == store.queryMemoryPreparationKey ? prepared : QueryMemoryDisplay()
+        let memory = current.memory
+        let messages = current.messages
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Label("对话记忆", systemImage: "brain.head.profile").font(.system(size: 20, weight: .semibold))
@@ -104,6 +106,13 @@ struct QueryMemoryInspector: View {
                 Button("清除派生摘要") { store.clearCurrentQueryMemory() }.disabled(store.isQueryBusy)
             }.padding(18)
         }.frame(width: 620, height: 560).onExitCommand(perform: onClose)
+            .task(id: store.queryMemoryPreparationKey) {
+                let key = store.queryMemoryPreparationKey
+                preparedKey = nil
+                let result = await store.prepareQueryMemoryDisplay()
+                guard !Task.isCancelled, store.queryMemoryPreparationKey == key else { return }
+                prepared = result; preparedKey = key
+            }
     }
     private func memoryGroup(_ title: String, items: [ConversationMemoryItem], sources: [String: ChatMessage]) -> some View {
         VStack(alignment: .leading, spacing: 13) {

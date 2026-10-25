@@ -12,6 +12,7 @@
   let appliedDecorations = new Map();
   let decorationsDeferred = false;
   let sourcePress = null;
+  let decorationBatchEpoch = 0;
 
   function escapedAt(source, position) {
     let backslashes = 0;
@@ -303,6 +304,9 @@
           }
         }
       }
+      // A derived sentence is an optional hover affordance. Complex Markdown
+      // must not gain a paragraph button for every unmappable sentence.
+      if (item.passive) continue;
       const block = findBlock(range[0], range[1]);
       if (block) {
         const marker = document.createElement('button'); marker.className = 'source-paragraph-link';
@@ -320,10 +324,30 @@
   function describeDecoration(marker, item, range) {
     marker.dataset.sourceDecoration = item.id; marker.dataset.sourceTarget = item.targetID;
     marker.dataset.sourceRole = item.interaction === 'term' ? 'term' : 'passage';
+    marker.dataset.sourcePassive = item.passive ? 'true' : 'false';
     marker.dataset.decorationStart = String(range[0]); marker.dataset.decorationEnd = String(range[1]);
   }
   function decorationIdentity(item) {
-    return JSON.stringify([item.id, item.targetID, item.quote, item.rangeLocation, item.rangeLength, item.interaction === 'term' ? 'term' : 'passage']);
+    return JSON.stringify([item.id, item.targetID, item.quote, item.rangeLocation, item.rangeLength, item.interaction === 'term' ? 'term' : 'passage', !!item.passive]);
+  }
+  function appendDecorationBatches(root, additions, next) {
+    const epoch = ++decorationBatchEpoch, revision = currentRevision;
+    const pending = new Set(additions.map(item => item.id));
+    appliedDecorations = new Map(Array.from(next).filter(([id]) => !pending.has(id)));
+    let cursor = 0;
+    function step() {
+      if (epoch !== decorationBatchEpoch || revision !== currentRevision || !root.isConnected) return;
+      if (sourcePress || global.getSelection?.()?.isCollapsed === false) { decorationsDeferred = true; return; }
+      // Small changes remain synchronous. Large result bursts allow a frame
+      // between batches instead of blocking selection/scroll for the full list.
+      const end = Math.min(additions.length, cursor + (additions.length <= 64 ? 64 : 24));
+      const batch = additions.slice(cursor, end);
+      addSourceDecorations(root, batch);
+      for (const item of batch) appliedDecorations.set(item.id, next.get(item.id));
+      cursor = end; reportHeight();
+      if (cursor < additions.length) global.requestAnimationFrame(step);
+    }
+    step();
   }
   function applyDecorations() {
     const root = global.document?.getElementById('content');
@@ -351,15 +375,14 @@
       if (changedRanges.some(range => range[0] < to && from < range[1])) { retryIDs.add(node.dataset.sourceDecoration); node.remove(); }
     });
     for (const item of sourceDecorations) if (item && retryIDs.has(item.id) && !additions.some(value => value.id === item.id)) additions.push(item);
-    addSourceDecorations(root, additions);
-    appliedDecorations = next;
+    appendDecorationBatches(root, additions, next);
     if (!root.querySelector('.source-paragraph-link')) root.querySelectorAll('.source-location-note').forEach(node => node.remove());
     reportHeight();
     return true;
   }
   function updateDecorations(items, options) {
     if (Number(options?.revision) !== currentRevision) return false;
-    sourceDecorations = Array.isArray(items) ? items.slice(0, 1_000) : [];
+    sourceDecorations = Array.isArray(items) ? items.slice(0, 5_000) : [];
     return applyDecorations();
   }
   function updatePresentation(options) {
@@ -402,7 +425,7 @@
     currentRevision = Number(settings.revision) || 0;
     selectionEnabled = !!settings.selectionEnabled;
     currentSource = typeof settings.sourceText === 'string' ? settings.sourceText : String(markdown || '');
-    sourceDecorations = Array.isArray(settings.sourceDecorations) ? settings.sourceDecorations.slice(0, 1_000) : [];
+    sourceDecorations = Array.isArray(settings.sourceDecorations) ? settings.sourceDecorations.slice(0, 5_000) : [];
     global.getSelection?.()?.removeAllRanges();
     document.documentElement.dataset.theme = settings.theme === 'dark' ? 'dark' : 'light';
     document.documentElement.dataset.readingStyle = settings.readingStyle === 'companion' ? 'companion' : 'body';
@@ -410,8 +433,7 @@
     const root = document.getElementById('content');
     root.innerHTML = renderHTML(markdown, settings);
     appliedDecorations = new Map(); decorationsDeferred = false; sourcePress = null;
-    addSourceDecorations(root);
-    appliedDecorations = new Map(sourceDecorations.filter(item => item && typeof item.id === 'string').map(item => [item.id, decorationIdentity(item)]));
+    applyDecorations();
     root.querySelectorAll('img').forEach(image => {
       image.addEventListener('load', reportHeight, { once: true });
       image.addEventListener('error', () => {

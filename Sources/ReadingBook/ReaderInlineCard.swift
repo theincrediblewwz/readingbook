@@ -8,6 +8,7 @@ struct ReaderInlineContent: Sendable {
     let title: String
     let kind: String
     let markdown: String
+    let savedMarkdown: String?
     let objectID: String?
     let context: ReadingContext
     let composition: ViewDefinition?
@@ -57,7 +58,7 @@ struct ReaderInlineContent: Sendable {
             return objects.isEmpty || objectID.map { objects.contains($0) } == true
         }
         return Self(anchor: anchor, title: title, kind: entity.flatMap { value in book.types.first(where: { $0.id == value.typeID })?.name } ?? (event == nil ? "译注" : "事件"),
-            markdown: markdown, objectID: objectID, context: context,
+            markdown: markdown, savedMarkdown: summary.isEmpty && localLayers.isEmpty ? nil : markdown, objectID: objectID, context: context,
             composition: configured ?? contextualComposition(objectID: objectID, unitID: anchor.unitID, book: book, projection: projection))
     }
     private static func contextualComposition(objectID: String?, unitID: String, book: BookProject, projection: ReadingSpoilerProjection.Context) -> ViewDefinition? {
@@ -170,7 +171,14 @@ struct ReaderInlineCard: View {
                 Divider().opacity(0.3)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        MarkdownText(markdown: content.markdown).clipShape(RoundedRectangle(cornerRadius: 14))
+                        if let objectID = content.objectID {
+                            if let saved = content.savedMarkdown { MarkdownText(markdown: saved).clipShape(RoundedRectangle(cornerRadius: 14)) }
+                            if state.pinned && store.queryAnswerStyle == .mentor {
+                                TeacherBackgroundCard(objectID: objectID, unitID: content.anchor.unitID)
+                            }
+                        } else {
+                            SentenceTranslationCard(anchor: content.anchor, fallbackMarkdown: content.savedMarkdown)
+                        }
                         if let composition = content.composition {
                             DisclosureGroup("时间与相关内容", isExpanded: $showsComposition) {
                                 if showsComposition { CompositionWorkspaceView(definition: composition, embedded: true, contextOverride: content.context).frame(height: 340) }

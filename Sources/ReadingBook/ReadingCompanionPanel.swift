@@ -326,7 +326,9 @@ struct ReadingCompanionPanel: View {
         }
     }
     @ViewBuilder private var layerSection: some View {
-        if items.layers.isEmpty {
+        if let id = store.focusedReadingAnchorID, let anchor = store.readingExperienceIndex.anchors.first(where: { $0.id == id }) {
+            SentenceTranslationCard(anchor: anchor)
+        } else if items.layers.isEmpty {
             empty(scope == "book" ? "还没有保存的伴读" : "这一页，还可以读得更深", detail: scope == "book" ? "回到原文页，生成解释或留下笔记。" : "生成解释，或围绕当前内容提一个问题。")
         }
         ForEach(Array(items.layers.prefix(layerLimit))) { layer in
@@ -402,6 +404,9 @@ struct ReadingCompanionPanel: View {
         DisclosureGroup(isExpanded: Binding(get: { store.selectedObjectID == entity.id }, set: { store.selectedObjectID = $0 ? entity.id : nil })) {
             if store.selectedObjectID == entity.id {
                 VStack(alignment: .leading, spacing: 10) {
+                    if store.queryAnswerStyle == .mentor {
+                        TeacherBackgroundCard(objectID: entity.id, unitID: store.currentReadingContext.unitID)
+                    }
                     if canShowSummary(entity.evidence) {
                         if !entity.summary.isEmpty { MarkdownText(markdown: entity.summary).clipShape(RoundedRectangle(cornerRadius: 12)) }
                         if !entity.aliases.isEmpty { Text("也称：" + entity.aliases.joined(separator: "、")).font(.system(size: 13)).foregroundStyle(.secondary) }
@@ -420,6 +425,9 @@ struct ReadingCompanionPanel: View {
         DisclosureGroup(isExpanded: Binding(get: { store.selectedObjectID == event.id }, set: { store.selectedObjectID = $0 ? event.id : nil })) {
             if store.selectedObjectID == event.id {
                 VStack(alignment: .leading, spacing: 10) {
+                    if store.queryAnswerStyle == .mentor {
+                        TeacherBackgroundCard(objectID: event.id, unitID: store.currentReadingContext.unitID)
+                    }
                     if !event.dateText.isEmpty { Text(event.dateText).font(.system(size: 13)).foregroundStyle(.secondary) }
                     if canShowSummary(event.evidence), !event.summary.isEmpty { MarkdownText(markdown: event.summary).clipShape(RoundedRectangle(cornerRadius: 12)) }
                     appearances(event.id, evidence: event.evidence)

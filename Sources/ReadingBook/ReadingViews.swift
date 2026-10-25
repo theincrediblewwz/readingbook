@@ -44,11 +44,16 @@ struct ReaderWorkspaceView: View {
                             }, onTrashAnnotation: { id, trashed in
                                 guard store.bookID == sourceBookID else { return false }
                                 return await store.setReaderAnnotationTrashed(id, trashed: trashed)
-                            }, sourceDecorations: store.sourceReadingDecorations,
+                            }, sourceDecorations: store.pdfSourceReadingDecorations,
+                               sourceDecorationRevision: store.pdfSourceReadingDecorationRevision,
                                focusedDecorationID: store.focusedReadingAnchorID,
                                onSourceDecorationTap: sourceTapped,
                                onSourceSelection: { selection in store.sourceReadingSelection = selection; if selection != nil { store.focusedReadingAnchorID = nil } },
                                onSourceDecorationHover: sourceHovered,
+                               onVisiblePagesChange: { pages in
+                                   guard store.bookID == sourceBookID else { return }
+                                   store.updateVisiblePDFPages(pages)
+                               },
                                workspaceMemory: store.workspaceMemory.pdf, memoryRevision: store.workspaceMemoryRevision,
                                onWorkspaceMemory: { memory in store.updateWorkspaceMemory({ $0.pdf = memory }, expectedKey: memoryKey) })
                         } else { sourceText(unit) }
@@ -135,7 +140,7 @@ struct ReaderWorkspaceView: View {
     }
     private func sourceHovered(_ value: SourceReadingHover?) {
         guard !interactionBlocked else { inlineReading.clear(); return }
-        inlineReading.receive(value, book: store.book, index: store.readingExperienceIndex, boundary: store.temporalBoundary)
+        inlineReading.receive(value, book: store.book, index: store.readingExperienceIndex, boundary: store.inlineReadingBoundary(for: value?.id))
     }
     private func sourceTapped(_ id: String) {
         if var value = inlineReading.lastHover, value.id == id { value.activated = true; sourceHovered(value) }

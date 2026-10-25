@@ -11,9 +11,27 @@ private struct ReadableManifest: Codable {
 
 extension LibraryRepository {
     func refreshReadableAfterCommit(id: String) {
-        if let previous = readableAutomaticRefresh[id], Date().timeIntervalSince(previous) < 2 { return }
-        readableAutomaticRefresh[id] = Date()
+        // Canonical data is already durable. Coalesce disposable Markdown
+        // guides instead of delaying every tool-result publication with a
+        // second full validation and regeneration of all readable files.
+        guard pendingReadableRefresh[id] == nil else { return }
+        pendingReadableRefresh[id] = Task(priority: .utility) { [weak self] in
+            do { try await Task.sleep(nanoseconds: 1_500_000_000) } catch { return }
+            guard let self else { return }
+            await self.finishReadableRefresh(id: id)
+        }
+    }
+
+    private func finishReadableRefresh(id: String) {
+        pendingReadableRefresh[id] = nil
         _ = try? refreshReadableViews(id: id)
+    }
+
+    func flushPendingReadableRefreshes() {
+        let ids = Array(pendingReadableRefresh.keys)
+        for task in pendingReadableRefresh.values { task.cancel() }
+        pendingReadableRefresh.removeAll()
+        for id in ids { _ = try? refreshReadableViews(id: id) }
     }
 
     /// Derived views have stable Chinese names. They never become the writer for
@@ -176,7 +194,7 @@ extension LibraryRepository {
             guide += "- [\(readableLabel(document.title))](\(target(document.relativePath)))" + (document.trashedAt != nil ? " · 已回收" : "") + "\n"
         }
         guide += "\n## AI 分析与书本要素\n\n"
-        for name in ["阅读摘要", "对象与事件", "关系与组件", "问答"] { guide += "- [\(name)](\(readableLink("AI分析/" + name + ".md")))\n" }
+        for name in ["阅读摘要", "对象与事件", "人物背景", "句旁译注", "关系与组件", "问答"] { guide += "- [\(name)](\(readableLink("AI分析/" + name + ".md")))\n" }
         guide += "\n项目 ID：`\(project.id)`\n\n[完整结构化记录](\(target("project.json")))包含 OCR、分析检查点、证据及恢复记录；本导览不改写它们。\n"
         var summary = "# 阅读摘要\n\n" + note
         summary += "处理进度：\(project.coverage.values.filter { $0.status == .completed }.count)/\(project.units.count) 个内容单元完成处理；不表示理解无遗漏。\n\n"
@@ -214,7 +232,19 @@ extension LibraryRepository {
             let role = message.role == "user" ? "读者" : (message.role == "assistant" ? "AI" : message.role)
             chats += "## \(readableLabel(role))\n\n\(message.content)\n\n" + readableEvidence(message.evidence, units: unitIndex, originalName: project.originalName, absoluteDirectory: absoluteDirectory)
         }
+        var backgrounds = "# 人物与事件背景\n\nAI 生成的讲解与背景补充，不等于原书所载，也不表示外部资料已经核验。书中对象、原文出处与用户笔记分别保留。\n\n"
+        for record in ReadingKnowledgeRuntime.readableBackgrounds(in: project) {
+            backgrounds += "## \(readableLabel(record.title))\n\n\(record.markdown)\n\n_模型：\(readableLabel(record.model))；对象 ID：`\(record.objectID)`_\n\n"
+            backgrounds += readableEvidence(record.evidence, units: unitIndex, originalName: project.originalName, absoluteDirectory: absoluteDirectory)
+        }
+        var translations = "# 句旁译注\n\n" + note
+        let anchors = Dictionary((project.readingExperience?.anchors ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for layer in (project.readingExperience?.layers ?? []) where layer.kind == "translation" {
+            translations += "## \(readableLabel(layer.title))\n\n\(layer.markdown)\n\n_\(readableLabel(layer.sourceLabel))_\n"
+            translations += readableEvidence(layer.sourceAnchorIDs.compactMap { anchors[$0] }.map { Evidence(unitID: $0.unitID, quote: $0.quote) }, units: unitIndex, originalName: project.originalName, absoluteDirectory: absoluteDirectory)
+        }
         return [("阅读导航.md", guide), ("AI分析/阅读摘要.md", summary), ("AI分析/对象与事件.md", objects),
+                ("AI分析/人物背景.md", backgrounds), ("AI分析/句旁译注.md", translations),
                 ("AI分析/关系与组件.md", relations), ("AI分析/问答.md", chats)].map { ($0.0, boundedReadable($0.1)) }
     }
 

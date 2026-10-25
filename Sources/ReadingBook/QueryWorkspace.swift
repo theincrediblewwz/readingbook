@@ -50,22 +50,30 @@ import ReadingCore
     }
     func saveQueryMemory(_ memory: ConversationMemory?, for snapshot: ReadingQuerySnapshot) {
         guard let memory, !storageState.working, memory.bookID == snapshot.bookID, memory.scopeFingerprint == snapshot.scopeFingerprint else { return }
-        do {
-            let url = queryMemoryURL(for: snapshot)
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(memory)
-            guard data.count <= 1_048_576 else { return }
-            try data.write(to: url, options: .atomic)
-        } catch { queryDisclosure += "\n本次会话记忆未能缓存，原对话仍完整保留。" }
+        let root = libraryRootURL
+        Task {
+            do {
+                try await QueryMemoryFiles.shared.write(memory, snapshot: snapshot, root: root)
+                if libraryRootURL == root, bookID == snapshot.bookID { queryMemoryRevision += 1 }
+            }
+            catch { if libraryRootURL == root, bookID == snapshot.bookID { queryDisclosure += "\n本次会话记忆未能缓存，原对话仍完整保留。" } }
+        }
     }
     func clearCurrentQueryMemory() {
         guard !isQueryBusy, !storageState.working else { return }
-        guard let snapshot = try? currentQueryTaskSnapshot() else { return }
-        let url = queryMemoryURL(for: snapshot)
-        do {
-            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
-            queryDisclosure = "已清除本范围的派生记忆；原始问答和笔记保留。"
-        } catch { errorMessage = "派生记忆未能清除：\(error.localizedDescription)" }
+        guard let project = book else { return }
+        let key = queryMemoryPreparationKey
+        Task {
+            do {
+                let snapshot = try await Task.detached(priority: .userInitiated) {
+                    try ReadingQuerySnapshot.freeze(scope: key.scope, in: project, context: key.context,
+                        documentIDs: key.documents, appendedDocumentIDs: key.scope == .notes ? [] : key.attachments, authorizedNodeIDs: key.nodes)
+                        .withContextIdentity(key.mode)
+                }.value
+                try await QueryMemoryFiles.shared.remove(snapshot: snapshot, root: key.root)
+                if bookID == key.bookID, libraryRootURL == key.root { queryMemoryRevision += 1; queryDisclosure = "已清除本范围的派生记忆；原始问答和笔记保留。" }
+            } catch { if bookID == key.bookID, libraryRootURL == key.root { errorMessage = "派生记忆未能清除：\(error.localizedDescription)" } }
+        }
     }
 }
 

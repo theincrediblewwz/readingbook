@@ -269,7 +269,21 @@ extension ReadingQuerySession {
                 rows.append(["id": candidate.id, "typeID": candidate.typeID, "kind": candidate.kind, "name": candidate.name, "summary": "", "identityOnly": true,
                     "sourceUnitIDs": [], "previouslySaved": saved, "notice": "当前原文出现同名/称谓，先核对是否为同一对象；旧简介不能当作本页已核实的新事实。"])
             }
-            return try page(rows, arguments, maximumBytes)
+            let pageResult = try page(rows, arguments, maximumBytes)
+            if !query.isEmpty, rows.count < 3,
+               var output = try JSONSerialization.jsonObject(with: Data(pageResult.utf8)) as? [String: Any] {
+                let returnedIDs = Set(rows.compactMap { $0["id"] as? String })
+                var suggestions = try KnowledgeIdentitySuggestions.find(query, in: scoped, allowedUnitIDs: Set(snapshot.unitIDs), typeIDs: types, limit: 6)
+                    .filter { !returnedIDs.contains($0.id) }.map { try encoded($0) }
+                while !suggestions.isEmpty {
+                    output["identitySuggestions"] = suggestions
+                    output["identitySuggestionNotice"] = "仅为本次可见范围内的相近名称候选；先核对身份，不自动合并，也不授予新事实或原文引用权限。"
+                    let result = try json(output)
+                    if result.utf8.count <= maximumBytes { return result }
+                    suggestions.removeLast()
+                }
+            }
+            return pageResult
         case "object_get":
             let id = try identifier(arguments)
             guard let object = try TemporalKnowledgeRuntime.object(id: id, in: scoped, boundary: boundary) else {

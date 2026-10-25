@@ -154,6 +154,7 @@ import ReadingCore
                 try Task.checkCancellation()
                 let frozen = try await repository.commitAIResult(base: original, result: started, operationID: "reading-start-" + UUID().uuidString)
                 publish(frozen); await readingReader.resetBudget()
+                await readingReader.setPublicationHandler(readingPublicationHandler(bookID: readingBookID, sessionID: sessionID, progressID: aiRunID))
                 if existing.selection.execution != nil {
                     try await runConfiguredAnalysis(bookID: readingBookID, sessionID: sessionID, allowedUnitIDs: unitIDs,
                         settings: requestSettings, apiKey: requestKey, progressID: aiRunID)
