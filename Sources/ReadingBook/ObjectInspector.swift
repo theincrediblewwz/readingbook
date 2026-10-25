@@ -37,7 +37,7 @@ import ReadingCore
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text(draft == nil ? "关联与依据" : "编辑卡片").font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary)
+                Text(draft == nil ? (store.queryAnswerStyle == .mentor ? "读到这里" : "原文依据") : "编辑卡片").font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
                 Button { request(.close) } label: { Image(systemName: "xmark") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("收起详情").accessibilityLabel("收起详情").disabled(saving)
@@ -54,7 +54,12 @@ import ReadingCore
                             DisclosureGroup("原文依据 · 保留不变") { EvidenceList(evidence: evidence).padding(.top, 6) }
                                 .font(.caption).tint(Palette.accent).disabled(saving)
                         }
-                    } else { objectContents }
+                    } else {
+                        Picker("讲解方式", selection: $store.queryAnswerStyle) {
+                            ForEach(ReadingAnswerStyle.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }.pickerStyle(.segmented).labelsHidden().padding(.bottom, 2)
+                        objectContents
+                    }
                 }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
             }
             if let localError {
@@ -74,7 +79,9 @@ import ReadingCore
                         .buttonStyle(.borderedProminent).disabled(saving || store.isBusy)
                 }.controlSize(.large).padding(.horizontal, 20).padding(.vertical, 14)
             }
-        }.background(Palette.surface.opacity(0.94))
+        }.background(Palette.surface.opacity(0.94), in: RoundedRectangle(cornerRadius: 20))
+            .clipShape(RoundedRectangle(cornerRadius: 20))
+            .environment(\.markdownReadingStyle, "companion")
             .interactiveDismissDisabled(hasChanges || saving)
             .onAppear { loadedBookID = store.bookID; displayedID = id; restoreDraft(checkOtherDrafts: true) }
             .onChange(of: id) { _, next in
@@ -104,35 +111,37 @@ import ReadingCore
         if let entity = store.book?.entities.first(where: { $0.id == objectID }) {
             Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent.opacity(0.08), in: Capsule())
             Text(entity.name).font(.system(size: 25, weight: .semibold)).textSelection(.enabled)
-            if !entity.summary.isEmpty { MarkdownText(markdown: entity.summary) }
+            if canShow(entity.evidence), !entity.summary.isEmpty { MarkdownText(markdown: entity.summary).clipShape(RoundedRectangle(cornerRadius: 12)) }
+            explanationButton(entity.name)
             HStack(spacing: 12) {
                 Button { draft = EntityEditDraft(entity: entity); localError = nil; restoredDraft = false } label: { Label("编辑", systemImage: "square.and.pencil") }
                 Spacer(minLength: 0)
                 Menu { Button("移入回收站…", role: .destructive) { store.requestDeletion(.entity, id: entity.id, title: entity.name) } } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("卡片管理")
             }.buttonStyle(ReadingToolbarButtonStyle()).font(.system(size: 15)).disabled(store.isBusy)
-            ForEach(entity.properties.keys.sorted().filter { entity.properties[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }, id: \.self) { key in
+            ForEach(entity.properties.keys.sorted().filter { canShow(entity.evidence) && entity.properties[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }, id: \.self) { key in
                 VStack(alignment: .leading, spacing: 5) {
                     Text(fieldLabel(key, type: entity.typeID)).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
-                    MarkdownText(markdown: entity.properties[key] ?? "")
+                    MarkdownText(markdown: entity.properties[key] ?? "").clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
-            if let lat = entity.latitude, let lon = entity.longitude {
+            if canShow(entity.evidence), let lat = entity.latitude, let lon = entity.longitude {
                 Label("\(lat), \(lon)", systemImage: "location").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
-            if let note = entity.locationNote, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if canShow(entity.evidence), let note = entity.locationNote, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
-            ForEach((store.book?.events ?? []).filter { $0.participantIDs.contains(objectID) || $0.placeIDs.contains(objectID) }) { event in
+            ForEach((store.book?.events ?? []).filter { canShow($0.evidence) && ($0.participantIDs.contains(objectID) || $0.placeIDs.contains(objectID)) }) { event in
                 Button { showObject(event.id) } label: { Label(event.name, systemImage: "calendar").frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
             }
-            EvidenceList(evidence: entity.evidence)
+            EvidenceList(evidence: visibleEvidence(entity.evidence))
         } else if let event = store.book?.events.first(where: { $0.id == objectID }) {
             Text("事件").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent.opacity(0.08), in: Capsule())
             Text(event.name).font(.system(size: 25, weight: .semibold))
-            Label(event.dateText, systemImage: "clock").font(.subheadline).foregroundStyle(.secondary)
-            MarkdownText(markdown: event.summary)
-            linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs)
-            EvidenceList(evidence: event.evidence)
+            if canShow(event.evidence) { Label(event.dateText, systemImage: "clock").font(.subheadline).foregroundStyle(.secondary) }
+            if canShow(event.evidence) { MarkdownText(markdown: event.summary).clipShape(RoundedRectangle(cornerRadius: 12)) }
+            explanationButton(event.name)
+            if canShow(event.evidence) { linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs) }
+            EvidenceList(evidence: visibleEvidence(event.evidence))
             Menu { Button("移入回收站…", role: .destructive) { store.requestDeletion(.event, id: event.id, title: event.name) } } label: { Label("事件管理", systemImage: "ellipsis").frame(minHeight: 44) }.menuStyle(.borderlessButton).fixedSize().font(.system(size: 14)).disabled(store.isBusy)
         } else if let document = store.book?.activeDocuments.first(where: { $0.id == objectID }) {
             Text("Markdown 文档").font(.system(size: 13)).foregroundStyle(Palette.accent)
@@ -149,7 +158,7 @@ import ReadingCore
         } else {
             Text("对象已不存在，或已移入回收站。").font(.callout).foregroundStyle(.secondary)
         }
-        ForEach((store.book?.relations ?? []).filter { $0.fromID == objectID || $0.toID == objectID }) { relation in
+        ForEach((store.book?.relations ?? []).filter { canShow($0.evidence) && ($0.fromID == objectID || $0.toID == objectID) }) { relation in
             HStack {
                 Button { showObject(relation.fromID == objectID ? relation.toID : relation.fromID) } label: {
                     Label("\(relation.label) · \(store.objectTitle(relation.fromID == objectID ? relation.toID : relation.fromID))", systemImage: "arrow.up.right").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle())
@@ -166,6 +175,25 @@ import ReadingCore
             Button { Task { await store.openDocument(document) } } label: { Label(document.title, systemImage: "doc.text").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }
                 .buttonStyle(.plain).foregroundStyle(Palette.accent)
         }
+    }
+
+    private func visibleEvidence(_ evidence: [Evidence]) -> [Evidence] {
+        guard let allowed = store.temporalBoundary.allowedUnitIDs else { return evidence }
+        return evidence.filter { allowed.contains($0.unitID) }
+    }
+    private func canShow(_ evidence: [Evidence]) -> Bool {
+        guard let allowed = store.temporalBoundary.allowedUnitIDs else { return true }
+        return !evidence.isEmpty && evidence.allSatisfy { allowed.contains($0.unitID) }
+    }
+    private func explanationButton(_ name: String) -> some View {
+        Button {
+            store.selectedObjectID = objectID
+            store.queryInteractionMode = .reading; store.queryScope = .page
+            store.queryComposerDraft.text = store.queryAnswerStyle == .mentor ? "像一起读书那样，给我讲讲\(name)，以及这一页为什么会提到它。" : "请结合这一页原文解释\(name)，区分明载和推断。"
+            store.readingCompanionVisible = true; store.readingCompanionTab = "chat"
+            onClose?()
+        } label: { Label(store.queryAnswerStyle == .mentor ? "听老师讲讲" : "继续核对原文", systemImage: "bubble.left.and.bubble.right").frame(minHeight: 44) }
+            .buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isQueryBusy)
     }
 
     private func key(bookID: String, entityID: String) -> ObjectInspectorDraftCache.Key {
