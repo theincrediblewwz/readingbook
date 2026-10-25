@@ -79,6 +79,28 @@ final class CompositionTests: XCTestCase {
         XCTAssertEqual(bounded["book"]!.items.first { $0.id == "cao" }?.title, "神秘人")
     }
 
+    func testBookComponentCannotTreatCroppedEarlyPageAsFullIdentityPermission() throws {
+        var book = try fixture()
+        // A stored canonical identity can be backed by only the earlier alias;
+        // the later reveal need not have been attached as a second evidence row.
+        book.entities[0].evidence = [Evidence(unitID: "u1", quote: "神秘人")]
+        book.events[0].name = "曹操称王"; book.events[0].summary = "曹操后来称王。"
+        book.events[0].dateText = "209年"; book.events[0].startYear = 209
+        let value = definition([CompositionDataSource(id: "objects", collection: .objects, scope: .book)])
+        let result = try CompositionRuntime.project(value, in: book, boundary: KnowledgeReadBoundary(allowedUnitIDs: ["u1"]))["objects"]!
+        let person = try XCTUnwrap(result.items.first { $0.id == "cao" })
+        XCTAssertEqual(person.title, "神秘人"); XCTAssertTrue(person.summary.isEmpty); XCTAssertTrue(person.fields.isEmpty)
+        let event = try XCTUnwrap(result.items.first { $0.id == "campaign" })
+        XCTAssertEqual(event.title, "本段关联事件"); XCTAssertTrue(event.summary.isEmpty)
+        XCTAssertFalse(event.fields.values.contains(where: { $0.contains("209") || $0.contains("曹操") }))
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: book)
+        let ordinary = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: book)
+        XCTAssertEqual(ordinary.scopedKnowledgeProject()?.entities.first { $0.id == "cao" }?.name, "神秘人")
+        let explicitlyAuthorized = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: book, allowsFullIdentity: true)
+        XCTAssertEqual(explicitlyAuthorized.scopedKnowledgeProject()?.entities.first { $0.id == "cao" }?.name, "曹操",
+            "仅宿主明确授予完整原书身份可读时保留原身份，不能从组件book字样推断授权。")
+    }
+
     func testSharedSelectionTimeAndNoInventedParticipantLocations() throws {
         let book = try fixture()
         let value = definition([

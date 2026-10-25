@@ -220,6 +220,9 @@ struct ReadingQuerySession {
     var workspace: ReadingWorkspaceSnapshot?
     let hostTools: ReadingHostToolAccess?
     let proposalAccess: ReadingProposalToolAccess?
+    /// Host-only authority. A .book snapshot over a pre-cropped component
+    /// project is not permission to expose the original canonical identity.
+    let allowsFullIdentity: Bool
     var hostReceipts: [String] = []
     var taskCreatedNodeIDs = Set<String>()
     var sourceExcerpts: [(String, String)] = []
@@ -231,9 +234,11 @@ struct ReadingQuerySession {
     private var cachedBytes = 0
 
     init(snapshot: ReadingQuerySnapshot, history: [ChatMessage], loader: ReadingDocumentLoader?, providedDocuments: [String: String],
-         project: BookProject? = nil, workspace: ReadingWorkspaceSnapshot? = nil, hostTools: ReadingHostToolAccess? = nil, proposalAccess: ReadingProposalToolAccess? = nil) {
+         project: BookProject? = nil, workspace: ReadingWorkspaceSnapshot? = nil, hostTools: ReadingHostToolAccess? = nil, proposalAccess: ReadingProposalToolAccess? = nil,
+         allowsFullIdentity: Bool = false) {
         self.snapshot = snapshot; self.history = history; self.loader = loader; self.providedDocuments = providedDocuments
         self.project = project; self.workspace = workspace; self.hostTools = hostTools; self.proposalAccess = proposalAccess
+        self.allowsFullIdentity = allowsFullIdentity && snapshot.scope == .book
     }
 
     /// Repack only genuinely supplied text for a standalone final request.

@@ -20,7 +20,8 @@ enum ReadingAnswerEngine {
             .withContextIdentity(preferences.contextIdentity)
         guard remainingRequests > 0 else { throw ReadingError.invalid("本轮问答请求预算已用完。") }
         var session = ReadingQuerySession(snapshot: snapshot, history: history, loader: loader, providedDocuments: documents,
-            project: project, workspace: functional ? workspace : nil, hostTools: functional ? hostTools : nil, proposalAccess: functional ? proposalAccess : nil)
+            project: project, workspace: functional ? workspace : nil, hostTools: functional ? hostTools : nil, proposalAccess: functional ? proposalAccess : nil,
+            allowsFullIdentity: scope == .book)
         let available = ReadingQueryToolCatalog.schemas(snapshot: snapshot, host: functional ? hostTools : nil, proposals: functional ? proposalAccess : nil)
         let tools = functional ? available : available.filter { tool in
             let name = (tool["function"] as? [String: Any])?["name"] as? String ?? ""

@@ -7,7 +7,9 @@ struct SavedKnowledgeReuse {
     let sourceHash: String
     let cursorOrder: Int
     private let units: [String: SourceUnit]
-    private let saved: [String: (summary: String, evidence: [Evidence])]
+    private let entities: [String: KnowledgeEntity]
+    private let events: [String: KnowledgeEvent]
+    private let projection: ReadingSpoilerProjection.Context
     private let currentSlices: [String: String]?
 
     init?(project: BookProject, currentUnitIDs: Set<String>, currentSlices: [String: String]? = nil) {
@@ -17,12 +19,25 @@ struct SavedKnowledgeReuse {
               let cursor = currentUnitIDs.compactMap({ units[$0]?.order }).max() else { return nil }
         self.sourceHash = project.sourceHash; self.cursorOrder = cursor; self.units = units
         self.currentSlices = currentSlices
-        self.saved = Dictionary((project.entities.map { ($0.id, ($0.summary, $0.evidence)) } + project.events.map { ($0.id, ($0.summary, $0.evidence)) }), uniquingKeysWith: { first, _ in first })
+        self.entities = Dictionary(project.entities.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        self.events = Dictionary(project.events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        self.projection = ReadingSpoilerProjection.Context(project: project,
+            allowedUnitIDs: Set(units.values.filter { $0.order <= cursor }.map(\.id)))
     }
 
     func record(id: String) -> [String: Any]? {
-        guard let value = saved[id] else { return nil }
-        return record(summary: value.summary, evidence: value.evidence)
+        if let original = entities[id], let value = entity(original) { return record(summary: value.summary, evidence: value.evidence) }
+        if let original = events[id], let value = event(original) { return record(summary: value.summary, evidence: value.evidence) }
+        return nil
+    }
+
+    func entity(_ original: KnowledgeEntity) -> KnowledgeEntity? {
+        guard admits(original.evidence) else { return nil }
+        return projection.entity(original)
+    }
+    func event(_ original: KnowledgeEvent) -> KnowledgeEvent? {
+        guard admits(original.evidence) else { return nil }
+        return projection.event(original)
     }
 
     func admits(_ evidence: [Evidence]) -> Bool {
@@ -38,7 +53,7 @@ struct SavedKnowledgeReuse {
         }
     }
 
-    func record(summary: String, evidence: [Evidence]) -> [String: Any]? {
+    private func record(summary: String, evidence: [Evidence]) -> [String: Any]? {
         guard admits(evidence) else { return nil }
         let sourceIDs = Array(Set(evidence.map(\.unitID))).sorted()
         return ["kind": "previously_saved", "sourceHash": sourceHash, "cursorOrder": cursorOrder,

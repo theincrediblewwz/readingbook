@@ -49,6 +49,24 @@ final class AnalysisContextTests: XCTestCase {
         XCTAssertTrue(scoped.readingExperience!.alignments.isEmpty)
     }
 
+    func testRawReuseCannotRestoreCanonicalIdentityMissingFromItsEarlierEvidence() async throws {
+        var book = try project()
+        book.entities[0].evidence = [Evidence(unitID: "u1", quote: "神秘人")]
+        let original = book.entities[0]
+        let scoped = try PluginEngine.analysisContextProject(book, allowedUnitIDs: ["u1"])
+        let identity = try XCTUnwrap(scoped.entities.first { $0.id == original.id })
+        XCTAssertEqual(identity.name, "神秘人"); XCTAssertTrue(identity.summary.isEmpty); XCTAssertTrue(identity.properties.isEmpty)
+        let saved = try XCTUnwrap(SavedKnowledgeReuse(project: book, currentUnitIDs: ["u1"])?.record(id: original.id))
+        XCTAssertEqual(saved["summary"] as? String, ""); XCTAssertEqual(saved["sourceUnitIDs"] as? [String], ["u1"])
+        let result = try PluginEngine.apply(name: "knowledge_search", arguments: Data(#"{"query":"神秘人"}"#.utf8), to: &book, allowedUnitIDs: ["u1"], phase: .reading)
+        XCTAssertTrue(result.contains(original.id)); XCTAssertFalse(result.contains("曹操")); XCTAssertFalse(result.contains("后文结局")); XCTAssertFalse(result.contains("隐藏身份"))
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u1", page: 1))
+        var query = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: book)
+        let lookup = try await query.execute(name: "object_get", arguments: ["id": original.id], maximumBytes: 8000)
+        XCTAssertTrue(lookup.contains(original.id)); XCTAssertFalse(lookup.contains("曹操")); XCTAssertFalse(lookup.contains("后文结局"))
+        XCTAssertEqual(book.entities[0], original, "候选与previouslySaved均为只读投影，不改完整旧卡片。")
+    }
+
     func testLaterChunkReusesPriorSavedSummaryWithoutGrantingEarlierSourceReads() async throws {
         let units = [SourceUnit(id: "u1", order: 0, chapter: "开篇", page: 1, text: "贾诩善于谋划。"),
                      SourceUnit(id: "u2", order: 1, chapter: "次回", page: 2, text: "贾诩又来到了这里。")]

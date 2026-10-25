@@ -244,11 +244,13 @@ public enum PluginEngine {
         let candidates = analysisIdentityCandidates(project, allowedUnitIDs: allowedUnitIDs)
         let relevantIDs = Set(scoped.entities.map(\.id) + scoped.events.map(\.id) + candidates.map(\.id))
         if let reuse = SavedKnowledgeReuse(project: project, currentUnitIDs: allowedUnitIDs) {
-            for entity in project.entities where relevantIDs.contains(entity.id) && reuse.admits(entity.evidence) {
+            for original in project.entities where relevantIDs.contains(original.id) {
+                guard let entity = reuse.entity(original) else { continue }
                 if let index = scoped.entities.firstIndex(where: { $0.id == entity.id }) { scoped.entities[index] = entity }
                 else { scoped.entities.append(entity) }
             }
-            for event in project.events where relevantIDs.contains(event.id) && reuse.admits(event.evidence) {
+            for original in project.events where relevantIDs.contains(original.id) {
+                guard let event = reuse.event(original) else { continue }
                 if let index = scoped.events.firstIndex(where: { $0.id == event.id }) { scoped.events[index] = event }
                 else { scoped.events.append(event) }
             }

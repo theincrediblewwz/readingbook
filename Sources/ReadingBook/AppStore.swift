@@ -220,6 +220,9 @@ import ReadingCore
         queryHistoryMessageID = nil
         let generation = navigationGeneration
         bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil; documentBaseHash = nil
+        readingIndexTask?.cancel(); readingIndexTask = nil; readingIndexGeneration &+= 1; readingPageSnapshots.reset()
+        readingExperienceIndex = book?.readingExperience ?? ReadingExperienceState()
+        readingContextCacheKey = nil; readingContextCache = ReadingContextItems()
         loadWorkspaceMemory()
         sourceReadingSelection = nil; focusedReadingAnchorID = nil; readingCompanionVisible = false; readingCompanionSection = "context"; readingSourceMode = "original"; readingScopeCurrent = false; lastQuestionContext = ""; readingExperienceError = nil
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
