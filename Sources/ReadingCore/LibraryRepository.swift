@@ -21,6 +21,8 @@ public struct DocumentContentSnapshot: Sendable {
 /// Local, file-backed library. Markdown files are the only document body source;
 /// project.json contains references and structured book analysis, never a body mirror.
 public actor LibraryRepository {
+    public nonisolated let publicationOwner = UUID()
+    private var publicationOrdinal: UInt64 = 0
     let rootURL: URL
     let files = FileManager.default
     private static let metadataLimit = 64 * 1_024 * 1_024
@@ -117,8 +119,9 @@ public actor LibraryRepository {
         _ = try? refreshReadableLibraryIndex()
     }
 
-    public func save(_ project: BookProject) throws {
-        _ = try saveCanonicalProject(project)
+    @discardableResult
+    public func save(_ project: BookProject) throws -> BookProject {
+        try saveCanonicalProject(project)
     }
 
     /// Canonical metadata after host-only caches have been merged. Callers
@@ -136,6 +139,7 @@ public actor LibraryRepository {
             throw ReadingError.invalid("项目中的 Markdown 引用比磁盘版本少，已阻止覆盖。请重新载入书籍。")
         }
         var updated = project
+        updated.aiRequestHistory = try AIRequestHistoryMerge.merge(proposed: project.aiRequestHistory, canonical: existing.aiRequestHistory)
         updated.readerAnnotations = existing.readerAnnotations
         // Only the explicit trash/restore API changes this canonical status. A stale reader
         // or editor window cannot silently revive a document through a routine save.
@@ -148,7 +152,7 @@ public actor LibraryRepository {
         try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false, encodedMetadataSize: metadata.count, reuseDocumentValidation: true)
         try atomicWrite(metadata, to: try child(directory, "project.json"))
         refreshReadableAfterCommit(id: updated.id)
-        return updated
+        return stampForPublication(updated)
     }
 
     public func readDocument(bookID: String, document: DocumentRecord) throws -> String {
@@ -177,6 +181,7 @@ public actor LibraryRepository {
         guard data.count <= Self.documentLimit else { throw ReadingError.invalid("单篇 Markdown 超过 16 MiB。") }
         try validateDocumentPath(document)
         var updated = project
+        updated.aiRequestHistory = try AIRequestHistoryMerge.merge(proposed: project.aiRequestHistory, canonical: existing.aiRequestHistory)
         updated.readerAnnotations = existing.readerAnnotations
         // Retain references written by another window before this editor was opened.
         for saved in existing.documents where !updated.documents.contains(where: { $0.id == saved.id }) { updated.documents.append(saved) }
@@ -221,7 +226,7 @@ public actor LibraryRepository {
         try atomicWrite(encode(journal), to: marker)
         try recoverDocument(in: directory)
         refreshReadableAfterCommit(id: updated.id)
-        return updated
+        return stampForPublication(updated)
     }
 
     public func setDocumentTrashed(project: BookProject, documentID: String, trashed: Bool) throws -> BookProject {
@@ -232,14 +237,14 @@ public actor LibraryRepository {
         guard updated.id == project.id, updated.sourceHash == project.sourceHash,
               updated.originalName == project.originalName else { throw ReadingError.invalid("回收操作中的书籍身份与磁盘记录不符。") }
         guard let index = updated.documents.firstIndex(where: { $0.id == documentID }) else { throw ReadingError.invalid("文档不属于此书籍。") }
-        guard (updated.documents[index].trashedAt != nil) != trashed else { return updated }
+        guard (updated.documents[index].trashedAt != nil) != trashed else { return stampForPublication(updated) }
         updated.documents[index].trashedAt = trashed ? Date() : nil
         updated.documents[index].updatedAt = Date()
         updated.audit.append(ToolAudit(name: trashed ? "document_trash" : "document_restore", summary: "\(trashed ? "移入回收站" : "恢复")文档：\(updated.documents[index].title)；Markdown 与导图关联保留。"))
         try validate(updated)
         try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false)
         try atomicWrite(encode(updated), to: try child(directory, "project.json"))
-        return updated
+        return stampForPublication(updated)
     }
 
     /// Manual deletion and its complete recovery record share one atomic metadata
@@ -255,7 +260,7 @@ public actor LibraryRepository {
         try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false,
                                  encodedMetadataSize: metadata.count, reuseDocumentValidation: true)
         try atomicWrite(metadata, to: try child(directory, "project.json"))
-        return updated
+        return stampForPublication(updated)
     }
 
     /// The confirmed dependency set is checked by the runtime against canonical
@@ -271,7 +276,7 @@ public actor LibraryRepository {
         try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false,
                                  encodedMetadataSize: metadata.count, reuseDocumentValidation: true)
         try atomicWrite(metadata, to: try child(directory, "project.json"))
-        return updated
+        return stampForPublication(updated)
     }
 
     private func requireManualTrashRevision(_ project: BookProject, canonical: BookProject) throws {
@@ -307,7 +312,7 @@ public actor LibraryRepository {
         updated.readerAnnotations = records
         try validate(updated)
         try atomicWrite(encode(updated), to: try child(directory, "project.json"))
-        return updated
+        return stampForPublication(updated)
     }
 
     public func setAnnotationTrashed(project: BookProject, annotationID: String, trashed: Bool) throws -> BookProject {
@@ -322,7 +327,7 @@ public actor LibraryRepository {
         }
         try validate(updated)
         try atomicWrite(encode(updated), to: try child(directory, "project.json"))
-        return updated
+        return stampForPublication(updated)
     }
 
     public func archiveBook(project: BookProject) throws {
@@ -381,7 +386,7 @@ public actor LibraryRepository {
         catch { throw ReadingError.invalid("书籍恢复未完成。回收目录及可能的目标文件均已保留，请检查 trash/\(id) 与 books/\(id)：\(error.localizedDescription)") }
         _ = try? refreshReadableViews(id: id)
         _ = try? refreshReadableLibraryIndex()
-        return project
+        return stampForPublication(project)
     }
 
     public func sourceURL(for project: BookProject) -> URL {
@@ -415,7 +420,7 @@ public actor LibraryRepository {
         try validate(updated)
         try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: true)
         try atomicWrite(encode(updated), to: try child(directory, "project.json"))
-        return updated
+        return stampForPublication(updated)
     }
 
     public func exportProject(_ project: BookProject, to url: URL) throws {
@@ -463,7 +468,7 @@ public actor LibraryRepository {
         try files.moveItem(at: staging, to: destination)
         _ = try? refreshReadableViews(id: project.id)
         _ = try? refreshReadableLibraryIndex()
-        return project
+        return stampForPublication(project)
     }
 
     // MARK: Recoverable document commit
@@ -882,7 +887,15 @@ public actor LibraryRepository {
     private func decode<T: Decodable>(_ data: Data) throws -> T { try JSONDecoder().decode(T.self, from: data) }
 
     func readProject(in directory: URL) throws -> BookProject {
-        try decode(readLimited(try child(directory, "project.json"), limit: Self.metadataLimit))
+        let project: BookProject = try decode(readLimited(try child(directory, "project.json"), limit: Self.metadataLimit))
+        return stampForPublication(project)
+    }
+
+    func stampForPublication(_ project: BookProject) -> BookProject {
+        publicationOrdinal &+= 1
+        var result = project
+        result.publicationStamp = LibraryPublicationStamp(owner: publicationOwner, ordinal: publicationOrdinal)
+        return result
     }
 
     func atomicWrite(_ data: Data, to url: URL) throws {

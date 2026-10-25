@@ -1,16 +1,28 @@
 import Foundation
 
+/// Ending a run must be visible before its asynchronous cleanup is scheduled.
+/// No deinit side effect: callers that keep using the legacy API stay explicit.
+public final class AIRequestRun: @unchecked Sendable {
+    fileprivate let id = UUID()
+    private let lock = NSLock()
+    private var finished = false
+    public func finish() { lock.lock(); defer { lock.unlock() }; finished = true }
+    fileprivate var isFinished: Bool { lock.lock(); defer { lock.unlock() }; return finished }
+}
+
 /// One user-authorized budget shared by all lanes. Reserving the next request's
 /// upper bound prevents parallel workers from spending the same remaining tokens.
 public actor AIRequestCoordinator {
     public enum Lane: Equatable, Sendable { case foreground, background }
+    private struct Permit { var id: UUID; var number: Int }
     private struct Waiter {
         var id: UUID
         var lane: Lane
         var reservation: Int
-        var continuation: CheckedContinuation<UUID, Error>
+        var continuation: CheckedContinuation<Permit, Error>
     }
     private var users = 0
+    private var runs: [UUID: AIRequestRun] = [:]
     private var limit = 2
     private var requestLimit = 100
     private var tokenLimit = 196_000
@@ -18,20 +30,33 @@ public actor AIRequestCoordinator {
     private var usedTokens = 0
     private var active: [UUID: (Lane, Int)] = [:]
     private var waiting: [Waiter] = []
+    private var transport: (@Sendable (ProviderClient.Prepared) async throws -> ProviderClient.Result)?
     public init() {}
+    init(transport: @escaping @Sendable (ProviderClient.Prepared) async throws -> ProviderClient.Result) { self.transport = transport }
 
     public func beginRun(settings: ProviderSettings, maximumConcurrency: Int) throws {
-        if users == 0 && active.isEmpty {
-            usedRequests = 0; usedTokens = 0
-            requestLimit = settings.maxRequestsPerRun
-            tokenLimit = try ReadingTokenBudget.operationLimit(for: settings)
-        }
-        limit = min(5, max(1, maximumConcurrency))
+        try prepareRun(settings: settings, maximumConcurrency: maximumConcurrency)
         users += 1; drain()
     }
+    public func beginManagedRun(settings: ProviderSettings, maximumConcurrency: Int) throws -> AIRequestRun {
+        try prepareRun(settings: settings, maximumConcurrency: maximumConcurrency)
+        let run = AIRequestRun(); runs[run.id] = run; drain(); return run
+    }
+    private func prepareRun(settings: ProviderSettings, maximumConcurrency: Int) throws {
+        runs = runs.filter { !$0.value.isFinished }
+        if users == 0 && runs.isEmpty && active.isEmpty && waiting.isEmpty {
+            let budget = try ReadingTokenBudget.operationLimit(for: settings)
+            usedRequests = 0; usedTokens = 0
+            requestLimit = settings.maxRequestsPerRun
+            tokenLimit = budget
+        }
+        limit = min(5, max(1, maximumConcurrency))
+    }
     public func endRun() { users = max(0, users - 1) }
+    public func endRun(_ run: AIRequestRun) { run.finish(); runs.removeValue(forKey: run.id) }
     public var requestsUsed: Int { usedRequests }
     public func configure(maximumConcurrency: Int) { limit = min(5, max(1, maximumConcurrency)); drain() }
+    var queuedRequestCount: Int { waiting.count }
 
     func perform(_ prepared: ProviderClient.Prepared, lane: Lane,
                  progress: (@Sendable (ProviderStreamSnapshot) -> Void)?, onStart: @Sendable (Int) -> Void) async throws -> ProviderClient.Result {
@@ -47,20 +72,23 @@ public actor AIRequestCoordinator {
         }, onCancel: { Task { await self.cancel(id) } })
         do {
             try Task.checkCancellation()
-            onStart(usedRequests)
-            let result = try await ProviderClient.perform(prepared, progress: progress)
-            release(permit, cost: max(0, result.tokenCost))
+            onStart(permit.number)
+            let result: ProviderClient.Result
+            if let transport { result = try await transport(prepared) }
+            else { result = try await ProviderClient.perform(prepared, progress: progress) }
+            release(permit.id, cost: max(0, result.tokenCost))
             return result
         } catch {
             // Providers may bill requests cancelled after transmission. Retain
             // the reservation if the transport did not report actual usage.
-            release(permit, cost: reservation)
+            release(permit.id, cost: reservation)
             throw error
         }
     }
     private func cancel(_ id: UUID) {
         guard let index = waiting.firstIndex(where: { $0.id == id }) else { return }
         waiting.remove(at: index).continuation.resume(throwing: CancellationError())
+        drain()
     }
     private func release(_ id: UUID, cost: Int) {
         guard active.removeValue(forKey: id) != nil else { return }
@@ -80,7 +108,7 @@ public actor AIRequestCoordinator {
             }
             if item.reservation > tokenLimit - usedTokens - reserved { waiting.insert(item, at: index); return }
             usedRequests += 1; active[item.id] = (item.lane, item.reservation)
-            item.continuation.resume(returning: item.id)
+            item.continuation.resume(returning: Permit(id: item.id, number: usedRequests))
         }
     }
 }

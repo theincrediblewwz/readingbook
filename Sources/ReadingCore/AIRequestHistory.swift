@@ -18,6 +18,26 @@ public struct AIRequestHistoryRecord: Codable, Identifiable, Hashable, Sendable 
     }
 }
 
+enum AIRequestHistoryMerge {
+    static func merge(proposed: [AIRequestHistoryRecord]?, canonical: [AIRequestHistoryRecord]?) throws -> [AIRequestHistoryRecord]? {
+        guard proposed != nil || canonical != nil else { return nil }
+        let proposed = proposed ?? [], canonical = canonical ?? []
+        guard proposed.count <= 1000, canonical.count <= 1000,
+              Set(proposed.map(\.id)).count == proposed.count, Set(canonical.map(\.id)).count == canonical.count else {
+            throw ReadingError.invalid("请求历史数量或身份无效。")
+        }
+        var combined = canonical, known = Set(canonical.map(\.id))
+        for record in proposed where known.insert(record.id).inserted { combined.append(record) }
+        // Old windows can carry records already evicted from the bounded log.
+        // Retain chronological recency, rather than appending stale IDs at the tail.
+        return Array(combined.sorted {
+            if $0.startedAt != $1.startedAt { return $0.startedAt < $1.startedAt }
+            if $0.finishedAt != $1.finishedAt { return $0.finishedAt < $1.finishedAt }
+            return $0.id < $1.id
+        }.suffix(1000))
+    }
+}
+
 extension LibraryRepository {
     public func aiRequestHistory(bookID: String) throws -> [AIRequestHistoryRecord] {
         let directory = try bookDirectory(bookID, mustExist: true)

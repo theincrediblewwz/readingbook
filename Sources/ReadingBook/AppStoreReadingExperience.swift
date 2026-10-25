@@ -205,11 +205,23 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                         left.id == right.id && left.page == right.page && left.text.utf8.elementsEqual(right.text.utf8)
                     }
                     if sourceStillMatches {
+                        var nextIndex = prepared.index
+                        // Citation links may create one unsaved anchor just
+                        // before this worker finishes. Keep only the currently
+                        // requested, still literal focus through the refresh.
+                        if let focused = self.focusedReadingAnchorID,
+                           !nextIndex.anchors.contains(where: { $0.id == focused }),
+                           let anchor = self.readingExperienceIndex.anchors.first(where: { $0.id == focused }),
+                           let currentBook = self.book,
+                           (try? ReadingExperienceRuntime.resolve(anchor, in: currentBook)) != nil {
+                            nextIndex.anchors.append(anchor)
+                            self.readingPageSnapshots.anchorsByID[anchor.id] = anchor
+                        }
                         self.readingPageSnapshots.current = prepared.selected; self.readingPageSnapshots.currentBase = prepared.base
                         let windowChanged = self.readingPageSnapshots.window.map(\.key) != prepared.snapshots.map(\.key)
                         self.readingPageSnapshots.window = prepared.snapshots
                         if prepared.changed || windowChanged {
-                            self.readingExperienceIndex = prepared.index; self.readingContextCacheKey = nil
+                            self.readingExperienceIndex = nextIndex; self.readingContextCacheKey = nil
                             self.readingPageSnapshots.presentationRevision &+= 1
                         }
                     }
@@ -228,11 +240,22 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         let persistentAnchor = anchor.flatMap { value in book?.readingExperience?.anchors.contains { $0.id == value.id } == true ? value.id : nil }
         let selection = selectedSourceAnchor
         let document = book?.activeDocuments.first { $0.id == readingContextDocumentID }
-        return ReadingContext(sourceHash: book?.sourceHash, unitID: document == nil ? (selection?.unitID ?? anchor?.unitID ?? selectedUnitID) : nil,
+        let sourceUnitID = selection?.unitID ?? anchor?.unitID ?? selectedUnitID
+        let sourceUnit = sourceUnitID.flatMap { id in
+            readingPageSnapshots.unitIndices[id].flatMap { index in
+                guard let book, book.units.indices.contains(index), book.units[index].id == id else { return nil as SourceUnit? }
+                return book.units[index]
+            } ?? book?.units.first(where: { $0.id == id })
+        }
+        // A sentence on a genuinely visible neighboring PDF page has its own
+        // source context, while native selections retain their start/end pages.
+        let sourcePage = sourceReadingSelection?.page ?? sourceUnit?.page
+        return ReadingContext(sourceHash: book?.sourceHash, unitID: document == nil ? sourceUnitID : nil,
                               selectedAnchorID: document == nil ? persistentAnchor : nil, selectedText: document == nil ? (selection?.quote ?? anchor?.quote) : nil,
                               selectedPrefix: document == nil ? (selection?.prefix ?? anchor?.prefix) : nil, selectedSuffix: document == nil ? (selection?.suffix ?? anchor?.suffix) : nil,
                               objectID: object, documentID: document?.id,
-                              page: document == nil ? selectedUnit?.page : nil, timeFrom: timeFrom, timeTo: timeTo)
+                              page: document == nil ? sourcePage : nil, timeFrom: timeFrom, timeTo: timeTo,
+                              selectionEndPage: document == nil ? sourceReadingSelection?.endPage : nil)
     }
     var readingContextItems: ReadingContextItems {
         guard let book else { return ReadingContextItems() }
@@ -310,7 +333,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
     var pdfSourceReadingDecorations: [SourceReadingDecoration] {
         guard let book else { return [] }
         let cache = readingPageSnapshots, owner = libraryRootURL.path + "|" + book.id + "|" + book.sourceHash
-        return cache.window.flatMap { snapshot -> [SourceReadingDecoration] in
+        var values = cache.window.flatMap { snapshot -> [SourceReadingDecoration] in
             guard snapshot.input.owner == owner,
                   snapshot.input.units.allSatisfy({ unit in
                       guard let index = cache.unitIndices[unit.id], book.units.indices.contains(index) else { return false }
@@ -318,6 +341,15 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                   }) else { return [] }
             return snapshot.decorations
         }
+        if let id = focusedReadingAnchorID, !values.contains(where: { $0.id == id }),
+           let anchor = readingExperienceIndex.anchors.first(where: { $0.id == id }),
+           let unit = book.units.first(where: { $0.id == anchor.unitID }), let page = unit.page,
+           let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: book) {
+            values.append(SourceReadingDecoration(id: anchor.id, targetID: id, quote: anchor.quote,
+                rangeLocation: resolved.utf16Location, rangeLength: resolved.utf16Length,
+                prefix: anchor.prefix, suffix: anchor.suffix, page: page))
+        }
+        return values
     }
     func sourceDecorationTapped(_ id: String) {
         guard let anchor = readingExperienceIndex.anchors.first(where: { $0.id == id }) else { return }
@@ -406,7 +438,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                     starting.audit.append(try progress.audit("companion_scope_started"))
                     // Persist the run before its first paid request so a restart
                     // can distinguish a continuation from a deliberate refresh.
-                    try await repository.save(starting); publish(starting)
+                    publish(try await repository.save(starting))
                 }
                 await reader.resetBudget()
                 for (index, unitID) in remainingIDs.enumerated() {
@@ -430,7 +462,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                         guard completed || receiptCount > previousReceipts else { throw ReadingError.invalid("这部分没有新增核对回执或伴读结果，已停止以避免重复请求。") }
                         if completed { result.audit.append(try progress.audit("companion_scope_checkpoint", unitID: unitID)) }
                         markAIProgressSaving(aiRunID)
-                        try await repository.save(result); publish(result)
+                        publish(try await repository.save(result))
                         requestsUsed = await reader.requestCount
                         if completed { break }
                     }
@@ -438,7 +470,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                 try Task.checkCancellation()
                 guard var finished = book, finished.id == snapshot.bookID, finished.sourceHash == snapshot.sourceHash else { throw CancellationError() }
                 finished.audit.append(try progress.audit("companion_scope_finished"))
-                try await repository.save(finished); publish(finished)
+                publish(try await repository.save(finished))
                 activity = "\(snapshot.displayTitle)的伴读已保存，请结合原文核对。"
             } catch { finishAIProgress(aiRunID, error: error); readingExperienceError = error is CancellationError ? nil : error.localizedDescription; handle(error) }
         }
@@ -452,13 +484,19 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
     func removeReadingItem(_ id: String, kind: String) async {
         guard var current = book, let state = current.readingExperience, !isBusy else { return }
         isBusy = true; defer { isBusy = false }
-        do { current.readingExperience = try ReadingExperienceRuntime.trashItem(id: id, kind: kind, state: state); try await repository.save(current); publish(current); activity = "已移入伴读回收站，可在伴读菜单恢复。" }
+        do {
+            current.readingExperience = try ReadingExperienceRuntime.trashItem(id: id, kind: kind, state: state)
+            current = try await repository.save(current)
+            if let focusedReadingAnchorID, state.anchors.contains(where: { $0.id == focusedReadingAnchorID }),
+               current.readingExperience?.anchors.contains(where: { $0.id == focusedReadingAnchorID }) != true { self.focusedReadingAnchorID = nil }
+            publish(current); activity = "已移入伴读回收站，可在伴读菜单恢复。"
+        }
         catch { readingExperienceError = error.localizedDescription }
     }
     func restoreReadingItem(_ id: String) async {
         guard var current = book, let state = current.readingExperience, !isBusy else { return }
         isBusy = true; defer { isBusy = false }
-        do { current.readingExperience = try ReadingExperienceRuntime.restoreTrashedItem(id: id, state: state, in: current); try await repository.save(current); publish(current) }
+        do { current.readingExperience = try ReadingExperienceRuntime.restoreTrashedItem(id: id, state: state, in: current); publish(try await repository.save(current)) }
         catch { readingExperienceError = error.localizedDescription }
     }
 }

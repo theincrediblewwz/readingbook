@@ -7,16 +7,22 @@ public enum ReadingAnalysisScheduler {
                                       steps: [ReadingExecutionStep], chapters: [String: String],
                                       currentUnitID: String?, dispatchCount: Int) -> ReadingAnalysisChunk? {
         let frequencies = Dictionary(steps.map { ($0.id, $0.frequency) }, uniquingKeysWith: { _, last in last })
+        var firstIncomplete: Int?
+        var firstIncompleteByChapter: [String: Int] = [:]
+        for (index, chunk) in chunks.enumerated() where !completed.contains(chunk.id) {
+            if firstIncomplete == nil { firstIncomplete = index }
+            for unitID in chunk.unitIDs {
+                let chapter = chapters[unitID] ?? ""
+                if firstIncompleteByChapter[chapter] == nil { firstIncompleteByChapter[chapter] = index }
+            }
+        }
         let ready = chunks.enumerated().filter { index, chunk in
             guard !completed.contains(chunk.id), !running.contains(chunk.id) else { return false }
             let actions = chunk.stepIDs.compactMap { frequencies[$0] }
-            let prior = chunks.prefix(index)
-            if actions.contains(.book) && prior.contains(where: { !completed.contains($0.id) }) { return false }
+            if actions.contains(.book), let firstIncomplete, firstIncomplete < index { return false }
             if actions.contains(.chapter) {
                 let own = Set(chunk.unitIDs.compactMap { chapters[$0] })
-                if prior.contains(where: { candidate in
-                    !completed.contains(candidate.id) && candidate.unitIDs.contains { own.contains(chapters[$0] ?? "") }
-                }) { return false }
+                if own.contains(where: { (firstIncompleteByChapter[$0] ?? index) < index }) { return false }
             }
             return true
         }

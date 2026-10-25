@@ -38,4 +38,63 @@ final class ReadingAnalysisSchedulerTests: XCTestCase {
         XCTAssertEqual(result?.id, "c2")
         XCTAssertNil(ReadingAnalysisScheduler.nextReadyChunk(in: chunks, completed: Set(chunks.map(\.id)), running: [], steps: steps, chapters: chapters, currentUnitID: "u6", dispatchCount: 0))
     }
+
+    func testLinearDependencyIndexMatchesPriorSchedulerAcrossMixedStates() {
+        var jobs = chunks
+        jobs[1].stepIDs = ["part", "chapter"]
+        jobs[2].unitIDs = ["u2", "u5"] // A block can span chapter boundaries.
+        jobs[2].stepIDs = ["chapter"]
+        jobs[4].stepIDs = ["book"]
+        jobs[6].stepIDs = ["chapter", "book"]
+        jobs[7].unitIDs = ["u7", "unknown-unit"]
+        jobs[7].stepIDs = ["chapter"]
+        let actions = steps + [ReadingExecutionStep(id: "chapter", title: "章末", frequency: .chapter), ReadingExecutionStep(id: "book", title: "书末", frequency: .book)]
+        var chapterMap = chapters; chapterMap["u7"] = ""
+        let pages: [String?] = [nil, "u0", "u3", "u5", "unknown-unit", "outside"]
+        for mask in 0..<(1 << jobs.count) {
+            let completed = Set(jobs.enumerated().compactMap { mask & (1 << $0.offset) == 0 ? nil : $0.element.id })
+            for runningMask in [0, 1, 8, 128, 170] {
+                let running = Set(jobs.enumerated().compactMap { runningMask & (1 << $0.offset) == 0 ? nil : $0.element.id })
+                for page in pages {
+                    for dispatch in [0, 3] {
+                        let expected = priorScheduler(in: jobs, completed: completed, running: running, steps: actions,
+                            chapters: chapterMap, currentUnitID: page, dispatchCount: dispatch)
+                        let actual = ReadingAnalysisScheduler.nextReadyChunk(in: jobs, completed: completed, running: running, steps: actions,
+                            chapters: chapterMap, currentUnitID: page, dispatchCount: dispatch)
+                        XCTAssertEqual(actual?.id, expected?.id, "完成mask=\(mask)，运行mask=\(runningMask)，当前页=\(page ?? "nil")，调度=\(dispatch)")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Keep the pre-optimization algorithm as a behavioral oracle, including
+    /// unknown/empty chapter treatment and every-fourth-dispatch fairness.
+    private func priorScheduler(in chunks: [ReadingAnalysisChunk], completed: Set<String>, running: Set<String>,
+                                steps: [ReadingExecutionStep], chapters: [String: String],
+                                currentUnitID: String?, dispatchCount: Int) -> ReadingAnalysisChunk? {
+        let frequencies = Dictionary(steps.map { ($0.id, $0.frequency) }, uniquingKeysWith: { _, last in last })
+        let ready = chunks.enumerated().filter { index, chunk in
+            guard !completed.contains(chunk.id), !running.contains(chunk.id) else { return false }
+            let actions = chunk.stepIDs.compactMap { frequencies[$0] }
+            let prior = chunks.prefix(index)
+            if actions.contains(.book) && prior.contains(where: { !completed.contains($0.id) }) { return false }
+            if actions.contains(.chapter) {
+                let own = Set(chunk.unitIDs.compactMap { chapters[$0] })
+                if prior.contains(where: { candidate in
+                    !completed.contains(candidate.id) && candidate.unitIDs.contains { own.contains(chapters[$0] ?? "") }
+                }) { return false }
+            }
+            return true
+        }
+        guard let oldest = ready.first else { return nil }
+        if dispatchCount % 4 == 3 { return oldest.element }
+        guard let currentUnitID, let target = chunks.firstIndex(where: { $0.unitIDs.contains(currentUnitID) }) else { return oldest.element }
+        return ready.min { left, right in
+            let a = abs(left.offset - target), b = abs(right.offset - target)
+            if a != b { return a < b }
+            if (left.offset >= target) != (right.offset >= target) { return left.offset >= target }
+            return left.offset < right.offset
+        }?.element
+    }
 }

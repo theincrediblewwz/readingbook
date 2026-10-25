@@ -21,7 +21,7 @@ import ReadingCore
             let record = try await Task.detached(priority: .userInitiated) { try MathVerificationEngine.verify(request) }.value
             guard bookID == expectedID, book?.sourceHash == expectedHash else { throw ReadingError.invalid("书籍已切换，未保存到其他书。") }
             current.mathVerifications = (current.mathVerifications ?? []) + [record]
-            try await repository.save(current); publish(current)
+            publish(try await repository.save(current))
             activity = record.summary
             return record.id
         } catch { errorMessage = error.localizedDescription; return nil }
@@ -34,7 +34,7 @@ import ReadingCore
         defer { isBusy = false; isCommittingLocalWrite = false }
         current.mathVerifications?[index].deletedAt = deleted ? Date() : nil
         do {
-            try await repository.save(current); publish(current)
+            publish(try await repository.save(current))
             activity = deleted ? "核查记录已收起到已删除，可在数学核查中恢复。" : "核查记录已恢复。"
         } catch { errorMessage = error.localizedDescription }
     }

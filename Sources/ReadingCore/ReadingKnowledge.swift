@@ -1,5 +1,19 @@
 import Foundation
 
+/// Shared only by a frozen read/capture context. Repeated evidence from the
+/// same unit must not re-hash a whole imported chapter for every old version.
+private final class KnowledgeSourceHashes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: String] = [:]
+    func hash(_ unit: SourceUnit) throws -> String {
+        lock.lock(); let value = values[unit.id]; lock.unlock()
+        if let value { return value }
+        let digest = try BookImporter.sha256(Data(unit.text.utf8))
+        lock.lock(); values[unit.id] = digest; lock.unlock()
+        return digest
+    }
+}
+
 /// Immutable derived versions keep earlier introductions readable after later
 /// evidence is added to the canonical object. They never replace that object.
 public struct KnowledgeObjectVersion: Codable, Identifiable, Hashable, Sendable {
@@ -66,15 +80,21 @@ public enum ReadingKnowledgeRuntime {
             }
         }
         let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var known = Set(state.versions.map { $0.objectID + "|" + $0.sourceHash + "|" + $0.contentFingerprint })
-        var hashes: [String: String] = [:]
+        var known = Dictionary(grouping: state.versions, by: { $0.objectID + "|" + $0.sourceHash + "|" + $0.contentFingerprint })
+        let hashes = KnowledgeSourceHashes()
         func append(entity: KnowledgeEntity? = nil, event: KnowledgeEvent? = nil) throws {
             let evidence = entity?.evidence ?? event?.evidence ?? []
             guard let id = entity?.id ?? event?.id, !evidence.isEmpty,
                   evidence.allSatisfy({ item in units[item.unitID].map { exact(item.quote, in: $0.text) } == true }) else { return }
             let fingerprint = try contentFingerprint(entity: entity, event: event)
             let key = id + "|" + project.sourceHash + "|" + fingerprint
-            guard known.insert(key).inserted else { return }
+            // Equal content with still-current provenance needs no duplicate.
+            // After OCR, keep the old record but allow the same facts to obtain
+            // a fresh source revision instead of remaining permanently stale.
+            if (known[key] ?? []).contains(where: { value in value.evidence.allSatisfy { item in
+                guard let unit = units[item.unitID], exact(item.quote, in: unit.text) else { return false }
+                return value.unitHashes[item.unitID] == (try? hashes.hash(unit))
+            } }) { return }
             // A cache must not make an otherwise valid legacy save fail merely
             // because an old hand-edited aggregate exceeds the cache bounds.
             guard state.versions.count < 100_000,
@@ -91,12 +111,14 @@ public enum ReadingKnowledgeRuntime {
             }
             var sourceHashes: [String: String] = [:]
             for item in evidence {
-                if hashes[item.unitID] == nil { hashes[item.unitID] = try BookImporter.sha256(Data(units[item.unitID]!.text.utf8)) }
-                sourceHashes[item.unitID] = hashes[item.unitID]
+                sourceHashes[item.unitID] = try hashes.hash(units[item.unitID]!)
             }
-            state.versions.append(KnowledgeObjectVersion(id: "knowledge-" + (try BookImporter.sha256(Data(key.utf8))), objectID: id,
+            let sourceRevision = try BookImporter.sha256(JSONSerialization.data(withJSONObject: sourceHashes, options: [.sortedKeys]))
+            let identity = known[key] == nil ? key : key + "|source-revision:" + sourceRevision
+            let version = KnowledgeObjectVersion(id: "knowledge-" + (try BookImporter.sha256(Data(identity.utf8))), objectID: id,
                 sourceHash: project.sourceHash, contentFingerprint: fingerprint, unitHashes: sourceHashes,
-                entity: entity, event: event, createdAt: Date()))
+                entity: entity, event: event, createdAt: Date())
+            state.versions.append(version); known[key, default: []].append(version)
         }
         let oldEntities = Dictionary(before.entities.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let oldEvents = Dictionary(before.events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -129,6 +151,7 @@ public enum ReadingKnowledgeRuntime {
         private let versions: [String: [KnowledgeObjectVersion]]
         private let allowed: Set<String>?
         private let slices: [String: String]?
+        private let hashes = KnowledgeSourceHashes()
         public init(project: BookProject, allowed: Set<String>?, slices: [String: String]? = nil) {
             sourceHash = project.sourceHash
             units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -142,7 +165,7 @@ public enum ReadingKnowledgeRuntime {
                 (entity ? value.entity != nil : value.event != nil) && value.sourceHash == sourceHash && !value.evidence.isEmpty && value.evidence.allSatisfy { item in
                     guard allowed?.contains(item.unitID) != false, let unit = units[item.unitID],
                           ReadingKnowledgeRuntime.exact(item.quote, in: unit.text),
-                          value.unitHashes[item.unitID] == (try? BookImporter.sha256(Data(unit.text.utf8))) else { return false }
+                          value.unitHashes[item.unitID] == (try? hashes.hash(unit)) else { return false }
                     if let slice = slices?[item.unitID] { return ReadingKnowledgeRuntime.exact(item.quote, in: slice) }
                     return true
                 }

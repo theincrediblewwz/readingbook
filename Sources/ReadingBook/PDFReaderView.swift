@@ -82,6 +82,7 @@ struct PDFReaderView: NSViewRepresentable {
     private var sourceDecorations: [SourceReadingDecoration] = []
     private var sourceDecorationPage: Int?
     private var sourceDecorationFocusID: String?
+    private var appliedSourceDecorationFocusID: String?
     private struct SourceLineKey: Hashable, Sendable { let id: String; let line: Int }
     private struct SourceGeometry {
         let value: SourceReadingDecoration
@@ -109,6 +110,20 @@ struct PDFReaderView: NSViewRepresentable {
                 if !value.value.passive { paintBands.insert(key, rectangle: rectangle) }
             }
         }
+        func retain(validIDs: Set<String>) {
+            guard geometry.keys.contains(where: { !validIDs.contains($0) }) else { return }
+            geometry = geometry.filter { validIDs.contains($0.key) }
+            geometryBytes = geometry.values.reduce(0) { $0 + $1.cost }
+            hitBands = ReadingGeometryBands<SourceLineKey>()
+            paintBands = ReadingGeometryBands<SourceLineKey>()
+            for value in geometry.values {
+                for (line, rectangle) in value.lines.enumerated() {
+                    let key = SourceLineKey(id: value.value.id, line: line)
+                    hitBands.insert(key, rectangle: rectangle)
+                    if !value.value.passive { paintBands.insert(key, rectangle: rectangle) }
+                }
+            }
+        }
     }
     private var sourceGeometries: [String: SourceGeometry] = [:]
     private var sourceGeometryIDsByPage: [Int: [String]] = [:]
@@ -121,6 +136,7 @@ struct PDFReaderView: NSViewRepresentable {
     private var sourceInputGeneration = 0
     private var renderedSourceInputGeneration = -1
     private var groupedSourceDecorations: [Int: [SourceReadingDecoration]] = [:]
+    private var validSourceDecorationIDsByPage: [Int: Set<String>] = [:]
     private var sourceAvailablePages: Set<Int> = []
     private var renderedSourceWindow: [Int] = []
     private let sourceCanvas = PDFSourceDecorationCanvas()
@@ -445,11 +461,18 @@ struct PDFReaderView: NSViewRepresentable {
         onSourceDecorationTap = input.onSourceDecorationTap; onSourceSelection = input.onSourceSelection
         onSourceDecorationHover = input.onSourceDecorationHover
         onVisiblePagesChange = input.onVisiblePagesChange
-        let sourceDecorationsChanged = sourceChanged || input.url.standardizedFileURL != loadedURL || sourceDecorationPage != requestedPage || (input.sourceDecorationRevision.map { $0 != sourceDecorationRevision }
+        let sourceDecorationsChanged = sourceChanged || input.url.standardizedFileURL != loadedURL || sourceDecorationPage != requestedPage || sourceDecorationFocusID != input.focusedDecorationID || (input.sourceDecorationRevision.map { $0 != sourceDecorationRevision }
             ?? (sourceDecorations != input.sourceDecorations))
         if sourceDecorationsChanged {
             sourceDecorations = Array(input.sourceDecorations.prefix(12_000)); sourceInputGeneration &+= 1
             groupedSourceDecorations = Dictionary(grouping: sourceDecorations, by: { $0.page ?? requestedPage ?? 1 })
+            // The geometry work cap is not a deletion manifest: keep valid IDs
+            // after that cap as well, so later page-priority batches can reuse
+            // their existing geometry instead of rebuilding it.
+            validSourceDecorationIDsByPage = [:]
+            for value in input.sourceDecorations {
+                validSourceDecorationIDsByPage[value.page ?? requestedPage ?? 1, default: []].insert(value.id)
+            }
             sourceAvailablePages = Set(groupedSourceDecorations.keys)
         }
         sourceDecorationRevision = input.sourceDecorationRevision; sourceDecorationPage = requestedPage
@@ -490,10 +513,9 @@ struct PDFReaderView: NSViewRepresentable {
         if sourceDecorationsChanged { renderSourceDecorations() }
         if sourceDecorationFocusID != input.focusedDecorationID {
             sourceDecorationFocusID = input.focusedDecorationID
-            if let id = input.focusedDecorationID, let decoration = sourceDecorations.first(where: { $0.id == id }), let page = decoration.page ?? requestedPage {
-                focusQuote(on: page, quote: decoration.quote, prefix: decoration.prefix, suffix: decoration.suffix)
-            }
+            appliedSourceDecorationFocusID = nil; pendingQuote = nil
         }
+        focusSourceDecorationIfReady()
         refreshControls()
         if pendingNavigation == nil, pendingWorkspaceMemory != nil, document?.isLocked == false { restoreWorkspaceDestination() }
     }
@@ -502,7 +524,7 @@ struct PDFReaderView: NSViewRepresentable {
         resetPageGesture(); observedClip = nil
         if !editingAnnotationSheet { closeAnnotationPanel() }
         pdfView.cancelRegionSelection()
-        clearSourceDecorations(); resetQuoteCache(); sourceDecorationFocusID = nil; pendingQuote = nil
+        clearSourceDecorations(); resetQuoteCache(); sourceDecorationFocusID = nil; appliedSourceDecorationFocusID = nil; pendingQuote = nil
         invalidateNavigation(); installingDocument = true
         defer { installingDocument = false }
         allowsSearchAutoNavigation = false; lastCallback = nil
@@ -539,10 +561,8 @@ struct PDFReaderView: NSViewRepresentable {
         layoutThumbnails()
         let desired = sourcePage ?? 1
         navigate(to: (1...document.pageCount).contains(desired) ? desired : 1, notifyParent: false)
-        if let id = sourceDecorationFocusID, let decoration = sourceDecorations.first(where: { $0.id == id }) {
-            focusQuote(on: desired, quote: decoration.quote, prefix: decoration.prefix, suffix: decoration.suffix)
-        }
         installingDocument = false
+        focusSourceDecorationIfReady()
         refreshControls()
     }
 
@@ -1293,6 +1313,17 @@ struct PDFReaderView: NSViewRepresentable {
         pendingQuote = (number, quote, prefix, suffix)
     }
 
+    private func focusSourceDecorationIfReady() {
+        guard let id = sourceDecorationFocusID, appliedSourceDecorationFocusID != id,
+              document?.isLocked == false,
+              let decoration = sourceDecorations.first(where: { $0.id == id }),
+              let page = decoration.page ?? sourceDecorationPage else { return }
+        // The target page snapshot may arrive after the navigation request.
+        // Keep that one request pending instead of consuming its ID too soon.
+        focusQuote(on: page, quote: decoration.quote, prefix: decoration.prefix, suffix: decoration.suffix)
+        appliedSourceDecorationFocusID = id
+    }
+
     private func applyQuoteFocus(on number: Int, quote: String, prefix: String? = nil, suffix: String? = nil) {
         guard let page = document?.page(at: number - 1), let range = nativeQuoteRange(quote, prefix: prefix, suffix: suffix, on: page),
               let selection = page.selection(for: range) else {
@@ -1331,13 +1362,25 @@ struct PDFReaderView: NSViewRepresentable {
         guard let document, !document.isLocked else { clearSourceDecorations(); return }
         let current = currentPageNumber ?? sourceDecorationPage ?? 1
         let window = ReadingSentenceAnchors.pageWindow(current: current, visible: lastVisiblePages, available: sourceAvailablePages)
-        guard renderedSourceInputGeneration != sourceInputGeneration || renderedSourceWindow != window else { return }
+        let inputChanged = renderedSourceInputGeneration != sourceInputGeneration
+        guard inputChanged || renderedSourceWindow != window else { return }
         sourceDecorationGeneration &+= 1; sourceDecorationTask?.cancel(); sourceDecorationTask = nil
+        if inputChanged {
+            // Prune only pages actually represented by this published snapshot.
+            // A missing neighbor may still be awaiting the next snapshot phase;
+            // its legal cached geometry stays available for later publication.
+            for (number, validIDs) in validSourceDecorationIDsByPage {
+                sourceGeometryPages[number]?.retain(validIDs: validIDs)
+            }
+        }
         renderedSourceInputGeneration = sourceInputGeneration; renderedSourceWindow = window
         let generation = sourceDecorationGeneration, documentID = documentGeneration
         let desired = window.flatMap { groupedSourceDecorations[$0] ?? [] }
         let desiredIDs = Set(desired.map(\.id))
         sourceGeometries = sourceGeometries.filter { desiredIDs.contains($0.key) }
+        if let hoveredSourceID, !desiredIDs.contains(hoveredSourceID) {
+            self.hoveredSourceID = nil; sourcePress = nil; onSourceDecorationHover?(nil)
+        }
         let grouped = groupedSourceDecorations
         sourceGeometryIDsByPage = grouped.mapValues { $0.map(\.id) }
         sourceDecorationTask = Task { [weak self] in

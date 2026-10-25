@@ -577,7 +577,7 @@ fileprivate enum PluginDefinitionAction { case tab(String), selection(String), h
             saving = true; store.isBusy = true; store.isCommittingLocalWrite = true; error = ""; notice = ""
             Task { @MainActor in
                 do {
-                    try await store.repository.save(project); store.publish(project)
+                    store.publish(try await store.repository.save(project))
                     load(in: project, id: savedID, tab: savedTab); notice = "已保存新版本，原定义与既有内容保留。"
                     self.saving = false; store.isBusy = false; store.isCommittingLocalWrite = false
                     onSaved?()

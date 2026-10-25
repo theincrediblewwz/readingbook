@@ -137,6 +137,33 @@ final class AIReadingPublicationTests: XCTestCase {
         XCTAssertTrue(latest.entities.isEmpty); XCTAssertFalse(SmartReadingRuntime.isChunkComplete(f.chunk, in: latest))
     }
 
+    func testPublishedCompletionRemainsUsableAfterAnotherWorkerUpdatesTheSamePerson() async throws {
+        let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.directory) }
+        let script = PublicationScript([response([try cards(), try completion(f.chunk)])]), records = PublicationRecords()
+        let reader = AIReader(transport: { _ in try await script.next() })
+        await reader.setPublicationHandler { publication in
+            let committed = try await f.repository.commitAIResult(base: publication.before, result: publication.after, operationID: publication.operationID)
+            await records.record(publication.isAnalysisComplete)
+            // A second worker finishes between durable publication and the
+            // first caller receiving its older worker-local return value.
+            if publication.isAnalysisComplete {
+                var newer = committed; newer.entities[0].summary = "另一部分补充了人物的发展。"
+                _ = try await f.repository.commitAIResult(base: committed, result: newer, operationID: "later-person-development")
+            }
+        }
+        let workerResult = try await reader.readChunk(project: f.book, chunk: f.chunk, settings: settings, apiKey: "")
+        let flags = await records.flags; XCTAssertEqual(flags, [true])
+        let books = try await f.repository.loadAll(), latest = try XCTUnwrap(books.first)
+        XCTAssertTrue(SmartReadingRuntime.isChunkComplete(f.chunk, in: latest))
+        XCTAssertEqual(latest.entities.first?.summary, "另一部分补充了人物的发展。")
+        do {
+            _ = try await f.repository.commitAIResult(base: f.book, result: workerResult, operationID: "redundant-whole-worker-replay")
+            XCTFail("旧整块快照会与已发布后的正常补充冲突；调用方应使用已发布完成回执而不重复提交。")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("另一条任务")) }
+        let body = try await f.repository.readDocument(bookID: latest.id, document: f.document)
+        XCTAssertEqual(body, "# 用户笔记\n\n不可覆盖 $x^2$。\n")
+    }
+
     func testCorrectedTerminalCanRepairItsOwnEarlierArgumentError() async throws {
         let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.directory) }
         let malformed = try call("reading_analysis", ["unitIDs": ["different-unit"]])

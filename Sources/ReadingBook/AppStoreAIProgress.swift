@@ -5,11 +5,14 @@ import ReadingCore
 /// being lost when the caller finishes before a queued MainActor UI update.
 fileprivate final class AIProgressMailbox: Equatable, @unchecked Sendable {
     let finishAction: @Sendable () async -> Void
+    let requestRun: AIRequestRun?
     private let lock = NSLock()
     private var events: [AIProgressEvent] = []
     private var scheduled = false
     private var closed = false
-    init(finishAction: @escaping @Sendable () async -> Void) { self.finishAction = finishAction }
+    init(requestRun: AIRequestRun?, finishAction: @escaping @Sendable () async -> Void) {
+        self.requestRun = requestRun; self.finishAction = finishAction
+    }
     static func == (lhs: AIProgressMailbox, rhs: AIProgressMailbox) -> Bool { lhs === rhs }
     func append(_ value: AIProgressEvent) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -38,6 +41,7 @@ struct AIProgressPresentationState: Equatable {
         var succeeded: Bool?
         var requiresReview = false
         var requestNumber = 0
+        var requestID: UUID?
         var summary = ""
     }
     struct Request: Identifiable, Equatable {
@@ -113,6 +117,7 @@ struct AIProgressPresentationState: Equatable {
         phase = event.phase
         let requestIndex = requests.firstIndex { $0.id == (event.requestID ?? activeRequestID) }
         let number = requestIndex.map { requests[$0].number } ?? requestNumber
+        let requestID = requestIndex.map { requests[$0].id } ?? event.requestID ?? activeRequestID
         requestNumber = max(requestNumber, number)
         if let index = requestIndex {
             if let count = event.reasoningCharacters { requests[index].reasoning = max(requests[index].reasoning, count) }
@@ -122,11 +127,11 @@ struct AIProgressPresentationState: Equatable {
         }
         if event.phase == .performingTool {
             toolName = event.toolName; toolIndex = event.toolIndex; toolTotal = event.toolTotal
-            toolSteps.append(ToolStep(title: Self.toolTitle(event.toolName), succeeded: nil, requestNumber: number))
+            toolSteps.append(ToolStep(title: Self.toolTitle(event.toolName), succeeded: nil, requestNumber: number, requestID: requestID))
             if toolSteps.count > 300 { toolSteps.removeFirst(toolSteps.count - 300) }
         } else if event.phase == .toolCompleted {
             let requiresReview = event.toolStatus == "needs_confirmation"
-            if let index = toolSteps.lastIndex(where: { $0.requestNumber == number && $0.title == Self.toolTitle(event.toolName) && $0.succeeded == nil && !$0.requiresReview }) {
+            if let index = toolSteps.lastIndex(where: { ($0.requestID == requestID && $0.requestNumber == number) && $0.title == Self.toolTitle(event.toolName) && $0.succeeded == nil && !$0.requiresReview }) {
                 toolSteps[index].requiresReview = requiresReview; toolSteps[index].summary = event.toolSummary ?? ""
                 if !requiresReview { toolSteps[index].succeeded = event.toolSucceeded == true }
             }
@@ -187,12 +192,13 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
             book?.plan?.recommendedParallelism ?? 5)))
     }
     @discardableResult func beginAIProgress(title: String, ocr: Bool = false, backgroundReading: Bool = false) async -> UUID {
-        if !ocr { try? await sharedAIRequests.beginRun(settings: settings, maximumConcurrency: aiConcurrencyLimit) }
-        return await prepareProgress(title: title, query: false, ocr: ocr, worker: backgroundReading ? readingReader : reader)
+        var run: AIRequestRun?
+        if !ocr { run = try? await sharedAIRequests.beginManagedRun(settings: settings, maximumConcurrency: aiConcurrencyLimit) }
+        return await prepareProgress(title: title, query: false, ocr: ocr, worker: backgroundReading ? readingReader : reader, requestRun: run)
     }
     @discardableResult func beginQueryProgress(title: String) async -> UUID {
-        try? await sharedAIRequests.beginRun(settings: settings, maximumConcurrency: aiConcurrencyLimit)
-        return await prepareProgress(title: title, query: true, ocr: false, worker: queryReader)
+        let run = try? await sharedAIRequests.beginManagedRun(settings: settings, maximumConcurrency: aiConcurrencyLimit)
+        return await prepareProgress(title: title, query: true, ocr: false, worker: queryReader, requestRun: run)
     }
     private func progressValue(_ runID: UUID) -> AIProgressPresentationState? {
         if aiProgress.runID == runID { return aiProgress }
@@ -203,10 +209,10 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
         if value.runID == queryProgressState.value.runID { queryProgressState.value = value }
         else { aiProgress = value }
     }
-    private func prepareProgress(title: String, query: Bool, ocr: Bool, worker: AIReader) async -> UUID {
+    private func prepareProgress(title: String, query: Bool, ocr: Bool, worker: AIReader, requestRun: AIRequestRun?) async -> UUID {
         let runID = UUID(), sourceBookID = bookID, frozenRepository = repository
         _ = (query ? queryProgressState.value : aiProgress).mailbox?.take(close: true)
-        let mailbox = AIProgressMailbox {
+        let mailbox = AIProgressMailbox(requestRun: requestRun) {
             if let sourceBookID { _ = try? await frozenRepository.refreshReadableViews(id: sourceBookID, archived: false) }
         }
         var value = AIProgressPresentationState()
@@ -242,7 +248,12 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
         flushAIProgress(runID, close: true)
         guard var value = progressValue(runID) else { return }
         let finishAction = value.mailbox?.finishAction
-        Task { await finishAction?(); await sharedAIRequests.endRun() }
+        let requestRun = value.mailbox?.requestRun
+        requestRun?.finish()
+        Task {
+            if let requestRun { await sharedAIRequests.endRun(requestRun) }
+            await finishAction?()
+        }
         value.finishedAt = Date()
         if let error {
             value.status = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled || error is ReadingWorkflowBudgetPause ? .paused : .failed
@@ -256,7 +267,13 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
                     reasoningCharacters: request.reasoning, answerCharacters: request.output)
             }
             let owner = repository
-            Task { try? await owner.recordAIRequestHistory(bookID: bookID, sourceHash: sourceHash, records: records) }
+            if !records.isEmpty {
+                pendingAIHistoryWrites += 1
+                Task {
+                    defer { pendingAIHistoryWrites -= 1 }
+                    try? await owner.recordAIRequestHistory(bookID: bookID, sourceHash: sourceHash, records: records)
+                }
+            }
         }
     }
     private func flushAIProgress(_ runID: UUID, close: Bool = false) {
@@ -359,7 +376,7 @@ struct AIRequestHistoryView: View {
                         DisclosureGroup {
                             VStack(alignment: .leading, spacing: 10) {
                                 Text("思考 \(request.reasoning) · 输出 \(request.output) 字符").font(.system(size: 12)).foregroundStyle(.secondary)
-                                ForEach(state.value.toolSteps.filter { $0.requestNumber == request.number }) { step in
+                                ForEach(state.value.toolSteps.filter { $0.requestID.map { $0 == request.id } ?? ($0.requestNumber == request.number) }) { step in
                                     HStack(alignment: .top, spacing: 8) {
                                         Image(systemName: step.succeeded == true ? "checkmark.circle.fill" : step.succeeded == false ? "exclamationmark.circle" : "clock").foregroundStyle(Palette.accent)
                                         VStack(alignment: .leading, spacing: 5) {

@@ -63,7 +63,7 @@ import ReadingCore
             Task {
                 defer { isBusy = false; isCommittingLocalWrite = false }
                 do {
-                    try await repository.save(current); publish(current)
+                    publish(try await repository.save(current))
                     isBusy = false; openBookScheme(); showingPlugins = false
                     activity = "\(manifest.name) 的声明方案待确认，尚未安装或升级。"
                 } catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription } }
@@ -98,7 +98,7 @@ import ReadingCore
             try change(&current); isBusy = true; isCommittingLocalWrite = true
             Task {
                 defer { isBusy = false; isCommittingLocalWrite = false }
-                do { try await repository.save(current); publish(current); activity = message; onSaved?() }
+                do { publish(try await repository.save(current)); activity = message; onSaved?() }
                 catch { errorMessage = error.localizedDescription }
             }
         } catch { errorMessage = error.localizedDescription }

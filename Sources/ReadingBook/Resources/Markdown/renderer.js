@@ -10,6 +10,8 @@
   let currentSource = '';
   let sourceDecorations = [];
   let appliedDecorations = new Map();
+  let unmappedPassiveDecorations = new Map();
+  let sourceFocusRequest = null;
   let decorationsDeferred = false;
   let sourcePress = null;
   let decorationBatchEpoch = 0;
@@ -300,13 +302,16 @@
             describeDecoration(marker, item, range);
             marker.tabIndex = 0; marker.setAttribute('role', 'button'); marker.setAttribute('aria-label', '查看“' + item.quote + '”的关联内容');
             marker.title = '查看关联内容';
-            marker.appendChild(domRange.extractContents()); domRange.insertNode(marker); continue;
+            marker.appendChild(domRange.extractContents()); domRange.insertNode(marker);
+            unmappedPassiveDecorations.delete(item.id);
+            if (sourceFocusRequest?.id === item.id) focusSourceNode(marker, sourceFocusRequest);
+            continue;
           }
         }
       }
       // A derived sentence is an optional hover affordance. Complex Markdown
       // must not gain a paragraph button for every unmappable sentence.
-      if (item.passive) continue;
+      if (item.passive) { unmappedPassiveDecorations.set(item.id, { identity: decorationIdentity(item), range }); continue; }
       const block = findBlock(range[0], range[1]);
       if (block) {
         const marker = document.createElement('button'); marker.className = 'source-paragraph-link';
@@ -314,6 +319,7 @@
         marker.textContent = item.quote.length > 22 ? item.quote.slice(0, 22) + '…' : item.quote;
         marker.title = '定位到本段；此处的 Markdown 结构不支持可靠词位映射';
         marker.setAttribute('aria-label', marker.textContent + '，段落关联，非精确词位'); block.appendChild(marker); approximateCount++;
+        if (sourceFocusRequest?.id === item.id) focusSourceNode(marker, sourceFocusRequest);
       }
     }
     if (approximateCount && !root.querySelector('.source-location-note')) {
@@ -370,11 +376,31 @@
     // A crossing neighbor may have forced an otherwise literal term into the
     // paragraph fallback. Retry only affected fallbacks after neighbors change.
     const retryIDs = new Set();
+    // Failed passive ranges have no fallback DOM node. Keep only those small
+    // unresolved records and retry when an overlapping neighbor changes, never
+    // on each animation frame or each progressive batch.
+    const merged = [];
+    for (const range of changedRanges.sort((a, b) => a[0] - b[0])) {
+      const last = merged[merged.length - 1];
+      if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]);
+      else merged.push(range.slice());
+    }
+    const intersectsChanges = (from, to) => {
+      let left = 0, right = merged.length;
+      while (left < right) { const middle = (left + right) >> 1; if (merged[middle][1] <= from) left = middle + 1; else right = middle; }
+      return left < merged.length && merged[left][0] < to;
+    };
+    for (const [id, failed] of unmappedPassiveDecorations) {
+      if (next.get(id) !== failed.identity) unmappedPassiveDecorations.delete(id);
+      else if (intersectsChanges(...failed.range)) retryIDs.add(id);
+    }
     root.querySelectorAll('.source-paragraph-link').forEach(node => {
       const from = Number(node.dataset.decorationStart), to = Number(node.dataset.decorationEnd);
-      if (changedRanges.some(range => range[0] < to && from < range[1])) { retryIDs.add(node.dataset.sourceDecoration); node.remove(); }
+      if (intersectsChanges(from, to)) { retryIDs.add(node.dataset.sourceDecoration); node.remove(); }
     });
-    for (const item of sourceDecorations) if (item && retryIDs.has(item.id) && !additions.some(value => value.id === item.id)) additions.push(item);
+    const additionIDs = new Set(additions.map(item => item.id));
+    for (const item of sourceDecorations) if (item && retryIDs.has(item.id) && !additionIDs.has(item.id)) { additions.push(item); additionIDs.add(item.id); }
+    if (sourceFocusRequest && !next.has(sourceFocusRequest.id)) sourceFocusRequest = null;
     appendDecorationBatches(root, additions, next);
     if (!root.querySelector('.source-paragraph-link')) root.querySelectorAll('.source-location-note').forEach(node => node.remove());
     reportHeight();
@@ -395,19 +421,26 @@
     reportHeight();
     return true;
   }
+  function focusSourceNode(node, request) {
+    if (request !== sourceFocusRequest || request.revision !== currentRevision) return;
+    node.classList.add('source-focused');
+    // First allow the fitted WebView to receive its new content height.
+    global.requestAnimationFrame(() => global.requestAnimationFrame(() => {
+      if (request !== sourceFocusRequest || request.revision !== currentRevision || !node.isConnected) return;
+      const rect = node.getBoundingClientRect(), parent = document.getElementById('content').getBoundingClientRect();
+      global.webkit?.messageHandlers?.readingbookSourceFocus?.postMessage({ y: Math.max(0, rect.top - parent.top - 12), height: rect.height + 24, revision: request.revision });
+    }));
+  }
   function focusDecoration(id) {
     const root = document.getElementById('content');
     root.querySelectorAll('.source-focused').forEach(node => node.classList.remove('source-focused'));
+    sourceFocusRequest = null;
+    if (id == null) return true;
+    if (typeof id !== 'string' || !sourceDecorations.some(item => item?.id === id)) return false;
+    const request = { id, revision: currentRevision }; sourceFocusRequest = request;
     const node = Array.from(root.querySelectorAll('[data-source-decoration]')).find(node => node.dataset.sourceDecoration === id);
-    if (!node) return false;
-    node.classList.add('source-focused');
-    const revision = currentRevision;
-    // First allow the fitted WebView to receive its new content height.
-    global.requestAnimationFrame(() => global.requestAnimationFrame(() => {
-      if (revision !== currentRevision || !node.isConnected) return;
-      const rect = node.getBoundingClientRect(), parent = root.getBoundingClientRect();
-      global.webkit?.messageHandlers?.readingbookSourceFocus?.postMessage({ y: Math.max(0, rect.top - parent.top - 12), height: rect.height + 24, revision });
-    }));
+    if (node) focusSourceNode(node, request);
+    // A later progressive batch applies this same revision-bound request.
     return true;
   }
   let heightScheduled = false;
@@ -432,7 +465,7 @@
     updatePresentation(settings);
     const root = document.getElementById('content');
     root.innerHTML = renderHTML(markdown, settings);
-    appliedDecorations = new Map(); decorationsDeferred = false; sourcePress = null;
+    appliedDecorations = new Map(); unmappedPassiveDecorations = new Map(); sourceFocusRequest = null; decorationsDeferred = false; sourcePress = null;
     applyDecorations();
     root.querySelectorAll('img').forEach(image => {
       image.addEventListener('load', reportHeight, { once: true });
@@ -515,7 +548,7 @@
           }
         }
       }
-      const key = currentRevision + ':' + containsMath + ':' + text;
+      const key = JSON.stringify([currentRevision, containsMath, text, sourceLocation, sourceLength]);
       if (key === lastSelectionKey) return;
       lastSelectionKey = key;
       global.webkit?.messageHandlers?.readingbookSelection?.postMessage({ text, containsMath, sourceLocation, sourceLength, revision: currentRevision });

@@ -41,11 +41,13 @@ private struct TeacherBackgroundCardBody: View {
             } else {
                 if let message = entry?.message { Text(message).font(.system(size: 13)).foregroundStyle(.secondary) }
                 Button {
-                    guard store.providerReady else { return }; state.load(objectID: objectID, unitID: unitID, store: store)
+                    state.load(objectID: objectID, unitID: unitID, store: store)
                 } label: { Label(entry?.message == nil ? "听老师讲讲" : "再试一次", systemImage: "sparkles") }
                     .buttonStyle(ReadingToolbarButtonStyle())
             }
         }.padding(14).background(Palette.accent.opacity(0.045), in: RoundedRectangle(cornerRadius: 16))
-            .task(id: key) { if autoGenerate { state.load(objectID: objectID, unitID: unitID, store: store) } }
+            .task(id: key + "|revision:" + String(store.projectRevision)) {
+                await state.refresh(objectID: objectID, unitID: unitID, store: store, autoGenerate: autoGenerate)
+            }
     }
 }

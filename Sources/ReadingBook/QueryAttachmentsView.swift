@@ -103,7 +103,7 @@ struct QueryMemoryInspector: View {
             HStack {
                 Toggle("使用长对话记忆", isOn: $store.queryMemoryEnabled).toggleStyle(.switch)
                 Spacer()
-                Button("清除派生摘要") { store.clearCurrentQueryMemory() }.disabled(store.isQueryBusy)
+                Button("清除派生摘要") { store.clearCurrentQueryMemory() }.disabled(store.isQueryBusy || store.isManagingQueryMemory || store.storageState.working)
             }.padding(18)
         }.frame(width: 620, height: 560).onExitCommand(perform: onClose)
             .task(id: store.queryMemoryPreparationKey) {

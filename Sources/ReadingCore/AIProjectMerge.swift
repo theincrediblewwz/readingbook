@@ -41,9 +41,19 @@ enum AIProjectMerge {
             canonical[keyPath: path] = try decoder.decode(T.self, from: JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys]))
         }
         let originalIDs = Set(base.entities.map(\.id))
-        let concurrent = latest.entities.filter { !originalIDs.contains($0.id) }
+        struct IdentityKey: Hashable { let typeID: String; let name: String }
+        var concurrentNames: [IdentityKey: Set<String>] = [:]
+        for entity in latest.entities {
+            for name in [entity.name] + entity.aliases {
+                let key = IdentityKey(typeID: entity.typeID, name: name.trimmingCharacters(in: .whitespacesAndNewlines))
+                concurrentNames[key, default: []].insert(entity.id)
+            }
+        }
         for entity in result.entities where !originalIDs.contains(entity.id) {
-            if concurrent.contains(where: { $0.id != entity.id && $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == entity.name.trimmingCharacters(in: .whitespacesAndNewlines) }) {
+            if ([entity.name] + entity.aliases).contains(where: { name in
+                let key = IdentityKey(typeID: entity.typeID, name: name.trimmingCharacters(in: .whitespacesAndNewlines))
+                return concurrentNames[key]?.contains(where: { $0 != entity.id }) == true
+            }) {
                 throw ReadingError.invalid("并行保存了同名对象，请重新查询本地身份后继续；已有内容保留。")
             }
         }
@@ -78,6 +88,16 @@ enum AIProjectMerge {
         }
         if let result = result as? [Any], let latest = latest as? [Any] {
             let base = base as? [Any] ?? []
+            // Common additive aliases/IDs need membership, not repeated scans
+            // of the whole history. Preserve order and concurrent removals.
+            if let prior = base as? [String], let proposed = result as? [String], let current = latest as? [String] {
+                let old = Set(prior), next = Set(proposed)
+                if old.isSubset(of: next) {
+                    var output = current, seen = Set(current)
+                    for item in proposed where !old.contains(item) && seen.insert(item).inserted { output.append(item) }
+                    return output
+                }
+            }
             func keyed(_ rows: [Any]) -> [String: Any]? {
                 var output: [String: Any] = [:]
                 for row in rows {

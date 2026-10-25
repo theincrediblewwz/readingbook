@@ -30,9 +30,14 @@ final class ReadingAssistanceProgressMailbox: @unchecked Sendable {
         var fromCache = false
         var message: String?
         var running = false
+        var requestIdentity: String?
+        var verifyingStoredContent = false
     }
     @Published private(set) var entries: [String: Entry] = [:]
     private var tasks: [String: Task<Void, Never>] = [:]
+    private var taskIDs: [String: UUID] = [:]
+    private var activeContexts = Set<String>()
+    var hasRunningTasks: Bool { !tasks.isEmpty }
     func key(objectID: String, unitID: String? = nil, store: AppStore) -> String {
         store.libraryRootURL.path + "|" + (store.bookID ?? "") + "|" + (store.book?.sourceHash ?? "") + "|" + objectID + "|" + (unitID ?? store.selectedUnitID ?? "") + "|" + (store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false ? "safe" : "open")
     }
@@ -43,14 +48,51 @@ final class ReadingAssistanceProgressMailbox: @unchecked Sendable {
     }
     func cancel(objectID: String, unitID: String? = nil, store: AppStore) { tasks[key(objectID: objectID, unitID: unitID, store: store)]?.cancel() }
 
+    /// Project revisions trigger one background validation, never body-time
+    /// hashing or cancellation/restart of a still-running model request.
+    func refresh(objectID: String, unitID: String? = nil, store: AppStore, autoGenerate: Bool) async {
+        guard !store.storageState.working, let book = store.book else { return }
+        let key = key(objectID: objectID, unitID: unitID, store: store), revision = store.projectRevision
+        let root = store.libraryRootURL.path, currentUnitID = unitID ?? store.selectedUnitID
+        let avoidsSpoilers = book.temporalKnowledge?.profile?.avoidsSpoilers != false
+        let worker = Task.detached(priority: .userInitiated) {
+            let request = try TeacherBackgroundRequest.freeze(objectID: objectID, in: book, currentUnitID: currentUnitID, avoidsSpoilers: avoidsSpoilers)
+            return (request, ReadingKnowledgeRuntime.background(for: request, in: book))
+        }
+        do {
+            let (request, cached) = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+            try Task.checkCancellation()
+            guard store.bookID == book.id, store.libraryRootURL.path == root, store.projectRevision == revision,
+                  tasks[key] == nil, !store.storageState.working else { return }
+            if let cached {
+                var value = entries[key] ?? Entry()
+                value.record = cached; value.fromCache = true; value.message = nil; value.running = false
+                value.verifyingStoredContent = false
+                value.requestIdentity = request.reuseIdentity; entries[key] = value
+            } else if entries[key]?.requestIdentity != request.reuseIdentity || entries[key]?.record != nil || entries[key]?.verifyingStoredContent == true {
+                var value = Entry(); value.requestIdentity = request.reuseIdentity; entries[key] = value
+                if autoGenerate { load(objectID: objectID, unitID: unitID, store: store) }
+            }
+            trimEntries(keeping: key)
+        } catch {
+            guard !Task.isCancelled, store.bookID == book.id, store.libraryRootURL.path == root,
+                  store.projectRevision == revision, tasks[key] == nil else { return }
+            var value = entries[key] ?? Entry(); value.record = nil; value.running = false
+            value.verifyingStoredContent = false
+            value.message = error.localizedDescription; entries[key] = value
+            trimEntries(keeping: key)
+        }
+    }
+
     func load(objectID: String, unitID: String? = nil, store: AppStore) {
         let key = key(objectID: objectID, unitID: unitID, store: store)
-        guard tasks[key] == nil, let book = store.book else { return }
+        guard !store.storageState.working, tasks[key] == nil, let book = store.book else { return }
         guard tasks.count < 3 else {
             var value = Entry(); value.message = "已有几处介绍正在生成，稍后再试。"; entries[key] = value
+            trimEntries(keeping: key)
             return
         }
-        let root = store.libraryRootURL.path, bookID = book.id, repository = store.repository
+        let root = store.libraryRootURL.path, bookID = book.id, repository = store.repository, startingRevision = store.projectRevision
         let currentUnitID = unitID ?? store.selectedUnitID, avoidsSpoilers = store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false
         var requestSettings = store.settings
         requestSettings.transportSessionID = "readingbook-" + bookID + "-teacher"
@@ -61,11 +103,23 @@ final class ReadingAssistanceProgressMailbox: @unchecked Sendable {
         entry.progress.title = "老师讲解"; entry.progress.bookID = bookID
         let runID = entry.runID, mailbox = ReadingAssistanceProgressMailbox()
         entries[key] = entry
+        taskIDs[key] = runID
         tasks[key] = Task { [weak self, weak store] in
-            var began = false
+            var requestRun: AIRequestRun?
+            var claimedContext: String?
+            var needsRevalidation = false
             defer {
-                if began { Task { await coordinator.endRun() } }
-                if self?.entries[key]?.runID == runID { self?.tasks[key] = nil }
+                if let requestRun { requestRun.finish(); Task { await coordinator.endRun(requestRun) } }
+                if let claimedContext { self?.activeContexts.remove(claimedContext) }
+                if self?.taskIDs[key] == runID { self?.tasks[key] = nil; self?.taskIDs[key] = nil }
+                self?.trimEntries(keeping: key)
+                if let store, store.bookID == bookID, store.libraryRootURL.path == root,
+                   needsRevalidation || store.projectRevision != startingRevision {
+                    Task { @MainActor [weak self, weak store] in
+                        guard let self, let store, store.bookID == bookID, store.libraryRootURL.path == root else { return }
+                        await self.refresh(objectID: objectID, unitID: unitID, store: store, autoGenerate: false)
+                    }
+                }
             }
             do {
                 let frozen = Task.detached(priority: .userInitiated) {
@@ -76,15 +130,25 @@ final class ReadingAssistanceProgressMailbox: @unchecked Sendable {
                 let (request, cached) = try await withTaskCancellationHandler(operation: { try await frozen.value }, onCancel: { frozen.cancel() })
                 try Task.checkCancellation()
                 guard let self, self.entries[key]?.runID == runID else { return }
+                self.entries[key]?.requestIdentity = request.reuseIdentity
                 if let cached {
-                    self.complete(key, runID: runID, record: cached, cached: true)
+                    if let store, store.projectRevision != startingRevision {
+                        needsRevalidation = true
+                        self.complete(key, runID: runID, message: "正在核对已保存内容", verifying: true)
+                    } else { self.complete(key, runID: runID, record: cached, cached: true) }
                     return
                 }
                 guard configured else {
                     self.complete(key, runID: runID, message: "设置模型后，就可以在这里听介绍。")
                     return
                 }
-                try await coordinator.beginRun(settings: settings, maximumConcurrency: limit); began = true
+                let context = root + "|" + request.reuseIdentity
+                guard self.activeContexts.insert(context).inserted else {
+                    self.complete(key, runID: runID, message: "这处介绍正在生成，完成后会在这里显示。")
+                    return
+                }
+                claimedContext = context
+                requestRun = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: limit)
                 let reader = AIReader(coordinator: coordinator, lane: .foreground)
                 await reader.setProgressHandler { [weak self] event in
                     guard mailbox.append(event) else { return }
@@ -98,10 +162,15 @@ final class ReadingAssistanceProgressMailbox: @unchecked Sendable {
                 }
                 let history = self.history(key, status: "returned")
                 let saved = try await repository.saveTeacherBackground(bookID: bookID, record: record, requestHistory: history)
-                self.complete(key, runID: runID, record: ReadingKnowledgeRuntime.background(for: request, in: saved) ?? record)
                 if let store, store.bookID == bookID, store.libraryRootURL.path == root {
-                    store.publish(saved); store.requestsUsed = await coordinator.requestsUsed
-                }
+                    if store.publish(saved) {
+                        self.complete(key, runID: runID, record: ReadingKnowledgeRuntime.background(for: request, in: saved) ?? record)
+                    } else {
+                        needsRevalidation = true
+                        self.complete(key, runID: runID, message: "正在核对已保存内容", verifying: true)
+                    }
+                    store.requestsUsed = await coordinator.requestsUsed
+                } else { self.complete(key, runID: runID, message: "介绍已保存。") }
             } catch {
                 guard let self, self.entries[key]?.runID == runID else { return }
                 self.flush(mailbox, key: key, runID: runID, close: true)
@@ -123,11 +192,17 @@ final class ReadingAssistanceProgressMailbox: @unchecked Sendable {
         for event in events { value.progress.apply(event) }
         entries[key] = value
     }
-    private func complete(_ key: String, runID: UUID, record: TeacherBackgroundRecord? = nil, cached: Bool = false, message: String? = nil) {
+    private func complete(_ key: String, runID: UUID, record: TeacherBackgroundRecord? = nil, cached: Bool = false, message: String? = nil, verifying: Bool = false) {
         guard var value = entries[key], value.runID == runID else { return }
         value.running = false; value.progress.finishedAt = Date(); value.progress.status = message == nil ? .completed : .paused
-        value.record = record; value.fromCache = cached; value.message = message; entries[key] = value
-        if entries.count > 40, let oldest = entries.first(where: { !$0.value.running && $0.key != key })?.key { entries[oldest] = nil }
+        value.record = record; value.fromCache = cached; value.message = message
+        value.verifyingStoredContent = verifying; entries[key] = value
+        trimEntries(keeping: key)
+    }
+    private func trimEntries(keeping key: String) {
+        while entries.count > 40, let old = entries.first(where: { !$0.value.running && $0.key != key && tasks[$0.key] == nil })?.key {
+            entries[old] = nil
+        }
     }
     private func history(_ key: String, status: String) -> [AIRequestHistoryRecord] {
         guard let value = entries[key] else { return [] }

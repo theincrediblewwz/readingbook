@@ -56,6 +56,25 @@ final class ReadingKnowledgeTests: XCTestCase {
         XCTAssertThrowsError(try ReadingKnowledgeRuntime.captureVersions(before: next, in: &conflicting))
     }
 
+    func testSameFactsCanAcquireFreshProvenanceAfterOCRWithoutDeletingOldVersions() throws {
+        let original = try book()
+        var first = original; first.entities[0].evidence.append(Evidence(unitID: "u1", quote: "贾诩"))
+        try ReadingKnowledgeRuntime.captureVersions(before: original, in: &first)
+        let stale = try XCTUnwrap(first.readingKnowledge?.versions.first)
+        var revised = first; revised.units[0].text += "修订后的排版。"
+        var later = revised
+        later.entities[0].summary += "后来在军中献策。"
+        later.entities[0].evidence.append(Evidence(unitID: "u2", quote: later.units[1].text))
+        try ReadingKnowledgeRuntime.captureVersions(before: revised, in: &later)
+        XCTAssertTrue(later.readingKnowledge?.versions.contains(stale) == true, "失效版本仍保留恢复现场。")
+        let early = try XCTUnwrap(SavedKnowledgeReuse(project: later, currentUnitIDs: ["u1"])?.record(id: "jia"))
+        XCTAssertEqual(early["summary"] as? String, original.entities[0].summary, "OCR后重新确认的同一段事实须能使用新来源哈希。")
+        let count = later.readingKnowledge?.versions.count
+        var repeated = later; repeated.entities[0].evidence.append(Evidence(unitID: "u2", quote: "贾诩"))
+        try ReadingKnowledgeRuntime.captureVersions(before: later, in: &repeated)
+        XCTAssertEqual(repeated.readingKnowledge?.versions.count, count, "同来源仅增加出处不重复保存摘要。")
+    }
+
     func testCacheReusesUnchangedKnowledgeAcrossPagesButNeverAcrossSpoilerModesOrOCR() throws {
         var book = try book()
         let request = try TeacherBackgroundRequest.freeze(objectID: "jia", in: book, currentUnitID: "u1", avoidsSpoilers: true)
@@ -63,6 +82,7 @@ final class ReadingKnowledgeTests: XCTestCase {
         book.readingKnowledge?.backgrounds = [record(request)]
         let later = try TeacherBackgroundRequest.freeze(objectID: "jia", in: book, currentUnitID: "u2", avoidsSpoilers: true)
         XCTAssertEqual(request.contextFingerprint, later.contextFingerprint)
+        XCTAssertEqual(request.reuseIdentity, later.reuseIdentity, "同一上下文的跨页介绍须共享正在进行的请求。")
         XCTAssertNotNil(ReadingKnowledgeRuntime.background(for: later, in: book), "相同介绍到后页应直接复用，不重新请求。")
         let open = try TeacherBackgroundRequest.freeze(objectID: "jia", in: book, currentUnitID: "u2", avoidsSpoilers: false)
         XCTAssertNil(ReadingKnowledgeRuntime.background(for: open, in: book))
@@ -154,6 +174,13 @@ final class ReadingKnowledgeTests: XCTestCase {
         let request = try TeacherBackgroundRequest.freeze(objectID: "jia", in: book, currentUnitID: "u1", avoidsSpoilers: true)
         let saved = try await repository.saveTeacherBackground(bookID: book.id, record: record(request))
         XCTAssertEqual(saved.entities, book.entities)
+        let laterRequest = try TeacherBackgroundRequest.freeze(objectID: "jia", in: saved, currentUnitID: "u2", avoidsSpoilers: true)
+        var duplicate = record(laterRequest); duplicate.id = "teacher-later"; duplicate.markdown = "另一个并发请求返回的介绍。"
+        let now = Date(), history = AIRequestHistoryRecord(id: "parallel-teacher", title: "老师讲解", number: 1,
+            startedAt: now, finishedAt: now, status: "returned", reasoningCharacters: 1, answerCharacters: 20)
+        let reused = try await repository.saveTeacherBackground(bookID: book.id, record: duplicate, requestHistory: [history])
+        XCTAssertEqual(reused.readingKnowledge?.backgrounds.count, 1, "并发的同上下文后页请求应复用已保存介绍。")
+        XCTAssertTrue(reused.aiRequestHistory?.contains(history) == true, "复用介绍也不能丢弃实际发生的第二次请求。")
         var stale = book; stale.bookmarks = ["u1"]
         try await repository.save(stale)
         let currentDocument = try await repository.readDocumentSnapshot(bookID: book.id, document: document)

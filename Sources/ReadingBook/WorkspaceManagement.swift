@@ -121,7 +121,7 @@ extension AppStore {
         isBusy = true; defer { isBusy = false }
         let index = project.nodes.count
         project.nodes.append(CanvasNode(targetID: document.id, x: Double(index % 3) * 270 + 60, y: Double(index / 3) * 150 + 60))
-        do { try await repository.save(project); publish(project); activity = "文档节点已加入导图。" }
+        do { publish(try await repository.save(project)); activity = "文档节点已加入导图。" }
         catch { errorMessage = error.localizedDescription }
     }
     @discardableResult

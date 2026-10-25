@@ -6,8 +6,13 @@ import ReadingCore
     var queryReadingContext: ReadingContext {
         var context = currentReadingContext
         if queryScope != .notes {
-            context.documentID = nil; context.unitID = selectedSourceAnchor?.unitID ?? selectedUnitID
-            context.page = sourceReadingSelection?.page ?? selectedUnit?.page
+            context.documentID = nil
+            // A pinned sentence may belong to another simultaneously visible
+            // PDF page. Its text, unit and page must remain one frozen scope.
+            if queryScope != .selection || sourceReadingSelection != nil {
+                context.unitID = selectedSourceAnchor?.unitID ?? selectedUnitID
+                context.page = sourceReadingSelection?.page ?? selectedUnit?.page
+            }
         }
         if queryScope == .selection, let selection = sourceReadingSelection {
             context.selectedText = selection.text
@@ -48,22 +53,24 @@ import ReadingCore
               let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(ConversationMemory.self, from: data)
     }
-    func saveQueryMemory(_ memory: ConversationMemory?, for snapshot: ReadingQuerySnapshot) {
-        guard let memory, !storageState.working, memory.bookID == snapshot.bookID, memory.scopeFingerprint == snapshot.scopeFingerprint else { return }
-        let root = libraryRootURL
-        Task {
-            do {
-                try await QueryMemoryFiles.shared.write(memory, snapshot: snapshot, root: root)
-                if libraryRootURL == root, bookID == snapshot.bookID { queryMemoryRevision += 1 }
-            }
-            catch { if libraryRootURL == root, bookID == snapshot.bookID { queryDisclosure += "\n本次会话记忆未能缓存，原对话仍完整保留。" } }
+    func saveQueryMemory(_ memory: ConversationMemory?, for snapshot: ReadingQuerySnapshot, root: URL) async {
+        guard let memory, !storageState.working, libraryRootURL == root, bookID == snapshot.bookID,
+              memory.bookID == snapshot.bookID, memory.scopeFingerprint == snapshot.scopeFingerprint else { return }
+        // Keep the question lane occupied until its derived write finishes, so
+        // an immediate library transfer cannot race this separate file actor.
+        do {
+            try await QueryMemoryFiles.shared.write(memory, snapshot: snapshot, root: root)
+            if libraryRootURL == root, bookID == snapshot.bookID { queryMemoryRevision += 1 }
         }
+        catch { if libraryRootURL == root, bookID == snapshot.bookID { queryDisclosure += "\n本次会话记忆未能缓存，原对话仍完整保留。" } }
     }
     func clearCurrentQueryMemory() {
-        guard !isQueryBusy, !storageState.working else { return }
+        guard !isQueryBusy, !isManagingQueryMemory, !storageState.working else { return }
         guard let project = book else { return }
         let key = queryMemoryPreparationKey
+        isManagingQueryMemory = true
         Task {
+            defer { isManagingQueryMemory = false }
             do {
                 let snapshot = try await Task.detached(priority: .userInitiated) {
                     try ReadingQuerySnapshot.freeze(scope: key.scope, in: project, context: key.context,

@@ -14,8 +14,7 @@ import ReadingCore
             var merged = temporal.profile ?? BookProfile()
             merged.genres = profile.genres; merged.customGenres = profile.customGenres; merged.avoidsSpoilers = profile.avoidsSpoilers
             temporal.profile = merged; current.temporalKnowledge = temporal
-            try await repository.save(current)
-            publish(current); activity = "读书偏好已保存；下次预读会参考所选书型。"
+            publish(try await repository.save(current)); activity = "读书偏好已保存；下次预读会参考所选书型。"
             return true
         } catch { errorMessage = error.localizedDescription; return false }
     }

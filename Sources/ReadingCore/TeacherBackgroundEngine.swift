@@ -16,6 +16,11 @@ public struct TeacherBackgroundRequest: Hashable, Sendable {
     public let title: String
     public let knownFacts: String
     public let priorBackgroundMarkdown: String?
+    /// A page change alone does not create a second copy of the same request.
+    public var reuseIdentity: String {
+        bookID + "|" + objectID + "|" + contextFingerprint + "|" +
+            unitHashes.keys.sorted().map { $0 + ":" + (unitHashes[$0] ?? "") }.joined(separator: "|")
+    }
 
     public static func freeze(objectID: String, in project: BookProject, currentUnitID: String?,
                               avoidsSpoilers: Bool) throws -> Self {

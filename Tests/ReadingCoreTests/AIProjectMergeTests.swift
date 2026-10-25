@@ -3,6 +3,80 @@ import XCTest
 @testable import ReadingCore
 
 final class AIProjectMergeTests: XCTestCase {
+    func testCanonicalHistorySurvivesStaleMetadataAndMarkdownSaves() async throws {
+        let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.directory) }
+        let record = AIRequestHistoryRecord(id: "late-history", title: "刚结束的请求", number: 1,
+            startedAt: Date(), finishedAt: Date(), status: "returned", reasoningCharacters: 2, answerCharacters: 3)
+        try await f.repository.recordAIRequestHistory(bookID: f.book.id, sourceHash: f.book.sourceHash, records: [record])
+        let saved = try await f.repository.save(f.book)
+        XCTAssertEqual(saved.aiRequestHistory?.map(\.id), [record.id], "旧窗口普通保存不能抹掉已落盘宿主历史。")
+        let body = try await f.repository.readDocumentSnapshot(bookID: f.book.id, document: f.document)
+        let edited = try await f.repository.saveDocument(project: f.book, document: f.document, markdown: "用户新正文", expectedContentHash: body.contentHash)
+        XCTAssertEqual(edited.aiRequestHistory?.map(\.id), [record.id])
+        let savedBody = try await f.repository.readDocument(bookID: f.book.id, document: f.document)
+        XCTAssertEqual(savedBody, "用户新正文")
+    }
+
+    func testPublicationOrderRejectsDelayedSnapshotsWithoutChangingStoredFormatOrAuthority() async throws {
+        let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.directory) }
+        var first = f.book; first.chats.append(ChatMessage(id: "first", role: "user", content: "一"))
+        let a = try await f.repository.commitAIResult(base: f.book, result: first, operationID: "stamp-first")
+        var second = a; second.chats.append(ChatMessage(id: "second", role: "assistant", content: "二"))
+        let ab = try await f.repository.commitAIResult(base: a, result: second, operationID: "stamp-second")
+        let owner = f.repository.publicationOwner
+        XCTAssertFalse(LibraryPublicationStamp.accepts(a, replacing: ab, owner: owner), "模拟AB先抵达UI、A后抵达，不能退回旧快照。")
+        XCTAssertTrue(LibraryPublicationStamp.accepts(ab, replacing: a, owner: owner))
+        XCTAssertFalse(LibraryPublicationStamp.accepts(ab, replacing: nil, owner: UUID()), "旧仓库owner的异步回调不能跨切库重新加入。")
+        let data = try JSONEncoder().encode(ab), object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(object["publicationStamp"])
+        let decoded = try JSONDecoder().decode(BookProject.self, from: data)
+        XCTAssertNil(decoded.publicationStamp); XCTAssertEqual(decoded.chats.map(\.id), ["first", "second"])
+        XCTAssertEqual(try ControlledChangeRecords.revision(ab), try ControlledChangeRecords.revision(decoded))
+        var manual = ab; manual.entities[0].summary = "手动新摘要"
+        let saved = try await f.repository.save(manual)
+        XCTAssertTrue(LibraryPublicationStamp.accepts(saved, replacing: ab, owner: owner), "较晚的显式保存必须得到新的宿主快照，而不是沿用旧序号。")
+    }
+
+    func testBoundedHistoryMergeKeepsRecentCanonicalRecordsAndRejectsDuplicateInputs() throws {
+        func record(_ n: Int) -> AIRequestHistoryRecord {
+            let date = Date(timeIntervalSince1970: Double(n))
+            return AIRequestHistoryRecord(id: "r-\(n)", title: "请求", number: n + 1, startedAt: date, finishedAt: date,
+                status: "returned", reasoningCharacters: 0, answerCharacters: 0)
+        }
+        let old = (0..<1000).map(record), recent = (1000..<2000).map(record)
+        XCTAssertEqual(try AIRequestHistoryMerge.merge(proposed: old, canonical: recent)?.map(\.id), recent.map(\.id))
+        XCTAssertThrowsError(try AIRequestHistoryMerge.merge(proposed: [record(1), record(1)], canonical: []))
+    }
+
+    func testConcurrentIdentityChecksTypeAndAliasesWithoutRejectingDifferentKinds() throws {
+        let base = BookProject(title: "身份", originalName: "book.txt", sourceHash: String(repeating: "a", count: 64), units: [])
+        var latest = base, result = base
+        latest.entities = [KnowledgeEntity(id: "place", typeID: "place", name: "长安", aliases: ["西京"])]
+        result.entities = [KnowledgeEntity(id: "person", typeID: "person", name: "长安")]
+        XCTAssertEqual(try AIProjectMerge.merge(base: base, result: result, latest: latest).entities.count, 2)
+        result.entities = [KnowledgeEntity(id: "duplicate", typeID: "place", name: "西京")]
+        XCTAssertThrowsError(try AIProjectMerge.merge(base: base, result: result, latest: latest), "并发新建也必须检查同类型别名。")
+        result.entities = latest.entities
+        XCTAssertEqual(try AIProjectMerge.merge(base: base, result: result, latest: latest).entities.count, 1, "同一稳定ID仍可幂等合并。")
+        var known = base
+        known.entities = [KnowledgeEntity(id: "known", typeID: "person", name: "甲")]
+        latest = known; latest.entities[0].aliases = ["乙"]
+        result = known; result.entities.append(KnowledgeEntity(id: "new", typeID: "person", name: "乙"))
+        XCTAssertThrowsError(try AIProjectMerge.merge(base: known, result: result, latest: latest), "旧对象并发新增的别名也必须参与身份检查。")
+    }
+
+    func testConcurrentStringAdditionsPreserveOrderAndNeverReviveRemovedAliases() throws {
+        var base = BookProject(title: "合并", originalName: "book.txt", sourceHash: String(repeating: "a", count: 64), units: [])
+        base.entities = [KnowledgeEntity(id: "person", typeID: "person", name: "人物", aliases: ["旧称", "保留"])]
+        var latest = base, result = base
+        latest.entities[0].aliases = ["保留", "并发补充"]
+        result.entities[0].aliases.append(contentsOf: ["本次补充", "并发补充"])
+        let merged = try AIProjectMerge.merge(base: base, result: result, latest: latest)
+        XCTAssertEqual(merged.entities[0].aliases, ["保留", "并发补充", "本次补充"])
+        result.entities[0].aliases = ["旧称"]
+        XCTAssertThrowsError(try AIProjectMerge.merge(base: base, result: result, latest: latest), "冲突的显式删改仍须拒绝。")
+    }
+
     func testHostExplanationCacheAndTransportHistoryDoNotInvalidateReviewedAuthority() throws {
         let base = BookProject(title: "旧功能", originalName: "book.txt", sourceHash: String(repeating: "a", count: 64), units: [])
         var derived = base; derived.readingKnowledge = ReadingKnowledgeState()

@@ -80,7 +80,9 @@ private final class StorageProgressRelay: @unchecked Sendable {
     }
     private var canManageStorage: Bool {
         !isBusy && !isSavingDocument && !isExportingProject && !isImportingBookCommit && !isCommittingLocalWrite
-            && !storageState.working && catalogOperations == 0 && !editorDirty && pendingAIChanges.isEmpty
+            && !storageState.working && !isManagingQueryMemory && pendingAIHistoryWrites == 0
+            && !teacherBackground.hasRunningTasks && !sentenceTranslation.hasRunningTasks
+            && catalogOperations == 0 && !editorDirty && pendingAIChanges.isEmpty
             && deletionRequest == nil
     }
     private func prepareStorageOperation() -> Bool {

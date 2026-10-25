@@ -74,21 +74,26 @@ extension LibraryRepository {
         let current = try SentenceTranslationRequest.freeze(anchor: request.anchor, in: project, targetLanguage: request.targetLanguage)
         guard current.cacheID == request.cacheID, !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               markdown.count <= 8_000, !markdown.utf8.contains(0) else { throw ReadingError.invalid("原句已改变，本次译文未应用。") }
-        if current.cachedLayer(in: project) != nil { return project }
+        guard requestHistory.count <= 10 else { throw ReadingError.invalid("句译请求记录过多。") }
+        var history = project.aiRequestHistory ?? [], existing = Set(history.map(\.id))
+        for record in requestHistory where existing.insert(record.id).inserted { history.append(record) }
+        if !requestHistory.isEmpty { project.aiRequestHistory = Array(history.suffix(1000)) }
+        if current.cachedLayer(in: project) != nil {
+            if requestHistory.isEmpty { return project }
+            return try saveCanonicalProject(project)
+        }
         var state = project.readingExperience ?? ReadingExperienceState()
         if let old = state.anchors.first(where: { $0.id == request.anchor.id }) {
             guard old == request.anchor else { throw ReadingError.invalid("原句定位已改变，本次译文未覆盖已有内容。") }
         } else { state.anchors.append(request.anchor) }
-        guard !state.layers.contains(where: { $0.id == request.cacheID }) else { return project }
+        guard !state.layers.contains(where: { $0.id == request.cacheID }) else {
+            if requestHistory.isEmpty { return project }
+            return try saveCanonicalProject(project)
+        }
         state.layers.append(ReadingLayer(id: request.cacheID, kind: "translation", title: "这句话的意思",
             markdown: markdown, sourceAnchorIDs: [request.anchor.id], sourceLabel: "AI 句译 · " + String(model.prefix(120)),
             provenance: ReadingProvenance(label: "sentence-translation", workTitle: request.targetLanguage)))
         project.readingExperience = state
-        guard requestHistory.count <= 10 else { throw ReadingError.invalid("句译请求记录过多。") }
-        var history = project.aiRequestHistory ?? []
-        let existing = Set(history.map(\.id))
-        history.append(contentsOf: requestHistory.filter { !existing.contains($0.id) })
-        if !requestHistory.isEmpty { project.aiRequestHistory = Array(history.suffix(1000)) }
         return try saveCanonicalProject(project)
     }
 }

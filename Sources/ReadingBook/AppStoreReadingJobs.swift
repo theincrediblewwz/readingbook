@@ -5,9 +5,17 @@ private struct ReadingChunkResult: Sendable {
     var chunk: ReadingAnalysisChunk
     var base: BookProject
     var result: BookProject?
+    var hasPublishedCompletion = false
     var failure: String? = nil
     var cancelled = false
     var conflict = false
+}
+
+private final class ReadingPublicationCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var saved = false
+    func record(_ complete: Bool) { lock.lock(); defer { lock.unlock() }; saved = saved || complete }
+    var isSaved: Bool { lock.lock(); defer { lock.unlock() }; return saved }
 }
 
 @MainActor extension AppStore {
@@ -39,14 +47,18 @@ private struct ReadingChunkResult: Sendable {
                     let worker = AIReader(coordinator: sharedAIRequests)
                     let handler = workerProgressHandler(progressID)
                     let publisher = readingPublicationHandler(bookID: bookID, sessionID: sessionID, progressID: progressID)
+                    let publication = ReadingPublicationCompletion()
                     let base = latest, priorityUnitID = selectedUnitID
                     running.insert(chunk.id); dispatchedCount += 1
                     group.addTask {
                         await worker.setProgressHandler(handler)
-                        await worker.setPublicationHandler(publisher)
+                        await worker.setPublicationHandler { batch in
+                            try await publisher(batch)
+                            publication.record(batch.isAnalysisComplete)
+                        }
                         do {
                             let result = try await worker.readChunk(project: base, chunk: chunk, settings: settings, apiKey: apiKey, priorityUnitID: priorityUnitID)
-                            return ReadingChunkResult(chunk: chunk, base: base, result: result)
+                            return ReadingChunkResult(chunk: chunk, base: base, result: result, hasPublishedCompletion: publication.isSaved)
                         } catch {
                             let message = String(error.localizedDescription.prefix(2000))
                             return ReadingChunkResult(chunk: chunk, base: base, result: nil, failure: message,
@@ -72,8 +84,14 @@ private struct ReadingChunkResult: Sendable {
                 }
                 guard let result = finished.result else { throw ReadingError.invalid("本部分没有返回有效结果，已保存内容保留。") }
                 do {
-                    let committed = try await repository.commitAIResult(base: finished.base, result: result, operationID: UUID().uuidString, expectedReadingSessionID: sessionID)
-                    publish(committed)
+                    // A terminal response batch is already persisted and shown.
+                    // Reapplying its full, older worker snapshot can conflict
+                    // with a newer worker's valid changes to the same object.
+                    // Exact receipt batches still use their original caller commit.
+                    if !finished.hasPublishedCompletion {
+                        let committed = try await repository.commitAIResult(base: finished.base, result: result, operationID: UUID().uuidString, expectedReadingSessionID: sessionID)
+                        publish(committed)
+                    }
                     requestsUsed = await sharedAIRequests.requestsUsed
                     activeReadingUnitID = finished.chunk.unitIDs.first
                 } catch {

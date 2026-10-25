@@ -252,6 +252,7 @@ private struct MarkdownWebView: NSViewRepresentable {
         private var lastSelection: RenderedMarkdownSelection?
         private var focusedID: String?
         private var displayedFocusID: String?
+        private var focusRequestGeneration = 0
         private var rendering = false
 
         init(height: Binding<CGFloat>, onOpenURL: @escaping (URL) -> Void,
@@ -290,8 +291,11 @@ private struct MarkdownWebView: NSViewRepresentable {
             let replacesDocument = previous.map { !state.sharesDocument(with: $0) } ?? true
             displayed = state; rendering = true
             if replacesDocument { revision += 1 }
-            displayedFocusID = nil
-            if replacesDocument { lastSelection = nil }
+            if replacesDocument { displayedFocusID = nil; lastSelection = nil }
+            else if let focusedID,
+                    state.decorations.contains(where: { $0.id == focusedID }) != (previous?.decorations.contains(where: { $0.id == focusedID }) ?? false) {
+                displayedFocusID = nil
+            }
             let renderedRevision = revision
             if replacesDocument {
                 DispatchQueue.main.async { [weak self] in
@@ -332,10 +336,20 @@ private struct MarkdownWebView: NSViewRepresentable {
         }
 
         private func focusPending() {
-            guard ready, !rendering, displayed == pending, let focusedID, displayedFocusID != focusedID,
-                  displayed?.decorations.contains(where: { $0.id == focusedID }) == true, let webView else { return }
-            displayedFocusID = focusedID
-            webView.callAsyncJavaScript("window.ReadingBookMarkdown.focusDecoration(id)", arguments: ["id": focusedID], in: nil, in: .page) { _ in }
+            guard ready, !rendering, displayed == pending, displayedFocusID != focusedID, let webView else { return }
+            if let focusedID, displayed?.decorations.contains(where: { $0.id == focusedID }) != true { return }
+            let requestedID = focusedID, requestedRevision = revision
+            focusRequestGeneration &+= 1
+            let generation = focusRequestGeneration
+            // Track the dispatched target so a quick clear queues a matching
+            // JS cancellation even before this acknowledgement returns.
+            displayedFocusID = requestedID
+            webView.callAsyncJavaScript("window.ReadingBookMarkdown.focusDecoration(id)", arguments: ["id": requestedID.map { $0 as Any } ?? NSNull()], in: nil, in: .page) { [weak self] result in
+                guard let self, self.revision == requestedRevision, self.focusedID == requestedID,
+                      self.focusRequestGeneration == generation else { return }
+                if case .success(let accepted) = result, accepted as? Bool == true { return }
+                self.displayedFocusID = nil
+            }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
