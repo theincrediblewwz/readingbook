@@ -25,7 +25,7 @@ final class ReadingGeometryBandsTests: XCTestCase {
         var index = ReadingGeometryBands<String>()
         index.insert("name", rectangle: CGRect(x: 0, y: -20, width: 60, height: 30))
         index.insert("name", rectangle: CGRect(x: 0, y: -20, width: 60, height: 30))
-        index.insert("invalid", rectangle: CGRect(x: 0, y: .infinity, width: 10, height: 10))
+        index.insert("invalid", rectangle: CGRect(x: 0, y: CGFloat.infinity, width: 10, height: 10))
         XCTAssertEqual(index.candidates(atY: -1), ["name"])
         XCTAssertEqual(index.candidates(atY: .nan), [])
         XCTAssertEqual(index.candidates(intersecting: CGRect(x: 0, y: -40, width: 100, height: 100)), ["name"])
