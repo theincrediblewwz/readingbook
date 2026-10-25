@@ -38,6 +38,9 @@ struct ReaderFloatingPanel<Content: View>: View {
     @State private var resizeStart: CGSize?
     @State private var resizeOrigin: CGPoint?
     @State private var resizePreferredStart: CGSize?
+    @State private var expandedReading = false
+    @State private var beforeExpansionSize: CGSize?
+    @State private var beforeExpansionOrigin: CGPoint?
     private struct PanelPresentation: Equatable { var presented: Bool; var collapsed: Bool }
     private var memoryID: String { memoryIDOverride ?? (trailing ? "reader.companion" : "reader.outline") }
 
@@ -223,6 +226,18 @@ struct ReaderFloatingPanel<Content: View>: View {
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: collapsed)
             .onAppear { initialPresented = isPresented; restoreMemory(); if viewport.width < 1050 && trailing { isPresented = false }; receivePanelCommand(store.workspaceAICommand); reportStableFrame() }
             .onChange(of: store.workspaceAICommand) { _, command in receivePanelCommand(command) }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ReadingBookExpandCompanion"))) { _ in
+                guard memoryID == "reader.companion" else { return }
+                transientPresentation = nil; collapsed = false; isPresented = true
+                if expandedReading {
+                    preferredSize = beforeExpansionSize; savedOrigin = beforeExpansionOrigin
+                } else {
+                    beforeExpansionSize = preferredSize; beforeExpansionOrigin = savedOrigin
+                    preferredSize = CGSize(width: min(760, viewport.width - 48), height: max(260, viewport.height - 88 - bottomReserve))
+                    savedOrigin = CGPoint(x: max(24, (viewport.width - (preferredSize?.width ?? width)) / 2), y: 88)
+                }
+                expandedReading.toggle(); saveMemory(); reportStableFrame()
+            }
             .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreMemory(); reportStableFrame() }
             .onChange(of: collapsed) { _, value in onExpansionChange(!value && isPresented); saveMemory(); reportStableFrame() }
             .onChange(of: isPresented) { _, value in if value { hasOpened = true }; onExpansionChange(value && !collapsed); saveMemory(); reportStableFrame() }

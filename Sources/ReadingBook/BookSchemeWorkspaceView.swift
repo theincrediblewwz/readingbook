@@ -305,7 +305,7 @@ private struct BookSchemeWorkspaceContent: View {
         VStack(alignment: .leading, spacing: 20) {
             Text("模板只保存生效配置。待确认的调整请先采纳；导出后可在另一本书导入预览。")
                 .font(.system(size: 13)).foregroundStyle(.secondary)
-            if state.templates.isEmpty { ContentUnavailableView("还没有模板", systemImage: "square.stack.3d.up", description: Text("把适合历史、教材或研究资料的方案保存下来，下一本书可以继续调整。")) }
+            if state.templates.isEmpty { EmptyState(title: "还没有模板", detail: "保存合适的方案，下本书继续使用。", icon: "square.stack.3d.up").frame(maxWidth: .infinity, minHeight: 260) }
             ForEach(state.templates) { template in
                 VStack(alignment: .leading, spacing: 14) {
                     Text(template.name).font(.system(size: 16, weight: .semibold))
@@ -324,7 +324,7 @@ private struct BookSchemeWorkspaceContent: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("最近 20 次采纳的配置版本；仅可安全撤销最近一次，后续编辑发生冲突时会停止。")
                 .font(.system(size: 15)).foregroundStyle(.secondary)
-            if state.history.isEmpty { ContentUnavailableView("还没有采纳记录", systemImage: "clock.arrow.circlepath", description: Text("原有配置继续有效，下一次采纳方案时会保存前后版本。")) }
+            if state.history.isEmpty { EmptyState(title: "还没有采纳记录", detail: "采纳方案后，会在这里留下版本。", icon: "clock.arrow.circlepath").frame(maxWidth: .infinity, minHeight: 260) }
             ForEach(state.history.reversed()) { revision in
                 VStack(alignment: .leading, spacing: 14) {
                     HStack { Text(revision.title).font(.system(size: 16, weight: .semibold)); Spacer(); Text(revision.revertedAt == nil ? "已采纳" : "已撤销").font(.system(size: 13)).foregroundStyle(.secondary) }

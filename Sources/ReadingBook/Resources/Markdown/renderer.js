@@ -9,6 +9,9 @@
   let selectionEnabled = false;
   let currentSource = '';
   let sourceDecorations = [];
+  let appliedDecorations = new Map();
+  let decorationsDeferred = false;
+  let sourcePress = null;
 
   function escapedAt(source, position) {
     let backslashes = 0;
@@ -246,13 +249,14 @@
       return best?.node ?? null;
     };
   }
-  function addSourceDecorations(root) {
-    if (!sourceDecorations.length) return;
+  function addSourceDecorations(root, additions) {
+    const incoming = additions || sourceDecorations;
+    if (!incoming.length) return;
     const findHost = sourceIntervalIndex(root.querySelectorAll('[data-source-start]'), 'sourceStart', 'sourceEnd', false);
     const findBlock = sourceIntervalIndex(root.querySelectorAll('[data-source-block-start]'), 'sourceBlockStart', 'sourceBlockEnd', true);
     const quoteRanges = new Map();
     let approximateCount = 0;
-    for (const item of sourceDecorations) {
+    for (const item of incoming) {
       const range = validatedRange(item, quoteRanges);
       if (!range) continue;
       const host = findHost(range[0], range[1]);
@@ -287,10 +291,48 @@
         marker.setAttribute('aria-label', marker.textContent + '，段落关联，非精确词位'); block.appendChild(marker); approximateCount++;
       }
     }
-    if (approximateCount) {
+    if (approximateCount && !root.querySelector('.source-location-note')) {
       const note = document.createElement('p'); note.className = 'source-location-note';
       note.textContent = '部分关联显示在对应段落末尾；公式、链接或复杂排版保留原样，未推测词语位置。'; root.appendChild(note);
     }
+  }
+  function decorationIdentity(item) {
+    return JSON.stringify([item.id, item.targetID, item.quote, item.rangeLocation, item.rangeLength]);
+  }
+  function applyDecorations() {
+    const root = global.document?.getElementById('content');
+    if (!root) return false;
+    // Do not detach a reader's live text selection or an in-progress click.
+    if (sourcePress || global.getSelection?.()?.isCollapsed === false) { decorationsDeferred = true; return false; }
+    decorationsDeferred = false;
+    const next = new Map(sourceDecorations.filter(item => item && typeof item.id === 'string').map(item => [item.id, decorationIdentity(item)]));
+    root.querySelectorAll('[data-source-decoration]').forEach(node => {
+      const id = node.dataset.sourceDecoration;
+      if (next.get(id) === appliedDecorations.get(id)) return;
+      if (node.classList.contains('source-mention')) node.replaceWith(...Array.from(node.childNodes));
+      else node.remove();
+    });
+    const additions = sourceDecorations.filter(item => item && typeof item.id === 'string' && next.get(item.id) !== appliedDecorations.get(item.id));
+    addSourceDecorations(root, additions);
+    appliedDecorations = next;
+    if (!root.querySelector('.source-paragraph-link')) root.querySelectorAll('.source-location-note').forEach(node => node.remove());
+    reportHeight();
+    return true;
+  }
+  function updateDecorations(items, options) {
+    if (Number(options?.revision) !== currentRevision) return false;
+    sourceDecorations = Array.isArray(items) ? items.slice(0, 1_000) : [];
+    return applyDecorations();
+  }
+  function updatePresentation(options) {
+    if (Number(options?.revision) !== currentRevision) return false;
+    selectionEnabled = !!options.selectionEnabled;
+    document.documentElement.dataset.theme = options.theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.dataset.readingStyle = options.readingStyle === 'companion' ? 'companion' : 'body';
+    const scale = Number.isFinite(Number(options.textScale)) ? Math.min(1.6, Math.max(0.8, Number(options.textScale))) : 1;
+    document.documentElement.style.fontSize = ((options.readingStyle === 'companion' ? 18 : 16) * scale) + 'px';
+    reportHeight();
+    return true;
   }
   function focusDecoration(id) {
     const root = document.getElementById('content');
@@ -326,9 +368,12 @@
     global.getSelection?.()?.removeAllRanges();
     document.documentElement.dataset.theme = settings.theme === 'dark' ? 'dark' : 'light';
     document.documentElement.dataset.readingStyle = settings.readingStyle === 'companion' ? 'companion' : 'body';
+    updatePresentation(settings);
     const root = document.getElementById('content');
     root.innerHTML = renderHTML(markdown, settings);
+    appliedDecorations = new Map(); decorationsDeferred = false; sourcePress = null;
     addSourceDecorations(root);
+    appliedDecorations = new Map(sourceDecorations.filter(item => item && typeof item.id === 'string').map(item => [item.id, decorationIdentity(item)]));
     root.querySelectorAll('img').forEach(image => {
       image.addEventListener('load', reportHeight, { once: true });
       image.addEventListener('error', () => {
@@ -341,15 +386,31 @@
     reportHeight();
     document.fonts?.ready.then(reportHeight);
   }
-  global.ReadingBookMarkdown = Object.freeze({ render, renderHTML, focusDecoration });
+  global.ReadingBookMarkdown = Object.freeze({ render, renderHTML, focusDecoration, updateDecorations, updatePresentation });
   if (global.document) {
     let selectionTimer = null;
     let lastSelectionKey = '';
-    let sourcePress = null;
+    function reportSourceHover(node, activated, event) {
+      if (!node || (!activated && (sourcePress || global.getSelection()?.isCollapsed === false))) {
+        global.webkit?.messageHandlers?.readingbookSourceHover?.postMessage({leaving:true,revision:currentRevision}); return;
+      }
+      const rectangles=Array.from(node.getClientRects());
+      const rect=rectangles.find(rect=>event && event.clientX>=rect.left && event.clientX<=rect.right && event.clientY>=rect.top && event.clientY<=rect.bottom) || rectangles[0] || node.getBoundingClientRect();
+      global.webkit?.messageHandlers?.readingbookSourceHover?.postMessage({id:node.dataset.sourceDecoration,rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},activated:!!activated,revision:currentRevision});
+    }
+    document.addEventListener('mouseover', event => {
+      const node=event.target.closest?.('[data-source-decoration]');
+      if(node && !node.contains(event.relatedTarget)) reportSourceHover(node,false,event);
+    });
+    document.addEventListener('mouseout', event => {
+      const node=event.target.closest?.('[data-source-decoration]');
+      if(node && !node.contains(event.relatedTarget)) reportSourceHover(null,false);
+    });
     function finishSourcePress() {
       const press = sourcePress;
       if (press?.node.isConnected) press.node.tabIndex = 0;
       sourcePress = null;
+      if (decorationsDeferred) applyDecorations();
     }
     function reportSelection() {
       if (!selectionEnabled) return;
@@ -391,6 +452,7 @@
     document.addEventListener('selectionchange', () => {
       clearTimeout(selectionTimer);
       selectionTimer = setTimeout(reportSelection, 80);
+      if (decorationsDeferred && global.getSelection()?.isCollapsed !== false) applyDecorations();
     });
     new ResizeObserver(reportHeight).observe(document.getElementById('content'));
     global.addEventListener('resize', reportHeight);
@@ -399,6 +461,7 @@
     // uses ordinary text behavior. No pointer capture or manual text offsets.
     document.addEventListener('mousedown', event => {
       finishSourcePress();
+      reportSourceHover(null,false);
       const node = event.target.closest?.('.source-mention');
       if (!node || event.button !== 0) return;
       sourcePress = { node, x: event.clientX, y: event.clientY, dragged: false };
@@ -419,6 +482,7 @@
         // A drag selection ending on a mention should remain a selection.
         if (event.detail !== 0 && (sourcePress?.dragged || global.getSelection()?.isCollapsed === false)) return;
         event.preventDefault();
+        reportSourceHover(marker,true,event);
         global.webkit?.messageHandlers?.readingbookSourceTap?.postMessage({ id: marker.dataset.sourceDecoration, targetID: marker.dataset.sourceTarget, revision: currentRevision });
         return;
       }

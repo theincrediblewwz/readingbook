@@ -60,7 +60,11 @@ struct SmartReadingProgressPanel: View {
                     }
                     if let scope = session?.scopeTitle { Text(scope).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                     statusRow("预读并确定阅读方案", completed: store.book?.plan != nil && !awaiting)
-                    statusRow("逐段阅读 · \(progress.receiptCount)/\(progress.receiptTotal)", completed: progress.receiptTotal > 0 && progress.receiptCount == progress.receiptTotal)
+                    if progress.isStandardAnalysis {
+                        statusRow("已分析 · \(progress.completed)/\(progress.total)", completed: progress.completed == progress.total)
+                    } else {
+                        statusRow("逐段核对 · \(progress.receiptCount)/\(progress.receiptTotal)", completed: progress.receiptTotal > 0 && progress.receiptCount == progress.receiptTotal)
+                    }
                     if progress.excludedCount > 0 || progress.blankCount > 0 {
                         Text("\(progress.excludedCount) 个片段暂缓未读，\(progress.blankCount) 个片段由你确认空白。")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -107,7 +111,7 @@ struct SmartReadingProgressPanel: View {
             Button { expanded.toggle() } label: {
                 HStack(spacing: 7) {
                     Image(systemName: statusIcon).font(.system(size: 18)).foregroundStyle(Palette.accent)
-                    Text(store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID ? store.aiProgress.phaseTitle : compactTitle).font(.system(size: 14, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
+                    Text(expanded ? "智能阅读" : store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID ? store.aiProgress.phaseTitle : compactTitle).font(.system(size: 14, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
                     Spacer(minLength: 0)
                     if let countText { Text(countText).font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85).layoutPriority(1) }
                 }.padding(.leading, 15).padding(.trailing, 5).frame(maxWidth: .infinity, minHeight: 52).contentShape(Rectangle())

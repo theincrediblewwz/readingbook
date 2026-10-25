@@ -4,11 +4,24 @@ import ReadingCore
 /// Reading material and layout permission are independent, explicit choices.
 /// Selecting a node does not silently share its mounted Markdown documents.
 @MainActor extension AppStore {
+    var currentQueryPreferences: ReadingAnswerPreferences {
+        ReadingAnswerPreferences(interaction: queryInteractionMode, style: queryAnswerStyle,
+            avoidsSpoilers: book?.temporalKnowledge?.profile?.avoidsSpoilers != false)
+    }
+    func queryHistory(in project: BookProject, preferences: ReadingAnswerPreferences) -> [ChatMessage] {
+        project.chats.filter {
+            // Earlier versions had only functional, evidence-bound questions.
+            ($0.conversationMode ?? .functional) == preferences.interaction && ($0.answerStyle ?? .research) == preferences.style
+        }
+    }
+    var currentQueryHistory: [ChatMessage] { book.map { queryHistory(in: $0, preferences: currentQueryPreferences) } ?? [] }
     func currentQueryTaskSnapshot() throws -> ReadingQuerySnapshot {
         guard let book else { throw ReadingError.invalid("请先打开一本书。") }
         return try ReadingQuerySnapshot.freeze(scope: queryScope, in: book, context: queryReadingContext,
             documentIDs: queryDocumentIDs.map { Array($0).sorted() },
-            appendedDocumentIDs: queryScope == .notes ? [] : queryAttachedDocumentIDs.sorted(), authorizedNodeIDs: queryAuthorizedNodeIDs.sorted())
+            appendedDocumentIDs: queryScope == .notes ? [] : queryAttachedDocumentIDs.sorted(),
+            authorizedNodeIDs: queryInteractionMode == .functional ? queryAuthorizedNodeIDs.sorted() : [])
+            .withContextIdentity(currentQueryPreferences.contextIdentity)
     }
 
     var queryAttachedDocuments: [DocumentRecord] {
@@ -27,21 +40,21 @@ import ReadingCore
         return "独立节点"
     }
     func setQueryAttachedDocument(_ id: String, included: Bool) {
-        guard !isBusy, book?.activeDocuments.contains(where: { $0.id == id }) == true else { return }
+        guard !isQueryBusy, book?.activeDocuments.contains(where: { $0.id == id }) == true else { return }
         if included {
             guard queryAttachedDocumentIDs.count < 128 || queryAttachedDocumentIDs.contains(id) else { errorMessage = "一次最多附加 128 篇笔记。"; return }
             queryAttachedDocumentIDs.insert(id)
         } else { queryAttachedDocumentIDs.remove(id) }
     }
     func setQueryAuthorizedNode(_ id: String, included: Bool) {
-        guard !isBusy, book?.nodes.contains(where: { $0.id == id }) == true else { return }
+        guard !isQueryBusy, queryInteractionMode == .functional, book?.nodes.contains(where: { $0.id == id }) == true else { return }
         if included {
             guard queryAuthorizedNodeIDs.count < 128 || queryAuthorizedNodeIDs.contains(id) else { errorMessage = "一次最多选择 128 个画布节点。"; return }
             queryAuthorizedNodeIDs.insert(id)
         } else { queryAuthorizedNodeIDs.remove(id) }
     }
     func addSelectedQueryNodes() {
-        guard !isBusy else { return }
+        guard !isQueryBusy, queryInteractionMode == .functional else { return }
         // This method is called only by an explicit reader action. Visibility
         // and ordinary graph selection alone never create query permission.
         let real = Set(querySelectableNodes.map(\.id))
@@ -51,25 +64,25 @@ import ReadingCore
         queryAuthorizedNodeIDs = combined
     }
     func clearQueryTaskAttachments() {
-        guard !isBusy else { return }
+        guard !isQueryBusy else { return }
         queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []
     }
 
     var currentQueryMemory: ConversationMemory? {
         guard let book, let snapshot = try? currentQueryTaskSnapshot(), let memory = loadQueryMemory(for: snapshot),
-              ConversationMemoryRuntime.isValid(memory, snapshot: snapshot, history: book.chats) else { return nil }
+              ConversationMemoryRuntime.isValid(memory, snapshot: snapshot, history: queryHistory(in: book, preferences: currentQueryPreferences)) else { return nil }
         return memory
     }
     var queryMemorySourceMessages: [ChatMessage] {
         guard let memory = currentQueryMemory else { return [] }
         let ids = Set((memory.requirements + memory.conclusions + memory.unresolved).flatMap(\.sources))
-        return (book?.chats ?? []).filter { ids.contains($0.id) }
+        return currentQueryHistory.filter { ids.contains($0.id) }
     }
 
     /// Host receipts are operation state, not quotations, adopted conclusions or
     /// new authority. No original chat message is modified or manufactured.
     var queryHostOperationContext: String? {
-        guard let book else { return nil }
+        guard queryInteractionMode == .functional, let book else { return nil }
         var state: [String: Any] = ["version": 1, "bookID": book.id,
             "meaning": "仅软件操作结果；不是原书事实、用户新授权或继续调用请求。是否再次整理由用户本次选择决定。"]
         let ownReceipts = (book.controlledChanges?.receipts ?? []).filter { $0.originBookID == book.id }
@@ -117,7 +130,8 @@ import ReadingCore
 
     func recordQueryHostOperation(status: String, bookID expectedBookID: String,
                                   proposal: ControlledChangeProposal? = nil, receipt: ControlledChangeReceipt? = nil) async {
-        guard ["applied", "discarded", "undone"].contains(status), var current = book, current.id == expectedBookID else { return }
+        guard ["applied", "discarded", "undone"].contains(status), let base = book, base.id == expectedBookID else { return }
+        var current = base
         let groups: [ControlledChangeGroup] = proposal?.groups ?? receipt?.groups ?? []
         let recordCount = receipt?.patches.count ?? proposal?.summary.count ?? 0
         let documentCount = receipt?.documents.count ?? proposal?.documents.count ?? 0
@@ -128,13 +142,15 @@ import ReadingCore
         let retained = Set(current.audit.filter { $0.name == QueryHostOperationRecord.auditName }.suffix(32).map(\.id))
         current.audit.removeAll { $0.name == QueryHostOperationRecord.auditName && !retained.contains($0.id) }
         do {
-            try await repository.save(current)
+            let identity = [expectedBookID, status, proposal?.id ?? "", receipt?.operationID ?? ""].joined(separator: "|")
+            let operationID = "query-review-" + (try BookImporter.sha256(Data(identity.utf8)))
+            let saved = try await repository.commitAIResult(base: base, result: current, operationID: operationID)
             guard bookID == expectedBookID else { return }
-            publish(current)
+            publish(saved)
         } catch {
             // Commit/undo receipts remain durable even if this auxiliary review
             // history cannot be saved; never turn a successful write into a retry.
-            queryDisclosure += "\n整理结果已处理，但这次审阅记录未能保存；实际提交与撤销仍以持久回执为准。"
+            if bookID == expectedBookID { queryDisclosure += "\n整理结果已处理，但这次审阅记录未能保存；实际提交与撤销仍以持久回执为准。" }
         }
     }
 }

@@ -3,6 +3,9 @@ import AppKit
 import WebKit
 import UniformTypeIdentifiers
 import ImageIO
+import os
+
+private let markdownSignposter = OSSignposter(subsystem: "org.readingbook.app", category: "Markdown")
 
 /// A transient selection from this exact trusted render. Rendered text is a semantic
 /// excerpt, not a claim that its bytes equal the Markdown source (especially math).
@@ -34,13 +37,29 @@ struct SourceReadingSelection: Equatable, Sendable {
     var endPage: Int? = nil
 }
 
+struct SourceReadingHover: Equatable, Sendable {
+    let id: String
+    var rect: CGRect
+    var point: CGPoint
+    var activated = false
+    func offsetBy(dx: CGFloat, dy: CGFloat) -> Self {
+        var copy = self; copy.rect = rect.offsetBy(dx: dx, dy: dy); copy.point = CGPoint(x: point.x + dx, y: point.y + dy); return copy
+    }
+}
+enum ReaderInlineCoordinateSpace { static let name = "readingbook.inline.reader" }
+
 /// Offline Markdown + KaTeX. The surrounding SwiftUI ScrollView owns vertical scrolling.
 /// A base directory is an explicit grant for relative raster images only, never file links.
 private struct MarkdownReadingStyleKey: EnvironmentKey { static let defaultValue = "body" }
+private struct MarkdownTextScaleKey: EnvironmentKey { static let defaultValue = 1.0 }
 extension EnvironmentValues {
     var markdownReadingStyle: String {
         get { self[MarkdownReadingStyleKey.self] }
         set { self[MarkdownReadingStyleKey.self] = newValue }
+    }
+    var markdownTextScale: Double {
+        get { self[MarkdownTextScaleKey.self] }
+        set { self[MarkdownTextScaleKey.self] = newValue }
     }
 }
 
@@ -55,9 +74,11 @@ struct RichMarkdownView: View {
     var focusedDecorationID: String?
     var onSourceDecorationTap: ((String) -> Void)?
     var onSourceSelection: ((SourceReadingSelection?) -> Void)?
+    var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.markdownReadingStyle) private var readingStyle
+    @Environment(\.markdownTextScale) private var textScale
     @State private var contentHeight: CGFloat = 40
 
     init(markdown: String, baseDirectory: URL? = nil,
@@ -66,7 +87,8 @@ struct RichMarkdownView: View {
          sourceText: String? = nil, plainText: Bool = false,
          sourceDecorations: [SourceReadingDecoration] = [], focusedDecorationID: String? = nil,
          onSourceDecorationTap: ((String) -> Void)? = nil,
-         onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil) {
+          onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil,
+          onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil) {
         self.markdown = markdown
         self.baseDirectory = baseDirectory
         self.onSelectionChange = onSelectionChange
@@ -74,19 +96,26 @@ struct RichMarkdownView: View {
         self.sourceText = sourceText; self.plainText = plainText
         self.sourceDecorations = sourceDecorations; self.focusedDecorationID = focusedDecorationID
         self.onSourceDecorationTap = onSourceDecorationTap; self.onSourceSelection = onSourceSelection
+        self.onSourceDecorationHover = onSourceDecorationHover
     }
 
     var body: some View {
         Group {
             if let resources = MarkdownResources.directory {
+              GeometryReader { geometry in
                 MarkdownWebView(markdown: markdown, baseDirectory: baseDirectory,
-                                resources: resources, theme: colorScheme == .dark ? "dark" : "light", readingStyle: readingStyle,
+                                resources: resources, theme: colorScheme == .dark ? "dark" : "light", readingStyle: readingStyle, textScale: textScale,
                                 height: $contentHeight, onOpenURL: { openURL($0) },
                                 onSelectionChange: onSelectionChange, onSelectionSave: onSelectionSave,
                                 sourceText: sourceText ?? markdown, plainText: plainText,
                                 sourceDecorations: sourceDecorations, focusedDecorationID: focusedDecorationID,
-                                onSourceDecorationTap: onSourceDecorationTap, onSourceSelection: onSourceSelection)
-                    .frame(height: max(32, contentHeight))
+                                onSourceDecorationTap: onSourceDecorationTap, onSourceSelection: onSourceSelection,
+                                onSourceDecorationHover: { value in
+                                    guard let onSourceDecorationHover else { return }
+                                    let origin = geometry.frame(in: .named(ReaderInlineCoordinateSpace.name)).origin
+                                    onSourceDecorationHover(value.map { $0.offsetBy(dx: origin.x, dy: origin.y) })
+                                })
+              }.frame(height: max(32, contentHeight)).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             } else {
                 Text("离线 Markdown / 公式资源缺失，请重新安装完整的 ReadingBook.app。")
                     .foregroundStyle(.secondary).padding()
@@ -116,6 +145,7 @@ private struct MarkdownWebView: NSViewRepresentable {
     let resources: URL
     let theme: String
     let readingStyle: String
+    let textScale: Double
     @Binding var height: CGFloat
     var onOpenURL: (URL) -> Void
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
@@ -126,6 +156,7 @@ private struct MarkdownWebView: NSViewRepresentable {
     let focusedDecorationID: String?
     var onSourceDecorationTap: ((String) -> Void)?
     var onSourceSelection: ((SourceReadingSelection?) -> Void)?
+    var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(height: $height, onOpenURL: onOpenURL, onSelectionChange: onSelectionChange) }
 
@@ -140,6 +171,7 @@ private struct MarkdownWebView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "readingbookSelection")
         configuration.userContentController.add(context.coordinator, name: "readingbookSourceTap")
         configuration.userContentController.add(context.coordinator, name: "readingbookSourceFocus")
+        configuration.userContentController.add(context.coordinator, name: "readingbookSourceHover")
         let webView = MarkdownContentWebView(frame: .zero, configuration: configuration)
         webView.underPageBackgroundColor = .clear
         webView.navigationDelegate = context.coordinator
@@ -161,12 +193,13 @@ private struct MarkdownWebView: NSViewRepresentable {
         context.coordinator.onSelectionSave = onSelectionSave
         context.coordinator.onSourceDecorationTap = onSourceDecorationTap
         context.coordinator.onSourceSelection = onSourceSelection
+        context.coordinator.onSourceDecorationHover = onSourceDecorationHover
         if let contentView = webView as? MarkdownContentWebView {
             if onSelectionSave != nil {
                 contentView.saveSelection = { [weak coordinator = context.coordinator] selection in coordinator?.saveSelection(selection) }
             } else { contentView.saveSelection = nil }
         }
-        context.coordinator.update(markdown: markdown, baseDirectory: baseDirectory, theme: theme, readingStyle: readingStyle,
+        context.coordinator.update(markdown: markdown, baseDirectory: baseDirectory, theme: theme, readingStyle: readingStyle, textScale: textScale,
                                    sourceText: sourceText, plainText: plainText, decorations: sourceDecorations,
                                    focusedID: focusedDecorationID)
     }
@@ -179,6 +212,7 @@ private struct MarkdownWebView: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "readingbookSelection")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "readingbookSourceTap")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "readingbookSourceFocus")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "readingbookSourceHover")
         coordinator.invalidate()
         if let contentView = webView as? MarkdownContentWebView { contentView.selectionForAction = nil; contentView.saveSelection = nil }
         coordinator.webView = nil
@@ -186,8 +220,16 @@ private struct MarkdownWebView: NSViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         struct State: Equatable {
-            let markdown: String; let directory: URL?; let theme: String; let readingStyle: String; let selectionEnabled: Bool
+            let markdown: String; let directory: URL?; let theme: String; let readingStyle: String; let textScale: Double; let selectionEnabled: Bool
             let sourceText: String; let plainText: Bool; let decorations: [SourceReadingDecoration]
+            func sharesDocument(with other: State) -> Bool {
+                directory == other.directory && plainText == other.plainText
+                    && markdown.utf8.elementsEqual(other.markdown.utf8) && sourceText.utf8.elementsEqual(other.sourceText.utf8)
+            }
+            static func == (lhs: State, rhs: State) -> Bool {
+                lhs.theme == rhs.theme && lhs.readingStyle == rhs.readingStyle && lhs.textScale == rhs.textScale
+                    && lhs.selectionEnabled == rhs.selectionEnabled && lhs.decorations == rhs.decorations && lhs.sharesDocument(with: rhs)
+            }
         }
         var height: Binding<CGFloat>
         var onOpenURL: (URL) -> Void
@@ -195,6 +237,7 @@ private struct MarkdownWebView: NSViewRepresentable {
         var onSelectionSave: ((RenderedMarkdownSelection) -> Void)?
         var onSourceDecorationTap: ((String) -> Void)?
         var onSourceSelection: ((SourceReadingSelection?) -> Void)?
+        var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
         weak var webView: WKWebView?
         var schemeHandler: MarkdownSchemeHandler?
         private var pending: State?
@@ -211,9 +254,9 @@ private struct MarkdownWebView: NSViewRepresentable {
             self.height = height; self.onOpenURL = onOpenURL; self.onSelectionChange = onSelectionChange
         }
 
-        func update(markdown: String, baseDirectory: URL?, theme: String, readingStyle: String, sourceText: String,
+        func update(markdown: String, baseDirectory: URL?, theme: String, readingStyle: String, textScale: Double, sourceText: String,
                     plainText: Bool, decorations: [SourceReadingDecoration], focusedID: String?) {
-            pending = State(markdown: markdown, directory: baseDirectory, theme: theme, readingStyle: readingStyle,
+            pending = State(markdown: markdown, directory: baseDirectory, theme: theme, readingStyle: readingStyle, textScale: textScale.isFinite ? min(1.6, max(0.8, textScale)) : 1,
                             selectionEnabled: onSelectionChange != nil || onSourceSelection != nil,
                             sourceText: sourceText, plainText: plainText, decorations: Array(decorations.prefix(1_000)))
             self.focusedID = focusedID
@@ -221,7 +264,7 @@ private struct MarkdownWebView: NSViewRepresentable {
             focusPending()
         }
 
-        func invalidate() { ready = false; rendering = false; revision += 1; pending = nil; displayed = nil; lastSelection = nil; onSelectionChange = nil; onSelectionSave = nil; onSourceSelection = nil; onSourceDecorationTap = nil }
+        func invalidate() { ready = false; rendering = false; revision += 1; pending = nil; displayed = nil; lastSelection = nil; onSelectionChange = nil; onSelectionSave = nil; onSourceSelection = nil; onSourceDecorationTap = nil; onSourceDecorationHover = nil }
 
         // Native menu/keyboard actions only reuse a selection admitted by the
         // existing main-frame bridge, and revalidate it when the action fires.
@@ -237,17 +280,22 @@ private struct MarkdownWebView: NSViewRepresentable {
         }
 
         private func renderPending() {
-            guard ready, let webView, let state = pending, state != displayed else { return }
-            displayed = state; revision += 1; rendering = true
+            guard ready, !rendering, let webView, let state = pending, state != displayed else { return }
+            let previous = displayed
+            let replacesDocument = previous.map { !state.sharesDocument(with: $0) } ?? true
+            displayed = state; rendering = true
+            if replacesDocument { revision += 1 }
             displayedFocusID = nil
-            lastSelection = nil
+            if replacesDocument { lastSelection = nil }
             let renderedRevision = revision
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.revision == renderedRevision else { return }
-                self.onSelectionChange?(nil)
-                self.onSourceSelection?(nil)
+            if replacesDocument {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.revision == renderedRevision else { return }
+                    self.onSelectionChange?(nil)
+                    self.onSourceSelection?(nil)
+                }
+                schemeHandler?.authorize(state.directory, revision: revision)
             }
-            schemeHandler?.authorize(state.directory, revision: revision)
             let decorations: [[String: Any]] = state.decorations.map { decoration in
                 var item: [String: Any] = ["id": decoration.id, "targetID": decoration.targetID, "quote": decoration.quote]
                 if let location = decoration.rangeLocation, let length = decoration.rangeLength {
@@ -255,20 +303,26 @@ private struct MarkdownWebView: NSViewRepresentable {
                 }
                 return item
             }
-            let options: [String: Any] = ["allowImages": state.directory != nil, "theme": state.theme, "readingStyle": state.readingStyle,
+            let options: [String: Any] = ["allowImages": state.directory != nil, "theme": state.theme, "readingStyle": state.readingStyle, "textScale": state.textScale,
                                           "revision": revision, "selectionEnabled": state.selectionEnabled,
                                           "sourceText": state.sourceText, "plainText": state.plainText,
                                           "sourceDecorations": decorations]
             // WebKit serializes these arguments. Markdown is never interpolated into JS/HTML.
-            webView.callAsyncJavaScript("window.ReadingBookMarkdown.render(markdown, options)",
+            let script = replacesDocument
+                ? "window.ReadingBookMarkdown.render(markdown, options)"
+                : "window.ReadingBookMarkdown.updatePresentation(options); window.ReadingBookMarkdown.updateDecorations(options.sourceDecorations, options)"
+            let intervalName: StaticString = replacesDocument ? "RenderMarkdownBody" : "UpdateMarkdownPresentation"
+            let interval = markdownSignposter.beginInterval(intervalName)
+            webView.callAsyncJavaScript(script,
                                        arguments: ["markdown": state.markdown, "options": options],
                                        in: nil, in: .page) { [weak self] result in
+                markdownSignposter.endInterval(intervalName, interval)
                 guard let self, self.revision == renderedRevision else { return }
                 self.rendering = false
                 if case .failure(let error) = result {
                     self.displayed = nil
                     NSLog("ReadingBook offline renderer: %@", error.localizedDescription)
-                } else { self.focusPending() }
+                } else { self.renderPending(); self.focusPending() }
             }
         }
 
@@ -316,6 +370,14 @@ private struct MarkdownWebView: NSViewRepresentable {
             } else if message.name == "readingbookLink", let href = body["href"] as? String,
                       let version = body["revision"] as? NSNumber, version.intValue == revision,
                       href.utf8.count <= 8_192, let url = URL(string: href) { open(url) }
+            else if message.name == "readingbookSourceHover", let version = body["revision"] as? NSNumber, version.intValue == revision {
+                if body["leaving"] as? Bool == true { onSourceDecorationHover?(nil); return }
+                guard displayed == pending, let id = body["id"] as? String, displayed?.decorations.contains(where: { $0.id == id }) == true,
+                      let rect = body["rect"] as? [String: NSNumber], let x = rect["x"]?.doubleValue, let y = rect["y"]?.doubleValue,
+                      let width = rect["width"]?.doubleValue, let height = rect["height"]?.doubleValue,
+                      [x, y, width, height].allSatisfy(\.isFinite), width > 0, height > 0, abs(x) <= 1_000_000, abs(y) <= 1_000_000 else { return }
+                onSourceDecorationHover?(SourceReadingHover(id: id, rect: CGRect(x: x, y: y, width: width, height: height), point: CGPoint(x: x + width / 2, y: y + height), activated: body["activated"] as? Bool == true))
+            }
             else if message.name == "readingbookSourceTap", let version = body["revision"] as? NSNumber,
                     version.intValue == revision, let id = body["id"] as? String,
                     displayed == pending, displayed?.decorations.contains(where: { $0.id == id }) == true {

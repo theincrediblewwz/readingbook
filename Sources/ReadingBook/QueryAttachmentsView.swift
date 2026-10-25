@@ -7,19 +7,19 @@ struct QueryAttachmentsControl: View {
     @EnvironmentObject private var store: AppStore
     @State private var presented = false
     @State private var search = ""
-    private var count: Int { (store.queryScope == .notes ? 0 : store.queryAttachedDocuments.count) + store.queryAuthorizedNodes.count }
+    private var count: Int { (store.queryScope == .notes ? 0 : store.queryAttachedDocuments.count) + (store.queryInteractionMode == .functional ? store.queryAuthorizedNodes.count : 0) }
     var body: some View {
         Button { presented.toggle() } label: {
             Label(count == 0 ? "附加内容" : "附加 \(count) 项", systemImage: "paperclip")
                 .font(.system(size: 13)).frame(minHeight: 44)
-        }.buttonStyle(.plain).fixedSize().disabled(store.isBusy)
+        }.buttonStyle(.plain).fixedSize().disabled(store.isQueryBusy)
             .popover(isPresented: $presented) { attachmentPicker.frame(width: 370, height: 470) }
             .help("附加本次可读取的笔记与可整理的节点")
     }
     private var attachmentPicker: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("这次一起读与整理").font(.system(size: 17, weight: .semibold))
+                Text(store.queryInteractionMode == .reading ? "这次一起读" : "这次一起读与整理").font(.system(size: 17, weight: .semibold))
                 Spacer()
                 Button { presented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("关闭附加内容")
             }.padding(.horizontal, 16)
@@ -39,16 +39,18 @@ struct QueryAttachmentsControl: View {
                         if documents.isEmpty { Text("没有匹配的已保存笔记").font(.caption).foregroundStyle(.secondary) }
                         Divider().padding(.vertical, 8)
                     }
-                    Text("画布节点").font(.subheadline.weight(.semibold))
-                    Button("附加画布中已选节点") { store.addSelectedQueryNodes() }.buttonStyle(.borderless)
-                    ForEach(nodes) { node in
-                        Toggle(store.queryNodeTitle(node), isOn: Binding(get: { store.queryAuthorizedNodeIDs.contains(node.id) },
-                            set: { store.setQueryAuthorizedNode(node.id, included: $0) }))
-                            .toggleStyle(.checkbox).frame(minHeight: 36, alignment: .leading)
+                    if store.queryInteractionMode == .functional {
+                        Text("画布节点").font(.subheadline.weight(.semibold))
+                        Button("附加画布中已选节点") { store.addSelectedQueryNodes() }.buttonStyle(.borderless)
+                        ForEach(nodes) { node in
+                            Toggle(store.queryNodeTitle(node), isOn: Binding(get: { store.queryAuthorizedNodeIDs.contains(node.id) },
+                                set: { store.setQueryAuthorizedNode(node.id, included: $0) }))
+                                .toggleStyle(.checkbox).frame(minHeight: 36, alignment: .leading)
+                        }
+                        if nodes.isEmpty { Text("没有匹配的节点").font(.caption).foregroundStyle(.secondary) }
+                        Text("挂载文档需单独勾选；修改已有内容仍先审阅差异。")
+                            .font(.caption).foregroundStyle(.secondary).lineSpacing(4).padding(.top, 10)
                     }
-                    if nodes.isEmpty { Text("没有匹配的节点").font(.caption).foregroundStyle(.secondary) }
-                    Text("节点选择仅开放布局；挂载文档需在上方单独勾选。修改已有内容仍先审阅差异。")
-                        .font(.caption).foregroundStyle(.secondary).lineSpacing(4).padding(.top, 10)
                 }.padding(18)
             }
             Divider()
@@ -74,7 +76,7 @@ struct QueryMemoryInspector: View {
     var body: some View {
         let memory = store.currentQueryMemory
         let sourceIDs = Set(((memory?.requirements ?? []) + (memory?.conclusions ?? []) + (memory?.unresolved ?? [])).flatMap(\.sources))
-        let messages = Dictionary((store.book?.chats ?? []).filter { sourceIDs.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let messages = Dictionary(store.currentQueryHistory.filter { sourceIDs.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Label("对话记忆", systemImage: "brain.head.profile").font(.system(size: 20, weight: .semibold))
@@ -99,7 +101,7 @@ struct QueryMemoryInspector: View {
             HStack {
                 Toggle("使用长对话记忆", isOn: $store.queryMemoryEnabled).toggleStyle(.switch)
                 Spacer()
-                Button("清除派生摘要") { store.clearCurrentQueryMemory() }.disabled(store.isBusy)
+                Button("清除派生摘要") { store.clearCurrentQueryMemory() }.disabled(store.isQueryBusy)
             }.padding(18)
         }.frame(width: 620, height: 560).onExitCommand(perform: onClose)
     }

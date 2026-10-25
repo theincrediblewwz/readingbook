@@ -9,6 +9,8 @@ struct CompositionWorkspaceView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.readingReduceMotion) private var reduceMotion
     var definition: ViewDefinition?
+    var embedded = false
+    var contextOverride: ReadingContext? = nil
     @State private var projections: [String: CompositionProjection] = [:]
     @State private var baseline: [String: CompositionProjection] = [:]
     @State private var selections: [String: Set<String>] = [:]
@@ -21,6 +23,7 @@ struct CompositionWorkspaceView: View {
 
     private var composition: CompositionDefinition? { definition?.composition }
     private var points: [String: TemporalQueryPoint] { clocks.compactMapValues(\.point) }
+    private var readingContext: ReadingContext { contextOverride ?? store.currentReadingContext }
 
     var body: some View {
         GeometryReader { geometry in
@@ -30,17 +33,18 @@ struct CompositionWorkspaceView: View {
                 else if let composition, validatedComposition == composition, validatedBookID == store.bookID {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 18) {
-                            workspaceHeader
-                            layout(composition.rootID, in: composition, width: max(240, geometry.size.width - 40))
-                        }.padding(.horizontal, 20).padding(.top, 92).padding(.bottom, 28)
+                            if !embedded { workspaceHeader }
+                            layout(composition.rootID, in: composition, width: max(240, geometry.size.width - (embedded ? 16 : 40)))
+                        }.padding(.horizontal, embedded ? 8 : 20).padding(.top, embedded ? 8 : 92).padding(.bottom, embedded ? 8 : 28)
                     }
                 } else if composition != nil { ProgressView("正在准备组件…") }
                 else { fallback("这个组件尚未提供可显示的布局。原书、笔记和已保存配置都保留。") }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.background(Palette.canvas)
+        }.background(embedded ? Color.clear : Palette.canvas)
             .task { refresh() }
             .onChange(of: store.projectRevision) { _, _ in refresh() }
             .onChange(of: store.currentReadingContext) { _, _ in refresh() }
+            .onChange(of: contextOverride) { _, _ in reset() }
             .onChange(of: store.bookID) { _, _ in reset() }
             .onChange(of: definition) { _, _ in reset() }
             .onChange(of: selections) { _, _ in refresh() }
@@ -78,15 +82,18 @@ struct CompositionWorkspaceView: View {
         guard let book = store.book, let composition else {
             projections = [:]; baseline = [:]; validatedComposition = nil; validatedBookID = nil; issue = nil; return
         }
+        if embedded, selections.isEmpty, let id = readingContext.objectID {
+            for source in composition.sources { selections[source.selectionGroup] = [id] }
+        }
         do {
             try CompositionRuntime.validate(composition, in: book)
             if includeBaseline {
-                baseline = try CompositionRuntime.project(composition, in: book, context: store.currentReadingContext,
+                baseline = try CompositionRuntime.project(composition, in: book, context: readingContext,
                     selections: selections, boundary: store.temporalBoundary)
             }
             if points.isEmpty { projections = baseline }
             else {
-                projections = try CompositionRuntime.project(composition, in: book, context: store.currentReadingContext,
+                projections = try CompositionRuntime.project(composition, in: book, context: readingContext,
                     selections: selections, times: points, boundary: store.temporalBoundary)
             }
             validatedComposition = composition; validatedBookID = book.id
@@ -244,7 +251,7 @@ struct CompositionWorkspaceView: View {
         case .markdown:
             CompositionMarkdown(items: projection.items, selected: selected)
         case .map:
-            CompositionMap(points: projection.mapPoints, selected: selected) { select($0, group: part.selectionGroup) }
+            CompositionMap(points: projection.mapPoints, selected: selected, height: embedded ? 220 : 420) { select($0, group: part.selectionGroup) }
         case .timeline:
             CompositionTimeline(items: baseline.items, selected: selected,
                 clock: Binding(get: { clocks[part.timeGroup] ?? CompositionClock() }, set: { clocks[part.timeGroup] = $0 }),
@@ -429,6 +436,7 @@ private struct CompositionMarkdown: View {
 private struct CompositionMap: View {
     let points: [CompositionMapPoint]
     let selected: Set<String>
+    var height: CGFloat = 420
     var select: (String) -> Void
     @State private var camera: MapCameraPosition = .automatic
     var body: some View {
@@ -446,7 +454,7 @@ private struct CompositionMap: View {
                     }
                 }
             }.mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll))
-                .mapControls { MapCompass(); MapScaleView() }.frame(height: 420).clipShape(RoundedRectangle(cornerRadius: 18))
+                .mapControls { MapCompass(); MapScaleView() }.frame(height: height).clipShape(RoundedRectangle(cornerRadius: 18))
                 .padding(8).onChange(of: selected) { _, ids in
                     locate(ids)
                 }.onChange(of: points) { _, _ in

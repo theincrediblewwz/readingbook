@@ -212,7 +212,8 @@ final class ReadingQueryTests: XCTestCase {
         let before = await counter.values(); XCTAssertTrue(before.isEmpty, "不能先执行副作用再因预算藏掉回执")
         let calls = QueryRequestCounter()
         let result = try await ReadingAnswerEngine.run(question: "打开节点面板", project: project, settings: ProviderSettings(model: "synthetic", contextWindowTokens: 128_000), documents: [:], context: nil,
-            scope: .book, history: [], memory: nil, memoryEnabled: false, documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 2, hostTools: host) { messages, tools, _, final in
+            scope: .book, history: [], memory: nil, memoryEnabled: false, documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 2, hostTools: host,
+            preferences: .init(interaction: .functional, style: .research)) { messages, tools, _, final in
                 let index = await calls.record(final: final, tools: tools.count)
                 if index == 1 { return ProviderClient.Result(message: .init(role: "assistant", content: nil, refusal: nil, tool_calls: [.init(id: "open", type: "function", function: .init(name: "panel_present", arguments: #"{"panelID":"nodes","state":"open"}"#))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 100) }
                 XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("hostToolReceipts") == true })
@@ -326,14 +327,15 @@ final class ReadingQueryTests: XCTestCase {
     }
 
     func testFinalRequestRetainsSourcedMemoryAndHostStatusAfterRecyclingTools() async throws {
-        let project = book(), snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: project)
+        let project = book(), preferences = ReadingAnswerPreferences(interaction: .functional, style: .research)
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: project).withContextIdentity(preferences.contextIdentity)
         let history = (0..<12).map { ChatMessage(id: "m\($0)", role: $0 % 2 == 0 ? "user" : "assistant", content: "第\($0)条原始问答") }
         let raw = #"{"requirements":[{"text":"保留用户指定的年号表达","sources":["m0"]}],"conclusions":[],"unresolved":[]}"#
         let memory = try ConversationMemoryRuntime.parse(raw, previous: nil, next: .init(index: 8), snapshot: snapshot, history: history, model: "synthetic", suppliedIDs: ["m0"])
         let calls = QueryRequestCounter()
         _ = try await ReadingAnswerEngine.run(question: "继续解释", project: project, settings: ProviderSettings(model: "synthetic", contextWindowTokens: 128_000), documents: [:], context: nil,
             scope: .book, history: history, memory: memory, memoryEnabled: true, documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 2,
-            hostOperationContext: #"{"status":"applied","operationID":"op-confirmed"}"#) { messages, tools, _, final in
+            hostOperationContext: #"{"status":"applied","operationID":"op-confirmed"}"#, preferences: preferences) { messages, tools, _, final in
                 let index = await calls.record(final: final, tools: tools.count)
                 if index == 1 {
                     return ProviderClient.Result(message: .init(role: "assistant", content: nil, refusal: nil, tool_calls: [.init(id: "read", type: "function", function: .init(name: "source_read", arguments: #"{"id":"u1"}"#))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 100)

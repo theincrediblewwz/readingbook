@@ -36,6 +36,12 @@ public actor LibraryRepository {
     }
     private var documentValidationCache: [String: DocumentValidationStamp] = [:]
     private var mathValidationCache = MathVerificationValidationCache()
+    private struct SourceManifest {
+        var sourceHash: String
+        var units: [SourceUnit]
+        var hashes: [String: String]
+    }
+    private var sourceManifests: [String: SourceManifest] = [:]
     var readableAutomaticRefresh: [String: Date] = [:]
     private struct ChangeGrantSession { var grant: ControlledWriteGrant; var latestRevision: String }
     private var changeGrants: [String: ChangeGrantSession] = [:]
@@ -538,7 +544,17 @@ public actor LibraryRepository {
         try MathVerificationTools.validateStoredRecords(in: project, cache: &mathValidationCache)
         try ReadingLedger.validateStoredRecords(in: project, mathCache: &mathValidationCache)
         try BookSchemeRuntime.validateStoredState(in: project)
-        try SmartReadingRuntime.validateStoredState(in: project)
+        let sourceManifest: SourceManifest
+        if let cached = sourceManifests[project.id], cached.sourceHash == project.sourceHash, cached.units == project.units {
+            sourceManifest = cached
+        } else {
+            sourceManifest = SourceManifest(sourceHash: project.sourceHash, units: project.units,
+                hashes: try Dictionary(uniqueKeysWithValues: project.units.map { ($0.id, try BookImporter.sha256(Data($0.text.utf8))) }))
+            sourceManifests[project.id] = sourceManifest
+            if sourceManifests.count > 4, let key = sourceManifests.keys.first(where: { $0 != project.id }) { sourceManifests.removeValue(forKey: key) }
+        }
+        try SmartReadingRuntime.validateStoredState(in: project, prevalidatedUnitHashes: sourceManifest.hashes)
+        guard project.plan?.recommendedParallelism.map({ (1...5).contains($0) }) ?? true else { throw ReadingError.invalid("AI 并行建议应在 1–5 之间。") }
         if let experience = project.readingExperience {
             try ReadingExperienceRuntime.validateStoredState(experience, in: project)
         }

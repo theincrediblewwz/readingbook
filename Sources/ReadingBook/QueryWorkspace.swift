@@ -49,7 +49,7 @@ import ReadingCore
         return try? JSONDecoder().decode(ConversationMemory.self, from: data)
     }
     func saveQueryMemory(_ memory: ConversationMemory?, for snapshot: ReadingQuerySnapshot) {
-        guard let memory else { return }
+        guard let memory, !storageState.working, memory.bookID == snapshot.bookID, memory.scopeFingerprint == snapshot.scopeFingerprint else { return }
         do {
             let url = queryMemoryURL(for: snapshot)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -59,6 +59,7 @@ import ReadingCore
         } catch { queryDisclosure += "\n本次会话记忆未能缓存，原对话仍完整保留。" }
     }
     func clearCurrentQueryMemory() {
+        guard !isQueryBusy, !storageState.working else { return }
         guard let snapshot = try? currentQueryTaskSnapshot() else { return }
         let url = queryMemoryURL(for: snapshot)
         do {
@@ -94,7 +95,7 @@ struct QueryScopeControl: View {
         } label: {
             Label(store.queryScope.title, systemImage: icon(store.queryScope))
                 .font(.system(size: compact ? 14 : 15, weight: .medium)).frame(minHeight: 44)
-        }.menuStyle(.borderlessButton).fixedSize().disabled(store.isBusy).help("选择这次提问允许读取的内容")
+        }.menuStyle(.borderlessButton).fixedSize().disabled(store.isQueryBusy).help("选择这次提问允许读取的内容")
     }
     private func icon(_ scope: ReadingQueryScope) -> String {
         switch scope {

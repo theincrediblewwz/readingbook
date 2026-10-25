@@ -70,7 +70,7 @@ struct WorkspaceView: View {
                         .transition(.opacity.combined(with: .scale(scale: 0.985))).zIndex(8)
                 }
                 if navigationExpanded {
-                    sidebar.frame(width: min(286, geometry.size.width - 96), height: max(100, min(690, geometry.size.height - 126)))
+                    sidebar.frame(width: min(286, geometry.size.width - 96), height: min(navigationContentHeight, max(100, geometry.size.height - 126)))
                         .readingGlass(radius: 24).padding(.leading, 16).padding(.top, 88)
                         .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading))).zIndex(10)
                 }
@@ -300,6 +300,12 @@ struct WorkspaceView: View {
         }
     }
     private var componentViews: [ViewDefinition] { WorkspaceComponentRegistry.shared.navigationViews(store.enabledViews) }
+    private var navigationContentHeight: CGFloat {
+        let rows = store.book == nil ? 6 : 10
+        let components = componentViews.isEmpty ? 0 : CGFloat(componentViews.count) * 53 + 42
+        let add = !addableComponents.isEmpty && store.book != nil ? CGFloat(53) : 0
+        return 56 + CGFloat(rows) * 53 + (store.book == nil ? 26 : 52) + components + add
+    }
     private var addableComponents: [WorkspaceComponentDescriptor] {
         guard store.book != nil else { return [] }
         let registry = WorkspaceComponentRegistry.shared

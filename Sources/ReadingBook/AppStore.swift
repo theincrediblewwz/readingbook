@@ -53,6 +53,15 @@ import ReadingCore
     @Published var queryDisclosure = ""
     @Published var queryRetryQuestion: String?
     @Published var queryAllowsOrganizing = false
+    @Published var queryInteractionMode: ReadingConversationMode = .reading
+    @Published var queryAnswerStyle: ReadingAnswerStyle = .mentor
+    @Published var isQueryBusy = false
+    let queryProgressState = AIProgressObservableState()
+    var queryTask: Task<Void, Never>?
+    var readingTask: Task<Void, Never>?
+    let sharedAIRequests = AIRequestCoordinator()
+    var canStartQuery: Bool { !isExclusiveBusy && !isQueryBusy && !isSavingDocument && !isRecognizingPDF && !storageState.working }
+    var canStartReading: Bool { !isExclusiveBusy && !isSmartReadingRunning && !isSavingDocument && !storageState.working }
     @Published var pendingAIChanges: [PendingAIChange] = []
     @Published var renderedWorkspaceVisibility: ReadingVisibleObjectsSnapshot?
     @Published var renderedSelectedNodeIDs: [String] = []
@@ -69,6 +78,7 @@ import ReadingCore
     @Published var isSmartReadingRunning = false
     @Published var smartReadingPlanReady = false
     var smartReadingProgressCacheKey: String?
+    var smartReadingProgressTask: Task<Void, Never>?
     var smartReadingProgressCache: SmartReadingProgress?
     var smartReadingUnitProgressCache = SmartReadingProgressCache()
     @Published var search = ""
@@ -85,7 +95,13 @@ import ReadingCore
     @Published var pdfPasswordRequest: PDFPasswordRequest?
     @Published var pdfSessionPasswords: [String: String] = [:]
     @Published var pdfUnlockedBookIDs: Set<String> = []
-    @Published var isBusy = false
+    @Published private var isExclusiveBusy = false
+    /// Existing manual editing/import/delete surfaces keep their exclusivity.
+    /// Only the explicitly separate read-only question lane bypasses a reading run.
+    var isBusy: Bool {
+        get { isExclusiveBusy || isSmartReadingRunning || isQueryBusy }
+        set { isExclusiveBusy = newValue }
+    }
     @Published var isSavingDocument = false
     @Published var isExportingProject = false
     @Published var isImportingBookCommit = false
@@ -132,11 +148,14 @@ import ReadingCore
     var modelCatalogRepository: ModelCatalogRepository
     var readingIndexTask: Task<Void, Never>?
     var readingIndexGeneration = 0
+    let readingPageSnapshots = ReadingPageSnapshotCache()
     var readingIndexCache: [String: ReadingExperienceState] = [:]
     var readingIndexCacheOrder: [String] = []
     var readableRefreshTask: Task<Void, Never>?
     let serviceProfileDraft = ServiceProfileDraftState()
-    let reader = AIReader()
+    let reader: AIReader
+    let readingReader: AIReader
+    let queryReader: AIReader
     let pdfOCRReader = PDFOCRReader()
     private var loaded = false
     var navigationGeneration = 0
@@ -152,6 +171,9 @@ import ReadingCore
         }.sorted { ($0.startYear ?? Int.max) < ($1.startYear ?? Int.max) }
     }
     init() {
+        reader = AIReader(coordinator: sharedAIRequests)
+        readingReader = AIReader(coordinator: sharedAIRequests)
+        queryReader = AIReader(coordinator: sharedAIRequests, lane: .foreground)
         let root = AppDataLocations.rootURL
         libraryRootURL = root
         repository = LibraryRepository(rootURL: root)
@@ -340,82 +362,84 @@ import ReadingCore
             publish(current); activity = "回答已保存为 Markdown 与导图节点。"
         } catch { errorMessage = error.localizedDescription }
     }
+    func cancelQuery() { queryTask?.cancel() }
     func ask(_ question: String, allowsOrganizing: Bool = false) {
-        guard let current = book, !isBusy, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, providerReady else { return }
+        guard let current = book, canStartQuery, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, providerReady else { return }
         guard question.count <= 4000 else { errorMessage = "问题最多 4000 字，请缩短后再发送；输入内容保留。"; return }
-        let context = queryReadingContext
-        let scope = queryScope
+        let context = queryReadingContext, scope = queryScope, preferences = currentQueryPreferences
+        let history = queryHistory(in: current, preferences: preferences)
         let documentIDs = queryDocumentIDs.map { Array($0).sorted() }
         let attachedDocumentIDs = scope == .notes ? [] : queryAttachedDocumentIDs.sorted()
-        let authorizedNodeIDs = queryAuthorizedNodeIDs.sorted()
+        let authorizedNodeIDs = preferences.interaction == .functional ? queryAuthorizedNodeIDs.sorted() : []
         let snapshot: ReadingQuerySnapshot
-        do { snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: current, context: context, documentIDs: documentIDs,
-            appendedDocumentIDs: attachedDocumentIDs, authorizedNodeIDs: authorizedNodeIDs) }
+        do { snapshot = try currentQueryTaskSnapshot() }
         catch { errorMessage = error.localizedDescription; return }
         let memoryEnabled = queryMemoryEnabled
-        let memory = memoryEnabled ? loadQueryMemory(for: snapshot) : nil
+        let memory = memoryEnabled ? currentQueryMemory : nil
         let repository = repository
         var requestSettings = settings
-        requestSettings.transportSessionID = "readingbook-" + current.id + "-chat"
+        requestSettings.transportSessionID = "readingbook-" + current.id + "-chat-" + preferences.contextIdentity
         let requestKey = apiKey
-        let workspaceSnapshot = makeReadingWorkspaceSnapshot()
-        let hostOperationContext = queryHostOperationContext
-        let viewTools = readingViewToolAccess(bookID: current.id, sourceHash: current.sourceHash)
-        queryAllowsOrganizing = false // A grant belongs to this send, never the next question.
-        isBusy = true; activity = "正在读取所选范围并回答…"
+        let workspaceSnapshot = preferences.interaction == .functional ? makeReadingWorkspaceSnapshot() : nil
+        let hostOperationContext = preferences.interaction == .functional ? queryHostOperationContext : nil
+        let viewTools = preferences.interaction == .functional ? readingViewToolAccess(bookID: current.id, sourceHash: current.sourceHash) : nil
+        let mayOrganize = allowsOrganizing && preferences.interaction == .functional
+        queryAllowsOrganizing = false
+        isQueryBusy = true
         lastQuestionContext = snapshot.displayTitle; queryDisclosure = ""; queryRetryQuestion = nil
-        let userMessage = ChatMessage(role: "user", content: question)
+        var userMessage = ChatMessage(role: "user", content: question)
+        userMessage.conversationMode = preferences.interaction; userMessage.answerStyle = preferences.style
+        let sentMessage = userMessage
         let previousChangeIDs = Set(current.controlledChanges?.receipts.map(\.operationID) ?? [])
-        task = Task {
-            let aiRunID = await beginAIProgress(title: "回答问题")
+        queryTask = Task {
+            let aiRunID = await beginQueryProgress(title: "与书对话")
             var writeGrant: ControlledWriteGrant?
-            defer { finishAIProgress(aiRunID); isBusy = false }
+            defer { finishAIProgress(aiRunID); isQueryBusy = false; queryTask = nil }
             defer {
                 if let grant = writeGrant, !pendingAIChanges.contains(where: { $0.grant.id == grant.id }) {
                     Task { await repository.revokeChangeGrant(grant.id) }
                 }
             }
             do {
-                // Preserve the exact question before networking; a cancelled or
-                // failed answer never discards the reader's input.
-                var pending = current; pending.chats.append(userMessage)
-                try await repository.save(pending); publish(pending)
+                var pending = current; pending.chats.append(sentMessage)
+                let questionBase = try await repository.commitAIResult(base: current, result: pending, operationID: "question-" + sentMessage.id)
+                publish(questionBase)
                 try Task.checkCancellation()
-                if allowsOrganizing {
+                if mayOrganize {
                     writeGrant = try await repository.issueChangeGrant(bookID: current.id, permissions: [.knowledge, .graph, .documents, .bookScheme],
                         allowedUnitIDs: Set(snapshot.unitIDs), editableDocumentIDs: Set(snapshot.documentIDs), requiresReceipts: false,
-                        reason: "读者选择本次整理；原问题ID：\(userMessage.id)；摘要：" + String(question.prefix(500)))
+                        reason: "读者选择本次整理；原问题ID：\(sentMessage.id)；摘要：" + String(question.prefix(500)))
                 }
                 let proposalTools = writeGrant.map { readingProposalAccess(grant: $0, snapshot: snapshot) }
-                await reader.resetBudget()
-                let answer = try await reader.answerDetailed(question: question, project: current, settings: requestSettings, apiKey: requestKey,
-                    readingContext: context, queryScope: scope, history: current.chats, memory: memory, memoryEnabled: memoryEnabled,
+                await queryReader.resetBudget()
+                var answer = try await queryReader.answerDetailed(question: question, project: current, settings: requestSettings, apiKey: requestKey,
+                    readingContext: context, queryScope: scope, history: history, memory: memory, memoryEnabled: memoryEnabled,
                     documentIDs: documentIDs, documentLoader: { document in
                         try Task.checkCancellation()
                         return try await repository.readDocument(bookID: current.id, document: document)
                     }, appendedDocumentIDs: attachedDocumentIDs, authorizedNodeIDs: authorizedNodeIDs,
-                    hostOperationContext: hostOperationContext, workspace: workspaceSnapshot, hostTools: viewTools, proposalAccess: proposalTools)
+                    hostOperationContext: hostOperationContext, workspace: workspaceSnapshot, hostTools: viewTools, proposalAccess: proposalTools,
+                    preferences: preferences)
                 try Task.checkCancellation()
-                guard var result = book, result.id == current.id, result.sourceHash == current.sourceHash,
-                      result.chats.map(\.id) == current.chats.map(\.id) + [userMessage.id] else { throw ReadingError.invalid("对话或原书已改变，本次回答未写入其他版本，请重试。") }
-                result.chats.append(answer.message)
+                answer.message.conversationMode = preferences.interaction; answer.message.answerStyle = preferences.style
+                var result = questionBase; result.chats.append(answer.message)
                 markAIProgressSaving(aiRunID)
-                try await repository.save(result); publish(result); requestsUsed = await reader.requestCount
+                let committed = try await repository.commitAIResult(base: questionBase, result: result, operationID: "answer-" + answer.message.id)
+                publish(committed); requestsUsed = await sharedAIRequests.requestsUsed
                 queryDisclosure = ([answer.diagnostics.disclosure] + answer.diagnostics.notices).joined(separator: "\n")
                 if memoryEnabled { saveQueryMemory(answer.memory, for: snapshot) }
-                activity = "回答已生成；你可以选择保存为 Markdown。"
+                if !isSmartReadingRunning { activity = "回答已生成，可以选一段记入笔记。" }
             } catch {
                 finishAIProgress(aiRunID, error: error)
-                queryRetryQuestion = question; handle(error)
+                queryRetryQuestion = question
+                if !(error is CancellationError) && (error as? URLError)?.code != .cancelled { errorMessage = error.localizedDescription }
                 let saved = book?.id == current.id ? (book?.controlledChanges?.receipts.filter { !previousChangeIDs.contains($0.operationID) && $0.undoneAt == nil }.count ?? 0) : 0
-                if saved > 0 {
-                    queryDisclosure = "本次回答尚未完成；已保存 \(saved) 次授权整理，可从权限菜单撤销。原问题与待审阅提案保留。"
-                    activity = queryDisclosure
-                }
-                requestsUsed = await reader.requestCount
+                if saved > 0 { queryDisclosure = "回答未完成；已保存的授权整理可在记录中查看或撤销。" }
+                requestsUsed = await sharedAIRequests.requestsUsed
             }
         }
     }
+
     func focus(_ id: String) {
         selectedObjectID = id
         if let event = book?.events.first(where: { $0.id == id }), let year = event.startYear {

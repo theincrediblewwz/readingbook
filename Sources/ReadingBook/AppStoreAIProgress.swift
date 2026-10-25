@@ -37,7 +37,19 @@ struct AIProgressPresentationState: Equatable {
         var title: String
         var succeeded: Bool?
         var requiresReview = false
+        var requestNumber = 0
+        var summary = ""
     }
+    struct Request: Identifiable, Equatable {
+        var id: UUID
+        var number: Int
+        var startedAt = Date()
+        var finishedAt: Date?
+        var reasoning = 0
+        var output = 0
+        var bytes = 0
+    }
+    var requests: [Request] = []
     var runID: UUID?
     fileprivate var mailbox: AIProgressMailbox?
     var bookID: String?
@@ -61,9 +73,9 @@ struct AIProgressPresentationState: Equatable {
     private var requestReasoning = 0
     private var requestAnswer = 0
     private var requestBytes = 0
-    var reasoningCharacters: Int { priorReasoning + requestReasoning }
-    var answerCharacters: Int { priorAnswer + requestAnswer }
-    var receivedBytes: Int { priorBytes + requestBytes }
+    var reasoningCharacters: Int { priorReasoning + requests.reduce(0) { $0 + $1.reasoning } }
+    var answerCharacters: Int { priorAnswer + requests.reduce(0) { $0 + $1.output } }
+    var receivedBytes: Int { priorBytes + requests.reduce(0) { $0 + $1.bytes } }
     var isRunning: Bool { status == .running }
     var hasActivity: Bool { startedAt != nil }
     var phaseTitle: String {
@@ -91,24 +103,31 @@ struct AIProgressPresentationState: Equatable {
     }
     mutating func apply(_ event: AIProgressEvent) {
         guard isRunning else { return }
-        if event.phase == .waitingForResponse, let id = event.requestID, id != activeRequestID {
-            priorReasoning += requestReasoning; priorAnswer += requestAnswer; priorBytes += requestBytes
-            requestReasoning = 0; requestAnswer = 0; requestBytes = 0; activeRequestID = id
+        if event.phase == .waitingForResponse, let id = event.requestID, !requests.contains(where: { $0.id == id }) {
+            activeRequestID = id
+            requests.append(Request(id: id, number: event.requestNumber ?? requests.count + 1))
+            if requests.count > 300 {
+                let removed = requests.removeFirst(); priorReasoning += removed.reasoning; priorAnswer += removed.output; priorBytes += removed.bytes
+            }
         }
-        if let id = event.requestID, id != activeRequestID { return }
         phase = event.phase
-        if let number = event.requestNumber { requestNumber = max(requestNumber, number) }
-        if let count = event.reasoningCharacters { requestReasoning = max(requestReasoning, count) }
-        if let count = event.answerCharacters { requestAnswer = max(requestAnswer, count) }
-        if let count = event.receivedBytes { requestBytes = max(requestBytes, count) }
+        let requestIndex = requests.firstIndex { $0.id == (event.requestID ?? activeRequestID) }
+        let number = requestIndex.map { requests[$0].number } ?? requestNumber
+        requestNumber = max(requestNumber, number)
+        if let index = requestIndex {
+            if let count = event.reasoningCharacters { requests[index].reasoning = max(requests[index].reasoning, count) }
+            if let count = event.answerCharacters { requests[index].output = max(requests[index].output, count) }
+            if let count = event.receivedBytes { requests[index].bytes = max(requests[index].bytes, count) }
+            if event.phase == .requestCompleted { requests[index].finishedAt = Date() }
+        }
         if event.phase == .performingTool {
             toolName = event.toolName; toolIndex = event.toolIndex; toolTotal = event.toolTotal
-            toolSteps.append(ToolStep(title: Self.toolTitle(event.toolName), succeeded: nil))
-            if toolSteps.count > 8 { toolSteps.removeFirst(toolSteps.count - 8) }
+            toolSteps.append(ToolStep(title: Self.toolTitle(event.toolName), succeeded: nil, requestNumber: number))
+            if toolSteps.count > 300 { toolSteps.removeFirst(toolSteps.count - 300) }
         } else if event.phase == .toolCompleted {
             let requiresReview = event.toolStatus == "needs_confirmation"
-            if let index = toolSteps.lastIndex(where: { $0.succeeded == nil && !$0.requiresReview }) {
-                toolSteps[index].requiresReview = requiresReview
+            if let index = toolSteps.lastIndex(where: { $0.requestNumber == number && $0.title == Self.toolTitle(event.toolName) && $0.succeeded == nil && !$0.requiresReview }) {
+                toolSteps[index].requiresReview = requiresReview; toolSteps[index].summary = event.toolSummary ?? ""
                 if !requiresReview { toolSteps[index].succeeded = event.toolSucceeded == true }
             }
             if !requiresReview { if event.toolSucceeded == true { completedTools += 1 } else { failedTools += 1 } }
@@ -148,55 +167,92 @@ struct AIProgressPresentationState: Equatable {
     @Published var value = AIProgressPresentationState()
 }
 
+fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: UUID?
+    func tag(_ event: AIProgressEvent) -> AIProgressEvent {
+        lock.lock(); defer { lock.unlock() }
+        var value = event
+        if value.phase == .waitingForResponse { current = value.requestID }
+        if value.requestID == nil { value.requestID = current }
+        return value
+    }
+}
+
 @MainActor extension AppStore {
-    @discardableResult func beginAIProgress(title: String, ocr: Bool = false) async -> UUID {
-        let runID = UUID(), sourceBookID = bookID
-        _ = aiProgress.mailbox?.take(close: true)
-        let frozenRepository = repository
+    var aiConcurrencyLimit: Int {
+        min(5, max(1, min(book?.smartReading?.selection.execution?.maximumConcurrentRequests ?? 2,
+            book?.plan?.recommendedParallelism ?? 5)))
+    }
+    @discardableResult func beginAIProgress(title: String, ocr: Bool = false, backgroundReading: Bool = false) async -> UUID {
+        if !ocr { try? await sharedAIRequests.beginRun(settings: settings, maximumConcurrency: aiConcurrencyLimit) }
+        return await prepareProgress(title: title, query: false, ocr: ocr, worker: backgroundReading ? readingReader : reader)
+    }
+    @discardableResult func beginQueryProgress(title: String) async -> UUID {
+        try? await sharedAIRequests.beginRun(settings: settings, maximumConcurrency: aiConcurrencyLimit)
+        return await prepareProgress(title: title, query: true, ocr: false, worker: queryReader)
+    }
+    private func progressValue(_ runID: UUID) -> AIProgressPresentationState? {
+        if aiProgress.runID == runID { return aiProgress }
+        if queryProgressState.value.runID == runID { return queryProgressState.value }
+        return nil
+    }
+    private func setProgress(_ value: AIProgressPresentationState) {
+        if value.runID == queryProgressState.value.runID { queryProgressState.value = value }
+        else { aiProgress = value }
+    }
+    private func prepareProgress(title: String, query: Bool, ocr: Bool, worker: AIReader) async -> UUID {
+        let runID = UUID(), sourceBookID = bookID, frozenRepository = repository
+        _ = (query ? queryProgressState.value : aiProgress).mailbox?.take(close: true)
         let mailbox = AIProgressMailbox {
             if let sourceBookID { _ = try? await frozenRepository.refreshReadableViews(id: sourceBookID, archived: false) }
         }
         var value = AIProgressPresentationState()
-        value.mailbox = mailbox
-        value.runID = runID; value.bookID = sourceBookID; value.title = title; value.startedAt = Date(); value.status = .running
-        aiProgress = value
-        let handler: AIProgressHandler = { [weak self] event in
-            guard mailbox.append(event) else { return }
+        value.mailbox = mailbox; value.runID = runID; value.bookID = sourceBookID
+        value.title = title; value.startedAt = Date(); value.status = .running
+        if query { queryProgressState.value = value } else { aiProgress = value }
+        let handler = workerProgressHandler(runID)
+        if ocr { await pdfOCRReader.setProgressHandler(handler) } else { await worker.setProgressHandler(handler) }
+        return runID
+    }
+    func workerProgressHandler(_ runID: UUID) -> AIProgressHandler {
+        let relay = AIWorkerProgressRelay()
+        let mailbox = progressValue(runID)?.mailbox, sourceBookID = bookID
+        return { [weak self] event in
+            guard let mailbox, mailbox.append(relay.tag(event)) else { return }
             Task { @MainActor [weak self] in
-                guard let self, self.aiProgress.runID == runID, self.bookID == sourceBookID, self.aiProgress.isRunning else { return }
+                guard let self, self.bookID == sourceBookID, self.progressValue(runID)?.isRunning == true else { return }
                 self.flushAIProgress(runID)
             }
         }
-        if ocr { await pdfOCRReader.setProgressHandler(handler) }
-        else { await reader.setProgressHandler(handler) }
-        return runID
     }
     func markAIProgressSaving(_ runID: UUID) {
-        guard aiProgress.runID == runID, aiProgress.isRunning else { return }
         flushAIProgress(runID)
-        aiProgress.phase = .saving
+        guard var value = progressValue(runID), value.isRunning else { return }
+        value.phase = .saving; setProgress(value)
     }
     func updateAIProgressDetail(_ runID: UUID, detail: String) {
-        guard aiProgress.runID == runID, aiProgress.isRunning else { return }
-        aiProgress.detail = String(detail.prefix(160))
+        guard var value = progressValue(runID), value.isRunning else { return }
+        value.detail = String(detail.prefix(160)); setProgress(value)
     }
     func finishAIProgress(_ runID: UUID, error: Error? = nil) {
-        guard aiProgress.runID == runID, aiProgress.isRunning else { return }
+        guard progressValue(runID)?.isRunning == true else { return }
         flushAIProgress(runID, close: true)
-        let finishAction = aiProgress.mailbox?.finishAction
-        Task { await finishAction?() }
-        aiProgress.finishedAt = Date()
+        guard var value = progressValue(runID) else { return }
+        let finishAction = value.mailbox?.finishAction
+        Task { await finishAction?(); await sharedAIRequests.endRun() }
+        value.finishedAt = Date()
         if let error {
-            aiProgress.status = error is CancellationError || (error as? URLError)?.code == .cancelled || error is ReadingWorkflowBudgetPause ? .paused : .failed
-        } else { aiProgress.status = .completed }
+            value.status = error is CancellationError || (error as? URLError)?.code == .cancelled || error is ReadingWorkflowBudgetPause ? .paused : .failed
+        } else { value.status = .completed }
+        setProgress(value)
     }
     private func flushAIProgress(_ runID: UUID, close: Bool = false) {
-        guard aiProgress.runID == runID else { return }
-        let events = aiProgress.mailbox?.take(close: close) ?? []
+        guard var value = progressValue(runID) else { return }
+        let events = value.mailbox?.take(close: close) ?? []
         guard !events.isEmpty else { return }
-        var value = aiProgress
         for event in events { value.apply(event) }
-        aiProgress = value
+        setProgress(value)
     }
 }
 
@@ -204,6 +260,7 @@ struct AIProgressStatusView: View {
     @ObservedObject var state: AIProgressObservableState
     var compact = false
     @Environment(\.readingReduceMotion) private var reduceMotion
+    @State private var showingDetails = false
     private var progress: AIProgressPresentationState { state.value }
     var body: some View {
         if let started = progress.startedAt {
@@ -240,13 +297,62 @@ struct AIProgressStatusView: View {
                             HStack(spacing: 7) {
                                 Image(systemName: step.requiresReview ? "clock" : step.succeeded == nil ? "circle.dotted" : step.succeeded == true ? "checkmark.circle.fill" : "exclamationmark.circle")
                                     .foregroundStyle(step.succeeded == false ? Palette.copper : Palette.accent)
-                                Text(step.title).font(.system(size: 12)).lineLimit(1)
+                                Button(step.title) { showingDetails = true }.buttonStyle(.plain).font(.system(size: 12)).lineLimit(1)
                                 if step.requiresReview { Text("审阅后应用").font(.system(size: 11)).foregroundStyle(.secondary) }
                             }
                         }
                     }
+                    Button { showingDetails = true } label: { Label("请求记录与详情", systemImage: "clock.arrow.circlepath").font(.system(size: 12)) }.buttonStyle(.plain).foregroundStyle(Palette.accent).frame(minHeight: 30)
                 }.font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading)
             }
+            .sheet(isPresented: $showingDetails) { AIRequestHistoryView(state: state) }
         }
+    }
+}
+
+struct AIRequestHistoryView: View {
+    @EnvironmentObject private var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var state: AIProgressObservableState
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Label("请求记录", systemImage: "clock.arrow.circlepath").font(.system(size: 17, weight: .semibold))
+                Spacer(); DockIconButton(title: "关闭请求记录", icon: "xmark") { dismiss() }
+            }.padding(.horizontal, 20).frame(height: 60)
+            Divider().opacity(0.4)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(state.value.requests.reversed()) { request in
+                        DisclosureGroup {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("思考 \(request.reasoning) · 输出 \(request.output) 字符").font(.system(size: 12)).foregroundStyle(.secondary)
+                                ForEach(state.value.toolSteps.filter { $0.requestNumber == request.number }) { step in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Image(systemName: step.succeeded == true ? "checkmark.circle.fill" : step.succeeded == false ? "exclamationmark.circle" : "clock").foregroundStyle(Palette.accent)
+                                        VStack(alignment: .leading, spacing: 5) {
+                                            Text(step.title)
+                                            if !step.summary.isEmpty { Text(step.summary).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled) }
+                                        }
+                                    }
+                                }
+                            }.padding(.top, 10)
+                        } label: {
+                            HStack { Text("第 \(request.number) 次请求"); Spacer(); Text(request.finishedAt == nil ? "进行中" : "已返回").foregroundStyle(.secondary) }
+                        }.padding(14).background(Palette.accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+                    }
+                    Text("已保存的操作").font(.system(size: 14, weight: .semibold)).padding(.top, 6)
+                    ForEach(Array((store.book?.audit ?? []).suffix(200).reversed())) { audit in
+                        DisclosureGroup(AIProgressPresentationState.toolTitle(audit.name)) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(audit.createdAt, style: .date).font(.system(size: 12)).foregroundStyle(.secondary)
+                                ForEach(audit.resultDetails ?? [], id: \.self) { Text($0).font(.system(size: 14)) }
+                                Text(audit.summary).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
+                            }.padding(.top, 8)
+                        }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }.padding(20)
+            }
+        }.frame(minWidth: 460, idealWidth: 640, minHeight: 380, idealHeight: 600).background(Palette.surface)
     }
 }

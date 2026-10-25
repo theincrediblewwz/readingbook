@@ -135,14 +135,14 @@ public enum PluginEngine {
         let receipt = object(["paragraphID": id, "textHash": id, "summary": ["type": "string", "minLength": 1, "maxLength": 1200], "startQuote": ["type": "string", "maxLength": 96], "endQuote": ["type": "string", "maxLength": 96], "issues": array(text, maximum: 12)], required: ["paragraphID", "textHash", "summary", "startQuote", "endQuote", "issues"])
         let stepResult = object(["stepID": id, "result": ["type": "string", "minLength": 1, "maxLength": 2000], "paragraphIDs": array(id, minimum: 1, maximum: 512)], required: ["stepID", "result", "paragraphIDs"])
         return [
-            function("knowledge_search", "只读查询当前获准原文相关的已保存实体与事件；跨页聚合信息会隐藏。当前正文出现的已有名称/称谓可返回仅身份候选，核对同名后复用稳定ID，不能当作范围外事实。不会自动附加用户笔记标题或正文，不增加阅读覆盖。", object(["query": ["type": "string", "minLength": 1, "maxLength": 400], "limit": ["type": "integer", "minimum": 1, "maximum": 12]], required: ["query"])),
+            function("knowledge_search", "先查询当前原文中对象的已有资料并复用稳定ID。来源全部不晚于当前阅读位置的已保存简介可直接复用；含后文来源的聚合内容只返身份候选。只有原文出现新发展才增补，不重复重建已有介绍。不会附加用户笔记或扩大原文读取权限，不增加覆盖。", object(["query": ["type": "string", "minLength": 1, "maxLength": 400], "limit": ["type": "integer", "minimum": 1, "maximum": 12]], required: ["query"])),
             function("types_define", "定义通用卡片类型。人物只是默认类型之一；可自定义概念、定理等类型。相同 ID 的既有类型不能被不同定义覆盖。", object(["types": array(type, minimum: 1, maximum: 64)], required: ["types"])),
             function("cards_upsert", "依据当前源单元证据创建或合并实体卡。typeID 必须已存在，properties 的键须已在该类型 fields 声明；坐标必须成对并有依据。重用同一稳定 ID，保留旧证据和信息。", object(["entities": array(entity, minimum: 1, maximum: 128)], required: ["entities"])),
             function("events_upsert", "创建或合并同一知识事件；placeIDs 和 participantIDs 引用既有实体 ID。地图与时间轴共用这个事件 ID。未知年份省略，dateText 保留原文及不确定性。", object(["events": array(event, minimum: 1, maximum: 128)], required: ["events"])),
             function("relations_link", "以证据连接已经存在的实体、事件或文档，不创建悬空引用，不编辑文档正文。", object(["relations": array(relation, minimum: 1, maximum: 128)], required: ["relations"])),
             function("views_configure", "添加或配置当前书适用的组件视图。reading.composition使用composition将8种原生元件组合为专用界面（kind=knowledge），共享真实对象、选择和时间；不同id可建立多个组合。reading.layers/reading.atlas/book.scheme保留。scope默认current；book也不越过读者剧透边界。声明不写正文、不执行代码、不凭空补事实。", object(["views": array(view, minimum: 1, maximum: 32)], required: ["views"])),
             function("methods_define", "定义读书法的目标、步骤及可执行动作绑定。executions按stepIndex逐项覆盖步骤，actionID从宿主动作注册表选择；未提供时按兼容AI分析动作执行。每步有输入输出、校验与检查点，不能跳过逐段回执。", object(["methods": array(method, minimum: 1, maximum: 32)], required: ["methods"])),
-            function("reading_plan", "预读后选择已有读书法，可先自定义；正文阶段只允许增加方法，不能减少现有步骤。正文阶段成功后返回当前全部宿主stepID，finish须完整交齐。该操作不增加正文覆盖。", object(["methodIDs": array(id, minimum: 1, maximum: 16), "rationale": ["type": "string", "minLength": 1, "maxLength": 8_000], "focus": array(text, maximum: 32)], required: ["methodIDs", "rationale", "focus"])),
+            function("reading_plan", "预读后选择已有读书法，可先自定义；正文阶段只允许增加方法，不能减少现有步骤。可建议按页或按章分析以及1–5条并行请求，实际仍由宿主范围、预算与服务限制决定。该操作不增加正文覆盖。", object(["methodIDs": array(id, minimum: 1, maximum: 16), "rationale": ["type": "string", "minLength": 1, "maxLength": 8_000], "focus": array(text, maximum: 32), "recommendedParallelism": ["type": "integer", "minimum": 1, "maximum": 5], "recommendedGranularity": ["type": "string", "enum": ["page", "chapter", "adaptive"]]], required: ["methodIDs", "rationale", "focus"])),
             function("read_receipt", "仅提交宿主当前batchID清单内的全部片段回执；不得自编清单、遗漏、重复或加入片段。summary用自己的话极简复述本段，保留关键条件、公式和注释；空白段写空白分隔。textHash原样复制，startQuote/endQuote精确复制宿主给出的首尾锚点，issues明确疑点。回执验证齐全后才开放知识抽取。", object(["batchID": id, "receipts": array(receipt, minimum: 1, maximum: 24)], required: ["batchID", "receipts"])),
             function("reading_finish", "全部片段回执齐全后，提交本次全部获准源单元的细读笔记及每个宿主stepID对应的执行结果。stepResults须精确覆盖选定读书法全部步骤，引用本单元paragraphIDs；不适用也写出原因。unitIDs必须与获准单元完全一致；evidence逐一覆盖且quote为连续原文。源提取警告和回执疑点保留待复核。", object(["unitIDs": array(id, minimum: 1, maximum: 128), "markdown": ["type": "string", "minLength": 1, "maxLength": 160_000], "evidence": evidenceList, "stepResults": array(stepResult, minimum: 1, maximum: 384)], required: ["unitIDs", "markdown", "evidence", "stepResults"])),
             function("map_attach", "把已有事件接入地图视图。必须先创建事件及其引用的地点；只使用同一 eventID，不复制事件。没有坐标的地点仍保持待定位，禁止猜造坐标。", attach),
@@ -241,7 +241,19 @@ public enum PluginEngine {
         let snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: input)
         let session = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: input)
         var scoped = session.scopedKnowledgeProject() ?? input
-        let knownIDs = Set(scoped.entities.map(\.id) + scoped.events.map(\.id) + analysisIdentityCandidates(project, allowedUnitIDs: allowedUnitIDs).map(\.id))
+        let candidates = analysisIdentityCandidates(project, allowedUnitIDs: allowedUnitIDs)
+        let relevantIDs = Set(scoped.entities.map(\.id) + scoped.events.map(\.id) + candidates.map(\.id))
+        if let reuse = SavedKnowledgeReuse(project: project, currentUnitIDs: allowedUnitIDs) {
+            for entity in project.entities where relevantIDs.contains(entity.id) && reuse.admits(entity.evidence) {
+                if let index = scoped.entities.firstIndex(where: { $0.id == entity.id }) { scoped.entities[index] = entity }
+                else { scoped.entities.append(entity) }
+            }
+            for event in project.events where relevantIDs.contains(event.id) && reuse.admits(event.evidence) {
+                if let index = scoped.events.firstIndex(where: { $0.id == event.id }) { scoped.events[index] = event }
+                else { scoped.events.append(event) }
+            }
+        }
+        let knownIDs = Set(scoped.entities.map(\.id) + scoped.events.map(\.id) + candidates.map(\.id))
         scoped.events = scoped.events.map { original in
             var event = original
             event.placeIDs = event.placeIDs.filter(knownIDs.contains); event.participantIDs = event.participantIDs.filter(knownIDs.contains)
@@ -290,14 +302,19 @@ public enum PluginEngine {
         let limit = try integer(input, key: "limit") ?? 8
         guard (1...12).contains(limit) else { throw invalid("查询 limit 必须在 1–12 之间。") }
         let project = try analysisContextProject(original, allowedUnitIDs: allowed)
+        let reuse = SavedKnowledgeReuse(project: original, currentUnitIDs: allowed)
         var matches: [[String: Any]] = []
         for entity in project.entities where matches.count < limit {
             guard ([entity.name, entity.summary] + entity.aliases).contains(where: { $0.localizedCaseInsensitiveContains(query) }) else { continue }
-            matches.append(["kind": "entity", "id": entity.id, "typeID": entity.typeID, "name": String(entity.name.prefix(120)), "aliases": entity.aliases.prefix(3).map { String($0.prefix(60)) }, "summary": String(entity.summary.prefix(180)), "sourceUnitIDs": Array(Set(entity.evidence.map(\.unitID))).sorted().prefix(3).map { $0 }])
+            var row: [String: Any] = ["kind": "entity", "id": entity.id, "typeID": entity.typeID, "name": String(entity.name.prefix(120)), "aliases": entity.aliases.prefix(3).map { String($0.prefix(60)) }, "summary": String(entity.summary.prefix(1200)), "sourceUnitIDs": Array(Set(entity.evidence.map(\.unitID))).sorted().prefix(64).map { $0 }, "identityOnly": entity.summary.isEmpty && entity.properties.isEmpty]
+            if let prior = reuse?.record(id: entity.id) { row["previouslySaved"] = prior }
+            matches.append(row)
         }
         for event in project.events where matches.count < limit {
             guard [event.name, event.summary].contains(where: { $0.localizedCaseInsensitiveContains(query) }) else { continue }
-            matches.append(["kind": "event", "id": event.id, "name": String(event.name.prefix(120)), "summary": String(event.summary.prefix(180)), "dateText": String(event.dateText.prefix(120)), "placeIDs": Array(event.placeIDs.prefix(3)), "participantIDs": Array(event.participantIDs.prefix(3))])
+            var row: [String: Any] = ["kind": "event", "id": event.id, "name": String(event.name.prefix(120)), "summary": String(event.summary.prefix(1200)), "dateText": String(event.dateText.prefix(120)), "placeIDs": Array(event.placeIDs.prefix(3)), "participantIDs": Array(event.participantIDs.prefix(3)), "sourceUnitIDs": Array(Set(event.evidence.map(\.unitID))).sorted().prefix(64).map { $0 }, "identityOnly": event.summary.isEmpty]
+            if let prior = reuse?.record(id: event.id) { row["previouslySaved"] = prior }
+            matches.append(row)
         }
         let returnedIDs = Set(matches.compactMap { $0["id"] as? String })
         for candidate in analysisIdentityCandidates(original, allowedUnitIDs: allowed) where matches.count < limit && !returnedIDs.contains(candidate.id) {
@@ -366,6 +383,7 @@ public enum PluginEngine {
         try registry.install(ReadingExperienceToolPlugin())
         try registry.install(ReadingGraphToolPlugin())
         try registry.install(TemporalKnowledgeToolPlugin())
+        try registry.install(StandardReadingToolPlugin())
         return registry
     }
 
@@ -425,7 +443,7 @@ public enum PluginEngine {
     }
 
     private static func planTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
-        try keys(input, allowed: ["methodIDs", "rationale", "focus"])
+        try keys(input, allowed: ["methodIDs", "rationale", "focus", "recommendedParallelism", "recommendedGranularity"])
         let ids = try strings(input, key: "methodIDs", required: true, maximum: 16)
         guard !ids.isEmpty else { throw invalid("阅读计划至少选择一种读书法。") }
         try uniqueIDs(ids)
@@ -437,6 +455,14 @@ public enum PluginEngine {
         let rationale = try string(input, key: "rationale", maximum: 8_000)
         let focus = try strings(input, key: "focus", required: true, maximum: 32)
         project.plan = ReadingPlan(methodIDs: ids, rationale: rationale, focus: focus)
+        if let parallelism = try integer(input, key: "recommendedParallelism") {
+            guard (1...5).contains(parallelism) else { throw invalid("并行建议须在1–5之间。") }
+            project.plan?.recommendedParallelism = parallelism
+        }
+        if let value = try optionalString(input, key: "recommendedGranularity", maximum: 20, allowEmpty: false) {
+            guard let granularity = ReadingAnalysisGranularity(rawValue: value) else { throw invalid("分析粒度建议无效。") }
+            project.plan?.recommendedGranularity = granularity
+        }
         if !allowed.isEmpty {
             let requirements = try project.units.filter { allowed.contains($0.id) }.flatMap { try ReadingLedger.stepRequirements(for: $0, in: project) }
             let data = try JSONEncoder().encode(requirements)

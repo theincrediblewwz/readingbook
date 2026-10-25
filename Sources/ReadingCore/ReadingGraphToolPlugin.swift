@@ -35,7 +35,7 @@ public enum ReadingGraphTools {
               Set(targets).count == targets.count, Set(relationIDs).count == relationIDs.count,
               !allowedUnitIDs.isEmpty, allowedUnitIDs.isSubset(of: Set(project.units.map(\.id))) else { throw invalid("阅读导图的对象、关系或当前原文范围无效或超过上限。") }
         for id in targets + relationIDs { try checkID(id) }
-        try ReadingLedger.requireComplete(unitIDs: allowedUnitIDs, in: project)
+        try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
         let safe = try PluginEngine.analysisContextProject(project, allowedUnitIDs: allowedUnitIDs)
         let names = Dictionary((safe.entities.map { ($0.id, $0.name) } + safe.events.map { ($0.id, $0.name) }), uniquingKeysWith: { first, _ in first })
         guard Set(targets).isSubset(of: Set(names.keys)) else { throw invalid("导图只能选择在当前获准原文有真实证据的既有实体或事件；身份候选和外页对象不算当前事实。") }

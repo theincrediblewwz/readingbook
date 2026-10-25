@@ -48,4 +48,37 @@ final class AnalysisContextTests: XCTestCase {
         XCTAssertEqual(scoped.readingExperience?.layers.map(\.id), ["local"])
         XCTAssertTrue(scoped.readingExperience!.alignments.isEmpty)
     }
+
+    func testLaterChunkReusesPriorSavedSummaryWithoutGrantingEarlierSourceReads() async throws {
+        let units = [SourceUnit(id: "u1", order: 0, chapter: "开篇", page: 1, text: "贾诩善于谋划。"),
+                     SourceUnit(id: "u2", order: 1, chapter: "次回", page: 2, text: "贾诩又来到了这里。")]
+        var book = BookProject(title: "复用", originalName: "reuse.txt", sourceHash: "source", units: units)
+        PluginEngine.seed(&book)
+        book.entities = [KnowledgeEntity(id: "jia", typeID: "person", name: "贾诩", summary: "贾诩是一位善于谋划的人。", evidence: [Evidence(unitID: "u1", quote: "贾诩善于谋划。")])]
+        let result = try PluginEngine.apply(name: "knowledge_search", arguments: Data(#"{"query":"贾诩"}"#.utf8), to: &book, allowedUnitIDs: ["u2"], phase: .reading)
+        XCTAssertTrue(result.contains("jia")); XCTAssertTrue(result.contains("善于谋划的人")); XCTAssertTrue(result.contains("previouslySaved"))
+        let scoped = try PluginEngine.analysisContextProject(book, allowedUnitIDs: ["u2"])
+        XCTAssertEqual(scoped.units.map(\.id), ["u2"]); XCTAssertEqual(scoped.entities.first?.id, "jia")
+        XCTAssertEqual(scoped.entities.first?.evidence.map(\.unitID), ["u1"])
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u2", page: 2))
+        var query = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: book)
+        let lookup = try await query.execute(name: "object_get", arguments: ["id": "jia"], maximumBytes: 8000)
+        XCTAssertTrue(lookup.contains("previouslySaved")); XCTAssertTrue(lookup.contains("善于谋划的人"))
+        XCTAssertTrue(query.sourceExcerpts.isEmpty, "旧摘要不会自动成为本轮原文引用许可。")
+        do { _ = try await query.execute(name: "source_read", arguments: ["id": "u1"], maximumBytes: 8000); XCTFail("不能因复用简介扩大原文读取范围。") } catch {}
+    }
+
+    func testAggregateWithFutureOrInvalidSourceNeverBecomesReusablePastFact() async throws {
+        var book = try project()
+        book.units.append(SourceUnit(id: "u3", order: 2, chapter: "后续", page: 3, text: "神秘人再次出现。"))
+        let mixed = try PluginEngine.analysisContextProject(book, allowedUnitIDs: ["u1"])
+        XCTAssertFalse(mixed.entities.contains(where: { !$0.summary.isEmpty }))
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u1", page: 1))
+        var query = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: book)
+        let lookup = try await query.execute(name: "object_get", arguments: ["id": "person1"], maximumBytes: 8000)
+        XCTAssertFalse(lookup.contains("previouslySaved")); XCTAssertFalse(lookup.contains("后文结局")); XCTAssertFalse(lookup.contains("曹操"))
+        book.entities[0].evidence = [Evidence(unitID: "u1", quote: "原文并没有这一句")]
+        let invalid = SavedKnowledgeReuse(project: book, currentUnitIDs: ["u3"])
+        XCTAssertNil(invalid?.record(id: "person1"), "OCR或来源改变后，旧引文失效就不能复用聚合内容。")
+    }
 }

@@ -18,8 +18,11 @@ public struct SmartReadingSelection: Codable, Hashable, Sendable {
     public var pageStart: Int?
     public var pageEnd: Int?
     public var preferredMethodIDs: [String]
-    public init(scope: SmartReadingScope = .wholeBook, pageStart: Int? = nil, pageEnd: Int? = nil, preferredMethodIDs: [String] = []) {
+    /// Absent in older sessions: their exact-receipt semantics remain unchanged.
+    public var execution: ReadingExecutionConfiguration? = nil
+    public init(scope: SmartReadingScope = .wholeBook, pageStart: Int? = nil, pageEnd: Int? = nil, preferredMethodIDs: [String] = [], execution: ReadingExecutionConfiguration? = nil) {
         self.scope = scope; self.pageStart = pageStart; self.pageEnd = pageEnd; self.preferredMethodIDs = preferredMethodIDs
+        self.execution = execution
     }
 }
 
@@ -53,6 +56,8 @@ public struct SmartReadingSession: Codable, Identifiable, Sendable {
     public var currentUnitID: String?
     public var updatedAt: Date
     public var lastMessage: String?
+    /// Standard analysis is distinct from the exact paragraph ledger.
+    public var analysisCheckpoints: [ReadingAnalysisCheckpoint]? = nil
     public init(id: String = UUID().uuidString, selection: SmartReadingSelection, scopeTitle: String, unitIDs: [String],
                 unitHashes: [String: String], sourceHash: String, status: SmartReadingStatus = .ready,
                 isPlanConfirmed: Bool = false, currentUnitID: String? = nil, updatedAt: Date = Date(), lastMessage: String? = nil) {
@@ -84,6 +89,7 @@ public struct SmartReadingProgress: Sendable {
     /// The current AI unit's actual method steps, rather than artificial timer ticks.
     public var steps: [SmartReadingProgressStep]
     public var fraction: Double { total == 0 ? 0 : Double(completed) / Double(total) }
+    public var isStandardAnalysis = false
 }
 
 /// In-memory projection cache only. Storage/start validation still checks source hashes.
@@ -120,6 +126,7 @@ public struct SmartReadingProgressCache: Sendable {
 
 public enum SmartReadingRuntime {
     public static func freeze(_ selection: SmartReadingSelection, in project: BookProject, currentUnitID: String?) throws -> SmartReadingSession {
+        try selection.execution?.validate()
         let ordered = project.units.sorted { $0.order == $1.order ? $0.id < $1.id : $0.order < $1.order }
         guard !ordered.isEmpty, Set(ordered.map(\.id)).count == ordered.count else { throw ReadingError.invalid("原书内容为空或单元ID重复，无法开始智能阅读。") }
         let offered = Set(PluginEngine.recommendedMethods(in: project).map(\.id))
@@ -144,11 +151,27 @@ public enum SmartReadingRuntime {
             title = start == end ? "第 \(start) 页" : "第 \(start)–\(end) 页"
         }
         guard !selected.isEmpty else { throw ReadingError.invalid("所选范围没有可分析的原文。") }
-        let hashes = try Dictionary(uniqueKeysWithValues: selected.map { ($0.id, try unitHash($0)) })
+        var hashes: [String: String] = [:]
+        for unit in selected { try Task.checkCancellation(); hashes[unit.id] = try unitHash(unit) }
         return SmartReadingSession(selection: selection, scopeTitle: title, unitIDs: selected.map(\.id), unitHashes: hashes, sourceHash: project.sourceHash)
     }
 
-    public static func validate(_ session: SmartReadingSession, in project: BookProject) throws {
+    public static func validate(_ session: SmartReadingSession, in project: BookProject, prevalidatedUnitHashes: [String: String]? = nil) throws {
+        try session.selection.execution?.validate()
+        let checkpoints = session.analysisCheckpoints ?? []
+        guard checkpoints.count <= 100_000, Set(checkpoints.map(\.id)).count == checkpoints.count else { throw ReadingError.invalid("分析检查点数量或标识无效。") }
+        let allUnits = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for checkpoint in checkpoints {
+            guard checkpoint.id.range(of: "^chunk-[a-f0-9]{48}$", options: .regularExpression) != nil,
+                  (1...12).contains(checkpoint.unitIDs.count), Set(checkpoint.unitIDs).count == checkpoint.unitIDs.count,
+                  Set(checkpoint.unitHashes.keys) == Set(checkpoint.unitIDs), checkpoint.configurationHash.count == 64,
+                  checkpoint.completedStepIDs.count <= 24, Set(checkpoint.completedStepIDs).count == checkpoint.completedStepIDs.count,
+                  !checkpoint.markdown.isEmpty, checkpoint.markdown.count <= 16_000,
+                  checkpoint.updatedAt.timeIntervalSince1970.isFinite, (1...128).contains(checkpoint.evidence.count),
+                  Set(checkpoint.evidence.map(\.unitID)) == Set(checkpoint.unitIDs),
+                  checkpoint.unitIDs.allSatisfy({ allUnits[$0] != nil && checkpoint.unitHashes[$0]?.count == 64 }),
+                  checkpoint.evidence.allSatisfy({ !$0.quote.isEmpty && $0.quote.count <= 32_768 && allUnits[$0.unitID]?.text.contains($0.quote) == true }) else { throw ReadingError.invalid("标准阅读分析检查点无效，原有内容保留。") }
+        }
         guard session.unitIDs.count <= BookImporter.maximumUnits, session.unitHashes.count <= BookImporter.maximumUnits,
               session.unitIDs.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 }),
               session.selection.preferredMethodIDs.count <= 32,
@@ -164,13 +187,15 @@ public enum SmartReadingRuntime {
               session.currentUnitID.map({ session.unitIDs.contains($0) }) ?? true else { throw ReadingError.invalid("智能阅读范围记录无效，请重新选择范围。") }
         let refrozen = try freezeScopeOnly(session.selection, in: project, currentUnitID: session.unitIDs.first)
         guard refrozen.map(\.id) == session.unitIDs else { throw ReadingError.invalid("智能阅读范围与保存的页章选择不一致。") }
-        for unit in units where session.unitHashes[unit.id] != (try unitHash(unit)) {
-            throw ReadingError.invalid("所选原文在任务建立后已变化（可能已重新OCR），请重新选择范围并预读；旧分析保留。")
+        for unit in units {
+            try Task.checkCancellation()
+            let expected = try prevalidatedUnitHashes?[unit.id] ?? unitHash(unit)
+            guard session.unitHashes[unit.id] == expected else { throw ReadingError.invalid("所选原文在任务建立后已变化（可能已重新OCR），请重新选择范围并预读；旧分析保留。") }
         }
     }
 
-    public static func validateStoredState(in project: BookProject) throws {
-        if let session = project.smartReading { try validate(session, in: project) }
+    public static func validateStoredState(in project: BookProject, prevalidatedUnitHashes: [String: String]? = nil) throws {
+        if let session = project.smartReading { try validate(session, in: project, prevalidatedUnitHashes: prevalidatedUnitHashes) }
     }
 
     /// The exact app-created marker is required; an empty extraction is never enough.
@@ -196,7 +221,10 @@ public enum SmartReadingRuntime {
 
     /// Historical coverage alone never satisfies a new task or changed method.
     public static func isUnitComplete(_ unit: SourceUnit, in project: BookProject) -> Bool {
-        isComplete(unit, in: UnitIndex(project).project(for: unit, original: project))
+        if project.smartReading?.selection.execution != nil {
+            return ((try? analysisChunks(in: project)) ?? []).contains { $0.unitIDs.contains(unit.id) && isChunkComplete($0, in: project) }
+        }
+        return isComplete(unit, in: UnitIndex(project).project(for: unit, original: project))
     }
 
     private static func isComplete(_ unit: SourceUnit, in project: BookProject) -> Bool {
@@ -216,6 +244,10 @@ public enum SmartReadingRuntime {
     }
 
     public static func nextUnit(in project: BookProject, allowedUnitIDs: Set<String>) throws -> SourceUnit? {
+        if project.smartReading?.selection.execution != nil {
+            let next = try nextAnalysisChunk(in: project, allowedUnitIDs: allowedUnitIDs)?.unitIDs.first
+            return project.units.first { $0.id == next }
+        }
         let index = UnitIndex(project)
         return try selectedUnits(in: project, allowedUnitIDs: allowedUnitIDs).first {
             let scoped = index.project(for: $0, original: project)
@@ -234,6 +266,22 @@ public enum SmartReadingRuntime {
     public static func progress(in project: BookProject, cache: inout SmartReadingProgressCache, validateSource: Bool = true) throws -> SmartReadingProgress? {
         guard let session = project.smartReading else { return nil }
         if validateSource { try validate(session, in: project) }
+        if session.selection.execution != nil {
+            let chunks = try analysisChunks(in: project)
+            let completed = chunks.filter { isChunkComplete($0, in: project) }
+            let completedIDs = Set(completed.flatMap(\.unitIDs))
+            let next = chunks.first { !isChunkComplete($0, in: project) }
+            let configuration = session.selection.execution
+            let rows = (configuration?.steps ?? []).filter { next?.stepIDs.contains($0.id) == true }.map { SmartReadingProgressStep(id: $0.id, title: $0.title, isCompleted: false) }
+            let excluded = project.units.filter { session.unitIDs.contains($0.id) && ReadingLedger.isDeferred(unitID: $0.id, in: project) }.count
+            let blank = project.units.filter { session.unitIDs.contains($0.id) && isConfirmedBlank($0, in: project) }.count
+            var value = SmartReadingProgress(completed: completedIDs.count, total: session.unitIDs.count,
+                receiptCount: (project.paragraphReceipts ?? []).filter { session.unitIDs.contains($0.unitID) }.count, receiptTotal: 0,
+                stepCount: completed.reduce(0) { $0 + $1.stepIDs.count }, stepTotal: chunks.reduce(0) { $0 + $1.stepIDs.count },
+                excludedCount: excluded, blankCount: blank, currentUnitID: next?.unitIDs.first, currentStepTitle: next?.title ?? "本轮分析已保存", steps: rows)
+            value.isStandardAnalysis = true
+            return value
+        }
         let units = try selectedUnits(in: project, allowedUnitIDs: Set(session.unitIDs))
         let index = UnitIndex(project)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]

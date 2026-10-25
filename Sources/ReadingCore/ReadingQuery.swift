@@ -38,6 +38,17 @@ public struct ReadingQuerySnapshot: Sendable {
         return source.text[range].utf8.elementsEqual(evidence.quote.utf8)
     }
 
+    /// Derive once from a freshly frozen scope. The visible data capabilities
+    /// stay identical; only derived conversation-memory identity changes.
+    public func withContextIdentity(_ identity: String) throws -> ReadingQuerySnapshot {
+        guard !identity.isEmpty, identity.utf8.count <= 160 else { throw ReadingError.invalid("对话模式标识无效。") }
+        let payload = ["scope": scopeFingerprint, "conversation": identity, "version": "1"]
+        let fingerprint = try BookImporter.sha256(JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]))
+        return ReadingQuerySnapshot(scope: scope, bookID: bookID, sourceHash: sourceHash,
+            scopeFingerprint: fingerprint, displayTitle: displayTitle, authorizedNodeIDs: authorizedNodeIDs,
+            sources: sources, documents: documents, sourceByID: sourceByID)
+    }
+
     public static func freeze(scope: ReadingQueryScope, in project: BookProject, context suppliedContext: ReadingContext? = nil,
                               documentIDs: [String]? = nil, appendedDocumentIDs: [String] = [],
                               authorizedNodeIDs: [String] = []) throws -> ReadingQuerySnapshot {

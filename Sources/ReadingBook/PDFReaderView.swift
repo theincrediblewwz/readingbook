@@ -2,6 +2,9 @@ import SwiftUI
 import AppKit
 import PDFKit
 import ReadingCore
+import os
+
+private let pdfDecorationSignposter = OSSignposter(subsystem: "org.readingbook.app", category: "PDFDecorations")
 
 /// Displays the original PDF with PDFKit. Page numbers and callbacks are 1-based.
 /// OCR text is deliberately not substituted for the PDF's rendered page.
@@ -26,17 +29,19 @@ struct PDFReaderView: NSViewRepresentable {
     var focusedDecorationID: String?
     var onSourceDecorationTap: ((String) -> Void)?
     var onSourceSelection: ((SourceReadingSelection?) -> Void)?
+    var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
     var workspaceMemory: WorkspacePDFMemory?
     var memoryRevision = 0
     var onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)?
 
-    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)? = nil) {
+    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)? = nil) {
         self.controller = controller; self.url = url; self.sourceHash = sourceHash; self.password = password; self.annotations = annotations
         self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
         self.onUnlock = onUnlock; self.onSaveAnnotations = onSaveAnnotations; self.onTrashAnnotation = onTrashAnnotation
         self.canEditAnnotations = canEditAnnotations
         self.sourceDecorations = sourceDecorations; self.focusedDecorationID = focusedDecorationID
         self.onSourceDecorationTap = onSourceDecorationTap; self.onSourceSelection = onSourceSelection
+        self.onSourceDecorationHover = onSourceDecorationHover
         self.workspaceMemory = workspaceMemory; self.memoryRevision = memoryRevision; self.onWorkspaceMemory = onWorkspaceMemory
     }
 
@@ -75,11 +80,15 @@ struct PDFReaderView: NSViewRepresentable {
     private var sourceDecorations: [SourceReadingDecoration] = []
     private var sourceDecorationPage: Int?
     private var sourceDecorationFocusID: String?
-    private var renderedSourceAnnotations: [(PDFPage, PDFAnnotation)] = []
+    private var renderedSourceAnnotations: [String: [(PDFPage, PDFAnnotation)]] = [:]
+    private var renderedSourceValues: [String: SourceReadingDecoration] = [:]
+    private var sourceDecorationTask: Task<Void, Never>?
+    private var sourceDecorationGeneration = 0
     private var sourceAnnotationIDs: [ObjectIdentifier: String] = [:]
+    private var hoveredSourceID: String?
     private weak var renderedSourcePage: PDFPage?
     private var renderedSourceDecorations: [SourceReadingDecoration] = []
-    private struct QuoteCacheKey: Hashable {
+    private struct QuoteCacheKey: Hashable, Sendable {
         // String equality normalizes Unicode; matching below deliberately does
         // not. Keep cache identities byte-exact as well.
         let quote: Data
@@ -87,13 +96,14 @@ struct PDFReaderView: NSViewRepresentable {
         let suffix: Data?
         var byteCount: Int { quote.count + (prefix?.count ?? 0) + (suffix?.count ?? 0) }
     }
-    private struct CachedQuoteRange { let range: NSRange? }
+    private struct CachedQuoteRange: Sendable { let range: NSRange? }
     private weak var quoteCachePage: PDFPage?
     private var quoteCacheText: NSString?
     private var quoteRangeCache: [QuoteCacheKey: CachedQuoteRange] = [:]
     private var quoteCacheBytes = 0
     private var onSourceDecorationTap: ((String) -> Void)?
     private var onSourceSelection: ((SourceReadingSelection?) -> Void)?
+    private var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
     private var pendingQuote: (page: Int, quote: String, prefix: String?, suffix: String?)?
     private var isFocusingQuote = false
     private var pendingWorkspaceMemory: WorkspacePDFMemory?
@@ -218,6 +228,7 @@ struct PDFReaderView: NSViewRepresentable {
             self?.annotationIDs[ObjectIdentifier(annotation)] != nil || self?.sourceAnnotationIDs[ObjectIdentifier(annotation)] != nil
         }
         pdfView.isSourceAnnotation = { [weak self] annotation in self?.sourceAnnotationIDs[ObjectIdentifier(annotation)] != nil }
+        pdfView.onSourceHover = { [weak self] annotation, point in self?.reportSourceHover(annotation, point: point) }
         pdfView.onAnnotationTap = { [weak self] annotation in self?.openAnnotation(annotation) }
         pdfView.autoScales = false
         readingDirection = defaultReadingDirection
@@ -389,6 +400,7 @@ struct PDFReaderView: NSViewRepresentable {
         callback = input.onPageChange; onUnlock = input.onUnlock
         onSaveAnnotations = input.onSaveAnnotations; onTrashAnnotation = input.onTrashAnnotation
         onSourceDecorationTap = input.onSourceDecorationTap; onSourceSelection = input.onSourceSelection
+        onSourceDecorationHover = input.onSourceDecorationHover
         let boundedSourceDecorations = Array(input.sourceDecorations.prefix(1_000))
         let sourceDecorationsChanged = sourceDecorations != boundedSourceDecorations || sourceDecorationPage != requestedPage
         sourceDecorations = boundedSourceDecorations; sourceDecorationPage = requestedPage
@@ -1103,7 +1115,7 @@ struct PDFReaderView: NSViewRepresentable {
         // window is modal. Keep the draft sheet alive until explicit save/cancel.
         if !editingAnnotationSheet { closeAnnotationPanel() }
         sessionPassword = nil; onUnlock = nil; onSaveAnnotations = nil; onTrashAnnotation = nil
-        clearSourceDecorations(); resetQuoteCache(); onSourceDecorationTap = nil; onSourceSelection = nil; pendingQuote = nil
+        clearSourceDecorations(); resetQuoteCache(); onSourceDecorationTap = nil; onSourceSelection = nil; onSourceDecorationHover = nil; pendingQuote = nil
         if securityScoped { loadedURL?.stopAccessingSecurityScopedResource() }; securityScoped = false
     }
 
@@ -1180,7 +1192,7 @@ struct PDFReaderView: NSViewRepresentable {
         // Retain at most one ordinary page, 256 results and 1 MiB of query
         // keys. An unusually large page still matches without retaining it.
         if text.length <= 2_000_000 { quoteCacheText = text }
-        let range = findNativeQuoteRange(quote, prefix: prefix, suffix: suffix, text: text)
+        let range = Self.findNativeQuoteRange(quote, prefix: prefix, suffix: suffix, text: text)
         if key.byteCount <= 1_048_576 {
             if quoteRangeCache.count >= 256 || quoteCacheBytes + key.byteCount > 1_048_576 {
                 quoteRangeCache.removeAll(keepingCapacity: true); quoteCacheBytes = 0
@@ -1190,7 +1202,7 @@ struct PDFReaderView: NSViewRepresentable {
         return range
     }
 
-    private func findNativeQuoteRange(_ quote: String, prefix: String?, suffix: String?, text: NSString) -> NSRange? {
+    nonisolated private static func findNativeQuoteRange(_ quote: String, prefix: String?, suffix: String?, text: NSString) -> NSRange? {
         var start = 0
         var candidate: NSRange?
         while start < text.length {
@@ -1236,8 +1248,10 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     private func clearSourceDecorations() {
-        for (page, annotation) in renderedSourceAnnotations { page.removeAnnotation(annotation) }
-        renderedSourceAnnotations = []; sourceAnnotationIDs = [:]
+        sourceDecorationGeneration &+= 1; sourceDecorationTask?.cancel(); sourceDecorationTask = nil
+        for entries in renderedSourceAnnotations.values { for (page, annotation) in entries { page.removeAnnotation(annotation) } }
+        renderedSourceAnnotations = [:]; renderedSourceValues = [:]; sourceAnnotationIDs = [:]
+        hoveredSourceID = nil; onSourceDecorationHover?(nil)
         renderedSourcePage = nil; renderedSourceDecorations = []
     }
 
@@ -1245,25 +1259,78 @@ struct PDFReaderView: NSViewRepresentable {
         guard let document, !document.isLocked, let number = sourceDecorationPage,
               (1...document.pageCount).contains(number), let page = document.page(at: number - 1) else { clearSourceDecorations(); return }
         guard renderedSourcePage !== page || renderedSourceDecorations != sourceDecorations else { return }
-        clearSourceDecorations()
-        let pageText: NSString? = sourceDecorations.isEmpty ? nil : (quoteCachePage === page ? quoteCacheText : nil) ?? page.string.map { $0 as NSString }
-        if let pageText {
-            for decoration in sourceDecorations {
-                guard let range = nativeQuoteRange(decoration.quote, prefix: decoration.prefix, suffix: decoration.suffix, on: page, pageText: pageText), let selection = page.selection(for: range) else { continue }
-                for line in selection.selectionsByLine() {
-                    let rect = line.bounds(for: page).intersection(page.bounds(for: .cropBox))
-                    guard !rect.isNull, !rect.isEmpty else { continue }
-                    // Presentation overlays belong to this view only and are never
-                    // written to the source PDF or the user's saved annotations.
-                    let annotation = PDFAnnotation(bounds: rect, forType: .underline, withProperties: nil)
-                    annotation.color = .systemTeal; annotation.contents = "查看“\(decoration.quote)”的关联内容"
-                    page.addAnnotation(annotation); renderedSourceAnnotations.append((page, annotation))
-                    sourceAnnotationIDs[ObjectIdentifier(annotation)] = decoration.id
-                }
+        if renderedSourcePage !== page { clearSourceDecorations() }
+        else { sourceDecorationGeneration &+= 1; sourceDecorationTask?.cancel(); sourceDecorationTask = nil }
+        let generation = sourceDecorationGeneration, documentID = documentGeneration
+        let desired = Dictionary(sourceDecorations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for id in Array(renderedSourceValues.keys) where desired[id] != renderedSourceValues[id] {
+            for (owner, annotation) in renderedSourceAnnotations.removeValue(forKey: id) ?? [] {
+                owner.removeAnnotation(annotation); sourceAnnotationIDs.removeValue(forKey: ObjectIdentifier(annotation))
             }
+            renderedSourceValues.removeValue(forKey: id)
         }
         renderedSourcePage = page; renderedSourceDecorations = sourceDecorations
-        pdfView.needsDisplay = true
+        let additions = sourceDecorations.filter { renderedSourceValues[$0.id] != $0 }
+        guard !additions.isEmpty else { pdfView.needsDisplay = true; return }
+        guard let text = (quoteCachePage === page ? quoteCacheText.map { $0 as String } : nil) ?? page.string else { return }
+        // Only immutable text and value records cross executors. PDFKit text
+        // extraction and selection geometry remain on its owning main thread.
+        if quoteCachePage !== page { resetQuoteCache(); quoteCachePage = page }
+        if (text as NSString).length <= 2_000_000 { quoteCacheText = text as NSString }
+        let savedRanges = quoteRangeCache
+        let calculation = Task.detached(priority: .userInitiated) { () -> [String: CachedQuoteRange] in
+            let interval = pdfDecorationSignposter.beginInterval("MatchPageQuotes")
+            defer { pdfDecorationSignposter.endInterval("MatchPageQuotes", interval) }
+            let source = text as NSString
+            var result: [String: CachedQuoteRange] = [:]
+            for decoration in additions {
+                guard !Task.isCancelled else { break }
+                guard !decoration.quote.isEmpty, decoration.quote.utf16.count <= 32_768,
+                      (decoration.prefix?.utf8.count ?? 0) <= 4_096, (decoration.suffix?.utf8.count ?? 0) <= 4_096 else { continue }
+                let key = QuoteCacheKey(quote: Data(decoration.quote.utf8), prefix: decoration.prefix.map { Data($0.utf8) }, suffix: decoration.suffix.map { Data($0.utf8) })
+                result[decoration.id] = savedRanges[key] ?? CachedQuoteRange(range: Self.findNativeQuoteRange(decoration.quote, prefix: decoration.prefix, suffix: decoration.suffix, text: source))
+            }
+            return result
+        }
+        sourceDecorationTask = Task { [weak self, weak page] in
+            let ranges = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
+            guard !Task.isCancelled, let self, let page, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
+            var cursor = 0
+            while cursor < additions.count {
+                guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation,
+                      self.renderedSourcePage === page else { return }
+                let began = ProcessInfo.processInfo.systemUptime
+                let interval = pdfDecorationSignposter.beginInterval("ApplyDecorationBatch")
+                var count = 0
+                repeat {
+                    let decoration = additions[cursor]; cursor += 1; count += 1
+                    let cached = ranges[decoration.id]
+                    let key = QuoteCacheKey(quote: Data(decoration.quote.utf8), prefix: decoration.prefix.map { Data($0.utf8) }, suffix: decoration.suffix.map { Data($0.utf8) })
+                    if let cached, key.byteCount <= 1_048_576 {
+                        if self.quoteRangeCache.count >= 256 || self.quoteCacheBytes + key.byteCount > 1_048_576 { self.quoteRangeCache = [:]; self.quoteCacheBytes = 0 }
+                        self.quoteRangeCache[key] = cached; self.quoteCacheBytes += key.byteCount
+                    }
+                    self.renderedSourceValues[decoration.id] = decoration
+                    if let range = cached?.range, let selection = page.selection(for: range) {
+                        var annotations: [(PDFPage, PDFAnnotation)] = []
+                        for line in selection.selectionsByLine() {
+                            let rect = line.bounds(for: page).intersection(page.bounds(for: .cropBox))
+                            guard !rect.isNull, !rect.isEmpty else { continue }
+                            let annotation = PDFAnnotation(bounds: rect, forType: .underline, withProperties: nil)
+                            annotation.color = NSColor.systemTeal.withAlphaComponent(self.hoveredSourceID == decoration.id ? 1 : 0.4)
+                            annotation.contents = "查看“\(decoration.quote)”的关联内容"
+                            page.addAnnotation(annotation); annotations.append((page, annotation))
+                            self.sourceAnnotationIDs[ObjectIdentifier(annotation)] = decoration.id
+                        }
+                        self.renderedSourceAnnotations[decoration.id] = annotations
+                    }
+                } while cursor < additions.count && count < 8 && ProcessInfo.processInfo.systemUptime - began < 0.003
+                pdfDecorationSignposter.endInterval("ApplyDecorationBatch", interval)
+                self.pdfView.needsDisplay = true
+                if cursor < additions.count { do { try await Task.sleep(nanoseconds: 1_000_000) } catch { return } }
+            }
+            if self.sourceDecorationGeneration == generation { self.sourceDecorationTask = nil }
+        }
     }
 
     private func renderSavedAnnotations() {
@@ -1294,9 +1361,29 @@ struct PDFReaderView: NSViewRepresentable {
         openAnnotation(annotation)
     }
     private func openAnnotation(_ annotation: PDFAnnotation) {
-        if let id = sourceAnnotationIDs[ObjectIdentifier(annotation)] { onSourceDecorationTap?(id); return }
+        if let id = sourceAnnotationIDs[ObjectIdentifier(annotation)] {
+            if onSourceDecorationHover != nil { reportSourceHover(annotation, point: nil, activated: true) }
+            else { onSourceDecorationTap?(id) }
+            return
+        }
         guard let id = annotationIDs[ObjectIdentifier(annotation)], let record = savedAnnotations.first(where: { $0.id == id && $0.trashedAt == nil }) else { return }
         editAnnotations([record])
+    }
+
+    private func reportSourceHover(_ annotation: PDFAnnotation?, point: CGPoint?, activated: Bool = false) {
+        let nextID = annotation.flatMap { sourceAnnotationIDs[ObjectIdentifier($0)] }
+        if nextID != hoveredSourceID {
+            for id in [hoveredSourceID, nextID].compactMap({ $0 }) {
+                for (_, value) in renderedSourceAnnotations[id] ?? [] { value.color = NSColor.systemTeal.withAlphaComponent(id == nextID ? 1 : 0.4) }
+            }
+            hoveredSourceID = nextID; pdfView.needsDisplay = true
+        }
+        guard let annotation, let id = sourceAnnotationIDs[ObjectIdentifier(annotation)], let page = annotation.page else {
+            onSourceDecorationHover?(nil); return
+        }
+        let rect = convert(pdfView.convert(annotation.bounds, from: page), from: pdfView)
+        let topRect = isFlipped ? rect : CGRect(x: rect.minX, y: bounds.height - rect.maxY, width: rect.width, height: rect.height)
+        onSourceDecorationHover?(SourceReadingHover(id: id, rect: topRect, point: CGPoint(x: topRect.midX, y: topRect.maxY), activated: activated))
     }
 
     private func createHighlight() {
@@ -1380,6 +1467,25 @@ private extension ReaderAnnotationColor {
 /// Region mode intercepts PDFKit's text selection only while explicitly armed.
 /// Both endpoints must belong to the same page; coordinates are converted by PDFView, including rotation/crop.
 @MainActor private final class AnnotationPDFView: PDFView {
+    var onSourceHover: ((PDFAnnotation?, CGPoint?) -> Void)?
+    private var sourceTrackingArea: NSTrackingArea?
+    private var lastSourceHoverTime = 0.0
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); window?.acceptsMouseMovedEvents = true }
+    override func updateTrackingAreas() {
+        if let sourceTrackingArea { removeTrackingArea(sourceTrackingArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
+        sourceTrackingArea = area; addTrackingArea(area); super.updateTrackingAreas()
+    }
+    override func mouseMoved(with event: NSEvent) {
+        guard event.timestamp - lastSourceHoverTime >= 1.0 / 30 else { return }
+        lastSourceHoverTime = event.timestamp
+        let point = convert(event.locationInWindow, from: nil)
+        if !interactionBlocked && !regionArmed && NSEvent.pressedMouseButtons == 0,
+           let annotation = managedAnnotation(at: point), isSourceAnnotation?(annotation) == true { onSourceHover?(annotation, point) }
+        else { onSourceHover?(nil, nil) }
+        super.mouseMoved(with: event)
+    }
+    override func mouseExited(with event: NSEvent) { onSourceHover?(nil, nil); super.mouseExited(with: event) }
     var interactionBlocked = false
     var readingDirection = PDFReadingDirection.vertical
     var onReadingNavigation: ((Int, PDFReadingDirection, Bool, Bool) -> Bool)?
@@ -1412,6 +1518,7 @@ private extension ReaderAnnotationColor {
         return candidates.first(where: { isSourceAnnotation?($0) != true }) ?? candidates.first
     }
     override func mouseDown(with event: NSEvent) {
+        onSourceHover?(nil, nil)
         let point = convert(event.locationInWindow, from: nil)
         sourceClick = nil
         if !regionArmed {
@@ -1432,6 +1539,7 @@ private extension ReaderAnnotationColor {
         addSubview(preview); regionPreview = preview
     }
     override func mouseDragged(with event: NSEvent) {
+        onSourceHover?(nil, nil)
         guard !handlingManagedClick else { return }
         sourceClick = nil
         guard let start = regionStart else { if !regionArmed { super.mouseDragged(with: event) }; return }

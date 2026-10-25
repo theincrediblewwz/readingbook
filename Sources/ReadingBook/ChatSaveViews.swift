@@ -38,6 +38,8 @@ private struct BookChatContent: View {
     @State private var reviewingChanges = false
     @State private var showingMemory = false
     @State private var showingComposerHelp = false
+    @State private var historyBook: BookProject?
+    @AppStorage("reading.companionTextScale") private var textScale = 1.0
     @State private var memorySourceID: String?
     @FocusState private var composerFocused: Bool
     private var composerIsActive: Bool { !workspaceBlocked && (embedded ? store.readingCompanionVisible && store.readingCompanionTab == "chat" : store.route == "query") }
@@ -45,19 +47,19 @@ private struct BookChatContent: View {
     var body: some View {
         VStack(spacing: 0) {
             if selectionMode { selectionBar }
-            if store.aiProgress.hasActivity, store.aiProgress.bookID == store.bookID {
-                AIProgressStatusView(state: store.aiProgressState, compact: true).padding(.horizontal, embedded ? 16 : 24).padding(.vertical, 10)
+            if store.isQueryBusy {
+                queryStatus.padding(.horizontal, embedded ? 16 : 24).padding(.vertical, 8)
             }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 20) {
-                        if store.book?.chats.isEmpty != false {
+                        if store.currentQueryHistory.isEmpty {
                             questionEmptyState
                         }
-                        ForEach(store.book?.chats ?? []) { message in answerCard(message).id(message.id) }
+                        ForEach(store.currentQueryHistory) { message in answerCard(message).id(message.id) }
                     }.padding(.horizontal, embedded ? 16 : 24).padding(.vertical, embedded ? 12 : 20).frame(maxWidth: 940).frame(maxWidth: .infinity)
-                }.onChange(of: store.book?.chats.count) { _, _ in
-                    if let last = store.book?.chats.last { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { proxy.scrollTo(last.id, anchor: .bottom) } }
+                }.onChange(of: store.currentQueryHistory.count) { _, _ in
+                    if let last = store.currentQueryHistory.last { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
                 .onChange(of: memorySourceID) { _, id in
                     guard let id else { return }; withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { proxy.scrollTo(id, anchor: .center) }; memorySourceID = nil
@@ -65,8 +67,11 @@ private struct BookChatContent: View {
             }
             composer
         }.padding(.top, embedded ? 0 : 76).background(embedded ? Color.clear : Palette.canvas)
+        .environment(\.markdownTextScale, textScale)
         .onChange(of: store.bookID) { _, _ in selectionMode = false; selectedAnswers.removeAll(); renderedSelections.removeAll(); saveRequest = nil }
         .onChange(of: composerIsActive) { _, active in if !active { composerFocused = false } }
+        .onChange(of: store.queryInteractionMode) { _, _ in store.queryAllowsOrganizing = false; resetModePresentation() }
+        .onChange(of: store.queryAnswerStyle) { _, _ in resetModePresentation() }
         .sheet(item: $saveRequest, onDismiss: {
             if openTrashAfterSheet { openTrashAfterSheet = false; store.showingTrash = true }
         }) { request in
@@ -79,6 +84,7 @@ private struct BookChatContent: View {
         .sheet(isPresented: $showingMemory) {
             QueryMemoryInspector(onClose: { showingMemory = false }, onSource: { id in showingMemory = false; memorySourceID = id }).environmentObject(store)
         }
+        .sheet(item: $historyBook) { project in SavedConversationHistory(project: project, onClose: { historyBook = nil }).environmentObject(store) }
     }
 
     private var questionEmptyState: some View {
@@ -93,7 +99,7 @@ private struct BookChatContent: View {
     }
     private func suggestion(_ text: String) -> some View {
         Button { question = text } label: { Text(text).font(.system(size: 13)).lineLimit(1).fixedSize().padding(.horizontal, 12).frame(minHeight: 44).contentShape(Capsule()) }
-            .buttonStyle(.plain).background(Palette.accent.opacity(0.055), in: Capsule()).disabled(store.isBusy)
+            .buttonStyle(.plain).background(Palette.accent.opacity(0.055), in: Capsule()).disabled(store.isQueryBusy)
             .help("填入问题，确认后发送")
     }
     private var composer: some View {
@@ -102,19 +108,17 @@ private struct BookChatContent: View {
                 .font(.system(size: 15)).lineLimit(1...5).textFieldStyle(.plain).focused($composerFocused).onSubmit { send() }
                 .frame(minHeight: 44)
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { scopeControls; Spacer(minLength: 4); questionOptions; sendButton }
+                HStack(spacing: 8) { scopeControls; Spacer(minLength: 4); modeControls; questionOptions; sendButton }
                 VStack(spacing: 4) {
-                    HStack(spacing: 8) { scopeControls; Spacer(minLength: 0) }
-                    HStack(spacing: 8) { questionOptions; Spacer(minLength: 0); sendButton }
+                    HStack(spacing: 8) { scopeControls; Spacer(minLength: 0); sendButton }
+                    HStack(spacing: 8) { modeControls; Spacer(minLength: 0); questionOptions }
                 }
             }
-            if store.isBusy {
-                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在阅读所选内容…").font(.system(size: 13)).foregroundStyle(.secondary) }
-            } else if let previous = store.queryRetryQuestion {
+            if !store.isQueryBusy, let previous = store.queryRetryQuestion {
                 Button { question = previous; store.queryRetryQuestion = nil } label: { Label("继续上次问题", systemImage: "arrow.clockwise") }
                     .buttonStyle(.borderless).font(.system(size: 13))
             }
-            if !store.queryDisclosure.isEmpty && !store.isBusy {
+            if !store.queryDisclosure.isEmpty && !store.isQueryBusy {
                 DisclosureGroup("这次查阅记录") {
                     Text(store.queryDisclosure).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
                 }.font(.system(size: 13)).padding(.top, 4)
@@ -131,24 +135,29 @@ private struct BookChatContent: View {
                     Text("范围、保存与公式").font(.system(size: 16, weight: .semibold))
                     Text("左下选择本次允许阅读的范围，附加内容会一同提供给 AI。")
                     Text("回答的保存菜单支持完整保存、选段和多条合并。保留公式与排版时，选择 Markdown 源文片段。")
-                    Text("整理授权仅用于接下来这次发送。修改正文、移除内容或改变读法仍会先请你审阅。对话记忆计入模型预算，原消息保留。")
+                    Text("纯阅读只分享所选内容；功能协作可调用组件。老师伴读会分开说明背景，原文考据只谈已读出处。已有笔记的修改仍先供你审阅。")
                 }.font(.system(size: 13)).foregroundStyle(.secondary).lineSpacing(4).padding(20).frame(width: 320)
             }
     }
     private var scopeControls: some View {
-        HStack(spacing: 6) { QueryScopeControl(compact: embedded).help(store.isBusy ? store.lastQuestionContext : store.queryScopePreview); QueryAttachmentsControl() }
+        HStack(spacing: 6) { QueryScopeControl(compact: embedded).help(store.isQueryBusy ? store.lastQuestionContext : store.queryScopePreview); QueryAttachmentsControl() }
     }
     private var sendButton: some View {
         Button(action: send) { Image(systemName: "arrow.up").font(.system(size: 17, weight: .semibold)).frame(width: 28, height: 30) }
             .controlSize(.large).buttonStyle(.borderedProminent)
-            .disabled(store.isBusy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canUseQueryScope(store.queryScope))
+            .disabled(!store.canStartQuery || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canUseQueryScope(store.queryScope))
             .help("发送问题").accessibilityLabel("发送问题")
     }
     private var questionOptions: some View {
         Menu {
-            Button { store.queryAllowsOrganizing = false } label: { Label("只读提问", systemImage: "lock") }
-            Button { store.queryAllowsOrganizing = true } label: { Label("允许本次整理、增添与修改", systemImage: "square.stack.3d.up") }
+            if store.queryInteractionMode == .functional {
+                Button { store.queryAllowsOrganizing = false } label: { Label("只读提问", systemImage: "lock") }
+                Button { store.queryAllowsOrganizing = true } label: { Label("允许本次整理", systemImage: "square.stack.3d.up") }
+                Divider()
+            }
+            readingSizeControls
             Divider()
+            Button { historyBook = store.book } label: { Label("查看全部历史", systemImage: "clock.arrow.circlepath") }
             Toggle(isOn: $store.queryMemoryEnabled) { Label("整理长对话记忆", systemImage: "brain.head.profile") }
             Button { showingMemory = true } label: { Label("查看记忆与原消息", systemImage: "text.bubble") }
             Button { store.clearCurrentQueryMemory() } label: { Label("清除本范围的整理摘要", systemImage: "eraser") }
@@ -160,9 +169,34 @@ private struct BookChatContent: View {
             Button { store.requestedWorkspaceRoute = "reader" } label: { Label("回到原文", systemImage: "book.closed") }
             Button { showingComposerHelp = true } label: { Label("范围、保存与公式说明", systemImage: "info.circle") }
         } label: {
-            Label(store.queryAllowsOrganizing ? "本次整理" : "只读", systemImage: store.queryAllowsOrganizing ? "square.stack.3d.up" : "lock")
+            Label(store.queryAllowsOrganizing ? "本次整理" : "更多", systemImage: store.queryAllowsOrganizing ? "square.stack.3d.up" : "ellipsis")
                 .font(.system(size: 13, weight: .medium)).frame(minHeight: 44)
-        }.menuStyle(.borderlessButton).fixedSize().disabled(store.isBusy).help("本次权限、对话记忆与更多操作")
+        }.menuStyle(.borderlessButton).fixedSize().disabled(store.isQueryBusy).help("字号、权限与对话记忆")
+    }
+
+    private var modeControls: some View {
+        HStack(spacing: 8) {
+            Menu {
+                ForEach(ReadingConversationMode.allCases, id: \.self) { mode in
+                    Button { store.queryInteractionMode = mode } label: { Label(mode.title, systemImage: store.queryInteractionMode == mode ? "checkmark" : mode.icon) }
+                }
+            } label: { Label(store.queryInteractionMode.title, systemImage: store.queryInteractionMode.icon).font(.system(size: 13)).frame(minHeight: 44) }
+                .menuStyle(.borderlessButton).fixedSize().help("选择阅读对话或软件功能协作")
+            Menu {
+                ForEach(ReadingAnswerStyle.allCases, id: \.self) { style in
+                    Button { store.queryAnswerStyle = style } label: { Label(style.title, systemImage: store.queryAnswerStyle == style ? "checkmark" : style.icon) }
+                }
+            } label: { Label(store.queryAnswerStyle.title, systemImage: store.queryAnswerStyle.icon).font(.system(size: 13)).frame(minHeight: 44) }
+                .menuStyle(.borderlessButton).fixedSize().help("老师会解释背景；考据只谈原文依据")
+        }.disabled(store.isQueryBusy)
+    }
+    @ViewBuilder private var readingSizeControls: some View {
+        Button { textScale = min(1.5, ((textScale + 0.1) * 10).rounded() / 10) } label: { Label("放大文字", systemImage: "textformat.size.larger") }.disabled(textScale >= 1.5)
+        Button { textScale = max(0.9, ((textScale - 0.1) * 10).rounded() / 10) } label: { Label("缩小文字", systemImage: "textformat.size.smaller") }.disabled(textScale <= 0.9)
+        Button("恢复字号") { textScale = 1 }
+    }
+    private var queryStatus: some View {
+        QueryProgressButton(state: store.queryProgressState, onCancel: store.cancelQuery)
     }
 
     private var selectionBar: some View {
@@ -182,7 +216,7 @@ private struct BookChatContent: View {
     private func answerCard(_ message: ChatMessage) -> some View {
         let assistant = message.role == "assistant"
         let bookID = store.bookID ?? ""
-        let prepared = ChatMarkdownBody.prepare(message.content, bookID: bookID)
+        let prepared = ChatMarkdownBody.prepare(message.content, bookID: bookID, project: store.book)
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 Label(assistant ? "一起理解" : "你的问题", systemImage: assistant ? "sparkles" : "person.crop.circle")
@@ -229,9 +263,8 @@ private struct BookChatContent: View {
             if assistant, !message.evidence.isEmpty {
                 EvidenceDisclosure(evidence: message.evidence)
             }
-        }.padding(24).background(assistant ? Palette.surface.opacity(0.94) : Palette.accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(Palette.line.opacity(0.65), lineWidth: 0.65))
-            .padding(.leading, assistant ? 0 : 64)
+        }.padding(embedded ? 16 : 22).background(assistant ? Palette.surface.opacity(0.55) : Palette.accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
+            .padding(.leading, assistant ? 0 : (embedded ? 20 : 52))
             .contextMenu {
                 if assistant { answerActions(message, bookID: bookID, prepared: prepared) }
             }
@@ -279,16 +312,73 @@ private struct BookChatContent: View {
     }
     private func saveRenderedSelection(_ message: ChatMessage, bookID: String, selection: RenderedMarkdownSelection) {
         guard !selection.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              selection.sourceMarkdown == ChatMarkdownBody.prepare(message.content, bookID: bookID),
+              selection.sourceMarkdown == ChatMarkdownBody.prepare(message.content, bookID: bookID, project: store.book),
               store.bookID == bookID, store.book?.chats.first(where: { $0.id == message.id })?.content == message.content else { return }
         request(parts: [SavedAnswerPart(messageID: message.id, sourceContent: message.content,
                                       text: selection.text, kind: .renderedText)], bookID: bookID)
     }
     private func send() {
         guard composerIsActive else { return }
-        guard !store.isBusy, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let input = question; store.ask(input, allowsOrganizing: store.queryAllowsOrganizing)
-        if store.isBusy { question = "" }
+        guard store.canStartQuery, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let input = question; store.ask(input, allowsOrganizing: store.queryInteractionMode == .functional && store.queryAllowsOrganizing)
+        if store.isQueryBusy { question = "" }
+    }
+    private func resetModePresentation() {
+        selectionMode = false; selectedAnswers = []; renderedSelections = [:]
+        store.queryDisclosure = ""; store.queryRetryQuestion = nil
+    }
+}
+
+private struct QueryProgressButton: View {
+    @ObservedObject var state: AIProgressObservableState
+    var onCancel: () -> Void
+    @Environment(\.readingReduceMotion) private var reduceMotion
+    @State private var details = false
+    var body: some View {
+        HStack(spacing: 8) {
+            Button { details = true } label: {
+                HStack(spacing: 8) {
+                    if reduceMotion { Image(systemName: "ellipsis.circle") } else { ProgressView().controlSize(.small) }
+                    Text(state.value.phaseTitle).font(.system(size: 13)).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Image(systemName: "ellipsis").foregroundStyle(.secondary)
+                }.frame(minHeight: 36).contentShape(Rectangle())
+            }.buttonStyle(.plain).help("查看本次问答详情")
+                .popover(isPresented: $details) { AIProgressStatusView(state: state).padding(18).frame(width: 320) }
+            Button(action: onCancel) { Image(systemName: "stop.fill") }
+                .buttonStyle(ReadingToolbarButtonStyle()).help("停止这次对话")
+        }
+    }
+}
+
+private struct SavedConversationHistory: View {
+    let project: BookProject
+    var onClose: () -> Void
+    @State private var limit = 60
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Label("已保存的对话", systemImage: "clock.arrow.circlepath").font(.system(size: 18, weight: .semibold))
+                Spacer()
+                Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction)
+            }.padding(18)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    if project.chats.count > limit { Button("显示更早的对话") { limit += 60 }.buttonStyle(ReadingToolbarButtonStyle()) }
+                    ForEach(Array(project.chats.suffix(limit))) { message in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(message.role == "user" ? "你" : "伴读").font(.system(size: 13, weight: .semibold))
+                                Spacer()
+                                if let mode = message.conversationMode { Text(mode.title).font(.system(size: 12)).foregroundStyle(.secondary) }
+                            }
+                            ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(message.content, bookID: project.id, project: project))
+                        }.padding(16).background(Palette.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    if project.chats.isEmpty { Text("还没有保存的对话").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 200) }
+                }.padding(18)
+            }
+        }.frame(width: 620, height: 600).background(Palette.canvas).onExitCommand(perform: onClose)
     }
 }
 
@@ -414,7 +504,7 @@ private struct AnswerSaveSheet: View {
 
     private func documentPreview(_ composition: SavedAnswerComposition) -> some View {
         ScrollView {
-            ChatMarkdownBody(markdown: ChatMarkdownBody.prepare(previewMarkdown(composition), bookID: bookID))
+            ChatMarkdownBody(markdown: ChatMarkdownBody.prepare(previewMarkdown(composition), bookID: bookID, project: store.book))
                 .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         }.background(Palette.paper, in: RoundedRectangle(cornerRadius: 9))
     }
@@ -479,20 +569,14 @@ private struct ChatMarkdownBody: View {
         RichMarkdownView(markdown: markdown,
                          baseDirectory: store.sourceFileURL?.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("docs", isDirectory: true),
                          onSelectionChange: onSelectionChange, onSelectionSave: onSelectionSave)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
             .environment(\.openURL, OpenURLAction { url in
                 if url.scheme == "readingbook" { Task { await store.openInternalURL(url) }; return .handled }
                 return ["https", "http"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
             })
     }
-    static func prepare(_ markdown: String, bookID: String) -> String {
-        var text = markdown
-        for kind in ["unit", "doc"] {
-            if let regex = try? NSRegularExpression(pattern: "\\[\(kind):([A-Za-z0-9._-]+)\\]") {
-                text = regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text),
-                    withTemplate: "[\(kind == "unit" ? "原文" : "文档") $1](readingbook://book/\(bookID)/\(kind == "unit" ? "unit" : "document")/$1)")
-            }
-        }
-        return text
+    static func prepare(_ markdown: String, bookID: String, project: BookProject? = nil) -> String {
+        MarkdownReferenceLinks.render(markdown, bookID: bookID, project: project)
     }
 }
 

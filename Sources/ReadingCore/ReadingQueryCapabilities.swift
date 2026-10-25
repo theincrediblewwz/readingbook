@@ -223,6 +223,9 @@ extension ReadingQuerySession {
         guard let project else { return try json(["ok": false, "status": "unsupported", "message": "宿主尚未连接该读取能力。"] ) }
         let scoped = scopedKnowledgeProject() ?? project
         let boundary = KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs))
+        // Construct this index once, rather than rebuilding it per result row.
+        // Previous sources stay derived context, never current citation grants.
+        let reuse = ["objects_search", "object_get"].contains(name) ? SavedKnowledgeReuse(project: project, currentUnitIDs: Set(snapshot.unitIDs)) : nil
         switch name {
         case "capabilities_list":
             if let group = arguments["schemaFor"] as? String {
@@ -246,15 +249,36 @@ extension ReadingQuerySession {
             let objects = try TemporalKnowledgeRuntime.objects(in: scoped, boundary: boundary).filter {
                 let named = ([$0.name, $0.summary] + $0.aliases).contains { $0.localizedCaseInsensitiveContains(query) }
                 let localMention = identityStubs.contains($0.id) && $0.evidence.contains { $0.quote.localizedCaseInsensitiveContains(query) }
-                return (types.isEmpty || types.contains($0.typeID)) && (query.isEmpty || named || localMention)
+                let earlier = (reuse?.record(id: $0.id)?["summary"] as? String)?.localizedCaseInsensitiveContains(query) == true
+                return (types.isEmpty || types.contains($0.typeID)) && (query.isEmpty || named || localMention || earlier)
             }
-            return try page(objects.map { ["id": $0.id, "typeID": $0.typeID, "kind": $0.kind.rawValue, "name": $0.name, "summary": String($0.summary.prefix(400)), "version": $0.version, "identityOnly": identityStubs.contains($0.id),
-                "sourceUnitIDs": Array(Set($0.evidence.map(\.unitID))).sorted()] as [String: Any] }, arguments, maximumBytes)
+            var rows = objects.map { object -> [String: Any] in
+                var row: [String: Any] = ["id": object.id, "typeID": object.typeID, "kind": object.kind.rawValue, "name": object.name, "summary": String(object.summary.prefix(400)), "version": object.version, "identityOnly": identityStubs.contains(object.id),
+                    "sourceUnitIDs": Array(Set(object.evidence.map(\.unitID))).sorted()]
+                if let saved = reuse?.record(id: object.id) { row["previouslySaved"] = saved }
+                return row
+            }
+            let returned = Set(objects.map(\.id))
+            for candidate in PluginEngine.analysisIdentityCandidates(project, allowedUnitIDs: Set(snapshot.unitIDs)) where !returned.contains(candidate.id) {
+                guard types.isEmpty || types.contains(candidate.typeID), let saved = reuse?.record(id: candidate.id),
+                      query.isEmpty || ([candidate.name] + candidate.aliases + [saved["summary"] as? String ?? ""]).contains(where: { $0.localizedCaseInsensitiveContains(query) }) else { continue }
+                rows.append(["id": candidate.id, "typeID": candidate.typeID, "kind": candidate.kind, "name": candidate.name, "summary": "", "identityOnly": true,
+                    "sourceUnitIDs": [], "previouslySaved": saved, "notice": "当前原文出现同名/称谓，先核对是否为同一对象；旧简介不能当作本页已核实的新事实。"])
+            }
+            return try page(rows, arguments, maximumBytes)
         case "object_get":
-            guard let object = try TemporalKnowledgeRuntime.object(id: identifier(arguments), in: scoped, boundary: boundary) else { throw invalid("对象不在本次原文范围内。") }
+            let id = try identifier(arguments)
+            guard let object = try TemporalKnowledgeRuntime.object(id: id, in: scoped, boundary: boundary) else {
+                guard let candidate = PluginEngine.analysisIdentityCandidates(project, allowedUnitIDs: Set(snapshot.unitIDs)).first(where: { $0.id == id }), let saved = reuse?.record(id: id) else { throw invalid("对象不在本次原文范围内。") }
+                guard arguments["expectedHash"] == nil else { throw invalid("当前只是待核对身份候选，没有可用于变更的对象版本。") }
+                return try json(["ok": true, "object": ["id": candidate.id, "name": candidate.name, "typeID": candidate.typeID], "identityOnly": true, "previouslySaved": saved,
+                    "documentBodiesProvided": false, "note": "当前同名身份尚待核对；旧简介是派生资料，不扩大本次原文与引用范围。"])
+            }
             try checkHash(arguments, actual: object.version)
-            return try json(["ok": true, "object": try encoded(object), "documentBodiesProvided": false,
-                "identityOnly": isIdentityStub(object.id), "note": "稳定id可复用关联；跨范围概述/属性已隐藏。通用占位名称不是原书姓名或新增别名。只有返回的本范围证据可用于内容判断。"])
+            var row: [String: Any] = ["ok": true, "object": try encoded(object), "documentBodiesProvided": false,
+                "identityOnly": isIdentityStub(object.id), "note": "稳定id可复用关联；跨范围聚合属性隐藏，安全旧简介单列为派生资料。只有本范围实际返回原文可作本次引用。"]
+            if let saved = reuse?.record(id: object.id) { row["previouslySaved"] = saved }
+            return try json(row)
         case "relations_list":
             guard let id = arguments["objectID"] as? String else { throw invalid("缺少objectID。") }
             let rows = try TemporalKnowledgeRuntime.relations(objectID: id, in: scoped, at: timePoint(arguments), boundary: boundary)

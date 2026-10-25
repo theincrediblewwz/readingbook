@@ -46,7 +46,7 @@ public enum ReadingExperienceTools {
               Set(object.keys).isSubset(of: ["anchors", "mentions", "layers", "alignments", "noChangesReason"]) else {
             throw ReadingError.invalid("阅读增强参数必须是小于256 KiB的合法JSON对象，不能包含未知字段。")
         }
-        try ReadingLedger.requireComplete(unitIDs: allowedUnitIDs, in: project)
+        try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
         let value = try JSONDecoder().decode(Submission.self, from: arguments)
         let requests = value.anchors ?? [], mentions = value.mentions ?? [], layers = value.layers ?? []
         let alignments = value.alignments ?? []
@@ -112,7 +112,7 @@ public enum ReadingExperienceTools {
         try retained(old.layers, in: new.layers, id: { $0.id })
         try retained(old.alignments, in: new.alignments, id: { $0.id })
         try retained(old.decisions, in: new.decisions, id: { $0.id })
-        try ReadingLedger.requireComplete(unitIDs: allowedUnitIDs, in: project)
+        try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
         let oldAnchorIDs = Set(old.anchors.map(\.id))
         for anchor in new.anchors where !oldAnchorIDs.contains(anchor.id) {
             guard allowedUnitIDs.contains(anchor.unitID) else { throw ReadingError.invalid("插件新增锚点不属于本次已获准原文。") }

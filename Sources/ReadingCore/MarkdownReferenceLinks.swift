@@ -3,7 +3,7 @@ import Foundation
 /// Expands the reader's shorthand citations without changing literal code,
 /// mathematics or an existing Markdown link. This is presentation-only.
 public enum MarkdownReferenceLinks {
-    public static func render(_ source: String, bookID: String) -> String {
+    public static func render(_ source: String, bookID: String, labelForReference: ((String, String) -> String?)? = nil) -> String {
         guard !bookID.isEmpty else { return source }
         let bytes = Array(source.utf8)
         var output: [UInt8] = []; output.reserveCapacity(bytes.count)
@@ -114,7 +114,9 @@ public enum MarkdownReferenceLinks {
                     let id = String(decoding: idBytes, as: UTF8.self)
                     var url = URLComponents(); url.scheme = "readingbook"; url.host = "book"; url.path = "/\(bookID)/\(kind)/\(id)"
                     if let destination = url.string {
-                        output.append(contentsOf: "[\(kind == "unit" ? "原文" : "文档") \(id)](\(destination))".utf8)
+                        let fallback = kind == "unit" ? "原文" : "笔记"
+                        let label = labelForReference?(kind, id)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        output.append(contentsOf: "[\(escapedLabel(label?.isEmpty == false ? label! : fallback))](\(destination))".utf8)
                         offset = close + 1; continue
                     }
                 }
@@ -122,6 +124,23 @@ public enum MarkdownReferenceLinks {
             output.append(value); offset += 1
         }
         return String(decoding: output, as: UTF8.self)
+    }
+
+    public static func render(_ source: String, bookID: String, project: BookProject?) -> String {
+        render(source, bookID: bookID, labelForReference: { kind, id in
+            if kind == "unit", let unit = project?.units.first(where: { $0.id == id }) {
+                return unit.page.map { "第 \($0) 页" } ?? (unit.chapter.isEmpty ? "原文" : unit.chapter)
+            }
+            return project?.documents.first(where: { $0.id == id })?.title
+        })
+    }
+
+    private static func escapedLabel(_ value: String) -> String {
+        let punctuation = Set("\\`*_{}[]()#+-.!<>|")
+        return value.prefix(120).map { character in
+            if character.isWhitespace { return " " }
+            return punctuation.contains(character) ? "\\" + String(character) : String(character)
+        }.joined()
     }
 
     private static func isIdentifier(_ byte: UInt8) -> Bool { (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte) || [45, 46, 95].contains(byte) }

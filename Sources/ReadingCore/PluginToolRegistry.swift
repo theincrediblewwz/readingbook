@@ -83,7 +83,7 @@ public struct PluginToolRegistry: Sendable {
         guard arguments.count <= 262_144,
               (try? JSONSerialization.jsonObject(with: arguments)) is [String: Any] else { throw ReadingError.invalid("工具参数必须是小于256 KiB的JSON对象。") }
         guard let tool = storage[name], phase == nil || tool.phases.contains(phase!) else { throw ReadingError.invalid("当前阶段没有注册插件工具：\(name)") }
-        if tool.requiresReceipts { try ReadingLedger.requireComplete(unitIDs: allowedUnitIDs, in: project) }
+        if tool.requiresReceipts { try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project) }
         var candidate = project
         let result = try tool.execute(arguments, project: &candidate, allowed: allowedUnitIDs)
         guard candidate.id == project.id, candidate.sourceHash == project.sourceHash, candidate.originalName == project.originalName,
@@ -94,7 +94,15 @@ public struct PluginToolRegistry: Sendable {
         guard try encoder.encode(candidate.bookSchemes) == encoder.encode(project.bookSchemes) else {
             throw ReadingError.invalid("插件不能直接改写书本方案的预览、应用和撤销记录；请由用户在宿主界面确认。")
         }
-        guard try encoder.encode(candidate.smartReading) == encoder.encode(project.smartReading) else {
+        let standardCompletion = tool.pluginID == "builtin.standard-reading" && name == "reading_analysis" && phase == .reading
+        var candidateSession = candidate.smartReading, previousSession = project.smartReading
+        if standardCompletion {
+            try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
+            let old = previousSession?.analysisCheckpoints ?? [], next = candidateSession?.analysisCheckpoints ?? []
+            guard next.count == old.count || next.count == old.count + 1, Array(next.prefix(old.count)) == old else { throw ReadingError.invalid("标准分析只能追加当前原文块的检查点。") }
+            candidateSession?.analysisCheckpoints = nil; previousSession?.analysisCheckpoints = nil
+        }
+        guard try encoder.encode(candidateSession) == encoder.encode(previousSession) else {
             throw ReadingError.invalid("插件不能改写宿主冻结的智能阅读范围、确认状态或进度任务。")
         }
         guard try encoder.encode(candidate.manualTrash) == encoder.encode(project.manualTrash) else {
@@ -131,6 +139,7 @@ public struct PluginToolRegistry: Sendable {
             throw ReadingError.invalid("阅读插件不能伪造受控变更凭据或修改用户画布分组。")
         }
         let hostReadingTool = tool.pluginID == "builtin.reading"
+        let insightsUnchanged = try encoder.encode(candidate.insights) == encoder.encode(project.insights)
         let finish = hostReadingTool && name == "reading_finish"
         let receipt = hostReadingTool && name == "read_receipt"
         let step = hostReadingTool && name == "workflow_step_complete"
@@ -139,10 +148,13 @@ public struct PluginToolRegistry: Sendable {
         }
         if !finish {
             guard try encoder.encode(candidate.coverage) == encoder.encode(project.coverage),
-                  candidate.insights.count == project.insights.count,
-                  try encoder.encode(candidate.insights) == encoder.encode(project.insights),
+                  (standardCompletion || insightsUnchanged),
                   try encoder.encode(candidate.syntheses) == encoder.encode(project.syntheses), candidate.lastUnitID == project.lastUnitID else {
                 throw ReadingError.invalid("插件不能直接修改阅读覆盖或伪造综合结果；请通过宿主完成门禁。")
+            }
+            if standardCompletion {
+                guard candidate.insights.count >= project.insights.count, candidate.insights.count <= project.insights.count + 1,
+                      try encoder.encode(Array(candidate.insights.prefix(project.insights.count))) == encoder.encode(project.insights) else { throw ReadingError.invalid("标准分析不能改写已有分析。") }
             }
         }
         if !receipt {

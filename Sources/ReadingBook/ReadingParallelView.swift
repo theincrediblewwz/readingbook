@@ -5,6 +5,8 @@ import ReadingCore
 struct ReadingParallelView: View {
     @EnvironmentObject var store: AppStore
     var mode: String
+    var onSourceDecorationTap: ((String) -> Void)? = nil
+    var onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil
     var body: some View {
         GeometryReader { geometry in
             ScrollView {
@@ -17,7 +19,8 @@ struct ReadingParallelView: View {
                     Text("对照按原文片段排列。AI 译注另列来源；没有译注的片段保留原文，不把局部翻译算成整页已译。")
                         .font(.system(size: 14)).foregroundStyle(.secondary).lineSpacing(5)
                     ForEach(store.visibleSourceUnits) { unit in
-                        ReadingParallelUnit(unit: unit, mode: mode, sideBySide: mode == "parallel" && geometry.size.width >= 820)
+                        ReadingParallelUnit(unit: unit, mode: mode, sideBySide: mode == "parallel" && geometry.size.width >= 820,
+                            onSourceDecorationTap: onSourceDecorationTap, onSourceDecorationHover: onSourceDecorationHover)
                     }
                 }.padding(.horizontal, 28).padding(.top, 100).padding(.bottom, 100).frame(maxWidth: mode == "parallel" ? 1320 : 890).frame(maxWidth: .infinity)
             }.background(Palette.canvas)
@@ -30,6 +33,8 @@ private struct ReadingParallelUnit: View {
     let unit: SourceUnit
     let mode: String
     let sideBySide: Bool
+    var onSourceDecorationTap: ((String) -> Void)?
+    var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
     private var layers: [ReadingLayer] {
         let ids = Set(store.readingExperienceIndex.anchors.filter { $0.unitID == unit.id }.map(\.id))
         return store.readingExperienceIndex.layers.filter { !ids.isDisjoint(with: $0.sourceAnchorIDs) }
@@ -67,11 +72,11 @@ private struct ReadingParallelUnit: View {
             RichMarkdownView(markdown: unit.text, sourceText: unit.text,
                              plainText: !["md", "markdown"].contains(store.sourceFileURL?.pathExtension.lowercased() ?? "") && store.book?.ocrPages?.contains(where: { $0.page == unit.page }) != true,
                              sourceDecorations: decorations, focusedDecorationID: store.focusedReadingAnchorID,
-                             onSourceDecorationTap: store.sourceDecorationTapped,
+                             onSourceDecorationTap: onSourceDecorationTap ?? store.sourceDecorationTapped,
                              onSourceSelection: { selection in
                                 var adjusted = selection; adjusted?.rangeLocation = selection?.rangeLocation.map { $0 + offset }
                                 store.sourceReadingSelection = adjusted; if selection != nil { store.focusedReadingAnchorID = nil }
-                             })
+                             }, onSourceDecorationHover: onSourceDecorationHover)
         }.padding(24).background(Palette.surface.opacity(0.94), in: RoundedRectangle(cornerRadius: 18)).overlay(RoundedRectangle(cornerRadius: 18).stroke(Palette.line.opacity(0.8), lineWidth: 0.8))
     }
     private var translated: some View {

@@ -145,6 +145,9 @@ public struct ReadingPlan: Codable, Sendable {
     public var methodIDs: [String]
     public var rationale: String
     public var focus: [String]
+    /// The host still clamps this suggestion to the reader and provider limits.
+    public var recommendedParallelism: Int? = nil
+    public var recommendedGranularity: ReadingAnalysisGranularity? = nil
     public init(methodIDs: [String] = [], rationale: String = "", focus: [String] = []) { self.methodIDs = methodIDs; self.rationale = rationale; self.focus = focus }
 }
 public struct ReadingInsight: Codable, Identifiable, Sendable {
@@ -201,6 +204,8 @@ public struct ChatMessage: Codable, Identifiable, Sendable {
     public var content: String
     public var evidence: [Evidence]
     public var createdAt: Date
+    public var conversationMode: ReadingConversationMode? = nil
+    public var answerStyle: ReadingAnswerStyle? = nil
     public init(id: String = UUID().uuidString, role: String, content: String, evidence: [Evidence] = []) { self.id = id; self.role = role; self.content = content; self.evidence = evidence; self.createdAt = Date() }
 }
 public struct ToolAudit: Codable, Identifiable, Sendable {
@@ -208,6 +213,9 @@ public struct ToolAudit: Codable, Identifiable, Sendable {
     public var name: String
     public var summary: String
     public var createdAt: Date
+    public var requestID: String? = nil
+    public var requestNumber: Int? = nil
+    public var resultDetails: [String]? = nil
     public init(id: String = UUID().uuidString, name: String, summary: String) { self.id = id; self.name = name; self.summary = summary; self.createdAt = Date() }
 }
 public struct PluginManifest: Codable, Identifiable, Sendable {

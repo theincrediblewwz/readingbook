@@ -5,11 +5,14 @@ import ReadingCore
 struct ReaderWorkspaceView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.readingReduceMotion) private var reduceMotion
+    @Environment(\.workspaceCanvasBlocked) private var interactionBlocked
     @Binding var showPDF: Bool
     @Binding var showOutline: Bool
     @Binding var bookmarksOnly: Bool
     @EnvironmentObject var pdfController: PDFReaderController
     @State private var outlineFrame = CGRect.zero
+    @State private var companionFrame = CGRect.zero
+    @StateObject private var inlineReading = ReaderInlineState()
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     private var pdfChrome: [CGRect] {
         guard isPDF, showPDF, store.readingSourceMode == "original" else { return [] }
@@ -20,7 +23,9 @@ struct ReaderWorkspaceView: View {
             ZStack(alignment: .topLeading) {
                 Group {
                     if let unit = store.selectedUnit {
-                        if store.readingSourceMode != "original" { ReadingParallelView(mode: store.readingSourceMode) }
+                        if store.readingSourceMode != "original" {
+                            ReadingParallelView(mode: store.readingSourceMode, onSourceDecorationTap: sourceTapped, onSourceDecorationHover: sourceHovered)
+                        }
                         else if isPDF, showPDF, let url = store.sourceFileURL {
                             let requestToken = store.pdfNavigationToken
                             let sourceBookID = store.bookID
@@ -41,8 +46,9 @@ struct ReaderWorkspaceView: View {
                                 return await store.setReaderAnnotationTrashed(id, trashed: trashed)
                             }, sourceDecorations: store.sourceReadingDecorations,
                                focusedDecorationID: store.focusedReadingAnchorID,
-                               onSourceDecorationTap: store.sourceDecorationTapped,
+                               onSourceDecorationTap: sourceTapped,
                                onSourceSelection: { selection in store.sourceReadingSelection = selection; if selection != nil { store.focusedReadingAnchorID = nil } },
+                               onSourceDecorationHover: sourceHovered,
                                workspaceMemory: store.workspaceMemory.pdf, memoryRevision: store.workspaceMemoryRevision,
                                onWorkspaceMemory: { memory in store.updateWorkspaceMemory({ $0.pdf = memory }, expectedKey: memoryKey) })
                         } else { sourceText(unit) }
@@ -55,10 +61,14 @@ struct ReaderWorkspaceView: View {
                     showsRestoreButton: false, unifiedDismiss: true,
                     onFrameChange: { value in if outlineFrame != value { outlineFrame = value } }) { ReaderOutlinePanel(bookmarksOnly: $bookmarksOnly) }
                 ReaderFloatingPanel(title: "伴读与对话", icon: "sparkles", width: 376, height: 620, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: 88,
-                    avoidRects: pdfChrome + (outlineFrame.isEmpty ? [] : [outlineFrame]), elevated: true, showsRestoreButton: false, unifiedDismiss: true, resizable: true) {
+                    avoidRects: pdfChrome + (outlineFrame.isEmpty ? [] : [outlineFrame]), elevated: true, showsRestoreButton: false, unifiedDismiss: true, resizable: true,
+                    onFrameChange: { frame in if companionFrame != frame { companionFrame = frame } }) {
                     ReaderAIPanel()
                 }
+                ReaderInlineCard(state: inlineReading, viewport: geometry.size,
+                    obstacles: pdfChrome + [outlineFrame, companionFrame].filter { !$0.isEmpty }).zIndex(9)
             }
+                .coordinateSpace(name: ReaderInlineCoordinateSpace.name)
                 .background {
                     let offset = geometry.frame(in: .global).origin
                     Color.clear.preference(key: WorkspaceChromeBoundsPreference.self, value: pdfChromeBounds(offset: offset)).allowsHitTesting(false)
@@ -71,6 +81,12 @@ struct ReaderWorkspaceView: View {
                     if !value { store.queryAllowsOrganizing = false }
                 }
                 .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.readingCompanionVisible)
+                .onChange(of: store.bookID) { _, _ in inlineReading.clear() }
+                .onChange(of: store.selectedUnitID) { _, _ in inlineReading.clear() }
+                .onChange(of: store.readingSourceMode) { _, _ in inlineReading.clear() }
+                .onChange(of: store.sourceReadingSelection != nil) { _, selecting in if selecting { inlineReading.clear() } }
+                .onChange(of: interactionBlocked) { _, blocked in if blocked { inlineReading.clear() } }
+                .onDisappear { inlineReading.clear() }
         }
     }
     private func pdfChromeBounds(offset: CGPoint) -> [String: CGRect] {
@@ -113,8 +129,17 @@ struct ReaderWorkspaceView: View {
         RichMarkdownView(markdown: text, sourceText: text, plainText: plain,
                          sourceDecorations: store.sourceReadingDecorations,
                          focusedDecorationID: store.focusedReadingAnchorID,
-                         onSourceDecorationTap: store.sourceDecorationTapped,
-                         onSourceSelection: { selection in store.sourceReadingSelection = selection; if selection != nil { store.focusedReadingAnchorID = nil } })
+                         onSourceDecorationTap: sourceTapped,
+                         onSourceSelection: { selection in store.sourceReadingSelection = selection; if selection != nil { store.focusedReadingAnchorID = nil } },
+                         onSourceDecorationHover: sourceHovered)
+    }
+    private func sourceHovered(_ value: SourceReadingHover?) {
+        guard !interactionBlocked else { inlineReading.clear(); return }
+        inlineReading.receive(value, book: store.book, index: store.readingExperienceIndex, boundary: store.temporalBoundary)
+    }
+    private func sourceTapped(_ id: String) {
+        if var value = inlineReading.lastHover, value.id == id { value.activated = true; sourceHovered(value) }
+        else { store.sourceDecorationTapped(id) }
     }
     private func sourceMarkdown(_ unit: SourceUnit) -> String {
         if let page = unit.page, store.book?.ocrPages?.contains(where: { $0.page == page }) == true {
@@ -275,7 +300,7 @@ struct MarkdownText: View {
             })
     }
     private var preparedMarkdown: String {
-        MarkdownReferenceLinks.render(markdown, bookID: store.bookID ?? "")
+        MarkdownReferenceLinks.render(markdown, bookID: store.bookID ?? "", project: store.book)
     }
 }
 
