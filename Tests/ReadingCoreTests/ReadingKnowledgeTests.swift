@@ -176,7 +176,7 @@ final class ReadingKnowledgeTests: XCTestCase {
         XCTAssertEqual(saved.entities, book.entities)
         let laterRequest = try TeacherBackgroundRequest.freeze(objectID: "jia", in: saved, currentUnitID: "u2", avoidsSpoilers: true)
         var duplicate = record(laterRequest); duplicate.id = "teacher-later"; duplicate.markdown = "另一个并发请求返回的介绍。"
-        let now = Date(), history = AIRequestHistoryRecord(id: "parallel-teacher", title: "老师讲解", number: 1,
+        let now = Date(), history = AIRequestHistoryRecord(id: UUID().uuidString, title: "老师讲解", number: 1,
             startedAt: now, finishedAt: now, status: "returned", reasoningCharacters: 1, answerCharacters: 20)
         let reused = try await repository.saveTeacherBackground(bookID: book.id, record: duplicate, requestHistory: [history])
         XCTAssertEqual(reused.readingKnowledge?.backgrounds.count, 1, "并发的同上下文后页请求应复用已保存介绍。")

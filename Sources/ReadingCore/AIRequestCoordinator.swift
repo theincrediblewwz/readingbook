@@ -92,7 +92,12 @@ public actor AIRequestCoordinator {
     }
     private func release(_ id: UUID, cost: Int) {
         guard active.removeValue(forKey: id) != nil else { return }
-        usedTokens += cost; drain()
+        // Usage is provider-controlled, and parallel responses may each report
+        // Int.max. Saturate before the next admission rather than overflowing
+        // ahead of the individual reader's token-budget validation.
+        let total = usedTokens.addingReportingOverflow(max(0, cost))
+        usedTokens = total.overflow ? Int.max : total.partialValue
+        drain()
     }
     private func drain() {
         while !waiting.isEmpty && active.count < limit {

@@ -5,7 +5,7 @@ import XCTest
 final class AIProjectMergeTests: XCTestCase {
     func testCanonicalHistorySurvivesStaleMetadataAndMarkdownSaves() async throws {
         let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.directory) }
-        let record = AIRequestHistoryRecord(id: "late-history", title: "刚结束的请求", number: 1,
+        let record = AIRequestHistoryRecord(id: UUID().uuidString, title: "刚结束的请求", number: 1,
             startedAt: Date(), finishedAt: Date(), status: "returned", reasoningCharacters: 2, answerCharacters: 3)
         try await f.repository.recordAIRequestHistory(bookID: f.book.id, sourceHash: f.book.sourceHash, records: [record])
         let saved = try await f.repository.save(f.book)

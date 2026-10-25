@@ -30,8 +30,8 @@ final class AIRequestCoordinatorTests: XCTestCase {
         request.httpBody = try JSONSerialization.data(withJSONObject: ["max_tokens": 64])
         return .init(request: request, estimatedInputTokens: input)
     }
-    private func response() -> ProviderClient.Result {
-        .init(message: .init(role: "assistant", content: "离线结果", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 1)
+    private func response(tokenCost: Int = 1) -> ProviderClient.Result {
+        .init(message: .init(role: "assistant", content: "离线结果", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: tokenCost)
     }
     private func waitUntil(_ condition: @escaping () async -> Bool) async throws {
         for _ in 0..<1000 {
@@ -116,5 +116,58 @@ final class AIRequestCoordinatorTests: XCTestCase {
         XCTAssertFalse(started.contains("blocked"))
         await gate.releaseAll(); _ = try await active.value; _ = try await small.value
         await coordinator.endRun(run)
+    }
+
+    func testConcurrentExtremeUsageSaturatesAndReleasesBothActiveRequests() async throws {
+        let gate = CoordinatorTransportGate(), result = response(tokenCost: Int.max)
+        let coordinator = AIRequestCoordinator(transport: { prepared in await gate.wait(prepared.request.url!.lastPathComponent); return result })
+        let run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 2)
+        let one = try prepared("huge-one"), two = try prepared("huge-two")
+        let first = Task { try await coordinator.perform(one, lane: .foreground, progress: nil, onStart: { _ in }) }
+        let second = Task { try await coordinator.perform(two, lane: .foreground, progress: nil, onStart: { _ in }) }
+        defer { first.cancel(); second.cancel(); Task { await gate.releaseAll() }; run.finish() }
+        try await waitUntil { await gate.started.count == 2 }
+        await gate.releaseAll()
+        let firstResult = try await first.value, secondResult = try await second.value
+        XCTAssertEqual(firstResult.tokenCost, Int.max); XCTAssertEqual(secondResult.tokenCost, Int.max)
+        do {
+            _ = try await coordinator.perform(prepared("same-run"), lane: .foreground, progress: nil, onStart: { _ in })
+            XCTFail("极端共享用量后，同一轮次的新请求应预算暂停。")
+        } catch { XCTAssertTrue(error is ReadingWorkflowBudgetPause) }
+        run.finish(); await coordinator.endRun(run)
+        let next = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 2)
+        // A fresh admission proves neither overflowing completion left an
+        // active permit behind that would prevent resetting the next run.
+        _ = try await coordinator.perform(prepared("fresh-run"), lane: .foreground, progress: nil, onStart: { _ in })
+        next.finish(); await coordinator.endRun(next)
+    }
+
+    func testConcurrentExtremeUsagePausesQueuedAndLaterRequestsWithoutSendingThem() async throws {
+        let gate = CoordinatorTransportGate(), result = response(tokenCost: Int.max)
+        let coordinator = AIRequestCoordinator(transport: { prepared in await gate.wait(prepared.request.url!.lastPathComponent); return result })
+        let run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 2)
+        let one = try prepared("huge-background"), two = try prepared("huge-question"), queuedRequest = try prepared("queued-question")
+        let background = Task { try await coordinator.perform(one, lane: .background, progress: nil, onStart: { _ in }) }
+        let foreground = Task { try await coordinator.perform(two, lane: .foreground, progress: nil, onStart: { _ in }) }
+        defer { background.cancel(); foreground.cancel(); Task { await gate.releaseAll() }; run.finish() }
+        try await waitUntil { await gate.started.count == 2 }
+        let queued = Task { try await coordinator.perform(queuedRequest, lane: .foreground, progress: nil, onStart: { _ in }) }
+        defer { queued.cancel() }
+        try await waitUntil { await coordinator.queuedRequestCount == 1 }
+        await gate.releaseAll()
+        _ = try await background.value; _ = try await foreground.value
+        do { _ = try await queued.value; XCTFail("已排队请求也应在极端用量后暂停。") }
+        catch { XCTAssertTrue(error is ReadingWorkflowBudgetPause) }
+        do {
+            _ = try await coordinator.perform(prepared("later-question"), lane: .foreground, progress: nil, onStart: { _ in })
+            XCTFail("后续请求不能越过共享预算。")
+        } catch { XCTAssertTrue(error is ReadingWorkflowBudgetPause) }
+        let started = await gate.started, queuedCount = await coordinator.queuedRequestCount, usedRequests = await coordinator.requestsUsed
+        XCTAssertEqual(started, ["huge-background", "huge-question"])
+        XCTAssertEqual(queuedCount, 0); XCTAssertEqual(usedRequests, 2)
+        run.finish(); await coordinator.endRun(run)
+        let next = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 1)
+        _ = try await coordinator.perform(prepared("after-pause"), lane: .foreground, progress: nil, onStart: { _ in })
+        next.finish(); await coordinator.endRun(next)
     }
 }

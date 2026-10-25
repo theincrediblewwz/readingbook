@@ -56,7 +56,7 @@ final class SentenceTranslationTests: XCTestCase {
         let saved = try await repository.saveSentenceTranslation(request: request, markdown: "先顾好眼前的事情。", model: "offline")
         XCTAssertEqual(saved.chats.map(\.id), ["question"])
         XCTAssertEqual(request.cachedLayer(in: saved)?.markdown, "先顾好眼前的事情。")
-        let now = Date(), history = AIRequestHistoryRecord(id: "parallel-sentence", title: "句旁翻译", number: 1,
+        let now = Date(), history = AIRequestHistoryRecord(id: UUID().uuidString, title: "句旁翻译", number: 1,
             startedAt: now, finishedAt: now, status: "returned", reasoningCharacters: 2, answerCharacters: 18)
         let repeated = try await repository.saveSentenceTranslation(request: request, markdown: "不应覆盖旧译文", model: "offline", requestHistory: [history])
         XCTAssertEqual(repeated.readingExperience?.layers.count, 1)
