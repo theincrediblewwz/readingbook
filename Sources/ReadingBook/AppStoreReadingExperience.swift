@@ -25,7 +25,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
     }
     struct Prepared: Sendable {
         let snapshots: [Snapshot]; let selected: Snapshot; let base: ReadingExperienceState
-        let index: ReadingExperienceState; let changed: Bool
+        let index: ReadingExperienceState; let changed: Bool; let decorationsChanged: Bool
         let unitIndices: [String: Int]; let pageIndices: [Int: [Int]]
         let boundariesByPage: [Int: KnowledgeReadBoundary]
         let currentBoundary: KnowledgeReadBoundary?
@@ -56,7 +56,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         entries[value.key] = value; order.removeAll { $0 == value.key }; order.append(value.key)
         while order.count > 24 { entries.removeValue(forKey: order.removeFirst()) }
     }
-    nonisolated static func prepare(_ request: Request, entries: [Int: Snapshot], current: Snapshot?, previousBase: ReadingExperienceState?, includeWindow: Bool = true) -> Prepared? {
+    nonisolated static func prepare(_ request: Request, entries: [Int: Snapshot], current: Snapshot?, previousBase: ReadingExperienceState?, previousDecorations: [[SourceReadingDecoration]] = [], includeWindow: Bool = true) -> Prepared? {
         let book = request.project
         var unitIndices: [String: Int] = [:], pageIndices: [Int: [Int]] = [:]
         for (index, unit) in book.units.enumerated() {
@@ -104,7 +104,8 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
             for mention in snapshot.index.mentions where mentionIDs.insert(mention.id).inserted { index.mentions.append(mention) }
         }
         let changed = current?.input != selected.input || previousBase != base || current?.index != selected.index
-        return Prepared(snapshots: snapshots, selected: selected, base: base, index: index, changed: changed,
+        let decorationsChanged = previousDecorations.flatMap { $0 } != snapshots.flatMap(\.decorations)
+        return Prepared(snapshots: snapshots, selected: selected, base: base, index: index, changed: changed, decorationsChanged: decorationsChanged,
             unitIndices: unitIndices, pageIndices: pageIndices, boundariesByPage: boundaries,
             currentBoundary: selectedUnit.page.flatMap { boundaries[$0] } ?? (try? KnowledgeReadBoundary.throughSourceUnit(selectedUnit.id, in: book)),
             anchorsByID: Dictionary(index.anchors.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }))
@@ -129,8 +130,11 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         for unit in input.units { offsets[unit.id] = offset; offset += (unit.text as NSString).length }
         let mentions = Dictionary(grouping: index.mentions, by: \.anchorID)
         let units = Dictionary(input.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let structuralBoundaries = units.mapValues { ReadingSentenceAnchors.boundaryIndex(in: $0.text, chapterTitle: $0.chapter) }
         let decorations = index.anchors.compactMap { anchor -> SourceReadingDecoration? in
             guard !Task.isCancelled, let start = offsets[anchor.unitID], let location = anchor.utf16Location, let length = anchor.utf16Length else { return nil }
+            let isTerm = mentions[anchor.id]?.isEmpty == false
+            guard isTerm || structuralBoundaries[anchor.unitID]?.crossesStructuralBoundary(NSRange(location: location, length: length)) == false else { return nil }
             return SourceReadingDecoration(id: anchor.id, targetID: mentions[anchor.id]?.first?.targetID ?? anchor.id, quote: anchor.quote,
                 rangeLocation: start + location, rangeLength: length, prefix: anchor.prefix, suffix: anchor.suffix,
                 interaction: mentions[anchor.id]?.isEmpty == false ? .term : .passage,
@@ -188,8 +192,9 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                 for includeWindow in (needsFirstPage ? [false, true] : [true]) {
                 let entries = self.readingPageSnapshots.entries
                 let current = self.readingPageSnapshots.current, base = self.readingPageSnapshots.currentBase
+                let previousDecorations = self.readingPageSnapshots.window.map(\.decorations)
                 let calculation = Task.detached(priority: .userInitiated) {
-                    ReadingPageSnapshotCache.prepare(frozen, entries: entries, current: current, previousBase: base, includeWindow: includeWindow)
+                    ReadingPageSnapshotCache.prepare(frozen, entries: entries, current: current, previousBase: base, previousDecorations: previousDecorations, includeWindow: includeWindow)
                 }
                 let prepared = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
                 guard !Task.isCancelled, self.readingIndexGeneration == generation, self.bookID == book.id,
@@ -222,8 +227,8 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                         self.readingPageSnapshots.window = prepared.snapshots
                         if prepared.changed || windowChanged {
                             self.readingExperienceIndex = nextIndex; self.readingContextCacheKey = nil
-                            self.readingPageSnapshots.presentationRevision &+= 1
                         }
+                        if prepared.decorationsChanged { self.readingPageSnapshots.presentationRevision &+= 1 }
                     }
                 }
                 }

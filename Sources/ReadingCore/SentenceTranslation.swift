@@ -11,6 +11,9 @@ public struct SentenceTranslationRequest: Sendable {
 
     public static func freeze(anchor: SourceAnchor, in project: BookProject, targetLanguage: String = "简体中文") throws -> Self {
         let resolved = try ReadingExperienceRuntime.resolve(anchor, in: project)
+        guard !ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter).crossesStructuralBoundary(resolved.range) else {
+            throw ReadingError.invalid("标题与正文已分开，请重新选择标题或原句。")
+        }
         guard !anchor.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               anchor.quote.count <= 2_000, targetLanguage == "简体中文" else {
             throw ReadingError.invalid("请选择两千字以内的原句。")
@@ -29,7 +32,8 @@ public struct SentenceTranslationRequest: Sendable {
     }
 
     public func cachedLayer(in project: BookProject) -> ReadingLayer? {
-        guard project.id == bookID, (try? ReadingExperienceRuntime.resolve(anchor, in: project)) != nil,
+        guard project.id == bookID, let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: project),
+              !ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter).crossesStructuralBoundary(resolved.range),
               let state = project.readingExperience else { return nil }
         let exactIDs = Set(state.anchors.filter {
             $0.sourceHash == anchor.sourceHash && $0.unitTextHash == anchor.unitTextHash && $0.unitID == anchor.unitID &&

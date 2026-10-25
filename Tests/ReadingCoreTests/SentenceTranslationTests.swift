@@ -23,6 +23,55 @@ final class SentenceTranslationTests: XCTestCase {
         var changed = book; changed.units[0].text = "已改的原句。"
         XCTAssertThrowsError(try SentenceTranslationRequest.freeze(anchor: first.anchor, in: changed))
     }
+    func testChapterTranslationDoesNotSendItsOpeningSentenceAndRejectsOldMixedAnchor() async throws {
+        let title = "第三十八回\n定三分隆中决策\n战长江孙氏报仇", opening = "却说玄德三顾茅庐。"
+        let text = title + "\n" + opening + "后文不应进入标题的翻译。"
+        let project = BookProject(title: "三国", originalName: "book.pdf", sourceHash: try BookImporter.sha256(Data(text.utf8)),
+            units: [SourceUnit(id: "u1", order: 0, chapter: "第三十八回", page: 1, text: text)])
+        let mixed = try ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash, unitID: "u1", quote: title + "\n" + opening, in: project)
+        XCTAssertThrowsError(try SentenceTranslationRequest.freeze(anchor: mixed, in: project))
+        let titleAnchor = try XCTUnwrap(ReadingSentenceAnchors.anchors(in: project.units[0], project: project).first)
+        let request = try SentenceTranslationRequest.freeze(anchor: titleAnchor, in: project), response = try result("隆中定下三分天下的计策，孙氏在长江一带报仇。")
+        XCTAssertEqual(request.anchor.quote, title); XCTAssertTrue(request.precedingText.isEmpty)
+        _ = try await SentenceTranslationEngine.generate(request: request, settings: .init()) { messages, _, _ in
+            XCTAssertFalse(String(describing: messages).contains(opening))
+            XCTAssertFalse(String(describing: messages).contains("后文不应"))
+            return response
+        }
+    }
+    func testOldMixedTranslationStaysOnDiskButCannotBeReusedForTheNewTitleOrFirstSentence() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ReadingBook-OldTitle-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let title = "第十九回 下邳城曹操鏖兵 白门楼吕布殒命", firstSentence = "却说曹操正在城下。"
+        let text = title + "\n" + firstSentence
+        var project = BookProject(title: "三国", originalName: "source.txt", sourceHash: try BookImporter.sha256(Data(text.utf8)),
+            units: [SourceUnit(id: "u1", order: 0, chapter: "三国", text: text)])
+        let oldAnchor = try ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash, unitID: "u1", quote: text, in: project)
+        let oldIdentity = [project.id, project.sourceHash, oldAnchor.unitID, oldAnchor.unitTextHash, oldAnchor.id, "简体中文"].joined(separator: "|")
+        let oldCacheID = "sentence-translation-" + (try BookImporter.sha256(Data(oldIdentity.utf8)))
+        project.readingExperience = ReadingExperienceState(anchors: [oldAnchor], layers: [ReadingLayer(id: oldCacheID, kind: "translation", title: "旧句译",
+            markdown: "旧译文混入了开篇正文。", sourceAnchorIDs: [oldAnchor.id], provenance: ReadingProvenance(label: "sentence-translation", workTitle: "简体中文"))])
+        let source = directory.appendingPathComponent("source.txt"); try Data(text.utf8).write(to: source)
+        let repository = LibraryRepository(rootURL: directory.appendingPathComponent("library"))
+        try await repository.create(project, sourceURL: source)
+        let anchors = ReadingSentenceAnchors.anchors(in: project.units[0], project: project)
+        XCTAssertEqual(anchors.map(\.quote), [title, firstSentence])
+        let titleRequest = try SentenceTranslationRequest.freeze(anchor: anchors[0], in: project)
+        let bodyRequest = try SentenceTranslationRequest.freeze(anchor: anchors[1], in: project)
+        XCTAssertNil(titleRequest.cachedLayer(in: project)); XCTAssertNil(bodyRequest.cachedLayer(in: project))
+        XCTAssertNotEqual(titleRequest.cacheID, oldCacheID); XCTAssertNotEqual(bodyRequest.cacheID, oldCacheID)
+        let oldRequest = SentenceTranslationRequest(bookID: project.id, anchor: oldAnchor, precedingText: "", targetLanguage: "简体中文", cacheID: oldCacheID)
+        XCTAssertNil(oldRequest.cachedLayer(in: project), "旧请求实例也不能继续命中错误的混合译文。")
+        do { _ = try await repository.saveSentenceTranslation(request: oldRequest, markdown: "仍然错误的范围", model: "offline"); XCTFail("旧跨标题请求不能重新保存或假装复用成功。") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("标题与正文")) }
+        let saved = try await repository.saveSentenceTranslation(request: titleRequest, markdown: "本回的标题译文。", model: "offline")
+        XCTAssertEqual(saved.readingExperience?.layers.count, 2)
+        XCTAssertEqual(saved.readingExperience?.layers.first { $0.id == oldCacheID }?.markdown, "旧译文混入了开篇正文。")
+        XCTAssertEqual(titleRequest.cachedLayer(in: saved)?.markdown, "本回的标题译文。")
+        XCTAssertNil(bodyRequest.cachedLayer(in: saved))
+        XCTAssertEqual(saved.units, project.units); XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), text)
+    }
     func testProviderGetsBoundedCleanTranslationContextAndAdequateInputBudget() async throws {
         let request = try request(book()), response = try result("贾诩说，先顾好眼前的事情。")
         let output = try await SentenceTranslationEngine.generate(request: request,
@@ -34,6 +83,21 @@ final class SentenceTranslationTests: XCTestCase {
             return response
         }
         XCTAssertEqual(output, "贾诩说，先顾好眼前的事情。")
+    }
+    func testTranslationWithOneExactAndOneCrossHeadingAnchorIsNeverACacheHit() throws {
+        let title = "第38回 定三分隆中决策", text = title + "\n却说玄德三顾茅庐。"
+        var project = BookProject(title: "三国", originalName: "source.txt", sourceHash: try BookImporter.sha256(Data(text.utf8)),
+            units: [SourceUnit(id: "u1", order: 0, chapter: "三国", text: text)])
+        let titleAnchor = try ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash, unitID: "u1", quote: title, in: project)
+        let mixed = try ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash, unitID: "u1", quote: text, in: project)
+        let request = try SentenceTranslationRequest.freeze(anchor: titleAnchor, in: project)
+        for ids in [[titleAnchor.id, mixed.id], [mixed.id, titleAnchor.id]] {
+            project.readingExperience = ReadingExperienceState(anchors: [titleAnchor, mixed], layers: [ReadingLayer(id: "old-combined", kind: "translation", title: "旧译文",
+                markdown: "旧内容含了第一句正文。", sourceAnchorIDs: ids)])
+            XCTAssertNil(request.cachedLayer(in: project), "精确锚并不能替另一个越界锚洗白整个旧layer。")
+        }
+        project.readingExperience?.layers = [ReadingLayer(id: "exact-title", kind: "translation", title: "本回标题", markdown: "只解释标题。", sourceAnchorIDs: [titleAnchor.id])]
+        XCTAssertEqual(request.cachedLayer(in: project)?.id, "exact-title", "合法的单锚旧译注仍可复用。")
     }
     func testTruncatedAndEmptyOutputAreNotAccepted() async throws {
         let request = try request(book()), truncated = try result("不完整", finish: "length"), empty = try result("  ")

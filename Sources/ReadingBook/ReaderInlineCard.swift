@@ -23,12 +23,20 @@ struct ReaderInlineContent: Sendable {
         let state = book.readingExperience ?? ReadingExperienceState()
         let units = Dictionary(book.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let anchors = Dictionary(state.anchors.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let structuralBoundaries = ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter)
+        guard target != nil || !structuralBoundaries.crossesStructuralBoundary(resolved.range) else { return nil }
+        var localProject = book; localProject.units = [resolved.unit]
         let localLayers = state.layers.filter { layer in
-            !layer.sourceAnchorIDs.isEmpty && layer.sourceAnchorIDs.allSatisfy { anchors[$0]?.unitID == anchor.unitID }
-                && layer.sourceAnchorIDs.contains { value in
-                    guard let candidate = anchors[value], let start = candidate.utf16Location, let length = candidate.utf16Length else { return value == id }
-                    return NSIntersectionRange(NSRange(location: start, length: length), resolved.range).length > 0
-                }
+            guard !layer.sourceAnchorIDs.isEmpty else { return false }
+            let ranges = layer.sourceAnchorIDs.compactMap { value -> NSRange? in
+                guard let candidate = anchors[value], candidate.unitID == anchor.unitID,
+                      let source = try? ReadingExperienceRuntime.resolve(candidate, in: localProject),
+                      !structuralBoundaries.crossesStructuralBoundary(source.range) else { return nil }
+                return source.range
+            }
+            guard ranges.count == layer.sourceAnchorIDs.count else { return false }
+            if layer.kind == "translation" { return ranges.count == 1 && ranges[0] == resolved.range }
+            return ranges.contains { NSIntersectionRange($0, resolved.range).length > 0 }
         }.sorted { lhs, rhs in
             let left = lhs.kind == "translation" ? 0 : 1, right = rhs.kind == "translation" ? 0 : 1
             return left == right ? lhs.id < rhs.id : left < right
@@ -100,32 +108,39 @@ struct ReaderInlineContent: Sendable {
     private var pendingID: String?
     private var task: Task<Void, Never>?
     private var inside = false
+    private var closing = false
     var lastHover: SourceReadingHover?
     func receive(_ value: SourceReadingHover?, book: BookProject?, index: ReadingExperienceState, boundary: KnowledgeReadBoundary) {
         if let value { lastHover = value }
         if pinned && value?.activated != true { return }
-        guard let value, let book else { scheduleClose(); return }
-        if hover?.id == value.id && !value.activated { task?.cancel(); pendingID = nil; return }
+        guard let value, let book else { leave(); return }
+        if hover?.id == value.id && !value.activated { task?.cancel(); task = nil; closing = false; pendingID = nil; return }
         if pendingID == value.id && !value.activated { return }
-        task?.cancel(); pendingID = value.id
+        task?.cancel(); closing = false; pendingID = value.id
         task = Task { [weak self] in
             if !value.activated { do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return } }
             guard !Task.isCancelled else { return }
             let worker = Task.detached(priority: .userInitiated) { ReaderInlineContent.freeze(value.id, book: book, index: index, boundary: boundary) }
             let frozen = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
-            guard !Task.isCancelled, let self, let content = frozen else { return }
-            self.content = content; self.hover = value; self.pinned = value.activated; self.pendingID = nil
+            guard !Task.isCancelled, let self else { return }
+            guard let content = frozen else { self.pendingID = nil; self.task = nil; return }
+            self.content = content; self.hover = value; self.pinned = value.activated; self.pendingID = nil; self.task = nil
         }
     }
-    func pointer(_ value: Bool) { inside = value; if value { task?.cancel(); pendingID = nil } else { scheduleClose() } }
-    func pin() { task?.cancel(); pendingID = nil; pinned = true }
-    func clear() { task?.cancel(); task = nil; pendingID = nil; hover = nil; content = nil; pinned = false; inside = false; lastHover = nil }
+    func leave() { scheduleClose() }
+    func pointer(_ value: Bool) { inside = value; if value { task?.cancel(); task = nil; closing = false; pendingID = nil } else { scheduleClose() } }
+    func pin() { task?.cancel(); task = nil; closing = false; pendingID = nil; pinned = true }
+    func clear() { task?.cancel(); task = nil; closing = false; pendingID = nil; hover = nil; content = nil; pinned = false; inside = false; lastHover = nil }
     private func scheduleClose() {
-        guard !pinned else { return }
+        guard !pinned, !closing else { return }
         task?.cancel(); pendingID = nil
+        guard hover != nil || content != nil else { task = nil; return }
+        closing = true
         task = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
-            guard let self, !self.inside, !self.pinned else { return }; self.clear()
+            guard !Task.isCancelled, let self else { return }
+            self.closing = false; self.task = nil
+            guard !self.inside, !self.pinned else { return }; self.clear()
         }
     }
 }

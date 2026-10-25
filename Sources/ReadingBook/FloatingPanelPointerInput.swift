@@ -1,10 +1,28 @@
 import SwiftUI
 import AppKit
 
+enum FloatingPanelPointerStyle: Equatable {
+    case move, horizontalResize, verticalResize, diagonalDownResize, diagonalUpResize
+
+    var cursor: NSCursor {
+        switch self {
+        case .move: return .openHand
+        case .horizontalResize: return .resizeLeftRight
+        case .verticalResize: return .resizeUpDown
+        case .diagonalDownResize, .diagonalUpResize:
+            let name = self == .diagonalDownResize ? "arrow.up.left.and.arrow.down.right" : "arrow.up.right.and.arrow.down.left"
+            guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return .crosshair }
+            image.size = NSSize(width: 18, height: 18)
+            return NSCursor(image: image, hotSpot: NSPoint(x: 9, y: 9))
+        }
+    }
+}
+
 /// Only covers the panel's title/handle, leaving its axis, buttons and text alone.
 /// AppKit retains the mouse receiver; window-space deltas never follow the panel.
 struct FloatingPanelPointerInput: NSViewRepresentable {
     var epoch: Int
+    var style: FloatingPanelPointerStyle = .move
     var begin: () -> Void
     var drag: (CGSize, Bool) -> Void
     var cancel: () -> Void
@@ -12,11 +30,13 @@ struct FloatingPanelPointerInput: NSViewRepresentable {
     func makeNSView(context: Context) -> PointerView { PointerView() }
     func updateNSView(_ view: PointerView, context: Context) {
         if view.epoch != epoch { view.stopTracking(); view.epoch = epoch }
+        if view.style != style { view.style = style; view.window?.invalidateCursorRects(for: view) }
         view.begin = begin; view.drag = drag; view.cancel = cancel
     }
 
     final class PointerView: NSView {
         var epoch = 0
+        var style: FloatingPanelPointerStyle = .move { didSet { cachedCursor = nil } }
         var begin: (() -> Void)?
         var drag: ((CGSize, Bool) -> Void)?
         var cancel: (() -> Void)?
@@ -24,12 +44,17 @@ struct FloatingPanelPointerInput: NSViewRepresentable {
         private var didDrag = false
         private var escapeMonitor: Any?
         private var focusObservers: [NSObjectProtocol] = []
+        private var cachedCursor: NSCursor?
+        private var currentCursor: NSCursor {
+            if let cachedCursor { return cachedCursor }
+            let value = style.cursor; cachedCursor = value; return value
+        }
         override var isFlipped: Bool { true }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-        override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+        override func resetCursorRects() { addCursorRect(bounds, cursor: currentCursor) }
         override func mouseDown(with event: NSEvent) {
             stopTracking(); origin = event.locationInWindow; begin?()
-            NSCursor.closedHand.set()
+            (style == .move ? NSCursor.closedHand : currentCursor).set()
             escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard event.keyCode == 53, let self, self.origin != nil,
                       event.window === self.window, self.window?.attachedSheet == nil else { return event }
@@ -63,7 +88,7 @@ struct FloatingPanelPointerInput: NSViewRepresentable {
             if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor); self.escapeMonitor = nil }
             for observer in focusObservers { NotificationCenter.default.removeObserver(observer) }
             focusObservers = []
-            if wasTracking { NSCursor.openHand.set() }
+            if wasTracking { currentCursor.set() }
         }
         override func cancelOperation(_ sender: Any?) { stopTracking(); cancel?() }
         override func viewDidMoveToWindow() {

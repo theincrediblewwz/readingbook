@@ -16,7 +16,8 @@ private struct CompanionProjection: Sendable {
                       selectedUnitID: String?, avoidsSpoilers: Bool) -> Self? {
         guard !Task.isCancelled else { return nil }
         let state = book.readingExperience ?? ReadingExperienceState()
-        let items: ReadingContextItems, count: Int
+        var items: ReadingContextItems
+        let count: Int
         if scope == "book" {
             items = ReadingContextItems(anchors: state.anchors, mentions: state.mentions, entities: book.entities,
                 events: book.events, layers: state.layers, alignments: state.alignments); count = 0
@@ -57,6 +58,40 @@ private struct CompanionProjection: Sendable {
             count = state.layers.filter { !anchorIDs.isDisjoint(with: $0.sourceAnchorIDs) && !fullyLocal($0.sourceAnchorIDs) }.count +
                 state.alignments.filter { !anchorIDs.isDisjoint(with: $0.sourceAnchorIDs) && !fullyLocal($0.sourceAnchorIDs) }.count
             items = ReadingContextItems(anchors: anchors, mentions: mentions, entities: entities, events: events, layers: layers, alignments: alignments)
+        }
+        guard !Task.isCancelled else { return nil }
+        // Old sentence-only output may cover a title and its opening prose.
+        // Hide only invalid sentence translations in this disposable projection;
+        // ordinary chapter analysis, source records and user notes stay intact.
+        if items.layers.contains(where: { $0.provenance?.label == "sentence-translation" }) {
+            let unitsByID = Dictionary(grouping: book.units, by: \.id)
+            let anchorsByID = Dictionary(grouping: items.anchors, by: \.id)
+            var boundaries: [String: ReadingPassageBoundaryIndex] = [:]
+            var validity: [String: Bool] = [:]
+            func validSentenceAnchor(_ id: String) -> Bool {
+                if let saved = validity[id] { return saved }
+                guard !Task.isCancelled, let anchors = anchorsByID[id], anchors.count == 1, let anchor = anchors.first,
+                      anchor.sourceHash == book.sourceHash,
+                      let matches = unitsByID[anchor.unitID], matches.count == 1, let unit = matches.first else {
+                    validity[id] = false; return false
+                }
+                var compact = book; compact.units = [unit]
+                guard let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: compact) else {
+                    validity[id] = false; return false
+                }
+                let boundary: ReadingPassageBoundaryIndex
+                if let saved = boundaries[unit.id] { boundary = saved }
+                else {
+                    boundary = ReadingSentenceAnchors.boundaryIndex(in: unit.text, chapterTitle: unit.chapter)
+                    boundaries[unit.id] = boundary
+                }
+                let valid = !boundary.crossesStructuralBoundary(resolved.range)
+                validity[id] = valid; return valid
+            }
+            items.layers.removeAll { layer in
+                guard layer.provenance?.label == "sentence-translation" else { return false }
+                return layer.sourceAnchorIDs.count != 1 || !validSentenceAnchor(layer.sourceAnchorIDs[0])
+            }
         }
         guard !Task.isCancelled else { return nil }
         let types = Dictionary(book.types.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -480,7 +515,7 @@ struct ReadingCompanionPanel: View {
     @ViewBuilder private func provenance(_ value: ReadingProvenance?) -> some View {
         if let value {
             VStack(alignment: .leading, spacing: 4) {
-                Text([value.label, value.workTitle, value.locator].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 13)).foregroundStyle(.secondary)
+                Text([value.label == "sentence-translation" ? "句译" : value.label, value.workTitle, value.locator].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 13)).foregroundStyle(.secondary)
                 if let string = value.url, let url = URL(string: string), ["http", "https"].contains(url.scheme ?? "") { Link(destination: url) { Label("查看来源", systemImage: "arrow.up.right.square") }.font(.system(size: 13)).frame(minHeight: 44) }
             }
         }

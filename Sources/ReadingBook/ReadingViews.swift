@@ -141,7 +141,8 @@ struct ReaderWorkspaceView: View {
     }
     private func sourceHovered(_ value: SourceReadingHover?) {
         guard !interactionBlocked else { inlineReading.clear(); return }
-        inlineReading.receive(value, book: store.book, index: store.readingExperienceIndex, boundary: store.inlineReadingBoundary(for: value?.id))
+        guard let value else { inlineReading.leave(); return }
+        inlineReading.receive(value, book: store.book, index: store.readingExperienceIndex, boundary: store.inlineReadingBoundary(for: value.id))
     }
     private func sourceTapped(_ id: String) {
         if var value = inlineReading.lastHover, value.id == id { value.activated = true; sourceHovered(value) }

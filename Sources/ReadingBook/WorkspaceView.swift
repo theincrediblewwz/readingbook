@@ -28,6 +28,7 @@ struct WorkspaceView: View {
     @State private var sheetClosing = false
     @State private var navigationExpanded = false
     @State private var pendingRoute: String?
+    @State private var opensCompanionAfterNavigation = false
     @State private var pendingModelRoute: String?
     @State private var showsRouteConfirmation = false
     @State private var showsModelRouteConfirmation = false
@@ -101,20 +102,20 @@ struct WorkspaceView: View {
             Button("保存并继续") { saveDocumentAndNavigate(to: destination) }.disabled(store.isBusy)
             Button("放弃修改并继续", role: .destructive) {
                 pendingRoute = nil; showsRouteConfirmation = false
-                store.discardDraftForWorkspaceNavigation(); store.route = destination
+                store.discardDraftForWorkspaceNavigation(); completeNavigation(to: destination)
             }.disabled(store.isBusy)
-            Button("继续编辑", role: .cancel) { pendingRoute = nil; showsRouteConfirmation = false }
+            Button("继续编辑", role: .cancel) { pendingRoute = nil; opensCompanionAfterNavigation = false; showsRouteConfirmation = false }
         } message: { _ in Text("已保存正文保留；本次未保存修改可保存或放弃。") }
         .confirmationDialog("当前模型配置尚未保存", isPresented: $showsModelRouteConfirmation, presenting: pendingModelRoute) { destination in
             Button("保存并继续") { resolveModelNavigation(to: destination, save: true) }.disabled(store.isBusy)
             Button("放弃更改并继续", role: .destructive) { resolveModelNavigation(to: destination, save: false) }.disabled(store.isBusy)
-            Button("继续编辑", role: .cancel) { pendingModelRoute = nil; showsModelRouteConfirmation = false }
+            Button("继续编辑", role: .cancel) { pendingModelRoute = nil; opensCompanionAfterNavigation = false; showsModelRouteConfirmation = false }
         } message: { _ in Text("保存会写入本机配置与钥匙串；取消可继续编辑。") }
         .onChange(of: showsRouteConfirmation) { _, visible in
-            if !visible && !resolvingNavigation { pendingRoute = nil }
+            if !visible && !resolvingNavigation { pendingRoute = nil; opensCompanionAfterNavigation = false }
         }
         .onChange(of: showsModelRouteConfirmation) { _, visible in
-            if !visible && !resolvingNavigation { pendingModelRoute = nil }
+            if !visible && !resolvingNavigation { pendingModelRoute = nil; opensCompanionAfterNavigation = false }
         }
     }
     private var presentedWorkspace: some View {
@@ -400,8 +401,9 @@ struct WorkspaceView: View {
                     }
             }
             if store.book != nil && store.route != "library" {
-                Button { navigate("workflow") } label: { Label(store.isSmartReadingRunning ? "查看分析" : "智能阅读", systemImage: "sparkles").font(.system(size: 14, weight: .medium)).padding(.horizontal, 6).frame(minHeight: 34) }
+                Button(action: toggleReadingCompanion) { Label("伴读与对话", systemImage: "bubble.left.and.bubble.right").font(.system(size: 14, weight: .medium)).padding(.horizontal, 6).frame(minHeight: 34) }
                     .buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).fixedSize().workspaceChromeBounds("primary")
+                    .accessibilityLabel("伴读与对话").help(store.route == "reader" && store.readingCompanionVisible ? "收起伴读与对话，保留当前内容" : "打开伴读与对话")
             } else {
                 Button { store.chooseBook() } label: { Label("导入书籍", systemImage: "plus").frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(store.isBusy).fixedSize().workspaceChromeBounds("primary")
             }
@@ -426,6 +428,7 @@ struct WorkspaceView: View {
             Divider().padding(.horizontal, 10).padding(.vertical, 4)
             DockMenuRow(title: "AI 服务", icon: "slider.horizontal.3", detail: store.serviceName.isEmpty ? "尚未配置" : store.serviceName) { servicePopover = true }
             if store.book != nil {
+                DockMenuRow(title: store.isSmartReadingRunning ? "查看分析" : "智能阅读", icon: "sparkles") { bookPopover = false; navigate("workflow") }
                 DockMenuRow(title: "本书方案", icon: "slider.horizontal.2.square") { bookPopover = false; presentManagement("book.scheme") }.disabled(store.isBusy || store.editorDirty)
                 DockMenuRow(title: "插件与组件", icon: "puzzlepiece.extension") { bookPopover = false; navigate("plugins") }
                 DockMenuRow(title: "重置布局", icon: "arrow.counterclockwise") { bookPopover = false; store.resetWorkspaceLayout() }
@@ -442,8 +445,15 @@ struct WorkspaceView: View {
         default: return store.book?.title ?? "ReadingBook"
         }
     }
-    private func navigate(_ route: String) {
+    private func toggleReadingCompanion() {
+        if store.route == "reader" && managementRoute == nil {
+            navigationExpanded = false; servicePopover = false; bookPopover = false; readerPopover = nil
+            store.readingCompanionVisible.toggle()
+        } else { navigate("reader", openingCompanion: true) }
+    }
+    private func navigate(_ route: String, openingCompanion: Bool = false) {
         guard !store.isSavingDocument, !resolvingNavigation else { return }
+        opensCompanionAfterNavigation = openingCompanion
         navigationExpanded = false; servicePopover = false; bookPopover = false; readerPopover = nil
         if store.serviceProfileDraft.isDirty(in: store) && managementRoute == "models" && route != "models" { pendingModelRoute = route; showsModelRouteConfirmation = true }
         else if store.editorDirty && store.route == "editor" && route != "editor" && !["models", "plugins", "book.scheme", "preferences"].contains(route) { pendingRoute = route; showsRouteConfirmation = true }
@@ -452,6 +462,8 @@ struct WorkspaceView: View {
     private func completeNavigation(to route: String) {
         if ["models", "plugins", "book.scheme", "preferences"].contains(route) { presentManagement(route) }
         else { closeManagement(); store.route = route }
+        if route == "reader" && opensCompanionAfterNavigation { store.readingCompanionVisible = true }
+        opensCompanionAfterNavigation = false
     }
     private func presentManagement(_ route: String) {
         store.queryAllowsOrganizing = false
@@ -528,9 +540,8 @@ struct WorkspaceView: View {
                 Text(store.selectedUnit?.page.map { "第 \($0) 页" } ?? "原文").font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: 110)
                 DockIconButton(title: "下一原文单元", icon: "chevron.right") { moveSource(1) }.disabled(store.selectedUnit?.order == (store.book?.units.count ?? 0) - 1)
             }
-            DockDivider()
-            DockIconButton(title: "伴读与对话", icon: "sparkles", isSelected: store.readingCompanionVisible) { store.readingCompanionVisible.toggle() }
             if viewingPDF {
+                DockDivider()
                 DockIconButton(title: "高亮与批注", icon: "highlighter", isSelected: readerPopover == .annotations) { toggleReaderPopover(.annotations) }
                     .disabled(!pdfController.isReady || store.isBusy)
                     .popover(isPresented: readerPopoverBinding(.annotations), arrowEdge: .bottom) { annotationTools }

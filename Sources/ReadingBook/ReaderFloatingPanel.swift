@@ -35,8 +35,8 @@ struct ReaderFloatingPanel<Content: View>: View {
     @State private var transientPresentation: PanelPresentation?
     @State private var lastReportedFrame: CGRect?
     @State private var preferredSize: CGSize?
-    @State private var resizeStart: CGSize?
-    @State private var resizeOrigin: CGPoint?
+    @State private var resizeStart: CGRect?
+    @State private var resizeFrame: CGRect?
     @State private var resizePreferredStart: CGSize?
     @State private var expandedReading = false
     @State private var beforeExpansionSize: CGSize?
@@ -44,7 +44,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     private struct PanelPresentation: Equatable { var presented: Bool; var collapsed: Bool }
     private var memoryID: String { memoryIDOverride ?? (trailing ? "reader.companion" : "reader.outline") }
 
-    private var panelWidth: CGFloat { min(preferredSize?.width ?? width, max(240, viewport.width - 48)) }
+    private var panelWidth: CGFloat { resizeFrame?.width ?? min(preferredSize?.width ?? width, max(240, viewport.width - 48)) }
     private var headerHeight: CGFloat { ReadingLayout.panelHeaderHeight }
     private var wantedHeight: CGFloat { collapsed ? headerHeight : min(preferredSize?.height ?? height, max(headerHeight, viewport.height - 88 - bottomReserve)) }
     private var panelHeight: CGFloat { presentationPlacement().height }
@@ -57,10 +57,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     /// Avoidance is presentation only. Keep the reader's saved position intact
     /// so it returns when the other floating surface closes or moves away.
     private func presentationPlacement() -> PanelPlacement {
-        if let resizeOrigin {
-            let x = trailing ? resizeOrigin.x + (resizeStart?.width ?? panelWidth) - panelWidth : resizeOrigin.x
-            return PanelPlacement(origin: CGPoint(x: max(24, x), y: resizeOrigin.y), height: wantedHeight)
-        }
+        if let resizeFrame { return PanelPlacement(origin: resizeFrame.origin, height: resizeFrame.height) }
         if let dragOrigin { return PanelPlacement(origin: dragOrigin, height: dragHeight ?? wantedHeight) }
         let proposed = savedOrigin ?? CGPoint(x: trailing ? viewport.width - panelWidth - 24 : 24, y: 100)
         let start = clamp(proposed, height: wantedHeight)
@@ -186,31 +183,15 @@ struct ReaderFloatingPanel<Content: View>: View {
                             Button { transientPresentation = nil; collapsed.toggle() } label: { Image(systemName: collapsed ? "plus" : "minus") }.buttonStyle(ReadingToolbarButtonStyle()).help(collapsed ? "展开\(title)" : "收起\(title)")
                             Button { transientPresentation = nil; isPresented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭\(title)")
                         }
-                    }.padding(.leading, 16).padding(.trailing, 8).frame(height: headerHeight).layoutPriority(1)
+                    }.padding(.leading, 16).padding(.trailing, resizable ? 16 : 8).frame(height: headerHeight).layoutPriority(1)
                     content().frame(maxWidth: .infinity).frame(minHeight: 0, maxHeight: collapsed ? 0 : .infinity)
                         .opacity(collapsed ? 0 : 1).clipped().allowsHitTesting(!collapsed).disabled(collapsed || !isPresented).accessibilityHidden(collapsed || panelHeight <= headerHeight)
                 }.frame(width: panelWidth, height: panelHeight).readingGlass(radius: 24, prominent: true)
                     .overlay {
                         RoundedRectangle(cornerRadius: 24).strokeBorder(Palette.accent.opacity(elevated ? 0.13 : 0), lineWidth: 0.7).allowsHitTesting(false)
                     }
-                    .overlay(alignment: trailing ? .bottomLeading : .bottomTrailing) {
-                        if resizable && !collapsed {
-                            Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11)).foregroundStyle(.tertiary)
-                                .frame(width: 24, height: 24).contentShape(Rectangle()).padding(4)
-                                .overlay { FloatingPanelPointerInput(epoch: epoch, begin: {
-                                    resizePreferredStart = preferredSize; resizeStart = CGSize(width: panelWidth, height: panelHeight); resizeOrigin = origin
-                                }, drag: { delta, ended in
-                                    guard let start = resizeStart, let anchor = resizeOrigin else { return }
-                                    let widthLimit = trailing ? anchor.x + start.width - 24 : viewport.width - anchor.x - 24
-                                    let newWidth = min(max(320, start.width + (trailing ? -delta.width : delta.width)), max(320, widthLimit))
-                                    preferredSize = CGSize(width: newWidth, height: min(max(260, start.height + delta.height), max(260, viewport.height - anchor.y - bottomReserve)))
-                                    if ended {
-                                        savedOrigin = CGPoint(x: trailing ? anchor.x + start.width - newWidth : anchor.x, y: anchor.y)
-                                        resizeStart = nil; resizeOrigin = nil; resizePreferredStart = nil; saveMemory(); reportStableFrame()
-                                    }
-                                }, cancel: cancelResize).accessibilityHidden(true) }
-                                .help("调整\(title)面板大小")
-                        }
+                    .overlay {
+                        if resizable && !collapsed { resizeHandles }
                     }.position(x: origin.x + panelWidth / 2, y: origin.y + panelHeight / 2)
                     .opacity(isPresented ? 1 : 0).scaleEffect(isPresented || reduceMotion ? 1 : 0.97, anchor: trailing ? .topTrailing : .topLeading)
                     .allowsHitTesting(isPresented).accessibilityHidden(!isPresented)
@@ -232,10 +213,16 @@ struct ReaderFloatingPanel<Content: View>: View {
             // These keys animate opening only. Pointer-driven origins never acquire an animation.
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: isPresented)
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: collapsed)
-            .onAppear { initialPresented = isPresented; restoreMemory(); if viewport.width < 1050 && trailing { isPresented = false }; receivePanelCommand(store.workspaceAICommand); reportStableFrame() }
+            .onAppear {
+                let requestedOpen = isPresented
+                initialPresented = requestedOpen; restoreMemory(preferringOpen: requestedOpen)
+                if viewport.width < 1050 && trailing && !requestedOpen { isPresented = false }
+                receivePanelCommand(store.workspaceAICommand); reportStableFrame()
+            }
             .onChange(of: store.workspaceAICommand) { _, command in receivePanelCommand(command) }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ReadingBookExpandCompanion"))) { _ in
                 guard memoryID == "reader.companion" else { return }
+                cancelPointerInteraction()
                 transientPresentation = nil; collapsed = false; isPresented = true
                 if expandedReading {
                     preferredSize = beforeExpansionSize; savedOrigin = beforeExpansionOrigin
@@ -247,23 +234,94 @@ struct ReaderFloatingPanel<Content: View>: View {
                 expandedReading.toggle(); saveMemory(); reportStableFrame()
             }
             .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreMemory(); reportStableFrame() }
-            .onChange(of: collapsed) { _, value in onExpansionChange(!value && isPresented); saveMemory(); reportStableFrame() }
-            .onChange(of: isPresented) { _, value in if value { hasOpened = true }; onExpansionChange(value && !collapsed); saveMemory(); reportStableFrame() }
+            .onChange(of: collapsed) { _, value in
+                if value { cancelPointerInteraction() }
+                onExpansionChange(!value && isPresented); saveMemory(); reportStableFrame()
+            }
+            .onChange(of: isPresented) { _, value in
+                if value { hasOpened = true } else { cancelPointerInteraction() }
+                onExpansionChange(value && !collapsed); saveMemory(); reportStableFrame()
+            }
             .onChange(of: savedOrigin) { _, _ in saveMemory(); reportStableFrame() }
             .onChange(of: avoidRects) { _, _ in reportStableFrame() }
             .onDisappear { cancelResize(); saveMemory(); lastReportedFrame = nil; onFrameChange(.zero) }
             .onChange(of: viewport) { old, value in
-                epoch += 1; dragStart = nil; dragOrigin = nil; dragHeight = nil; cancelResize()
+                cancelPointerInteraction()
                 if old.width >= 1050, value.width < 1050, trailing { isPresented = false }
                 reportStableFrame()
             }
     }
+    private var resizeBounds: CGRect {
+        CGRect(x: 24, y: 88, width: max(0, viewport.width - 48), height: max(0, viewport.height - 88 - bottomReserve))
+    }
+    private var resizeHandles: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                ForEach(FloatingPanelResizeDirection.allCases, id: \.self) { direction in
+                    let frame = resizeHandleFrame(direction, size: geometry.size)
+                    FloatingPanelPointerInput(epoch: epoch, style: resizeCursor(direction), begin: beginResize,
+                        drag: { delta, ended in resize(by: delta, direction: direction, ended: ended) }, cancel: cancelResize)
+                        .frame(width: frame.width, height: frame.height).position(x: frame.midX, y: frame.midY)
+                        .help("拖动边缘或角落调整\(title)大小")
+                        .accessibilityHidden(true)
+                }
+                Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .frame(width: 16, height: 16).position(x: geometry.size.width - 8, y: geometry.size.height - 8)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
+    }
+    /// Six-point edge strips stop before sixteen-point corner targets. The
+    /// title and its buttons remain inside that perimeter, and the body's
+    /// scrolling and text selection keep their own pointer receivers.
+    private func resizeHandleFrame(_ direction: FloatingPanelResizeDirection, size: CGSize) -> CGRect {
+        let corner: CGFloat = 16, edge: CGFloat = 6
+        switch direction {
+        case .top: return CGRect(x: corner, y: 0, width: max(0, size.width - corner * 2), height: edge)
+        case .bottom: return CGRect(x: corner, y: size.height - edge, width: max(0, size.width - corner * 2), height: edge)
+        case .leading: return CGRect(x: 0, y: corner, width: edge, height: max(0, size.height - corner * 2))
+        case .trailing: return CGRect(x: size.width - edge, y: corner, width: edge, height: max(0, size.height - corner * 2))
+        case .topLeading: return CGRect(x: 0, y: 0, width: corner, height: corner)
+        case .topTrailing: return CGRect(x: size.width - corner, y: 0, width: corner, height: corner)
+        case .bottomLeading: return CGRect(x: 0, y: size.height - corner, width: corner, height: corner)
+        case .bottomTrailing: return CGRect(x: size.width - corner, y: size.height - corner, width: corner, height: corner)
+        }
+    }
+    private func resizeCursor(_ direction: FloatingPanelResizeDirection) -> FloatingPanelPointerStyle {
+        switch direction {
+        case .top, .bottom: return .verticalResize
+        case .leading, .trailing: return .horizontalResize
+        case .topLeading, .bottomTrailing: return .diagonalDownResize
+        case .topTrailing, .bottomLeading: return .diagonalUpResize
+        }
+    }
+    private func beginResize() {
+        transientPresentation = nil
+        resizePreferredStart = preferredSize
+        let placement = presentationPlacement()
+        let frame = CGRect(origin: placement.origin, size: CGSize(width: panelWidth, height: placement.height))
+        resizeStart = frame; resizeFrame = frame
+    }
+    private func resize(by delta: CGSize, direction: FloatingPanelResizeDirection, ended: Bool) {
+        guard let start = resizeStart else { return }
+        let frame = FloatingPanelResizeGeometry.resizedFrame(from: start, delta: delta, direction: direction, in: resizeBounds)
+        if ended {
+            preferredSize = frame.size; savedOrigin = frame.origin
+            resizeStart = nil; resizeFrame = nil; resizePreferredStart = nil
+            saveMemory(); reportStableFrame()
+        } else { resizeFrame = frame }
+    }
     private func cancelResize() {
         if resizeStart != nil { preferredSize = resizePreferredStart }
-        resizeStart = nil; resizeOrigin = nil; resizePreferredStart = nil
+        resizeStart = nil; resizeFrame = nil; resizePreferredStart = nil
         reportStableFrame()
     }
-    private func restoreMemory() {
+    private func cancelPointerInteraction() {
+        epoch &+= 1; dragStart = nil; dragOrigin = nil; dragHeight = nil; cancelResize()
+    }
+    private func restoreMemory(preferringOpen: Bool = false) {
+        epoch &+= 1; dragStart = nil; dragOrigin = nil; dragHeight = nil
+        resizeStart = nil; resizeFrame = nil; resizePreferredStart = nil
         transientPresentation = nil
         if memoryScope != store.workspaceMemoryKey { lastReportedFrame = nil }
         memoryScope = store.workspaceMemoryKey
@@ -271,7 +329,7 @@ struct ReaderFloatingPanel<Content: View>: View {
         collapsed = unifiedDismiss ? false : (saved?.collapsed ?? false)
         savedOrigin = saved?.origin.map { CGPoint(x: $0.x, y: $0.y) }
         preferredSize = resizable ? saved?.size.map { CGSize(width: $0.width, height: $0.height) } : nil
-        isPresented = saved?.isPresented ?? initialPresented ?? false
+        isPresented = preferringOpen || (saved?.isPresented ?? initialPresented ?? false)
         if isPresented || saved != nil { hasOpened = true }
         onExpansionChange(isPresented && !collapsed)
     }
