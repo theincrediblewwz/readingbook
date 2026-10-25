@@ -73,7 +73,7 @@ final class AIProjectMergeTests: XCTestCase {
         var book = BookProject(title: "原文字节", originalName: "book.txt", sourceHash: try BookImporter.sha256(original),
             units: [SourceUnit(id: "u1", order: 0, chapter: "一", text: decomposed)])
         PluginEngine.seed(&book)
-        book.smartReading = try SmartReadingRuntime.freeze(SmartReadingSelection(execution: .init()), in: book)
+        book.smartReading = try SmartReadingRuntime.freeze(SmartReadingSelection(execution: .init()), in: book, currentUnitID: "u1")
         try await repository.create(book, sourceURL: source)
         try await repository.save(book) // Warm the same repository actor's manifest cache.
         let managedSource = await repository.sourceURL(for: book)
