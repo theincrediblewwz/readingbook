@@ -3,7 +3,7 @@ import Foundation
 /// Derived from the accepted host state transition, never the model's claim.
 enum AIToolResultDetails {
     static func describe(before: BookProject, after: BookProject, name: String) -> [String] {
-        func changed<T: Encodable>(_ old: [T], _ new: [T], id: (T) -> String, title: (T) -> String) -> [String] {
+        func changed<T: Encodable>(_ old: [T], _ new: [T], id: @escaping (T) -> String, title: @escaping (T) -> String) -> [String] {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             let prior = Dictionary(uniqueKeysWithValues: old.map { (id($0), $0) })
             return Array(new.lazy.filter { item in

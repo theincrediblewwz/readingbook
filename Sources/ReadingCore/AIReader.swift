@@ -144,15 +144,16 @@ public actor AIReader {
                 names.formUnion(["types_define", "cards_upsert", "events_upsert", "relations_link", "map_attach", "timeline_attach", "knowledge_temporal"])
                 if configuration.componentKinds.contains(.mindmap) || project.views.contains(where: { $0.kind == .mindmap }) { names.insert("reading_graph") }
             }
-            if steps.contains(where: { $0.actionID == "reading.enrich" }) { names.insert("reading_enrich") }
+            if steps.contains(where: { $0.actionID == "reading.enrich" }) { names.formUnion(["reading_enrich", "views_configure"]) }
             let prompt = """
-            陪读者阅读本次实际提供的原文块。先讲清内容，再按本次启用步骤保存有用产物；不要把答案写成开发记录或逐项核查公文。
+            陪读者阅读本次实际提供的原文块。阅读原文是始终执行的基础动作；附加步骤只做本次启用的部分，不要把答案写成开发记录或逐项核查公文。本次步骤为空时只留下有界的简短阅读摘要和真实引文，不做额外讲解、要素整理或组件操作。
             本轮精细度：\(configuration.precision.title)。标准阅读不要求逐段复述；精读所需回执已由宿主在前面的真实批次保存。本次不调用read_receipt、workflow_step_complete或reading_finish。一次分析可以包含同页多个单元或同章多页，但引文必须回到原始unitID，不合并或重写原文。
             本次原文块：\(chunk.title)。unitIDs必须精确为\(try encodedString(chunk.unitIDs))。
             本次步骤：\(try encodedString(steps))。最后调用reading_analysis，completedStepIDs精确为\(try encodedString(chunk.stepIDs))，每个unitID至少有一条连续精确引文。
             所选组件：\(configuration.componentKinds.map(\.title).joined(separator: "、"))。需要时实际创建实体、事件、关系、时态和导图，不能只在回答中声称创建；用户未启用的步骤不执行。无可靠日期或地点就保留未知，不造坐标。
             先knowledge_search查询本地人物、别名和事件。存在就复用稳定ID和已有介绍，本次只补新的发展和原文出处，不重新堆叠旧摘要。身份不确定保留候选，不按相似名字强行合并。
             reading_enrich用于保存句译、释义与词语提及。背景讲解可自然补充，但应是单独标明背景的解释层，不能把书外知识写成原文事实或虚构引文。背景内容也须遵循防剧透。
+            需要在人物或词语气泡内组合文字、地图、时间轴等元件时，可views_configure新增独立视图：rendererID为reading.composition，configuration.presentation为inline，configuration.objectIDs为适用真实对象ID的逗号分隔列表；composition按实际叙述选择先后、分栏或标签。空objectIDs表示通用模板；引用同一共享对象，不复制事实。只新增独立内嵌声明，不改已有视图和用户布局；已有合适声明则复用，不要每页新建。只用注册元件，不运行脚本、不自动调用外部服务。
             \(spoilerConstraint(project))
             工具和unit-等内部ID只放工具参数，不显示在读者正文。正文适量分段、自然叙述；没有新增对象时如实说明，不为填满组件制造内容。
             已有本地知识：\(try objectIndex(project, allowedUnitIDs: allowed))

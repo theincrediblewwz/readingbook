@@ -24,7 +24,7 @@ public enum ControlledKnowledgeRuntime {
     /// operation ID; model arguments cannot disable receipts or choose authority.
     @discardableResult public static func apply(_ changes: ControlledKnowledgeChanges, to project: inout BookProject, allowedUnitIDs: Set<String>, operationID: String) throws -> [String: String] {
         try ControlledChangeCoding.requireID(operationID)
-        try ReadingLedger.requireComplete(unitIDs: allowedUnitIDs, in: project)
+        try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
         var identity = ControlledIdentityMap(operationID: operationID, project: project), candidate = project
         try apply(changes, to: &candidate, allowedUnitIDs: allowedUnitIDs, requiresReceipts: true, identity: &identity)
         project = candidate
@@ -33,7 +33,7 @@ public enum ControlledKnowledgeRuntime {
 
     static func apply(_ changes: ControlledKnowledgeChanges, to project: inout BookProject, allowedUnitIDs: Set<String>, requiresReceipts: Bool, identity: inout ControlledIdentityMap) throws {
         guard !allowedUnitIDs.isEmpty, allowedUnitIDs.isSubset(of: Set(project.units.map(\.id))), try ControlledChangeCoding.data(changes).count <= 262_144 else { throw ControlledChangeError.invalid("知识批次须有获准原文，且不能超过256 KiB。") }
-        if requiresReceipts { try ReadingLedger.requireComplete(unitIDs: allowedUnitIDs, in: project) }
+        if requiresReceipts { try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project) }
         let counts = [(changes.types ?? []).count, (changes.entities ?? []).count, (changes.events ?? []).count, (changes.relations ?? []).count,
                       (changes.anchors ?? []).count, (changes.presences ?? []).count, (changes.participations ?? []).count, (changes.eventMetadata ?? []).count,
                       (changes.relationMetadata ?? []).count, (changes.layers ?? []).count, (changes.alignments ?? []).count]
@@ -158,7 +158,7 @@ public enum ControlledKnowledgeRuntime {
         }
         if hasTemporal { project.temporalKnowledge = temporal }
         if !(changes.layers ?? []).isEmpty || !(changes.alignments ?? []).isEmpty {
-            try ReadingLedger.requireComplete(unitIDs: allowedUnitIDs, in: project)
+            try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
             var experience = project.readingExperience ?? ReadingExperienceState()
             try registerRecords(changes.layers ?? [], existing: experience.layers, kind: "layer", map: &identity)
             try registerRecords(changes.alignments ?? [], existing: experience.alignments, kind: "alignment", map: &identity)

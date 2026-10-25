@@ -86,6 +86,12 @@ public struct PluginToolRegistry: Sendable {
         if tool.requiresReceipts { try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project) }
         var candidate = project
         let result = try tool.execute(arguments, project: &candidate, allowed: allowedUnitIDs)
+        if name == "views_configure", ReadingAnalysisAuthority.current != nil {
+            guard project.views.allSatisfy({ old in candidate.views.contains(old) }),
+                  candidate.views.filter({ view in !project.views.contains(where: { $0.id == view.id }) }).allSatisfy({ $0.configuration?["presentation"] == "inline" && $0.composition != nil }) else {
+                throw ReadingError.invalid("后台阅读只新增独立内嵌组件，已有视图和布局保留。")
+            }
+        }
         guard candidate.id == project.id, candidate.sourceHash == project.sourceHash, candidate.originalName == project.originalName,
               candidate.units == project.units, candidate.documents == project.documents else {
             throw ReadingError.invalid("插件不能修改原书或用户Markdown文档。")

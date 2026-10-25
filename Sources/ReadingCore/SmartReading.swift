@@ -268,15 +268,22 @@ public enum SmartReadingRuntime {
         if validateSource { try validate(session, in: project) }
         if session.selection.execution != nil {
             let chunks = try analysisChunks(in: project)
-            let completed = chunks.filter { isChunkComplete($0, in: project) }
+            let checkpoints = Dictionary((session.analysisCheckpoints ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            let completed = chunks.filter { chunk in
+                guard let checkpoint = checkpoints[chunk.id] else { return false }
+                return checkpoint.unitIDs == chunk.unitIDs && checkpoint.configurationHash == chunk.configurationHash &&
+                    Set(checkpoint.completedStepIDs) == Set(chunk.stepIDs) && chunk.unitIDs.allSatisfy { checkpoint.unitHashes[$0] == session.unitHashes[$0] }
+            }
+            let completedChunkIDs = Set(completed.map(\.id)), scopeIDs = Set(session.unitIDs)
             let completedIDs = Set(completed.flatMap(\.unitIDs))
-            let next = chunks.first { !isChunkComplete($0, in: project) }
+            let next = chunks.first { !completedChunkIDs.contains($0.id) }
             let configuration = session.selection.execution
             let rows = (configuration?.steps ?? []).filter { next?.stepIDs.contains($0.id) == true }.map { SmartReadingProgressStep(id: $0.id, title: $0.title, isCompleted: false) }
-            let excluded = project.units.filter { session.unitIDs.contains($0.id) && ReadingLedger.isDeferred(unitID: $0.id, in: project) }.count
-            let blank = project.units.filter { session.unitIDs.contains($0.id) && isConfirmedBlank($0, in: project) }.count
+            let scopedUnits = project.units.filter { scopeIDs.contains($0.id) }
+            let excluded = scopedUnits.filter { ReadingLedger.isDeferred(unitID: $0.id, in: project) }.count
+            let blank = scopedUnits.filter { isConfirmedBlank($0, in: project) }.count
             var value = SmartReadingProgress(completed: completedIDs.count, total: session.unitIDs.count,
-                receiptCount: (project.paragraphReceipts ?? []).filter { session.unitIDs.contains($0.unitID) }.count, receiptTotal: 0,
+                receiptCount: (project.paragraphReceipts ?? []).filter { scopeIDs.contains($0.unitID) }.count, receiptTotal: 0,
                 stepCount: completed.reduce(0) { $0 + $1.stepIDs.count }, stepTotal: chunks.reduce(0) { $0 + $1.stepIDs.count },
                 excludedCount: excluded, blankCount: blank, currentUnitID: next?.unitIDs.first, currentStepTitle: next?.title ?? "本轮分析已保存", steps: rows)
             value.isStandardAnalysis = true

@@ -66,9 +66,9 @@ public enum ReadingLedger {
     private static let deferredMessage = "用户保留本单元为待识别，未读取其中内容。"
 
     public static func isDeferred(unitID: String, in project: BookProject) -> Bool {
-        guard let unit = project.units.first(where: { $0.id == unitID }),
-              project.coverage[unitID]?.status == .needsReview,
-              project.coverage[unitID]?.message == deferredMessage else { return false }
+        guard project.coverage[unitID]?.status == .needsReview,
+              project.coverage[unitID]?.message == deferredMessage,
+              let unit = project.units.first(where: { $0.id == unitID }) else { return false }
         return project.insights.contains {
             $0.id == "deferred-\(unitID)" && $0.unitIDs == [unitID] &&
             $0.markdown == "【未读取，待识别】\(unit.locator)。该单元尚无可靠文本，不得推断其中的事实。"

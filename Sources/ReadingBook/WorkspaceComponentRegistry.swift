@@ -96,6 +96,7 @@ struct WorkspaceComponentDescriptor: Identifiable {
     func navigationViews(_ views: [ViewDefinition]) -> [ViewDefinition] {
         var seen = Set<String>()
         return views.filter { view in
+            guard view.configuration?["presentation"] != "inline" else { return false }
             guard let descriptor = component(for: view), !descriptor.permanent else { return false }
             // Card collections may intentionally filter different types. Other
             // current renderers share book-wide state and need one navigation entry.

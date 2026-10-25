@@ -146,13 +146,15 @@ struct ReaderMethodView: View {
             }
             DisclosureGroup("调整分析步骤") {
                 VStack(spacing: 12) {
+                    Label("阅读原文（基础）", systemImage: "book.pages").font(.system(size: 13)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     ForEach($execution.steps) { $step in
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 8) {
                                 Toggle("启用步骤", isOn: $step.enabled).labelsHidden().toggleStyle(.checkbox)
                                 TextField("要做什么", text: $step.title).textFieldStyle(.roundedBorder)
                                 Button { execution.steps.removeAll { $0.id == step.id } } label: { Image(systemName: "minus.circle") }
-                                    .buttonStyle(.borderless).help("移除这一步").disabled(execution.steps.count <= 1)
+                                    .buttonStyle(.borderless).help("移除这一步")
                             }
                             HStack {
                                 Picker("处理方式", selection: $step.actionID) {

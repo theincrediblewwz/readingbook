@@ -45,7 +45,7 @@ public struct ReadingExecutionConfiguration: Codable, Hashable, Sendable {
         let actions: Set<String> = ["ai.analyze", "facts.extract", "reading.enrich", "reading.review", "citations.verify"]
         guard (1...5).contains(maximumConcurrentRequests), componentKinds.count <= 8,
               Set(componentKinds).count == componentKinds.count, Set(componentKinds).isSubset(of: Set(Self.offeredComponents)),
-              (1...24).contains(steps.count), Set(steps.map(\.id)).count == steps.count, !enabledSteps.isEmpty,
+              (0...24).contains(steps.count), Set(steps.map(\.id)).count == steps.count,
               steps.allSatisfy({ $0.id.range(of: "^[A-Za-z0-9_.-]{1,128}$", options: .regularExpression) != nil && !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.title.count <= 500 && actions.contains($0.actionID) }) else {
             throw ReadingError.invalid("阅读步骤、组件或并行上限无效；尚未发送请求。")
         }
