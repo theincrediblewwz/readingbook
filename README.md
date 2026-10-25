@@ -1,3 +1,17 @@
+# 0.22.0 · 正文排版与独立字体（2026-10-26）
+
+- 去掉伴读、对话、人物介绍、句译和对照正文的重复白底、圆角裁剪与多层留白。原文依据与引用使用轻量分隔和文字标识；保留代码、表格、公式及真正输入框的必要结构。
+- **设置 → 阅读 → 字体与字号**：原文、伴读、对话、笔记、卡片与组件分别选择字体和 12–36pt 字号，支持本机字体、实时预览、恢复当前/全部。文本原文、OCR、聊天输入与历史、笔记编辑/预览、地图和图谱详情均接入；PDF 原字形继续用缩放。旧伴读字号保留，缺失字体回退，偏好独立保存在本机。
+- 调字体或主题只更新排版，跳过不变句词标记的扫描与重新调度。实际标记变化仍渐进更新；没有改写原书、Markdown、分析内容或项目格式。
+
+既有 **53 项**离线渲染检查与新增 **25 项**字体/透明/宽窄检查通过，原生桥接脚本组合反例另核选区、公式、真实标记变化与 240 条渐进焦点。旧标记层本来就有身份与选区保护，本次移除的是多余扫描，不能宣称旧路径必丢选区，也不把它说成已测得 Mac 帧率改善。
+
+[本机直接安装 ZIP · 0.22.0/build30](dist/ReadingBook-0.22.0-Mac.zip)，支持 Apple 芯片和 Intel。[Actions 40208594384](https://github.com/theincrediblewwz/readingbook/actions/runs/40208594384) 成功：**374 项 Core 零失败、无编译警告**，双架构 Release、ad hoc 签名与资源自检通过。原生源码 `c58c48a7e030523d72fdb220f63a20b5690ca167`，分支 `codex/reading-typography-0.22`。下载后 artifact 摘要、ZIP CRC/SHA、版本/源码、架构/0755及全部 32 个资源与构建提交逐字节核验通过，含 20 个公式字体。ZIP 19,720,649 字节，SHA-256 `d5e31d1abf2632045fbe607e42d6499e378c7a4afef79ab5f68b7b6765871185`。源码冻结后仅更新既有交付文档；未操作真实用户书库、付费模型或主机网络设置。
+
+Mac 原生透明效果、安装字体菜单、大字号重排、选区滚动和实际流畅度仍待 [三项集中验收](MAC_TEST_CHECKLIST.md)。透明背景使用带运行时存在检查的 WebKit 兼容开关，缺失时保留标准渲染；不能以离线浏览器截图代替原生验收。实现前核对了 [WebKit 背景 API](https://developer.apple.com/documentation/webkit/wkwebview/underpagebackgroundcolor) 与 [Apple KVC 访问规则](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/KeyValueCoding/SearchImplementation.html)。
+
+---
+
 # 0.21.1 · 三轮代码审查与补修（2026-10-25）
 
 继续按触发时序检查代码，分别审查渲染、请求生命周期与保存边界，再交叉复核前一轮修正。发现并修正的代表性问题：
