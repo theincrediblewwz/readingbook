@@ -329,9 +329,16 @@ private struct MarkdownWebView: NSViewRepresentable {
                                           "sourceText": state.sourceText, "plainText": state.plainText,
                                           "sourceDecorations": decorations]
             // WebKit serializes these arguments. Markdown is never interpolated into JS/HTML.
-            let script = replacesDocument
-                ? "window.ReadingBookMarkdown.render(markdown, options)"
-                : "window.ReadingBookMarkdown.updatePresentation(options); window.ReadingBookMarkdown.updateDecorations(options.sourceDecorations, options)"
+            let script: String
+            if replacesDocument {
+                script = "window.ReadingBookMarkdown.render(markdown, options)"
+            } else if previous?.decorations != state.decorations {
+                script = "window.ReadingBookMarkdown.updatePresentation(options); window.ReadingBookMarkdown.updateDecorations(options.sourceDecorations, options)"
+            } else {
+                // Font/theme changes must preserve source-mark nodes and live
+                // selections as well as the Markdown/KaTeX document itself.
+                script = "window.ReadingBookMarkdown.updatePresentation(options)"
+            }
             let intervalName: StaticString = replacesDocument ? "RenderMarkdownBody" : "UpdateMarkdownPresentation"
             let interval = markdownSignposter.beginInterval(intervalName)
             webView.callAsyncJavaScript(script,
