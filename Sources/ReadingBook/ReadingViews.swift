@@ -123,7 +123,7 @@ struct ReaderWorkspaceView: View {
                 ForEach(insights) { insight in
                     VStack(alignment: .leading, spacing: 12) {
                         Label("阅读留下的线索", systemImage: "sparkles").font(.caption).foregroundStyle(Palette.accent)
-                        MarkdownText(markdown: insight.markdown)
+                        MarkdownText(markdown: insight.markdown).readingTextContext(.companion)
                         Button("保存为我的文档") { Task { await store.saveInsight(insight) } }.font(.caption).disabled(store.isBusy)
                     }.softPanel()
                 }
@@ -137,6 +137,7 @@ struct ReaderWorkspaceView: View {
                          onSourceDecorationTap: sourceTapped,
                          onSourceSelection: { selection in store.sourceReadingSelection = selection; if selection != nil { store.focusedReadingAnchorID = nil } },
                          onSourceDecorationHover: sourceHovered)
+            .readingTextContext(.source)
     }
     private func sourceHovered(_ value: SourceReadingHover?) {
         guard !interactionBlocked else { inlineReading.clear(); return }
@@ -325,6 +326,7 @@ struct MarkdownText: View {
 
 struct DocumentEditorView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject private var typography: ReadingTypographySettings
     @State private var preview = true
     @State private var discardingDraft = false
     @State private var showingDocuments = true
@@ -433,7 +435,7 @@ struct DocumentEditorView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 22) {
                             Text(store.editorTitle.isEmpty ? "未命名笔记" : store.editorTitle).font(.system(size: 30, weight: .semibold)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                            MarkdownText(markdown: previewBody)
+                            MarkdownText(markdown: previewBody).readingTextContext(.notes)
                         }.padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 30)
                     }
                 } else {
@@ -441,7 +443,7 @@ struct DocumentEditorView: View {
                         .font(.system(size: 28, weight: .semibold)).textFieldStyle(.plain).lineLimit(1...3)
                         .padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 18).disabled(store.isRecognizingPDF).accessibilityLabel("文档标题")
                     TextEditor(text: Binding(get: { store.editorMarkdown }, set: { store.editorMarkdown = $0; store.editorDirty = true }))
-                        .font(.system(size: 16, design: .monospaced)).lineSpacing(6).scrollContentBackground(.hidden)
+                        .font(typography.font(for: .notes)).lineSpacing(6).scrollContentBackground(.hidden)
                         .padding(.horizontal, 22).padding(.bottom, 22).disabled(store.isRecognizingPDF)
                 }
             } else {

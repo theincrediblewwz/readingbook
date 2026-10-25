@@ -130,6 +130,7 @@ private struct GraphNodeBrowserRow: View {
 
 private struct GraphNodeDetails: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject private var typography: ReadingTypographySettings
     var item: GraphItem
     @State private var markdown: String?
     @State private var loadError: String?
@@ -154,24 +155,24 @@ private struct GraphNodeDetails: View {
                 if let document {
                     Text(document.origin == "user" ? "我的笔记 · 已保存内容" : "主动保存的 AI 摘记").font(.caption).foregroundStyle(.secondary)
                     if let loadError { Text(loadError).font(.caption).foregroundStyle(.red) }
-                    else if let markdown { MarkdownText(markdown: markdown) }
+                    else if let markdown { MarkdownText(markdown: markdown).readingTextContext(.notes) }
                     else { ProgressView().controlSize(.small).frame(maxWidth: .infinity) }
                     if !document.evidence.isEmpty { EvidenceDisclosure(evidence: document.evidence).id(document.id) }
                 } else if let entity = store.book?.entities.first(where: { $0.id == item.targetID }) {
-                    Text(entity.summary).font(.system(size: 15)).textSelection(.enabled)
+                    Text(entity.summary).font(typography.font(for: .knowledge)).textSelection(.enabled)
                     ForEach(entity.properties.sorted(by: { $0.key < $1.key }), id: \.key) { field in
-                        VStack(alignment: .leading, spacing: 3) { Text(field.key).font(.system(size: 13)).foregroundStyle(.secondary); Text(field.value).font(.system(size: 15)).textSelection(.enabled) }
+                        VStack(alignment: .leading, spacing: 3) { Text(field.key).font(.system(size: 13)).foregroundStyle(.secondary); Text(field.value).font(typography.font(for: .knowledge)).textSelection(.enabled) }
                     }
                     if !entity.evidence.isEmpty { EvidenceDisclosure(evidence: entity.evidence).id(entity.id) }
                 } else if let event = store.book?.events.first(where: { $0.id == item.targetID }) {
                     Text(event.dateText).font(.caption).foregroundStyle(Palette.accent)
-                    Text(event.summary).font(.system(size: 15)).textSelection(.enabled)
-                    if !event.placeIDs.isEmpty { Text("地点：" + event.placeIDs.map(store.objectTitle).joined(separator: "、")).font(.system(size: 15)) }
-                    if !event.participantIDs.isEmpty { Text("参与者：" + event.participantIDs.map(store.objectTitle).joined(separator: "、")).font(.system(size: 15)) }
+                    Text(event.summary).font(typography.font(for: .knowledge)).textSelection(.enabled)
+                    if !event.placeIDs.isEmpty { Text("地点：" + event.placeIDs.map(store.objectTitle).joined(separator: "、")).font(typography.font(for: .knowledge)) }
+                    if !event.participantIDs.isEmpty { Text("参与者：" + event.participantIDs.map(store.objectTitle).joined(separator: "、")).font(typography.font(for: .knowledge)) }
                     if !event.evidence.isEmpty { EvidenceDisclosure(evidence: event.evidence).id(event.id) }
                 } else if let unit = store.book?.units.first(where: { $0.id == item.targetID }) {
                     Text(unit.locator).font(.caption).foregroundStyle(.secondary)
-                    Text(unit.text).font(.system(size: 15)).textSelection(.enabled)
+                    Text(unit.text).font(typography.font(for: .source)).textSelection(.enabled)
                 } else { Text("这个节点暂时没有可预览的内容。").font(.system(size: 15)).foregroundStyle(.secondary) }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
         }.task(id: revision) {

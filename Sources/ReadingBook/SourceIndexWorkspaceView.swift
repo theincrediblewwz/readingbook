@@ -5,6 +5,7 @@ import ReadingCore
 /// is rebuilt off the main actor after a project revision, never during body.
 struct SourceIndexWorkspaceView: View {
     @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var typography: ReadingTypographySettings
     var definition: ViewDefinition?
     @State private var projection: SourceIndexProjection?
     @State private var visibleEntries: [SourceIndexedObject] = []
@@ -236,16 +237,16 @@ struct SourceIndexWorkspaceView: View {
                         if let markdown = mention.richMarkdown {
                             // The complete source block reaches KaTeX. Folding
                             // affects its viewport, never a TeX/code delimiter.
-                            MarkdownText(markdown: markdown).allowsHitTesting(false)
+                            MarkdownText(markdown: markdown).readingTextContext(.source).allowsHitTesting(false)
                                 .frame(maxHeight: selectedSourceID == mention.id ? nil : 220, alignment: .top).clipped()
                         } else {
                             (Text(mention.before) + Text(mention.anchor.quote).foregroundColor(Palette.accent).bold() + Text(mention.after))
-                                .font(.system(size: 17)).lineSpacing(7).lineLimit(selectedSourceID == mention.id ? nil : 6).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+                                .font(typography.font(for: .source)).lineSpacing(7).lineLimit(selectedSourceID == mention.id ? nil : 6).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
                         }
                     }.padding(16).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(Palette.line.opacity(0.7), lineWidth: 0.7)).contentShape(Rectangle())
                 }.buttonStyle(.plain).help("展开此处的原文上下文")
                 if selectedSourceID == mention.id, let unit = store.book?.units.first(where: { $0.id == mention.anchor.unitID }) {
-                    DisclosureGroup("所在片段") { MarkdownText(markdown: unit.text).padding(.top, 12) }.font(.system(size: 14)).tint(Palette.accent)
+                    DisclosureGroup("所在片段") { MarkdownText(markdown: unit.text).readingTextContext(.source).padding(.top, 12) }.font(.system(size: 14)).tint(Palette.accent)
                 }
             }
         }
@@ -303,8 +304,8 @@ struct SourceIndexWorkspaceView: View {
         }
     }
     @ViewBuilder private func quote(_ text: String, expanded: Bool) -> some View {
-        if sourceIndexNeedsRichText(text) { MarkdownText(markdown: text) }
-        else { Text(text).font(.system(size: 17)).lineSpacing(7).lineLimit(expanded ? nil : 6).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+        if sourceIndexNeedsRichText(text) { MarkdownText(markdown: text).readingTextContext(.source) }
+        else { Text(text).font(typography.font(for: .source)).lineSpacing(7).lineLimit(expanded ? nil : 6).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
     }
     private func notice(_ text: String, symbol: String) -> some View { Label(text, systemImage: symbol).font(.system(size: 14)).foregroundStyle(.secondary).lineSpacing(5).fixedSize(horizontal: false, vertical: true) }
 

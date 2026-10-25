@@ -22,6 +22,7 @@ struct EnhancedBookChatView: View {
 
 private struct BookChatContent: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject private var typography: ReadingTypographySettings
     @Environment(\.readingReduceMotion) private var reduceMotion
     @Environment(\.workspaceCanvasBlocked) private var workspaceBlocked
     @ObservedObject var composerDraft: QueryComposerDraft
@@ -40,7 +41,6 @@ private struct BookChatContent: View {
     @State private var showingComposerHelp = false
     @State private var historyBook: BookProject?
     @State private var historyMessageID: String?
-    @AppStorage("reading.companionTextScale") private var textScale = 1.0
     @State private var memorySourceID: String?
     @FocusState private var composerFocused: Bool
     private var composerIsActive: Bool { !workspaceBlocked && (embedded ? store.readingCompanionVisible && store.readingCompanionTab == "chat" : store.route == "query") }
@@ -75,7 +75,7 @@ private struct BookChatContent: View {
             }
             composer
         }.padding(.top, embedded ? 0 : 76).background(embedded ? Color.clear : Palette.canvas)
-        .environment(\.markdownTextScale, textScale)
+        .readingTextContext(.conversation)
         .onChange(of: store.bookID) { _, _ in selectionMode = false; selectedAnswers.removeAll(); renderedSelections.removeAll(); saveRequest = nil; historyBook = nil; historyMessageID = nil }
         .onAppear { revealRequestedHistory() }
         .onChange(of: store.queryHistoryMessageID) { _, _ in revealRequestedHistory() }
@@ -123,7 +123,7 @@ private struct BookChatContent: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("围绕所选内容，问一个问题…", text: Binding(get: { question }, set: { question = $0 }), axis: .vertical)
-                .font(.system(size: 15)).lineLimit(1...5).textFieldStyle(.plain).focused($composerFocused).onSubmit { send() }
+                .font(typography.font(for: .conversation)).lineLimit(1...5).textFieldStyle(.plain).focused($composerFocused).onSubmit { send() }
                 .frame(minHeight: 44)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { scopeControls; Spacer(minLength: 4); modeControls; questionOptions; sendButton }
@@ -209,9 +209,11 @@ private struct BookChatContent: View {
         }.disabled(store.isQueryBusy)
     }
     @ViewBuilder private var readingSizeControls: some View {
-        Button { textScale = min(1.5, ((textScale + 0.1) * 10).rounded() / 10) } label: { Label("放大文字", systemImage: "textformat.size.larger") }.disabled(textScale >= 1.5)
-        Button { textScale = max(0.9, ((textScale - 0.1) * 10).rounded() / 10) } label: { Label("缩小文字", systemImage: "textformat.size.smaller") }.disabled(textScale <= 0.9)
-        Button("恢复字号") { textScale = 1 }
+        Button { typography.setPointSize(typography.style(for: .conversation).pointSize + 1, for: .conversation) } label: { Label("放大文字", systemImage: "textformat.size.larger") }
+            .disabled(typography.style(for: .conversation).pointSize >= ReadingTextStyle.pointSizeRange.upperBound)
+        Button { typography.setPointSize(typography.style(for: .conversation).pointSize - 1, for: .conversation) } label: { Label("缩小文字", systemImage: "textformat.size.smaller") }
+            .disabled(typography.style(for: .conversation).pointSize <= ReadingTextStyle.pointSizeRange.lowerBound)
+        Button("恢复默认") { typography.reset(.conversation) }
     }
     private var queryStatus: some View {
         QueryProgressButton(state: store.queryProgressState, onCancel: store.cancelQuery)
@@ -281,8 +283,7 @@ private struct BookChatContent: View {
             if assistant, !message.evidence.isEmpty {
                 EvidenceDisclosure(evidence: message.evidence)
             }
-        }.padding(embedded ? 16 : 22).background(assistant ? Palette.surface.opacity(0.55) : Palette.accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
-            .padding(.leading, assistant ? 0 : (embedded ? 20 : 52))
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
             .contextMenu {
                 if assistant { answerActions(message, bookID: bookID, prepared: prepared) }
             }
@@ -396,14 +397,16 @@ private struct SavedConversationHistory: View {
                                 if let mode = message.conversationMode { Text(mode.title).font(.system(size: 12)).foregroundStyle(.secondary) }
                             }
                             ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(message.content, bookID: project.id, project: project))
-                        }.padding(16).background(message.id == focusedMessageID ? Palette.accent.opacity(0.1) : Palette.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 16)).id(message.id)
+                        }.padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(message.id == focusedMessageID ? Palette.accent.opacity(0.055) : Color.clear).id(message.id)
                     }
                     if project.chats.isEmpty { Text("还没有保存的对话").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 200) }
                 }.padding(18)
             }.onAppear { if let id = focusedMessageID { proxy.scrollTo(id, anchor: .center) } }
                 .onChange(of: focusedMessageID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
             }
-        }.frame(width: 620, height: 600).background(Palette.canvas).onExitCommand(perform: onClose)
+        }.frame(minWidth: 360, idealWidth: 620, maxWidth: 900, minHeight: 320, idealHeight: 600, maxHeight: .infinity)
+            .background(Palette.canvas).onExitCommand(perform: onClose)
     }
 }
 
@@ -417,6 +420,7 @@ private struct ChatComposerSurface: ViewModifier {
 
 private struct AnswerSaveSheet: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject private var typography: ReadingTypographySettings
     @Environment(\.dismiss) private var dismiss
     let bookID: String
     let sourceAnswer: ChatMessage?
@@ -508,7 +512,7 @@ private struct AnswerSaveSheet: View {
                 Spacer(minLength: 0)
                 Text(selectedSource.isEmpty ? "拖动选择" : "已选 \(selectedSource.count) 字").font(.system(size: 13)).foregroundStyle(.secondary)
             }
-            MarkdownSourceSelector(source: answer.content) { source, text in
+            MarkdownSourceSelector(source: answer.content, font: typography.nsFont(for: .notes)) { source, text in
                 guard !saving else { return }
                 selectedSource = source == answer.content ? text : ""
             }.frame(minHeight: 60, maxHeight: .infinity)
@@ -529,9 +533,9 @@ private struct AnswerSaveSheet: View {
 
     private func documentPreview(_ composition: SavedAnswerComposition) -> some View {
         ScrollView {
-            ChatMarkdownBody(markdown: ChatMarkdownBody.prepare(previewMarkdown(composition), bookID: bookID, project: store.book))
-                .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-        }.background(Palette.paper, in: RoundedRectangle(cornerRadius: 9))
+            ChatMarkdownBody(markdown: ChatMarkdownBody.prepare(previewMarkdown(composition), bookID: bookID, project: store.book), context: .notes)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var saveBar: some View {
@@ -588,13 +592,15 @@ private struct AnswerSaveSheet: View {
 private struct ChatMarkdownBody: View {
     @EnvironmentObject var store: AppStore
     var markdown: String
+    var context: ReadingTextContext = .conversation
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)? = nil
     var onSelectionSave: ((RenderedMarkdownSelection) -> Void)? = nil
     var body: some View {
         RichMarkdownView(markdown: markdown,
                          baseDirectory: store.sourceFileURL?.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("docs", isDirectory: true),
                          onSelectionChange: onSelectionChange, onSelectionSave: onSelectionSave)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .readingTextContext(context)
             .environment(\.openURL, OpenURLAction { url in
                 if url.scheme == "readingbook" { Task { await store.openInternalURL(url) }; return .handled }
                 return ["https", "http"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
@@ -608,12 +614,13 @@ private struct ChatMarkdownBody: View {
 /// Read-only AppKit selection preserves exact UTF-16 source ranges, including TeX.
 private struct MarkdownSourceSelector: NSViewRepresentable {
     let source: String
+    let font: NSFont
     let onSelection: (String, String) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(source: source, onSelection: onSelection) }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.borderType = .noBorder
         let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400)); text.isEditable = false; text.isSelectable = true; text.isRichText = false
-        text.font = .monospacedSystemFont(ofSize: 15, weight: .regular); text.textColor = .textColor; text.backgroundColor = .textBackgroundColor
+        text.font = font; text.textColor = .textColor; text.backgroundColor = .textBackgroundColor
         text.textContainerInset = NSSize(width: 10, height: 10); text.isVerticallyResizable = true; text.isHorizontallyResizable = false
         text.autoresizingMask = [.width]; text.textContainer?.widthTracksTextView = true
         text.minSize = .zero; text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -622,7 +629,14 @@ private struct MarkdownSourceSelector: NSViewRepresentable {
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.source = source; context.coordinator.onSelection = onSelection
-        if let text = scroll.documentView as? NSTextView, text.string != source { text.string = source; text.setSelectedRange(NSRange(location: 0, length: 0)) }
+        guard let text = scroll.documentView as? NSTextView else { return }
+        if text.string != source { text.string = source; text.setSelectedRange(NSRange(location: 0, length: 0)) }
+        if text.font != font {
+            let selection = text.selectedRanges, origin = scroll.contentView.bounds.origin
+            text.font = font
+            if text.selectedRanges != selection { text.selectedRanges = selection }
+            scroll.contentView.scroll(to: origin); scroll.reflectScrolledClipView(scroll.contentView)
+        }
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
         var source: String

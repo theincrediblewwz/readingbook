@@ -172,7 +172,7 @@ struct ReaderInlineCard: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         if let objectID = content.objectID {
-                            if let saved = content.savedMarkdown { MarkdownText(markdown: saved).clipShape(RoundedRectangle(cornerRadius: 14)) }
+                            if let saved = content.savedMarkdown { MarkdownText(markdown: saved) }
                             if state.pinned && store.queryAnswerStyle == .mentor {
                                 TeacherBackgroundCard(objectID: objectID, unitID: content.anchor.unitID)
                             }
@@ -199,6 +199,7 @@ struct ReaderInlineCard: View {
                 }
             }.frame(width: placement.width, height: placement.height).readingGlass(radius: 24, prominent: true)
                 .environment(\.markdownReadingStyle, "companion")
+                .readingTextContext(.companion)
                 .onHover { state.pointer($0) }.onChange(of: content.anchor.id) { _, _ in showsComposition = false }
                 .position(x: placement.midX, y: placement.midY).workspaceChromeBounds("reader-inline")
         } else if let content = state.content, state.pinned {

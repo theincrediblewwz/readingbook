@@ -4,6 +4,7 @@ import WebKit
 import UniformTypeIdentifiers
 import ImageIO
 import os
+import ReadingCore
 
 private let markdownSignposter = OSSignposter(subsystem: "org.readingbook.app", category: "Markdown")
 
@@ -69,6 +70,7 @@ extension EnvironmentValues {
 }
 
 struct RichMarkdownView: View {
+    @EnvironmentObject private var typography: ReadingTypographySettings
     let markdown: String
     var baseDirectory: URL?
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
@@ -82,8 +84,7 @@ struct RichMarkdownView: View {
     var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.markdownReadingStyle) private var readingStyle
-    @Environment(\.markdownTextScale) private var textScale
+    @Environment(\.readingTextContext) private var textContext
     @State private var contentHeight: CGFloat = 40
 
     init(markdown: String, baseDirectory: URL? = nil,
@@ -105,11 +106,14 @@ struct RichMarkdownView: View {
     }
 
     var body: some View {
+        let style = typography.style(for: textContext)
         Group {
             if let resources = MarkdownResources.directory {
               GeometryReader { geometry in
                 MarkdownWebView(markdown: markdown, baseDirectory: baseDirectory,
-                                resources: resources, theme: colorScheme == .dark ? "dark" : "light", readingStyle: readingStyle, textScale: textScale,
+                                resources: resources, theme: colorScheme == .dark ? "dark" : "light",
+                                readingStyle: textContext == .companion ? "companion" : "body", readingContext: textContext.rawValue,
+                                fontFamily: typography.cssFamily(for: textContext), fontSize: style.pointSize,
                                 height: $contentHeight, onOpenURL: { openURL($0) },
                                 onSelectionChange: onSelectionChange, onSelectionSave: onSelectionSave,
                                 sourceText: sourceText ?? markdown, plainText: plainText,
@@ -120,7 +124,7 @@ struct RichMarkdownView: View {
                                     let origin = geometry.frame(in: .named(ReaderInlineCoordinateSpace.name)).origin
                                     onSourceDecorationHover(value.map { $0.offsetBy(dx: origin.x, dy: origin.y) })
                                 })
-              }.frame(height: max(32, contentHeight)).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+              }.frame(height: max(1, contentHeight))
             } else {
                 Text("离线 Markdown / 公式资源缺失，请重新安装完整的 ReadingBook.app。")
                     .foregroundStyle(.secondary).padding()
@@ -150,7 +154,9 @@ private struct MarkdownWebView: NSViewRepresentable {
     let resources: URL
     let theme: String
     let readingStyle: String
-    let textScale: Double
+    let readingContext: String
+    let fontFamily: String
+    let fontSize: Double
     @Binding var height: CGFloat
     var onOpenURL: (URL) -> Void
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
@@ -178,7 +184,7 @@ private struct MarkdownWebView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "readingbookSourceFocus")
         configuration.userContentController.add(context.coordinator, name: "readingbookSourceHover")
         let webView = MarkdownContentWebView(frame: .zero, configuration: configuration)
-        webView.underPageBackgroundColor = .clear
+        webView.configureReadingSurface()
         webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = false
         webView.selectionForAction = { [weak coordinator = context.coordinator] in coordinator?.selectionForAction() }
@@ -204,7 +210,8 @@ private struct MarkdownWebView: NSViewRepresentable {
                 contentView.saveSelection = { [weak coordinator = context.coordinator] selection in coordinator?.saveSelection(selection) }
             } else { contentView.saveSelection = nil }
         }
-        context.coordinator.update(markdown: markdown, baseDirectory: baseDirectory, theme: theme, readingStyle: readingStyle, textScale: textScale,
+        context.coordinator.update(markdown: markdown, baseDirectory: baseDirectory, theme: theme, readingStyle: readingStyle, readingContext: readingContext,
+                                   fontFamily: fontFamily, fontSize: fontSize,
                                    sourceText: sourceText, plainText: plainText, decorations: sourceDecorations,
                                    focusedID: focusedDecorationID)
     }
@@ -225,14 +232,16 @@ private struct MarkdownWebView: NSViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         struct State: Equatable {
-            let markdown: String; let directory: URL?; let theme: String; let readingStyle: String; let textScale: Double; let selectionEnabled: Bool
+            let markdown: String; let directory: URL?; let theme: String; let readingStyle: String; let readingContext: String
+            let fontFamily: String; let fontSize: Double; let selectionEnabled: Bool
             let sourceText: String; let plainText: Bool; let decorations: [SourceReadingDecoration]
             func sharesDocument(with other: State) -> Bool {
                 directory == other.directory && plainText == other.plainText
                     && markdown.utf8.elementsEqual(other.markdown.utf8) && sourceText.utf8.elementsEqual(other.sourceText.utf8)
             }
             static func == (lhs: State, rhs: State) -> Bool {
-                lhs.theme == rhs.theme && lhs.readingStyle == rhs.readingStyle && lhs.textScale == rhs.textScale
+                lhs.theme == rhs.theme && lhs.readingStyle == rhs.readingStyle && lhs.readingContext == rhs.readingContext
+                    && lhs.fontFamily == rhs.fontFamily && lhs.fontSize == rhs.fontSize
                     && lhs.selectionEnabled == rhs.selectionEnabled && lhs.decorations == rhs.decorations && lhs.sharesDocument(with: rhs)
             }
         }
@@ -260,9 +269,11 @@ private struct MarkdownWebView: NSViewRepresentable {
             self.height = height; self.onOpenURL = onOpenURL; self.onSelectionChange = onSelectionChange
         }
 
-        func update(markdown: String, baseDirectory: URL?, theme: String, readingStyle: String, textScale: Double, sourceText: String,
+        func update(markdown: String, baseDirectory: URL?, theme: String, readingStyle: String, readingContext: String,
+                    fontFamily: String, fontSize: Double, sourceText: String,
                     plainText: Bool, decorations: [SourceReadingDecoration], focusedID: String?) {
-            pending = State(markdown: markdown, directory: baseDirectory, theme: theme, readingStyle: readingStyle, textScale: textScale.isFinite ? min(1.6, max(0.8, textScale)) : 1,
+            pending = State(markdown: markdown, directory: baseDirectory, theme: theme, readingStyle: readingStyle, readingContext: readingContext,
+                            fontFamily: fontFamily, fontSize: fontSize.isFinite ? min(36, max(12, fontSize)) : 18,
                             selectionEnabled: onSelectionChange != nil || onSourceSelection != nil,
                             sourceText: sourceText, plainText: plainText, decorations: Array(decorations.prefix(5_000)))
             self.focusedID = focusedID
@@ -312,7 +323,8 @@ private struct MarkdownWebView: NSViewRepresentable {
                 }
                 return item
             }
-            let options: [String: Any] = ["allowImages": state.directory != nil, "theme": state.theme, "readingStyle": state.readingStyle, "textScale": state.textScale,
+            let options: [String: Any] = ["allowImages": state.directory != nil, "theme": state.theme, "readingStyle": state.readingStyle,
+                                          "readingContext": state.readingContext, "fontFamily": state.fontFamily, "fontSize": state.fontSize,
                                           "revision": revision, "selectionEnabled": state.selectionEnabled,
                                           "sourceText": state.sourceText, "plainText": state.plainText,
                                           "sourceDecorations": decorations]
@@ -438,6 +450,21 @@ private struct MarkdownWebView: NSViewRepresentable {
 private final class MarkdownContentWebView: WKWebView {
     var selectionForAction: (() -> RenderedMarkdownSelection?)?
     var saveSelection: ((RenderedMarkdownSelection) -> Void)?
+
+    override var isOpaque: Bool { false }
+    func configureReadingSurface() {
+        underPageBackgroundColor = .clear
+        wantsLayer = true; layer?.backgroundColor = NSColor.clear.cgColor
+        // Only this trusted offline document uses WebKit's guarded macOS
+        // compatibility setter. CSS/under-page transparency alone does not
+        // disable the native page background. Missing SPI safely keeps the
+        // standard renderer; no external browser or webpage is reconfigured.
+        guard responds(to: NSSelectorFromString("_setDrawsBackground:")) else {
+            NSLog("ReadingBook offline renderer: transparent page background unavailable on this WebKit version")
+            return
+        }
+        setValue(false, forKey: "drawsBackground")
+    }
 
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         super.willOpenMenu(menu, with: event)

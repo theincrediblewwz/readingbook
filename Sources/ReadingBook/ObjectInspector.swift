@@ -40,6 +40,7 @@ private struct ObjectInspectorProjection: Sendable {
 
 @MainActor struct ObjectInspector: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject private var typography: ReadingTypographySettings
     let id: String
     var onClose: (() -> Void)? = nil
     @State private var displayedID: String?
@@ -113,6 +114,7 @@ private struct ObjectInspectorProjection: Sendable {
         }.background(Palette.surface.opacity(0.94), in: RoundedRectangle(cornerRadius: 20))
             .clipShape(RoundedRectangle(cornerRadius: 20))
             .environment(\.markdownReadingStyle, "companion")
+            .readingTextContext(.knowledge)
             .interactiveDismissDisabled(hasChanges || saving)
             .onAppear { loadedBookID = store.bookID; displayedID = id; restoreDraft(checkOtherDrafts: true) }
             .onChange(of: id) { _, next in
@@ -151,7 +153,7 @@ private struct ObjectInspectorProjection: Sendable {
             Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent.opacity(0.08), in: Capsule())
             Text(entity.name).font(.system(size: 25, weight: .semibold)).textSelection(.enabled)
             if store.queryAnswerStyle == .mentor { TeacherBackgroundCard(objectID: entity.id) }
-            if canShow(entity.evidence), !entity.summary.isEmpty { MarkdownText(markdown: entity.summary).clipShape(RoundedRectangle(cornerRadius: 12)) }
+            if canShow(entity.evidence), !entity.summary.isEmpty { MarkdownText(markdown: entity.summary) }
             explanationButton(entity.name)
             HStack(spacing: 12) {
                 Button {
@@ -164,7 +166,7 @@ private struct ObjectInspectorProjection: Sendable {
             ForEach(entity.properties.keys.sorted().filter { canShow(entity.evidence) && entity.properties[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }, id: \.self) { key in
                 VStack(alignment: .leading, spacing: 5) {
                     Text(fieldLabel(key, type: entity.typeID)).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
-                    MarkdownText(markdown: entity.properties[key] ?? "").clipShape(RoundedRectangle(cornerRadius: 12))
+                    MarkdownText(markdown: entity.properties[key] ?? "")
                 }
             }
             if canShow(entity.evidence), let lat = entity.latitude, let lon = entity.longitude {
@@ -182,7 +184,7 @@ private struct ObjectInspectorProjection: Sendable {
             Text(event.name).font(.system(size: 25, weight: .semibold))
             if store.queryAnswerStyle == .mentor { TeacherBackgroundCard(objectID: event.id) }
             if canShow(event.evidence) { Label(event.dateText, systemImage: "clock").font(.subheadline).foregroundStyle(.secondary) }
-            if canShow(event.evidence) { MarkdownText(markdown: event.summary).clipShape(RoundedRectangle(cornerRadius: 12)) }
+            if canShow(event.evidence) { MarkdownText(markdown: event.summary) }
             explanationButton(event.name)
             if canShow(event.evidence) { linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs) }
             EvidenceList(evidence: visibleEvidence(event.evidence))
@@ -202,7 +204,7 @@ private struct ObjectInspectorProjection: Sendable {
             EvidenceList(evidence: document.evidence)
         } else if let unit = store.book?.units.first(where: { $0.id == objectID }) {
             Text(unit.chapter).font(.title3); Text(unit.locator).font(.caption).foregroundStyle(.secondary)
-            Text(String(unit.text.prefix(500))).font(.system(size: 15)).lineSpacing(6).textSelection(.enabled)
+            Text(String(unit.text.prefix(500))).font(typography.font(for: .source)).lineSpacing(6).textSelection(.enabled)
         } else {
             Text("对象已不存在，或已移入回收站。").font(.callout).foregroundStyle(.secondary)
         }

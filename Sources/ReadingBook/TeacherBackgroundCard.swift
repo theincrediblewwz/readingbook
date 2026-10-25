@@ -20,12 +20,12 @@ private struct TeacherBackgroundCardBody: View {
         let entry = state.entries[key]
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Label("背景补充", systemImage: "sparkles").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent)
+                Text("背景补充 · AI讲解").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent)
                 Spacer()
-                Text(entry?.fromCache == true ? "本地已存 · AI讲解" : "AI讲解").font(.system(size: 11)).foregroundStyle(.secondary)
+                if entry?.fromCache == true { Text("本地已存").font(.system(size: 11)).foregroundStyle(.secondary) }
             }
             if let record = entry?.record {
-                MarkdownText(markdown: record.markdown).clipShape(RoundedRectangle(cornerRadius: 14))
+                MarkdownText(markdown: record.markdown)
             } else if let entry, entry.running {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -45,7 +45,8 @@ private struct TeacherBackgroundCardBody: View {
                 } label: { Label(entry?.message == nil ? "听老师讲讲" : "再试一次", systemImage: "sparkles") }
                     .buttonStyle(ReadingToolbarButtonStyle())
             }
-        }.padding(14).background(Palette.accent.opacity(0.045), in: RoundedRectangle(cornerRadius: 16))
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
+            .readingTextContext(.companion)
             .task(id: key + "|revision:" + String(store.projectRevision)) {
                 await state.refresh(objectID: objectID, unitID: unitID, store: store, autoGenerate: autoGenerate)
             }

@@ -173,7 +173,7 @@ private struct SentenceTranslationCardBody: View {
         VStack(alignment: .leading, spacing: 10) {
             if let markdown = entry?.markdown {
                 HStack { Text("句译").font(.system(size: 12, weight: .medium)); Spacer(); Text(entry?.cached == true ? "本地已存" : "已保存").font(.system(size: 11)).foregroundStyle(.secondary) }
-                MarkdownText(markdown: markdown).clipShape(RoundedRectangle(cornerRadius: 14))
+                MarkdownText(markdown: markdown)
             } else if let entry, entry.running {
                 HStack {
                     ProgressView().controlSize(.small); Text(entry.progress.phaseTitle).font(.system(size: 13))
@@ -183,12 +183,13 @@ private struct SentenceTranslationCardBody: View {
                     Text("思考 \(entry.progress.reasoningCharacters.formatted()) · 输出 \(entry.progress.answerCharacters.formatted()) 字符").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             } else {
-                if let fallbackMarkdown { MarkdownText(markdown: fallbackMarkdown).clipShape(RoundedRectangle(cornerRadius: 14)) }
+                if let fallbackMarkdown { MarkdownText(markdown: fallbackMarkdown) }
                 if let message = entry?.message { Text(message).font(.system(size: 13)).foregroundStyle(.secondary) }
                 Button { state.load(anchor: anchor, store: store, generate: true) } label: { Label("翻译这句", systemImage: "character.bubble") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("生成后保存在本书，下次直接读取")
             }
-        }.padding(12).background(Palette.accent.opacity(0.04), in: RoundedRectangle(cornerRadius: 14))
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
+            .readingTextContext(.companion)
             .task(id: key + "|revision:" + String(store.projectRevision)) { await state.refresh(anchor: anchor, store: store) }
     }
 }

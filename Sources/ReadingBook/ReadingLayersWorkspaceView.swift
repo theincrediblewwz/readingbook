@@ -193,6 +193,7 @@ struct ReadingLayersWorkspaceView: View {
                 // Always pass the complete source to Markdown/KaTeX. A folded
                 // viewport clips presentation only and cannot split a TeX pair.
                 RichMarkdownView(markdown: unit.text, sourceText: unit.text)
+                    .readingTextContext(.source)
                     .id(unit.id)
                     .background {
                         GeometryReader { geometry in
@@ -215,7 +216,7 @@ struct ReadingLayersWorkspaceView: View {
     private func layerCard(_ layer: ReadingLayer) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             itemHeading(layer.title, label: kindTitle(layer.kind) + " · " + layer.sourceLabel, id: layer.id, kind: "layer")
-            MarkdownText(markdown: layer.markdown)
+            MarkdownText(markdown: layer.markdown).readingTextContext(.companion)
             provenance(layer.provenance)
             sourceLinks(layer.sourceAnchorIDs)
             Button { store.newReadingNote(title: layer.title, markdown: layer.markdown + "\n\n_\(layer.sourceLabel)_", anchorIDs: layer.sourceAnchorIDs) } label: { Label("整理为 Markdown 草稿", systemImage: "square.and.pencil") }
@@ -225,7 +226,7 @@ struct ReadingLayersWorkspaceView: View {
     private func alignmentCard(_ item: ReferenceAlignment) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             itemHeading(item.title, label: "资料对读 · " + (item.status == "proposed" ? "待核对" : item.status), id: item.id, kind: "alignment")
-            MarkdownText(markdown: item.markdown)
+            MarkdownText(markdown: item.markdown).readingTextContext(.companion)
             provenance(item.provenance)
             sourceLinks(item.sourceAnchorIDs)
             Button { store.newReadingNote(title: item.title, markdown: item.markdown, anchorIDs: item.sourceAnchorIDs) } label: { Label("整理为 Markdown 草稿", systemImage: "square.and.pencil") }

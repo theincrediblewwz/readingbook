@@ -72,6 +72,7 @@ private struct CompanionProjection: Sendable {
 /// One contextual panel shared by source reading and declared plugin views.
 struct ReadingCompanionPanel: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject private var typography: ReadingTypographySettings
     var section: String = "context"
     var scope: String = "current"
     var onClose: (() -> Void)?
@@ -93,7 +94,6 @@ struct ReadingCompanionPanel: View {
     @State private var projectionTask: Task<Void, Never>?
     @State private var projectionGeneration = 0
     @State private var displayedScopeKey: String?
-    @AppStorage("reading.companionTextScale") private var textScale = 1.0
     private var avoidsSpoilers: Bool { scope != "book" && store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false }
     private var sourceUnits: [SourceUnit] {
         guard let book = store.book else { return [] }
@@ -162,18 +162,17 @@ struct ReadingCompanionPanel: View {
                     }
                     if scope != "book" {
                         if let quote = selectedQuote {
-                            Text(quote).font(.system(size: 15)).lineSpacing(6).textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(16)
-                                .background(Palette.accent.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
-                                .overlay(alignment: .leading) { Capsule().fill(Palette.accent).frame(width: 3).padding(.vertical, 14) }
+                            Text(quote).font(typography.font(for: .source)).lineSpacing(6).textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 12).padding(.vertical, 4)
+                                .overlay(alignment: .leading) { Capsule().fill(Palette.accent.opacity(0.55)).frame(width: 2) }
                         }
                         if showsSourceContext && !sourceUnits.isEmpty {
                             VStack(alignment: .leading, spacing: 10) {
                                 Label(scopeTitle, systemImage: "text.quote").font(.system(size: 13)).foregroundStyle(.secondary)
-                                ForEach(Array(sourceUnits.prefix(sourceContextLimit))) { unit in if !unit.text.isEmpty { MarkdownText(markdown: unit.text) } }
+                                ForEach(Array(sourceUnits.prefix(sourceContextLimit))) { unit in if !unit.text.isEmpty { MarkdownText(markdown: unit.text).readingTextContext(.source) } }
                                 if sourceUnits.count > sourceContextLimit { Button("继续显示原文") { sourceContextLimit += 4 }.buttonStyle(.borderless).frame(minHeight: 40) }
                                 if sourceUnits.allSatisfy({ $0.text.isEmpty }) { Text("此处尚无可靠识别文本，请先对照原 PDF。") }
-                            }.padding(14).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
+                            }.padding(.vertical, 8)
                         }
                     }
                     if effectiveSection == "mentions" { objectSection }
@@ -185,7 +184,7 @@ struct ReadingCompanionPanel: View {
             companionFooter
         }
         .environment(\.markdownReadingStyle, "companion")
-        .environment(\.markdownTextScale, textScale)
+        .readingTextContext(.companion)
         .onAppear(perform: refreshItems)
         .onChange(of: projectionKey) { _, _ in refreshItems() }
         .onChange(of: companionScope) { _, _ in frozenScope = nil; sourceContextLimit = 4 }
@@ -227,9 +226,11 @@ struct ReadingCompanionPanel: View {
     }
     @ViewBuilder private var companionTools: some View {
                 Menu {
-                    Button("放大文字") { textScale = min(1.5, ((textScale + 0.1) * 10).rounded() / 10) }.disabled(textScale >= 1.5)
-                    Button("缩小文字") { textScale = max(0.9, ((textScale - 0.1) * 10).rounded() / 10) }.disabled(textScale <= 0.9)
-                    Button("恢复字号") { textScale = 1 }
+                    Button("放大文字") { typography.setPointSize(typography.style(for: .companion).pointSize + 1, for: .companion) }
+                        .disabled(typography.style(for: .companion).pointSize >= ReadingTextStyle.pointSizeRange.upperBound)
+                    Button("缩小文字") { typography.setPointSize(typography.style(for: .companion).pointSize - 1, for: .companion) }
+                        .disabled(typography.style(for: .companion).pointSize <= ReadingTextStyle.pointSizeRange.lowerBound)
+                    Button("恢复默认") { typography.reset(.companion) }
                     Divider()
                     ForEach(ReadingAnswerStyle.allCases, id: \.self) { style in
                         Button { store.queryAnswerStyle = style } label: { Label(style.title, systemImage: store.queryAnswerStyle == style ? "checkmark" : style.icon) }
@@ -334,11 +335,11 @@ struct ReadingCompanionPanel: View {
         ForEach(Array(items.layers.prefix(layerLimit))) { layer in
             VStack(alignment: .leading, spacing: 10) {
                 itemHeader(layer.title, label: layer.sourceLabel, id: layer.id, kind: "layer")
-                MarkdownText(markdown: layer.markdown).clipShape(RoundedRectangle(cornerRadius: 12))
+                MarkdownText(markdown: layer.markdown)
                 provenance(layer.provenance)
                 anchorButtons(layer.sourceAnchorIDs)
                 Button { store.newReadingNote(title: layer.title, markdown: layer.markdown + "\n\n_\(layer.sourceLabel)_", anchorIDs: layer.sourceAnchorIDs) } label: { Label("存为笔记草稿", systemImage: "square.and.pencil") }.buttonStyle(.borderless).font(.system(size: 13)).frame(minHeight: 44)
-            }.readingCompanionCard()
+            }.readingCompanionSection()
         }
         if items.layers.count > layerLimit { Button("继续显示解释 · 还有 \(items.layers.count - layerLimit) 条") { layerLimit += 8 }.buttonStyle(.borderless).frame(minHeight: 40) }
         if !items.alignments.isEmpty { referenceSection }
@@ -348,11 +349,11 @@ struct ReadingCompanionPanel: View {
         ForEach(Array(items.alignments.prefix(alignmentLimit))) { alignment in
             VStack(alignment: .leading, spacing: 10) {
                 itemHeader(alignment.title, label: "资料对齐 · \(alignment.status == "proposed" ? "待核对" : alignment.status)", id: alignment.id, kind: "alignment")
-                MarkdownText(markdown: alignment.markdown).clipShape(RoundedRectangle(cornerRadius: 12))
+                MarkdownText(markdown: alignment.markdown)
                 provenance(alignment.provenance)
                 anchorButtons(alignment.sourceAnchorIDs)
                 Button { store.newReadingNote(title: alignment.title, markdown: alignment.markdown, anchorIDs: alignment.sourceAnchorIDs) } label: { Label("存为笔记草稿", systemImage: "square.and.pencil") }.buttonStyle(.borderless).font(.system(size: 13)).frame(minHeight: 44)
-            }.readingCompanionCard()
+            }.readingCompanionSection()
         }
         if items.alignments.count > alignmentLimit { Button("继续显示对读 · 还有 \(items.alignments.count - alignmentLimit) 条") { alignmentLimit += 8 }.buttonStyle(.borderless).frame(minHeight: 40) }
     }
@@ -367,7 +368,7 @@ struct ReadingCompanionPanel: View {
                     moreObjects(group.id, shown: min(objectLimits[group.id] ?? 24, group.entities.count), total: group.entities.count)
                 }.padding(.top, 10)
             } label: { groupLabel(group.title, icon: group.icon, count: group.entities.count) }
-                .readingCompanionCard()
+                .readingCompanionSection()
         }
         if !items.events.isEmpty {
             DisclosureGroup(isExpanded: groupBinding("events")) {
@@ -377,7 +378,7 @@ struct ReadingCompanionPanel: View {
                     ForEach(Array(items.events.prefix(objectLimits["events"] ?? 24))) { event in eventRow(event) }
                     moreObjects("events", shown: min(objectLimits["events"] ?? 24, items.events.count), total: items.events.count)
                 }.padding(.top, 10)
-            } label: { groupLabel("事件", icon: "calendar", count: items.events.count) }.readingCompanionCard()
+            } label: { groupLabel("事件", icon: "calendar", count: items.events.count) }.readingCompanionSection()
         }
     }
     private func groupBinding(_ id: String) -> Binding<Bool> {
@@ -401,17 +402,21 @@ struct ReadingCompanionPanel: View {
         return !evidence.isEmpty && evidence.allSatisfy { allowed.contains($0.unitID) }
     }
     private func entityRow(_ entity: KnowledgeEntity) -> some View {
-        DisclosureGroup(isExpanded: Binding(get: { store.selectedObjectID == entity.id }, set: { store.selectedObjectID = $0 ? entity.id : nil })) {
+        VStack(alignment: .leading, spacing: 0) {
+            objectHeading(entity.name, id: entity.id)
             if store.selectedObjectID == entity.id {
                 VStack(alignment: .leading, spacing: 10) {
                     if store.queryAnswerStyle == .mentor {
                         TeacherBackgroundCard(objectID: entity.id, unitID: store.currentReadingContext.unitID)
                     }
                     if canShowSummary(entity.evidence) {
-                        if !entity.summary.isEmpty { MarkdownText(markdown: entity.summary).clipShape(RoundedRectangle(cornerRadius: 12)) }
+                        if !entity.summary.isEmpty { MarkdownText(markdown: entity.summary) }
                         if !entity.aliases.isEmpty { Text("也称：" + entity.aliases.joined(separator: "、")).font(.system(size: 13)).foregroundStyle(.secondary) }
                         ForEach(entity.properties.keys.sorted(), id: \.self) { key in
-                            HStack(alignment: .top) { Text(store.book?.types.first(where: { $0.id == entity.typeID })?.fields.first(where: { $0.key == key })?.label ?? key).foregroundStyle(.secondary); Text(entity.properties[key] ?? "").textSelection(.enabled) }.font(.system(size: 13))
+                            HStack(alignment: .top) {
+                                Text(store.book?.types.first(where: { $0.id == entity.typeID })?.fields.first(where: { $0.key == key })?.label ?? key).font(.system(size: 13)).foregroundStyle(.secondary)
+                                Text(entity.properties[key] ?? "").font(typography.font(for: .companion)).textSelection(.enabled)
+                            }
                         }
                     }
                     appearances(entity.id, evidence: entity.evidence)
@@ -419,22 +424,33 @@ struct ReadingCompanionPanel: View {
                     Button { discussObject(entity.name) } label: { Label("聊聊\(entity.name)", systemImage: "bubble.left") }.buttonStyle(.borderless).font(.system(size: 13)).frame(minHeight: 40)
                 }.padding(.top, 8)
             }
-        } label: { HStack { Image(systemName: entity.latitude == nil ? "person.text.rectangle" : "mappin").foregroundStyle(.secondary); Text(entity.name).font(.system(size: 15, weight: .medium)); Spacer(minLength: 0) }.frame(minHeight: 40) }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
     private func eventRow(_ event: KnowledgeEvent) -> some View {
-        DisclosureGroup(isExpanded: Binding(get: { store.selectedObjectID == event.id }, set: { store.selectedObjectID = $0 ? event.id : nil })) {
+        VStack(alignment: .leading, spacing: 0) {
+            objectHeading(event.name, id: event.id)
             if store.selectedObjectID == event.id {
                 VStack(alignment: .leading, spacing: 10) {
                     if store.queryAnswerStyle == .mentor {
                         TeacherBackgroundCard(objectID: event.id, unitID: store.currentReadingContext.unitID)
                     }
                     if !event.dateText.isEmpty { Text(event.dateText).font(.system(size: 13)).foregroundStyle(.secondary) }
-                    if canShowSummary(event.evidence), !event.summary.isEmpty { MarkdownText(markdown: event.summary).clipShape(RoundedRectangle(cornerRadius: 12)) }
+                    if canShowSummary(event.evidence), !event.summary.isEmpty { MarkdownText(markdown: event.summary) }
                     appearances(event.id, evidence: event.evidence)
                     if !event.placeIDs.isEmpty { Button { store.selectedObjectID = event.id; store.readingScopeCurrent = true; store.activate(.map) } label: { Label("在时间与地图中查看", systemImage: "map") }.buttonStyle(.borderless).font(.system(size: 13)).frame(minHeight: 40) }
                 }.padding(.top, 8)
             }
-        } label: { HStack { Image(systemName: "calendar").foregroundStyle(.secondary); Text(event.name).font(.system(size: 15, weight: .medium)); Spacer(minLength: 0) }.frame(minHeight: 40) }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func objectHeading(_ title: String, id: String) -> some View {
+        let expanded = store.selectedObjectID == id
+        return Button { store.selectedObjectID = expanded ? nil : id } label: {
+            HStack(spacing: 8) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).frame(width: 12)
+                Text(title).font(.system(size: 15, weight: expanded ? .semibold : .medium)).foregroundStyle(expanded ? Palette.accent : Palette.ink)
+                Spacer(minLength: 0)
+            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityLabel(title).accessibilityValue(expanded ? "已展开" : "已收起")
     }
     private func discussObject(_ name: String) {
         guard store.canStartQuery else { return }
@@ -448,7 +464,7 @@ struct ReadingCompanionPanel: View {
         }
     }
     private func empty(_ title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .center, spacing: 12) {
             Image(systemName: "sparkles").font(.system(size: 24, weight: .medium)).foregroundStyle(Palette.accent)
             Text(title).font(.system(size: 18, weight: .semibold))
             Text(detail).font(.system(size: 14)).foregroundStyle(.secondary).lineSpacing(5)
@@ -541,7 +557,7 @@ private struct ReadingDecisionView: View {
                 let outcome = revealed ? "\n\n## 原书结果与解析\n\n\(card.historicalOutcomeMarkdown)" : ""
                 store.newReadingNote(title: card.title, markdown: "\(card.contextMarkdown)\n\n## 我的选择\n\n\(selected)\n\n\(thought)\(outcome)\n\n_\(card.sourceLabel)_", anchorIDs: card.sourceAnchorIDs)
             }.font(.caption).buttonStyle(.borderless)
-        }.readingCompanionCard().id(card.id)
+        }.readingCompanionSection().id(card.id)
         .onAppear {
             let draft = UserDefaults.standard.dictionary(forKey: draftKey) ?? [:]
             choice = (draft["choice"] as? String).flatMap { id in card.options.contains { $0.id == id } ? id : nil }
@@ -572,5 +588,8 @@ struct ReadingExperienceWorkspaceView: View {
 }
 
 private extension View {
-    func readingCompanionCard() -> some View { padding(14).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 14)) }
+    func readingCompanionSection() -> some View {
+        frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12)
+            .overlay(alignment: .top) { Rectangle().fill(Palette.line.opacity(0.4)).frame(height: 0.5) }
+    }
 }

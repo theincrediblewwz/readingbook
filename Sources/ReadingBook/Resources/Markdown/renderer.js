@@ -416,9 +416,17 @@
     selectionEnabled = !!options.selectionEnabled;
     document.documentElement.dataset.theme = options.theme === 'dark' ? 'dark' : 'light';
     document.documentElement.dataset.readingStyle = options.readingStyle === 'companion' ? 'companion' : 'body';
+    const role = ['source', 'companion', 'conversation', 'notes', 'knowledge'].includes(options.readingContext) ? options.readingContext : 'knowledge';
+    document.documentElement.dataset.readingContext = role;
     const scale = Number.isFinite(Number(options.textScale)) ? Math.min(1.6, Math.max(0.8, Number(options.textScale))) : 1;
-    document.documentElement.style.fontSize = ((options.readingStyle === 'companion' ? 18 : 16) * scale) + 'px';
+    const size = Number.isFinite(options.fontSize) ? Math.min(36, Math.max(12, options.fontSize)) : (options.readingStyle === 'companion' ? 18 : 16) * scale;
+    const family = typeof options.fontFamily === 'string' && options.fontFamily.length <= 1024 ? options.fontFamily : '';
+    // Font settings are presentation only. Do not replace body nodes, clear a
+    // live selection or reset citation/KaTeX identity when the reader resizes.
+    document.documentElement.style.fontSize = size + 'px';
+    document.documentElement.style.fontFamily = family;
     reportHeight();
+    document.fonts?.ready.then(reportHeight);
     return true;
   }
   function focusSourceNode(node, request) {

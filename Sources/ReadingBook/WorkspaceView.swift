@@ -790,6 +790,7 @@ struct EvidenceList: View {
 /// Inspect a quote in place; leaving for the source is a separate action.
 private struct EvidenceReferenceRow: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject private var typography: ReadingTypographySettings
     let reference: Evidence
     @State private var expanded = false
     private var unit: SourceUnit? { store.book?.units.first { $0.id == reference.unitID } }
@@ -802,19 +803,19 @@ private struct EvidenceReferenceRow: View {
                         Spacer(minLength: 0)
                         Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption)
                     }.foregroundStyle(Palette.accent)
-                    if !expanded { Text(reference.quote).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(3).multilineTextAlignment(.leading) }
-                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(12).contentShape(Rectangle())
+                    if !expanded { Text(reference.quote).font(typography.font(for: .source)).foregroundStyle(.secondary).lineLimit(3).multilineTextAlignment(.leading) }
+                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(.vertical, 10).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(expanded ? "收起原文依据" : "展开原文依据")
             if expanded {
                 VStack(alignment: .leading, spacing: 12) {
                     if let unit, !unit.chapter.isEmpty { Text(unit.chapter).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
-                    Text(reference.quote).font(.system(size: 15)).lineSpacing(5).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    Text(reference.quote).font(typography.font(for: .source)).lineSpacing(5).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     Button { store.follow(reference) } label: { Label("回到原文", systemImage: "arrow.uturn.backward") }
                         .buttonStyle(ReadingToolbarButtonStyle()).disabled(unit == nil)
                     if unit == nil { Text("来源片段已不存在，引句仍保留。").font(.caption).foregroundStyle(.secondary) }
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.bottom, 12)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 12)
             }
-        }.background(Palette.accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

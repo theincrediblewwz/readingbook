@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ReadingCore
 
 struct AppSettingsView: View {
     @EnvironmentObject private var store: AppStore
@@ -102,11 +103,15 @@ private struct StorageSettingsPane: View {
 }
 
 private struct ReadingSettingsPane: View {
+    @EnvironmentObject private var typography: ReadingTypographySettings
+    @State private var textContext: ReadingTextContext = .source
     @AppStorage("reading.defaultDirection") private var direction = "vertical"
     @AppStorage("reading.defaultContinuous") private var continuous = true
     @AppStorage("reading.showProgress") private var progress = true
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
+            typographyControls
+            Divider().opacity(0.5)
             Text("默认阅读方式").font(.system(size: 16, weight: .semibold))
             Picker("翻页方向", selection: $direction) { Text("上下").tag("vertical"); Text("左右").tag("horizontal") }.pickerStyle(.segmented)
             Picker("页面布局", selection: $continuous) { Text("连续").tag(true); Text("单页").tag(false) }.pickerStyle(.segmented)
@@ -114,6 +119,77 @@ private struct ReadingSettingsPane: View {
             Divider().opacity(0.5)
             Toggle("显示左下角阅读百分比", isOn: $progress)
         }.font(.system(size: 14))
+    }
+
+    private struct FontChoice: Identifiable { let id: String; let title: String }
+    private let builtInFamilies = [FontChoice(id: "system", title: "系统默认"), FontChoice(id: "serif", title: "宋体"),
+                                   FontChoice(id: "sans", title: "无衬线"), FontChoice(id: "monospaced", title: "等宽")]
+    private var style: ReadingTextStyle { typography.style(for: textContext) }
+    private var family: Binding<String> {
+        Binding(get: { typography.style(for: textContext).family }, set: { typography.setFamily($0, for: textContext) })
+    }
+    private var pointSize: Binding<Double> {
+        Binding(get: { typography.style(for: textContext).pointSize }, set: { typography.setPointSize($0, for: textContext) })
+    }
+    private var missingFamily: String? {
+        let selected = style.family
+        return builtInFamilies.contains(where: { $0.id == selected }) || typography.availableFontFamilies.contains(selected) ? nil : selected
+    }
+
+    private var typographyControls: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("字体与字号").font(.system(size: 16, weight: .semibold))
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 20) {
+                    contextPicker.frame(minWidth: 150, maxWidth: 210)
+                    familyPicker.frame(minWidth: 230, maxWidth: .infinity)
+                }
+                VStack(alignment: .leading, spacing: 14) { contextPicker; familyPicker }
+            }
+            HStack(spacing: 16) {
+                Slider(value: pointSize, in: ReadingTextStyle.pointSizeRange, step: 1) { Text("字号") }
+                    .frame(minWidth: 100).accessibilityLabel("\(textContext.title)字号")
+                Stepper(value: pointSize, in: ReadingTextStyle.pointSizeRange, step: 1) {
+                    Text(style.pointSize.formatted(.number.precision(.fractionLength(0...1))) + " pt").monospacedDigit().frame(minWidth: 56, alignment: .trailing)
+                }.fixedSize().accessibilityLabel("\(textContext.title)字号")
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                Text("预览").font(.system(size: 13)).foregroundStyle(.secondary)
+                Text("读到这里，可以再想一想。\n把书中的线索，慢慢变成自己的理解。")
+                    .font(typography.font(for: textContext)).lineSpacing(6)
+                    .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+            }.padding(.vertical, 6)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { resetTypographyButtons }
+                VStack(alignment: .leading, spacing: 8) { resetTypographyButtons }
+            }.buttonStyle(ReadingToolbarButtonStyle())
+            Text("适用于文本原文，PDF 使用缩放。").font(.system(size: 13)).foregroundStyle(.secondary)
+        }
+    }
+    private var contextPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("阅读区域").foregroundStyle(.secondary)
+            Picker("阅读区域", selection: $textContext) {
+                ForEach(ReadingTextContext.allCases, id: \.self) { Text($0.title).tag($0) }
+            }.pickerStyle(.menu).labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+    private var familyPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("字体").foregroundStyle(.secondary)
+            Picker("\(textContext.title)字体", selection: family) {
+                ForEach(builtInFamilies, id: \.id) { Text($0.title).tag($0.id) }
+                if let missingFamily { Text(missingFamily + "（未安装）").tag(missingFamily) }
+                Divider()
+                ForEach(typography.availableFontFamilies.filter { candidate in !builtInFamilies.contains(where: { $0.id == candidate }) }, id: \.self) {
+                    Text($0).tag($0)
+                }
+            }.pickerStyle(.menu).labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+    @ViewBuilder private var resetTypographyButtons: some View {
+        Button("恢复此区域") { typography.reset(textContext) }.help("恢复\(textContext.title)的默认字体与字号")
+        Button("全部恢复默认") { typography.resetAll() }.help("恢复所有阅读区域的默认字体与字号")
     }
 }
 private struct AppearanceSettingsPane: View {

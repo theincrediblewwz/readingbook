@@ -40,7 +40,7 @@ struct CompositionWorkspaceView: View {
                 } else if composition != nil { ProgressView("正在准备组件…") }
                 else { fallback("这个组件尚未提供可显示的布局。原书、笔记和已保存配置都保留。") }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.background(embedded ? Color.clear : Palette.canvas)
+        }.background(embedded ? Color.clear : Palette.canvas).readingTextContext(.knowledge)
             .task { refresh() }
             .onChange(of: store.projectRevision) { _, _ in refresh() }
             .onChange(of: store.currentReadingContext) { _, _ in refresh() }
@@ -358,12 +358,11 @@ private struct CompositionEvidenceList: View {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(evidence.prefix(shown).enumerated()), id: \.offset) { _, evidence in
                     VStack(alignment: .leading, spacing: 8) {
-                        MarkdownText(markdown: evidence.quote)
+                        MarkdownText(markdown: evidence.quote).readingTextContext(.source)
                         Button { store.follow(evidence) } label: {
                             Label(store.book?.units.first { $0.id == evidence.unitID }?.locator ?? "查看原文", systemImage: "arrow.uturn.backward").frame(minHeight: 48)
                         }.buttonStyle(ReadingToolbarButtonStyle()).foregroundStyle(Palette.accent)
-                    }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Palette.accent.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if shown < evidence.count {
                     Button { shown += 4 } label: {
@@ -416,7 +415,7 @@ private struct CompositionMarkdown: View {
                         .buttonStyle(.plain).help("打开这篇笔记").accessibilityLabel("打开这篇笔记")
                 }.padding(.horizontal, 18)
                 if let issue { Text(issue).font(.callout).foregroundStyle(.secondary).textSelection(.enabled).padding(20) }
-                else if let markdown { ScrollView { MarkdownText(markdown: markdown).padding(20) }.frame(maxHeight: 460) }
+                else if let markdown { ScrollView { MarkdownText(markdown: markdown).readingTextContext(.notes).padding(20) }.frame(maxHeight: 460) }
                 else { ProgressView().frame(maxWidth: .infinity, minHeight: 150) }
             } else { CompositionEmptyState(text: "这里显示已关联、主动保存的 Markdown 笔记。", icon: "doc.text") }
         }.task(id: loadKey) { await load() }.onChange(of: selected) { _, _ in chosen = nil }
@@ -483,6 +482,7 @@ private struct CompositionClock: Equatable {
 }
 
 private struct CompositionTimeline: View {
+    @EnvironmentObject private var typography: ReadingTypographySettings
     let items: [CompositionItem]
     let selected: Set<String>
     @Binding var clock: CompositionClock
@@ -536,7 +536,7 @@ private struct CompositionTimeline: View {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(item.title).font(.system(size: 17, weight: .medium))
                         if let extent = item.extent, !extent.sourceText.isEmpty { Text(extent.sourceText).font(.caption).foregroundStyle(.secondary) }
-                        if !item.summary.isEmpty { Text(item.summary).font(.callout).lineLimit(4) }
+                        if !item.summary.isEmpty { Text(item.summary).font(typography.font(for: .knowledge)).lineLimit(4) }
                         CompositionEvidenceList(evidence: item.evidence)
                     }.padding(.top, 10)
                 }

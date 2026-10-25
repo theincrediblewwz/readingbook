@@ -56,7 +56,7 @@ private struct ReadingParallelUnit: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(unit.locator).font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary).padding(.horizontal, 4)
             if sideBySide {
-                HStack(alignment: .top, spacing: 20) {
+                HStack(alignment: .top, spacing: 32) {
                     original.frame(maxWidth: .infinity, alignment: .leading)
                     translated.frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -77,7 +77,7 @@ private struct ReadingParallelUnit: View {
                                 var adjusted = selection; adjusted?.rangeLocation = selection?.rangeLocation.map { $0 + offset }
                                 store.sourceReadingSelection = adjusted; if selection != nil { store.focusedReadingAnchorID = nil }
                              }, onSourceDecorationHover: onSourceDecorationHover)
-        }.padding(24).background(Palette.surface.opacity(0.94), in: RoundedRectangle(cornerRadius: 18)).overlay(RoundedRectangle(cornerRadius: 18).stroke(Palette.line.opacity(0.8), lineWidth: 0.8))
+        }.frame(maxWidth: .infinity, alignment: .leading).readingTextContext(.source)
     }
     private var translated: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -94,8 +94,8 @@ private struct ReadingParallelUnit: View {
                         Spacer()
                         Button { store.newReadingNote(title: layer.title, markdown: layer.markdown, anchorIDs: layer.sourceAnchorIDs) } label: { Label("记一笔", systemImage: "square.and.pencil") }.disabled(store.isBusy)
                     }.font(.system(size: 14)).buttonStyle(ReadingToolbarButtonStyle())
-                }.padding(20).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
+                }
             }
-        }.padding(24).frame(maxWidth: .infinity, alignment: .leading).background(Palette.surface.opacity(0.86), in: RoundedRectangle(cornerRadius: 18)).overlay(RoundedRectangle(cornerRadius: 18).stroke(Palette.line.opacity(0.8), lineWidth: 0.8))
+        }.frame(maxWidth: .infinity, alignment: .leading).readingTextContext(.companion)
     }
 }

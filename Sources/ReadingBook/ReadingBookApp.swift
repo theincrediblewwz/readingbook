@@ -3,9 +3,10 @@ import AppKit
 
 struct ReadingBookApp: App {
     @StateObject private var store = AppStore()
+    @StateObject private var typography = ReadingTypographySettings()
     var body: some Scene {
         Window("ReadingBook", id: "main") {
-            WorkspaceView().environmentObject(store).modifier(ReadingPreferencesEnvironment())
+            WorkspaceView().environmentObject(store).environmentObject(typography).modifier(ReadingPreferencesEnvironment())
                 .background(FrostWindowAppearance())
                 .frame(minWidth: 800, minHeight: 600)
                 .task { await store.load() }
@@ -32,7 +33,7 @@ struct ReadingBookApp: App {
                 Button("我的笔记") { store.requestedWorkspaceRoute = "editor" }.keyboardShortcut("4")
             }
         }
-        Settings { AppSettingsView().environmentObject(store).modifier(ReadingPreferencesEnvironment()).frame(minWidth: 760, idealWidth: 960, minHeight: 600, idealHeight: 720) }
+        Settings { AppSettingsView().environmentObject(store).environmentObject(typography).modifier(ReadingPreferencesEnvironment()).frame(minWidth: 760, idealWidth: 960, minHeight: 600, idealHeight: 720) }
     }
 }
 
