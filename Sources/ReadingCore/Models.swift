@@ -254,6 +254,7 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var edges: [CanvasEdge] = []
     public var chats: [ChatMessage] = []
     public var audit: [ToolAudit] = []
+    public var aiRequestHistory: [AIRequestHistoryRecord]? = nil
     public var plugins: [PluginManifest] = []
     public var disabledPluginIDs: [String] = []
     public var appliedOperationIDs: [String] = []

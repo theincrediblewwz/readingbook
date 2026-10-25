@@ -246,6 +246,16 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
             value.status = error is CancellationError || (error as? URLError)?.code == .cancelled || error is ReadingWorkflowBudgetPause ? .paused : .failed
         } else { value.status = .completed }
         setProgress(value)
+        if let bookID = value.bookID, let sourceHash = book?.sourceHash, self.bookID == bookID {
+            let records = value.requests.map { request in
+                AIRequestHistoryRecord(id: request.id.uuidString, title: value.title, number: request.number,
+                    startedAt: request.startedAt, finishedAt: request.finishedAt ?? value.finishedAt ?? Date(),
+                    status: request.finishedAt != nil ? "returned" : value.status == .paused ? "paused" : "failed",
+                    reasoningCharacters: request.reasoning, answerCharacters: request.output)
+            }
+            let owner = repository
+            Task { try? await owner.recordAIRequestHistory(bookID: bookID, sourceHash: sourceHash, records: records) }
+        }
     }
     private func flushAIProgress(_ runID: UUID, close: Bool = false) {
         guard var value = progressValue(runID) else { return }
@@ -314,6 +324,7 @@ struct AIRequestHistoryView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var state: AIProgressObservableState
+    @State private var savedRequests: [AIRequestHistoryRecord] = []
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -342,6 +353,18 @@ struct AIRequestHistoryView: View {
                         }.padding(14).background(Palette.accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
                     }
                     Text("已保存的操作").font(.system(size: 14, weight: .semibold)).padding(.top, 6)
+                    ForEach(savedRequests.reversed()) { request in
+                        DisclosureGroup(request.title + " · 第 \(request.number) 次请求") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(request.startedAt, style: .date).font(.system(size: 12)).foregroundStyle(.secondary)
+                                Text("\(max(0, Int(request.finishedAt.timeIntervalSince(request.startedAt)))) 秒 · 思考 \(request.reasoningCharacters) · 输出 \(request.answerCharacters) 字符").font(.system(size: 13))
+                                ForEach((store.book?.audit ?? []).filter { $0.requestID == request.id }) { audit in
+                                    Text(AIProgressPresentationState.toolTitle(audit.name)).font(.system(size: 14, weight: .medium))
+                                    ForEach(audit.resultDetails ?? [], id: \.self) { Text($0).font(.system(size: 13)).foregroundStyle(.secondary) }
+                                }
+                            }.padding(.top, 8)
+                        }.padding(12)
+                    }
                     ForEach(Array((store.book?.audit ?? []).suffix(200).reversed())) { audit in
                         DisclosureGroup(AIProgressPresentationState.toolTitle(audit.name)) {
                             VStack(alignment: .leading, spacing: 8) {
@@ -354,5 +377,11 @@ struct AIRequestHistoryView: View {
                 }.padding(20)
             }
         }.frame(minWidth: 460, idealWidth: 640, minHeight: 380, idealHeight: 600).background(Palette.surface)
+            .task {
+                guard let id = store.bookID else { return }
+                let records = try? await store.repository.aiRequestHistory(bookID: id)
+                let currentIDs = Set(state.value.requests.map { $0.id.uuidString })
+                savedRequests = (records ?? []).filter { !currentIDs.contains($0.id) }
+            }
     }
 }

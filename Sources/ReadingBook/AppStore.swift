@@ -14,6 +14,8 @@ import ReadingCore
                 queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil
                 queryAllowsOrganizing = false; renderedWorkspaceVisibility = nil; renderedSelectedNodeIDs = []
                 smartReadingPlanReady = false
+                queryInteractionMode = UserDefaults.standard.string(forKey: "chat-mode-" + (bookID ?? "")).flatMap(ReadingConversationMode.init(rawValue:)) ?? .reading
+                queryAnswerStyle = UserDefaults.standard.string(forKey: "chat-style-" + (bookID ?? "")).flatMap(ReadingAnswerStyle.init(rawValue:)) ?? .mentor
                 if queryScope == .selection { queryScope = .page }
             }
         }
@@ -53,8 +55,12 @@ import ReadingCore
     @Published var queryDisclosure = ""
     @Published var queryRetryQuestion: String?
     @Published var queryAllowsOrganizing = false
-    @Published var queryInteractionMode: ReadingConversationMode = .reading
-    @Published var queryAnswerStyle: ReadingAnswerStyle = .mentor
+    @Published var queryInteractionMode: ReadingConversationMode = .reading {
+        didSet { if let bookID { UserDefaults.standard.set(queryInteractionMode.rawValue, forKey: "chat-mode-" + bookID) } }
+    }
+    @Published var queryAnswerStyle: ReadingAnswerStyle = .mentor {
+        didSet { if let bookID { UserDefaults.standard.set(queryAnswerStyle.rawValue, forKey: "chat-style-" + bookID) } }
+    }
     @Published var isQueryBusy = false
     let queryProgressState = AIProgressObservableState()
     var queryTask: Task<Void, Never>?

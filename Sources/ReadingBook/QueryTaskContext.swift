@@ -1,5 +1,6 @@
 import SwiftUI
 import ReadingCore
+import CryptoKit
 
 /// Reading material and layout permission are independent, explicit choices.
 /// Selecting a node does not silently share its mounted Markdown documents.
@@ -143,7 +144,7 @@ import ReadingCore
         current.audit.removeAll { $0.name == QueryHostOperationRecord.auditName && !retained.contains($0.id) }
         do {
             let identity = [expectedBookID, status, proposal?.id ?? "", receipt?.operationID ?? ""].joined(separator: "|")
-            let operationID = "query-review-" + (try BookImporter.sha256(Data(identity.utf8)))
+            let operationID = "query-review-" + SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
             let saved = try await repository.commitAIResult(base: base, result: current, operationID: operationID)
             guard bookID == expectedBookID else { return }
             publish(saved)

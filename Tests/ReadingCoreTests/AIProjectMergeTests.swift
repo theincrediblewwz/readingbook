@@ -30,8 +30,9 @@ final class AIProjectMergeTests: XCTestCase {
         var reading = f.book, question = f.book
         reading.entities[0].summary = "善于谋划的人。"; reading.coverage["u1"]?.status = .completed
         question.chats.append(ChatMessage(id: "q", role: "user", content: "这个人是谁？"))
-        async let a = f.repository.commitAIResult(base: f.book, result: reading, operationID: "reading-a")
-        async let b = f.repository.commitAIResult(base: f.book, result: question, operationID: "question-b")
+        let readingResult = reading, questionResult = question
+        async let a = f.repository.commitAIResult(base: f.book, result: readingResult, operationID: "reading-a")
+        async let b = f.repository.commitAIResult(base: f.book, result: questionResult, operationID: "question-b")
         _ = try await (a, b)
         let books = try await f.repository.loadAll(), latest = try XCTUnwrap(books.first)
         XCTAssertEqual(latest.chats.map(\.id), ["q"]); XCTAssertEqual(latest.entities[0].summary, "善于谋划的人。")

@@ -504,6 +504,13 @@ public actor LibraryRepository {
     // MARK: Package validation
 
     func validate(_ project: BookProject) throws {
+        let requests = project.aiRequestHistory ?? []
+        guard requests.count <= 1000, Set(requests.map(\.id)).count == requests.count,
+              requests.allSatisfy({ UUID(uuidString: $0.id) != nil && $0.title.count <= 160 && $0.number > 0 &&
+                  ["returned", "paused", "failed"].contains($0.status) && $0.reasoningCharacters >= 0 && $0.answerCharacters >= 0 &&
+                  $0.startedAt.timeIntervalSince1970.isFinite && $0.finishedAt.timeIntervalSince1970.isFinite && $0.finishedAt >= $0.startedAt }) else {
+            throw ReadingError.invalid("请求历史记录无效，原数据保留。")
+        }
         try ReaderAnnotationValidator.validateAll(in: project)
         guard project.schemaVersion == 1 else { throw ReadingError.invalid("不支持此项目 schemaVersion：\(project.schemaVersion)。") }
         guard UUID(uuidString: project.id) != nil, project.id.count == 36,
