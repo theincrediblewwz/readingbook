@@ -11,6 +11,7 @@ struct ReaderMethodView: View {
     @State private var pageEnd = 1
     @State private var details = false
     @State private var guide = false
+    @State private var requestHistory = false
     @State private var profileDraft = BookProfile()
     @State private var customGenre = ""
     @State private var execution = ReadingExecutionConfiguration()
@@ -20,7 +21,10 @@ struct ReaderMethodView: View {
                               pageEnd: scope == .pageRange ? pageEnd : nil,
                               preferredMethodIDs: automatic ? [] : methodIDs.sorted(), execution: execution)
     }
-    private var selectionChanged: Bool { selection != store.book?.smartReading?.selection }
+    private var selectionChanged: Bool {
+        guard let book = store.book else { return true }
+        return !SmartReadingRuntime.selectionMatchesFrozenContext(selection, in: book, currentUnitID: store.selectedUnitID)
+    }
     private var activeMethods: [ReadingMethod] {
         guard let book = store.book else { return [] }
         return (book.plan?.methodIDs ?? []).compactMap { id in book.methods.first { $0.id == id } }
@@ -53,6 +57,7 @@ struct ReaderMethodView: View {
         }
         .onAppear(perform: load).onChange(of: store.bookID) { _, _ in load() }
         .sheet(isPresented: $guide) { ReadingGuideView(onClose: { guide = false }) }
+        .sheet(isPresented: $requestHistory) { AIRequestHistoryView(state: store.aiProgressState).environmentObject(store) }
         .sheet(isPresented: $details) {
             VStack(spacing: 0) {
                 HStack { Label("阅读处理详情", systemImage: "checklist").font(.headline); Spacer(); Button { details = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction).help("关闭处理详情") }.padding(14)
@@ -62,7 +67,12 @@ struct ReaderMethodView: View {
     }
     private var introduction: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("智能阅读", systemImage: "sparkles").font(.system(size: 14, weight: .semibold)).foregroundStyle(Palette.accent)
+            HStack {
+                Label("智能阅读", systemImage: "sparkles").font(.system(size: 14, weight: .semibold)).foregroundStyle(Palette.accent)
+                Spacer(minLength: 8)
+                Button { requestHistory = true } label: { Label("请求记录", systemImage: "clock.arrow.circlepath") }
+                    .buttonStyle(ReadingToolbarButtonStyle()).help("查看本书当前与以前的请求和操作")
+            }
             Text("安心读，线索会慢慢连起来。").font(.system(size: 33, weight: .semibold, design: .rounded)).fixedSize(horizontal: false, vertical: true)
             Text("你决定读哪些内容，AI 为这本书选择合适的方法。\n分析在后台进行，原书始终在你手里。")
                 .font(.system(size: 16)).foregroundStyle(.secondary).lineSpacing(7)
@@ -217,8 +227,9 @@ struct ReaderMethodView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack { Label("正在使用的阅读方案", systemImage: "checkmark.seal").font(.system(size: 17, weight: .semibold)); Spacer(); Button { store.openBookScheme() } label: { Image(systemName: "slider.horizontal.3") }.buttonStyle(ReadingToolbarButtonStyle()).help("查看完整方案") }
             Text(store.book?.plan?.rationale ?? "").font(.system(size: 15)).foregroundStyle(.secondary).lineSpacing(5)
+            Text("以下是方法参考；本轮实际步骤以上方可调整的步骤为准。").font(.system(size: 12)).foregroundStyle(.secondary)
             ForEach(activeMethods) { method in
-                DisclosureGroup(method.name) {
+                DisclosureGroup("方法参考 · " + method.name) {
                     Text(method.goal).font(.system(size: 14)).foregroundStyle(.secondary).padding(.top, 8)
                     ForEach(Array(method.steps.enumerated()), id: \.offset) { _, step in Text("· " + step).font(.system(size: 14)).foregroundStyle(.secondary).padding(.top, 5) }
                 }.font(.system(size: 15, weight: .medium))
@@ -227,9 +238,13 @@ struct ReaderMethodView: View {
                 Text(store.book?.smartReading?.scopeTitle ?? "继续前，先确认本轮分析范围。").font(.system(size: 12)).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
                 if store.isSmartReadingRunning { Button { store.pauseReading() } label: { Label("暂停分析", systemImage: "pause") }.buttonStyle(ReadingToolbarButtonStyle()) }
+                else if selection.preferredMethodIDs != (store.book?.smartReading?.selection.preferredMethodIDs ?? []) {
+                    prepareButton.disabled(!store.canStartReading)
+                }
                 else if selectionChanged {
-                    Button { store.startSmartReadingWithExistingPlan(selection) } label: { Label("按新范围与方式分析", systemImage: "play") }
+                    Button { store.startSmartReadingWithExistingPlan(selection) } label: { Label("沿用方案，按新设置分析", systemImage: "play") }
                         .buttonStyle(ReadingActionButtonStyle(prominent: true)).disabled(!store.canStartReading || (try? execution.validate()) == nil)
+                        .help("更新范围、组件和步骤；更换读书方法请先预读新方案。")
                 } else {
                     Button { store.startReading() } label: { Label("继续分析", systemImage: "play") }
                         .buttonStyle(ReadingActionButtonStyle(prominent: true)).disabled(!store.canStartReading)

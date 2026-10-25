@@ -8,11 +8,12 @@ import Darwin
 enum ReadingBookLauncher {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--verify-resources") {
+            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
             do {
                 try PackagedResourceVerification.run()
-                print("ReadingBook 0.17.0 资源检查 OK")
+                print("ReadingBook \(version) 资源检查 OK")
             } catch {
-                let message = "ReadingBook 0.17.0 资源检查失败：\(error.localizedDescription)\n"
+                let message = "ReadingBook \(version) 资源检查失败：\(error.localizedDescription)\n"
                 try? FileHandle.standardError.write(contentsOf: Data(message.utf8))
                 exit(1)
             }

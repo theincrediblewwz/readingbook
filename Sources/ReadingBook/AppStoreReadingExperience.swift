@@ -28,15 +28,61 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         let index: ReadingExperienceState
         let decorations: [SourceReadingDecoration]
     }
-    var pending: Input?
+    struct Request: Sendable {
+        let project: BookProject
+        let selectedUnitID: String?
+        let owner: String
+        let scope: String
+    }
+    struct Prepared: Sendable {
+        let snapshot: Snapshot
+        let base: ReadingExperienceState
+        let index: ReadingExperienceState
+        let changed: Bool
+    }
+    var pendingScope: String?
+    var queued: Request?
     var current: Snapshot?
     var currentBase: ReadingExperienceState?
     var entries: [Input: Snapshot] = [:]
     var order: [Input] = []
-    func reset() { pending = nil; current = nil; currentBase = nil; entries = [:]; order = [] }
+    func reset() { pendingScope = nil; queued = nil; current = nil; currentBase = nil; entries = [:]; order = [] }
     func remember(_ value: Snapshot) {
         entries[value.input] = value; order.removeAll { $0 == value.input }; order.append(value.input)
         while order.count > 6 { entries.removeValue(forKey: order.removeFirst()) }
+    }
+    nonisolated static func prepare(_ request: Request, entries: [Input: Snapshot], current: Snapshot?, previousBase: ReadingExperienceState?) -> Prepared? {
+        let book = request.project
+        guard !Task.isCancelled, let unit = book.units.first(where: { $0.id == request.selectedUnitID }) else { return nil }
+        let units = unit.page.map { page in book.units.filter { $0.page == page } } ?? [unit]
+        let unitIDs = Set(units.map(\.id)), base = book.readingExperience ?? ReadingExperienceState()
+        let anchors = base.anchors.filter { unitIDs.contains($0.unitID) }, ids = Set(anchors.map(\.id))
+        var objects: [ObjectInput] = []
+        for object in book.entities {
+            guard !Task.isCancelled else { return nil }
+            let evidence = object.evidence.filter { unitIDs.contains($0.unitID) }
+            if !evidence.isEmpty { objects.append(.init(id: object.id, names: [object.name] + object.aliases, evidence: evidence, event: false)) }
+        }
+        for object in book.events {
+            guard !Task.isCancelled else { return nil }
+            let evidence = object.evidence.filter { unitIDs.contains($0.unitID) }
+            if !evidence.isEmpty { objects.append(.init(id: object.id, names: [object.name], evidence: evidence, event: true)) }
+        }
+        let input = Input(owner: request.owner, units: units, objects: objects, anchors: anchors,
+            mentions: base.mentions.filter { ids.contains($0.anchorID) },
+            literalBytes: units.map { Data($0.text.utf8) }
+                + objects.flatMap { $0.names.map { Data($0.utf8) } + $0.evidence.map { Data($0.quote.utf8) } }
+                + anchors.flatMap { [Data($0.quote.utf8), Data($0.prefix.utf8), Data($0.suffix.utf8)] })
+        let snapshot = entries[input] ?? build(input, project: book)
+        guard !Task.isCancelled else { return nil }
+        let changed = current?.input != input || previousBase != base
+        var index = base
+        if changed {
+            let anchorIDs = Set(base.anchors.map(\.id)), mentionIDs = Set(base.mentions.map(\.id))
+            index.anchors.append(contentsOf: snapshot.index.anchors.filter { !anchorIDs.contains($0.id) })
+            index.mentions.append(contentsOf: snapshot.index.mentions.filter { !mentionIDs.contains($0.id) })
+        }
+        return Prepared(snapshot: snapshot, base: base, index: index, changed: changed)
     }
     nonisolated static func build(_ input: Input, project: BookProject) -> Snapshot {
         let interval = pageEvidenceSignposter.beginInterval("BuildPageSnapshot")
@@ -56,7 +102,8 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
             guard !Task.isCancelled, let start = offsets[anchor.unitID],
                   let range = try? ReadingExperienceRuntime.resolve(anchor, in: compact) else { return nil }
             return SourceReadingDecoration(id: anchor.id, targetID: mentions[anchor.id]?.first?.targetID ?? anchor.id, quote: anchor.quote,
-                rangeLocation: start + range.utf16Location, rangeLength: range.utf16Length, prefix: anchor.prefix, suffix: anchor.suffix)
+                rangeLocation: start + range.utf16Location, rangeLength: range.utf16Length, prefix: anchor.prefix, suffix: anchor.suffix,
+                interaction: mentions[anchor.id]?.isEmpty == false ? .term : .passage)
         }
         return Snapshot(input: input, index: index, decorations: decorations)
     }
@@ -74,57 +121,54 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
             readingIndexTask?.cancel(); readingIndexGeneration &+= 1; readingPageSnapshots.reset()
             readingExperienceIndex = ReadingExperienceState(); return
         }
-        let units = visibleSourceUnits, unitIDs = Set(units.map(\.id))
-        let base = book.readingExperience ?? ReadingExperienceState()
-        let anchors = base.anchors.filter { unitIDs.contains($0.unitID) }, ids = Set(anchors.map(\.id))
-        var objects: [ReadingPageSnapshotCache.ObjectInput] = []
-        for object in book.entities {
-            let evidence = object.evidence.filter { unitIDs.contains($0.unitID) }
-            if !evidence.isEmpty { objects.append(.init(id: object.id, names: [object.name] + object.aliases, evidence: evidence, event: false)) }
-        }
-        for object in book.events {
-            let evidence = object.evidence.filter { unitIDs.contains($0.unitID) }
-            if !evidence.isEmpty { objects.append(.init(id: object.id, names: [object.name], evidence: evidence, event: true)) }
-        }
-        let input = ReadingPageSnapshotCache.Input(owner: libraryRootURL.path + "|" + book.id + "|" + book.sourceHash,
-            units: units, objects: objects, anchors: anchors, mentions: base.mentions.filter { ids.contains($0.anchorID) },
-            literalBytes: units.map { Data($0.text.utf8) }
-                + objects.flatMap { $0.names.map { Data($0.utf8) } + $0.evidence.map { Data($0.quote.utf8) } }
-                + anchors.flatMap { [Data($0.quote.utf8), Data($0.prefix.utf8), Data($0.suffix.utf8)] })
-        if let cached = readingPageSnapshots.entries[input] {
-            if readingPageSnapshots.pending != nil {
-                readingIndexTask?.cancel(); readingIndexGeneration &+= 1; readingPageSnapshots.pending = nil
-            }
-            if readingPageSnapshots.current?.input != input || readingPageSnapshots.currentBase != base { applyReadingPageSnapshot(cached, base: base) }
-            return
-        }
-        // A background checkpoint on another page must not cancel this page's
-        // calculation, clear its marks or repeat its hash/quote resolution.
-        if readingPageSnapshots.pending == input { return }
-        readingIndexTask?.cancel(); readingIndexGeneration &+= 1; readingPageSnapshots.pending = input
-        let previous = readingPageSnapshots.current?.input
-        if previous?.owner != input.owner || previous?.units.map(\.id) != input.units.map(\.id) || previous?.literalBytes.prefix(units.count) != input.literalBytes.prefix(units.count) {
-            readingExperienceIndex = base
-        }
+        let owner = libraryRootURL.path + "|" + book.id + "|" + book.sourceHash
+        let scope = owner + "|" + (selectedUnit?.page.map { "page:\($0)" } ?? "unit:" + (selectedUnitID ?? ""))
+        let request = ReadingPageSnapshotCache.Request(project: book, selectedUnitID: selectedUnitID, owner: owner, scope: scope)
+        // Copy-on-write snapshots are cheap here. All evidence scans, byte
+        // hashing, equality checks and canonical-index merges run off main.
+        // Coalesce same-page publications instead of repeatedly cancelling it.
+        if readingPageSnapshots.pendingScope == scope { readingPageSnapshots.queued = request; return }
+        readingIndexTask?.cancel(); readingIndexGeneration &+= 1
+        readingPageSnapshots.pendingScope = scope; readingPageSnapshots.queued = nil
         let generation = readingIndexGeneration
         readingIndexTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 45_000_000) } catch { return }
-            guard !Task.isCancelled else { return }
-            let calculation = Task.detached(priority: .userInitiated) { ReadingPageSnapshotCache.build(input, project: book) }
-            let value = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
-            guard !Task.isCancelled, let self, self.readingIndexGeneration == generation, self.bookID == book.id,
-                  self.libraryRootURL.path + "|" + book.id + "|" + (self.book?.sourceHash ?? "") == input.owner else { return }
-            self.readingPageSnapshots.remember(value); self.readingPageSnapshots.pending = nil
-            self.applyReadingPageSnapshot(value, base: self.book?.readingExperience ?? ReadingExperienceState())
+            guard let self, !Task.isCancelled, self.readingIndexGeneration == generation else { return }
+            var next = self.readingPageSnapshots.queued ?? request
+            self.readingPageSnapshots.queued = nil
+            while !Task.isCancelled {
+                let frozen = next, entries = self.readingPageSnapshots.entries
+                let current = self.readingPageSnapshots.current, base = self.readingPageSnapshots.currentBase
+                let calculation = Task.detached(priority: .userInitiated) {
+                    ReadingPageSnapshotCache.prepare(frozen, entries: entries, current: current, previousBase: base)
+                }
+                let prepared = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
+                guard !Task.isCancelled, self.readingIndexGeneration == generation, self.bookID == book.id,
+                      self.readingPageSnapshots.pendingScope == scope,
+                      self.libraryRootURL.path + "|" + book.id + "|" + (self.book?.sourceHash ?? "") == owner else { return }
+                if let prepared {
+                    self.readingPageSnapshots.remember(prepared.snapshot)
+                    // Continuous background saves must not starve this page's
+                    // incremental results. Publish an accepted projection before
+                    // consuming the latest queued update, provided the actual
+                    // visible source still has exactly the same IDs and bytes.
+                    // This check touches only page units, never all book facts.
+                    let units = self.visibleSourceUnits, expected = prepared.snapshot.input.units
+                    let sourceStillMatches = units.count == expected.count && zip(expected, units).allSatisfy { left, right in
+                        left.id == right.id && left.page == right.page && left.text.utf8.elementsEqual(right.text.utf8)
+                    }
+                    if sourceStillMatches {
+                        self.readingPageSnapshots.current = prepared.snapshot; self.readingPageSnapshots.currentBase = prepared.base
+                        if prepared.changed { self.readingExperienceIndex = prepared.index; self.readingContextCacheKey = nil }
+                    }
+                }
+                if let queued = self.readingPageSnapshots.queued {
+                    self.readingPageSnapshots.queued = nil; next = queued; continue
+                }
+                self.readingPageSnapshots.pendingScope = nil; self.readingIndexTask = nil
+                break
+            }
         }
-    }
-    private func applyReadingPageSnapshot(_ snapshot: ReadingPageSnapshotCache.Snapshot, base: ReadingExperienceState) {
-        var result = base
-        let anchorIDs = Set(base.anchors.map(\.id)), mentionIDs = Set(base.mentions.map(\.id))
-        result.anchors.append(contentsOf: snapshot.index.anchors.filter { !anchorIDs.contains($0.id) })
-        result.mentions.append(contentsOf: snapshot.index.mentions.filter { !mentionIDs.contains($0.id) })
-        readingPageSnapshots.current = snapshot; readingPageSnapshots.currentBase = base
-        readingExperienceIndex = result; readingContextCacheKey = nil
     }
     var currentReadingContext: ReadingContext {
         let object = selectedObjectID.flatMap { id in

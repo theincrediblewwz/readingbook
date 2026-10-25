@@ -16,6 +16,13 @@ import CryptoKit
         }
     }
     var currentQueryHistory: [ChatMessage] { book.map { queryHistory(in: $0, preferences: currentQueryPreferences) } ?? [] }
+    func queryContextHistory(in project: BookProject, preferences: ReadingAnswerPreferences, snapshot: ReadingQuerySnapshot) -> [ChatMessage] {
+        ReadingChatHistory.automaticHistory(in: project, preferences: preferences, snapshot: snapshot)
+    }
+    var currentQueryContextHistory: [ChatMessage] {
+        guard let book, let snapshot = try? currentQueryTaskSnapshot() else { return [] }
+        return queryContextHistory(in: book, preferences: currentQueryPreferences, snapshot: snapshot)
+    }
     func currentQueryTaskSnapshot() throws -> ReadingQuerySnapshot {
         guard let book else { throw ReadingError.invalid("请先打开一本书。") }
         return try ReadingQuerySnapshot.freeze(scope: queryScope, in: book, context: queryReadingContext,
@@ -70,14 +77,18 @@ import CryptoKit
     }
 
     var currentQueryMemory: ConversationMemory? {
-        guard let book, let snapshot = try? currentQueryTaskSnapshot(), let memory = loadQueryMemory(for: snapshot),
-              ConversationMemoryRuntime.isValid(memory, snapshot: snapshot, history: queryHistory(in: book, preferences: currentQueryPreferences)) else { return nil }
+        guard let book, let snapshot = try? currentQueryTaskSnapshot() else { return nil }
+        return queryMemory(for: snapshot, history: queryContextHistory(in: book, preferences: currentQueryPreferences, snapshot: snapshot))
+    }
+    func queryMemory(for snapshot: ReadingQuerySnapshot, history: [ChatMessage]) -> ConversationMemory? {
+        guard let memory = loadQueryMemory(for: snapshot),
+              ConversationMemoryRuntime.isValid(memory, snapshot: snapshot, history: history) else { return nil }
         return memory
     }
     var queryMemorySourceMessages: [ChatMessage] {
         guard let memory = currentQueryMemory else { return [] }
         let ids = Set((memory.requirements + memory.conclusions + memory.unresolved).flatMap(\.sources))
-        return currentQueryHistory.filter { ids.contains($0.id) }
+        return currentQueryContextHistory.filter { ids.contains($0.id) }
     }
 
     /// Host receipts are operation state, not quotations, adopted conclusions or

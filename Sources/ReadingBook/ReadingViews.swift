@@ -178,6 +178,20 @@ struct ReadingProcessingDetailsView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         overview(book)
                         reviewSummary(book)
+                        if let records = book.smartReading?.analysisCheckpoints, !records.isEmpty {
+                            DisclosureGroup("最近分析说明") {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    ForEach(Array(records.suffix(6).reversed())) { checkpoint in
+                                        let notes = SmartReadingRuntime.analysisCheckpointNotes(checkpoint, in: book)
+                                        VStack(alignment: .leading, spacing: 5) {
+                                            Text(checkpoint.updatedAt, style: .time).font(.caption2).foregroundStyle(.secondary)
+                                            if notes.isEmpty { Text("本部分分析已保存。").font(.caption).foregroundStyle(.secondary) }
+                                            ForEach(Array(notes.enumerated()), id: \.offset) { _, note in Text(note).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                                        }
+                                    }
+                                }.padding(.top, 8)
+                            }.softPanel()
+                        }
                         ReadingLedgerView()
                         if let plan = book.plan {
                             DisclosureGroup(isExpanded: $showMethods) {

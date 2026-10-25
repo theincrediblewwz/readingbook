@@ -245,7 +245,7 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
         Task { await finishAction?(); await sharedAIRequests.endRun() }
         value.finishedAt = Date()
         if let error {
-            value.status = error is CancellationError || (error as? URLError)?.code == .cancelled || error is ReadingWorkflowBudgetPause ? .paused : .failed
+            value.status = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled || error is ReadingWorkflowBudgetPause ? .paused : .failed
         } else { value.status = .completed }
         setProgress(value)
         if let bookID = value.bookID, let sourceHash = book?.sourceHash, self.bookID == bookID {
@@ -327,16 +327,35 @@ struct AIRequestHistoryView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var state: AIProgressObservableState
     @State private var savedRequests: [AIRequestHistoryRecord] = []
+    private var currentRequests: [AIProgressPresentationState.Request] {
+        state.value.bookID == store.bookID ? state.value.requests : []
+    }
+    private var representedRequestIDs: Set<String> {
+        Set(currentRequests.map { $0.id.uuidString }).union(savedRequests.map(\.id))
+    }
+    private var otherOperations: [ToolAudit] {
+        let represented = representedRequestIDs
+        return Array((store.book?.audit ?? []).filter { $0.requestID.map { !represented.contains($0) } ?? true }.suffix(200).reversed())
+    }
+    private func requestStatus(_ request: AIProgressPresentationState.Request) -> String {
+        if request.finishedAt != nil { return "模型已返回" }
+        if state.value.isRunning { return "进行中" }
+        return state.value.status == .paused ? "已停止，未返回" : "未完成"
+    }
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Label("请求记录", systemImage: "clock.arrow.circlepath").font(.system(size: 17, weight: .semibold))
                 Spacer(); DockIconButton(title: "关闭请求记录", icon: "xmark") { dismiss() }
-            }.padding(.horizontal, 20).frame(height: 60)
+            }.padding(.horizontal, 20).frame(height: 56)
             Divider().opacity(0.4)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(state.value.requests.reversed()) { request in
+                    if currentRequests.isEmpty && savedRequests.isEmpty && (store.book?.audit.isEmpty ?? true) {
+                        EmptyState(title: "还没有请求记录", detail: "分析或提问后，可在这里查看过程与结果。", icon: "clock.arrow.circlepath")
+                            .frame(minHeight: 260)
+                    }
+                    ForEach(currentRequests.reversed()) { request in
                         DisclosureGroup {
                             VStack(alignment: .leading, spacing: 10) {
                                 Text("思考 \(request.reasoning) · 输出 \(request.output) 字符").font(.system(size: 12)).foregroundStyle(.secondary)
@@ -345,16 +364,19 @@ struct AIRequestHistoryView: View {
                                         Image(systemName: step.succeeded == true ? "checkmark.circle.fill" : step.succeeded == false ? "exclamationmark.circle" : "clock").foregroundStyle(Palette.accent)
                                         VStack(alignment: .leading, spacing: 5) {
                                             Text(step.title)
+                                            if step.succeeded == nil && !step.requiresReview && !state.value.isRunning {
+                                                Text("未完成").font(.system(size: 12)).foregroundStyle(.secondary)
+                                            }
                                             if !step.summary.isEmpty { Text(step.summary).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled) }
                                         }
                                     }
                                 }
                             }.padding(.top, 10)
                         } label: {
-                            HStack { Text("第 \(request.number) 次请求"); Spacer(); Text(request.finishedAt == nil ? "进行中" : "已返回").foregroundStyle(.secondary) }
+                            HStack { Text("第 \(request.number) 次请求"); Spacer(); Text(requestStatus(request)).foregroundStyle(.secondary) }
                         }.padding(14).background(Palette.accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
                     }
-                    Text("已保存的操作").font(.system(size: 14, weight: .semibold)).padding(.top, 6)
+                    if !savedRequests.isEmpty { Text("以前的请求").font(.system(size: 14, weight: .semibold)).padding(.top, 6) }
                     ForEach(savedRequests.reversed()) { request in
                         DisclosureGroup(request.title + " · 第 \(request.number) 次请求") {
                             VStack(alignment: .leading, spacing: 8) {
@@ -367,7 +389,8 @@ struct AIRequestHistoryView: View {
                             }.padding(.top, 8)
                         }.padding(12)
                     }
-                    ForEach(Array((store.book?.audit ?? []).suffix(200).reversed())) { audit in
+                    if !otherOperations.isEmpty { Text("其他已保存操作").font(.system(size: 14, weight: .semibold)).padding(.top, 6) }
+                    ForEach(otherOperations) { audit in
                         DisclosureGroup(AIProgressPresentationState.toolTitle(audit.name)) {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(audit.createdAt, style: .date).font(.system(size: 12)).foregroundStyle(.secondary)
@@ -378,11 +401,13 @@ struct AIRequestHistoryView: View {
                     }
                 }.padding(20)
             }
-        }.frame(minWidth: 460, idealWidth: 640, minHeight: 380, idealHeight: 600).background(Palette.surface)
-            .task {
+        }.frame(minWidth: 460, idealWidth: 640, minHeight: 380, idealHeight: 600).readingGlass(radius: 22, prominent: true)
+            .task(id: store.bookID) {
+                savedRequests = []
                 guard let id = store.bookID else { return }
                 let records = try? await store.repository.aiRequestHistory(bookID: id)
-                let currentIDs = Set(state.value.requests.map { $0.id.uuidString })
+                guard store.bookID == id, !Task.isCancelled else { return }
+                let currentIDs = Set(currentRequests.map { $0.id.uuidString })
                 savedRequests = (records ?? []).filter { !currentIDs.contains($0.id) }
             }
     }

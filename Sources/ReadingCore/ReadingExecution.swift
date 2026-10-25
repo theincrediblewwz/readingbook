@@ -81,6 +81,9 @@ public struct ReadingAnalysisCheckpoint: Codable, Hashable, Identifiable, Sendab
     public var markdown: String
     public var evidence: [Evidence]
     public var updatedAt: Date
+    public var noChangesReasons: [String: String]? = nil
+    /// Computed by the host; never accepted from model tool arguments.
+    public var hostCitationSummary: String? = nil
 }
 
 /// A task-local host capability, never a JSON field or a persisted active chunk.
@@ -101,8 +104,37 @@ extension SmartReadingRuntime {
         guard allowed.isSubset(of: Set(session.unitIDs)) else { throw ReadingError.invalid("分析块超出本轮范围。") }
         let units = try selectedUnits(in: project, allowedUnitIDs: allowed).filter { !ReadingLedger.isDeferred(unitID: $0.id, in: project) && !isConfirmedBlank($0, in: project) }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        let planData = try encoder.encode(project.plan)
-        let fingerprint = try BookImporter.sha256(Data(try configuration.fingerprint().utf8) + planData)
+        // Worker counts and prose explaining a plan cannot invalidate completed
+        // reading. Actual source, enabled steps, focus and grouping still do.
+        var workConfiguration = configuration
+        workConfiguration.maximumConcurrentRequests = 1
+        workConfiguration.steps = configuration.enabledSteps
+        var workPlan = project.plan
+        workPlan?.rationale = ""; workPlan?.recommendedParallelism = nil
+        if configuration.granularity != .adaptive { workPlan?.recommendedGranularity = nil }
+        let directions = readingDirections(in: project)
+        let directionData = directions.isEmpty ? Data() : try JSONSerialization.data(withJSONObject: directions, options: [.sortedKeys])
+        let fingerprint = try BookImporter.sha256(Data("reading-work-v2|".utf8) + Data(try workConfiguration.fingerprint().utf8) + encoder.encode(workPlan) + directionData)
+        // 0.20 originally hashed the scheduling knobs too. Recognize only exact
+        // known old configurations, once per whole-book projection, keeping all
+        // source/steps/focus checks. Unknown historical rationale is not guessed.
+        var legacyFingerprints = Set<String>()
+        // Earlier 0.20 did not send confirmed method goals/focus to analysis.
+        // Its products survive, but cannot count as work using a new direction.
+        let newProductContract = !configuration.componentKinds.isEmpty || configuration.enabledSteps.contains { ["facts.extract", "reading.enrich", "citations.verify"].contains($0.actionID) }
+        if directions.isEmpty && (project.plan?.focus.isEmpty ?? true) && !newProductContract && !(session.analysisCheckpoints ?? []).isEmpty {
+            let hashes = try (1...5).map { count -> String in
+                var legacy = configuration; legacy.maximumConcurrentRequests = count
+                return try legacy.fingerprint()
+            }
+            let parallelismOptions: [Int?] = [nil, 1, 2, 3, 4, 5]
+            let plans = try parallelismOptions.map { count -> Data in
+                var legacy = project.plan; legacy?.recommendedParallelism = count
+                return try encoder.encode(legacy)
+            }
+            for hash in hashes { for plan in plans { legacyFingerprints.insert(try BookImporter.sha256(Data(hash.utf8) + plan)) } }
+        }
+        let checkpoints = Dictionary(grouping: session.analysisCheckpoints ?? [], by: \.unitIDs)
         let granularity = configuration.granularity == .adaptive ? (project.plan?.recommendedGranularity ?? .adaptive) : configuration.granularity
         var groups: [[SourceUnit]] = [], pending: [SourceUnit] = [], characters = 0
         for unit in units {
@@ -119,13 +151,20 @@ extension SmartReadingRuntime {
         return try groups.enumerated().map { index, group in
             let ids = group.map(\.id)
             let sourceKey = ids.map { $0 + ":" + (session.unitHashes[$0] ?? "") }.joined(separator: "|")
-            let id = "chunk-" + String(try BookImporter.sha256(Data((project.sourceHash + "|" + fingerprint + "|" + sourceKey).utf8)).prefix(48))
+            var id = "chunk-" + String(try BookImporter.sha256(Data((project.sourceHash + "|" + fingerprint + "|" + sourceKey).utf8)).prefix(48))
             let chapters = Set(group.map(\.chapter))
             let isChapterEnd = groups.dropFirst(index + 1).first.map { !chapters.contains($0.first?.chapter ?? "") } ?? true
             let stepIDs = configuration.enabledSteps.filter { $0.frequency == .chunk || ($0.frequency == .chapter && isChapterEnd) || ($0.frequency == .book && index == groups.count - 1) }.map(\.id)
+            var identity = fingerprint
+            if let previous = try checkpoints[ids]?.first(where: { checkpoint in
+                guard legacyFingerprints.contains(checkpoint.configurationHash), Set(checkpoint.completedStepIDs) == Set(stepIDs),
+                      ids.allSatisfy({ checkpoint.unitHashes[$0] == session.unitHashes[$0] }) else { return false }
+                let expected = "chunk-" + String(try BookImporter.sha256(Data((project.sourceHash + "|" + checkpoint.configurationHash + "|" + sourceKey).utf8)).prefix(48))
+                return checkpoint.id == expected
+            }) { id = previous.id; identity = previous.configurationHash }
             let pages = Array(Set(group.compactMap(\.page))).sorted()
             let title = pages.first.map { start in pages.last == start ? "第 \(start) 页" : "第 \(start)–\(pages.last ?? start) 页" } ?? group.first?.chapter ?? "本部分"
-            return ReadingAnalysisChunk(id: id, title: title, unitIDs: ids, configurationHash: fingerprint, stepIDs: stepIDs)
+            return ReadingAnalysisChunk(id: id, title: title, unitIDs: ids, configurationHash: identity, stepIDs: stepIDs)
         }
     }
     public static func isChunkComplete(_ chunk: ReadingAnalysisChunk, in project: BookProject) -> Bool {
@@ -137,6 +176,89 @@ extension SmartReadingRuntime {
     }
     public static func nextAnalysisChunk(in project: BookProject, allowedUnitIDs: Set<String>? = nil) throws -> ReadingAnalysisChunk? {
         try analysisChunks(in: project, allowedUnitIDs: allowedUnitIDs).first { !isChunkComplete($0, in: project) }
+    }
+    static func readingDirections(in project: BookProject) -> [[String: String]] {
+        (project.plan?.methodIDs ?? []).compactMap { id in
+            guard let method = project.methods.first(where: { $0.id == id }), !method.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return ["method": method.name, "goal": method.goal]
+        }
+    }
+    public static func analysisCheckpointNotes(_ checkpoint: ReadingAnalysisCheckpoint, in project: BookProject) -> [String] {
+        var notes: [String] = []
+        let steps = project.smartReading?.selection.execution?.steps ?? []
+        for (key, reason) in (checkpoint.noChangesReasons ?? [:]).sorted(by: { $0.key < $1.key }) {
+            let title: String
+            if key.hasPrefix("component:"), let kind = ComponentKind(rawValue: String(key.dropFirst(10))) { title = kind.title }
+            else { title = steps.first(where: { "step:" + $0.id == key })?.title ?? "阅读步骤" }
+            notes.append(title + "：" + reason)
+        }
+        if let summary = checkpoint.hostCitationSummary { notes.append(summary) }
+        return notes
+    }
+    private static func verifyAnalysisProducts(in project: BookProject, grant: ReadingAnalysisAuthority.Grant,
+                                               reasons: [String: String], submissionEvidence: [Evidence]) throws -> String? {
+        guard let configuration = project.smartReading?.selection.execution else { throw ReadingError.invalid("阅读方式已改变。") }
+        let steps = configuration.enabledSteps.filter { grant.chunk.stepIDs.contains($0.id) }, allowed = Set(grant.chunk.unitIDs)
+        let keys = Set(steps.map { "step:" + $0.id } + configuration.componentKinds.map { "component:" + $0.rawValue })
+        guard reasons.count <= 30, Set(reasons.keys).isSubset(of: keys), reasons.values.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 400 }) else {
+            throw ReadingError.invalid("无新增说明须逐项对应当前步骤或组件，每项不超过400字。")
+        }
+        let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func literal(_ quote: String, unitID: String) -> Bool {
+            guard !quote.isEmpty, let text = units[unitID]?.text, let range = text.range(of: quote, options: .literal) else { return false }
+            return text[range].utf8.elementsEqual(quote.utf8)
+        }
+        func exact(_ values: [Evidence]) -> Bool {
+            let local = values.filter { allowed.contains($0.unitID) }
+            return !local.isEmpty && local.allSatisfy { literal($0.quote, unitID: $0.unitID) }
+        }
+        let anchors = (project.readingExperience?.anchors ?? []).filter { allowed.contains($0.unitID) && literal($0.quote, unitID: $0.unitID) }
+        let anchorIDs = Set(anchors.map(\.id))
+        let mentioned = Set((project.readingExperience?.mentions ?? []).filter { anchorIDs.contains($0.anchorID) }.map(\.targetID))
+        let reuse = SavedKnowledgeReuse(project: project, currentUnitIDs: allowed)
+        let entities = project.entities.filter { (exact($0.evidence) || mentioned.contains($0.id)) && reuse?.admits($0.evidence) == true }
+        let events = project.events.filter { (exact($0.evidence) || mentioned.contains($0.id)) && reuse?.admits($0.evidence) == true }
+        let relations = project.relations.filter { exact($0.evidence) }, objectIDs = Set(entities.map(\.id) + events.map(\.id))
+        let hasLayers = (project.readingExperience?.layers ?? []).contains { !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.sourceAnchorIDs.isEmpty && Set($0.sourceAnchorIDs).isSubset(of: anchorIDs) }
+        let hasMentions = (project.readingExperience?.mentions ?? []).contains { anchorIDs.contains($0.anchorID) && objectIDs.contains($0.targetID) }
+        let hasFacts = !objectIDs.isEmpty || !relations.isEmpty
+        for step in steps {
+            let available = step.actionID == "facts.extract" ? hasFacts : step.actionID == "reading.enrich" ? hasLayers || hasMentions : true
+            guard available || reasons["step:" + step.id] != nil else {
+                throw ReadingError.invalid("“\(step.title)”尚无可核验产物或复用内容；不适用时请单独说明原因。")
+            }
+        }
+        for kind in configuration.componentKinds {
+            let available: Bool
+            switch kind {
+            case .cards, .knowledge: available = hasFacts
+            case .map: available = entities.contains { entity in
+                guard let latitude = entity.latitude, let longitude = entity.longitude else { return false }
+                return latitude.isFinite && longitude.isFinite && (-90...90).contains(latitude) && (-180...180).contains(longitude)
+            }
+            case .timeline:
+                let dated = events.contains { $0.startYear != nil || $0.endYear != nil }
+                let temporalAnchors = Set((project.temporalKnowledge?.anchors ?? []).filter { allowed.contains($0.unitID) && literal($0.quote, unitID: $0.unitID) }.map(\.id)).union(anchorIDs)
+                let temporal = (project.temporalKnowledge?.eventMetadata ?? []).contains { objectIDs.contains($0.eventID) && $0.extent?.start != nil && !$0.sourceAnchorIDs.isEmpty && Set($0.sourceAnchorIDs).isSubset(of: temporalAnchors) }
+                available = dated || temporal
+            case .mindmap: available = project.nodes.contains { objectIDs.contains($0.targetID) }
+            case .relations: available = !relations.isEmpty
+            default: available = false
+            }
+            guard available || reasons["component:" + kind.rawValue] != nil else {
+                throw ReadingError.invalid("“\(kind.title)”尚无可核验内容；请保存适用内容，或说明没有可靠数据的原因，不要补造坐标和年代。")
+            }
+        }
+        guard steps.contains(where: { $0.actionID == "citations.verify" }) else { return nil }
+        let evidence = project.entities.flatMap(\.evidence) + project.events.flatMap(\.evidence) + project.relations.flatMap(\.evidence) + submissionEvidence
+        let local = evidence.filter { allowed.contains($0.unitID) }
+        let entityIDs = Set(project.entities.map(\.id)), targetIDs = entityIDs.union(project.events.map(\.id))
+        guard local.allSatisfy({ !$0.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && literal($0.quote, unitID: $0.unitID) }),
+              project.relations.allSatisfy({ targetIDs.contains($0.fromID) && targetIDs.contains($0.toID) }),
+              project.events.allSatisfy({ Set($0.placeIDs + $0.participantIDs).isSubset(of: entityIDs) }) else {
+            throw ReadingError.invalid("宿主引用核验未通过：存在不匹配引文或失效对象关联，未标记该步完成。")
+        }
+        return "宿主核对了本部分\(local.count)条已保存引文及对象关联；只验证来源一致性，不代表分析质量或逐段核对完成。"
     }
     /// Standard authority is granted by readChunk, not merely by a stored mode.
     public static func requireAnalysisAuthority(unitIDs: Set<String>, in project: BookProject) throws {
@@ -153,8 +275,9 @@ extension SmartReadingRuntime {
         if configuration.precision == .close { try ReadingLedger.requireComplete(unitIDs: unitIDs, in: project) }
     }
     static func completeAnalysis(arguments: Data, in project: inout BookProject, allowedUnitIDs: Set<String>) throws -> String {
-        struct Submission: Decodable { var unitIDs: [String]; var markdown: String; var evidence: [Evidence]; var completedStepIDs: [String] }
-        guard let raw = try JSONSerialization.jsonObject(with: arguments) as? [String: Any], Set(raw.keys) == Set(["unitIDs", "markdown", "evidence", "completedStepIDs"]) else { throw ReadingError.invalid("分析完成参数不完整。") }
+        struct Submission: Decodable { var unitIDs: [String]; var markdown: String; var evidence: [Evidence]; var completedStepIDs: [String]; var noChangesReasons: [String: String]? }
+        let required: Set<String> = ["unitIDs", "markdown", "evidence", "completedStepIDs"]
+        guard let raw = try JSONSerialization.jsonObject(with: arguments) as? [String: Any], required.isSubset(of: Set(raw.keys)), Set(raw.keys).isSubset(of: required.union(["noChangesReasons"])) else { throw ReadingError.invalid("分析完成参数不完整。") }
         try requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
         guard let grant = ReadingAnalysisAuthority.current else { throw ReadingError.invalid("标准分析必须由宿主当前原文块发起。") }
         let value = try JSONDecoder().decode(Submission.self, from: arguments)
@@ -165,9 +288,13 @@ extension SmartReadingRuntime {
               value.evidence.allSatisfy({ evidence in allowedUnitIDs.contains(evidence.unitID) && !evidence.quote.isEmpty && evidence.quote.count <= 32_768 && project.units.first(where: { $0.id == evidence.unitID })?.text.contains(evidence.quote) == true }) else {
             throw ReadingError.invalid("分析范围、步骤或原文引用未通过核验；未增加已分析覆盖。")
         }
-        let checkpoint = ReadingAnalysisCheckpoint(id: grant.chunk.id, unitIDs: grant.chunk.unitIDs, unitHashes: grant.unitHashes,
+        let reasons = value.noChangesReasons ?? [:]
+        let hostSummary = try verifyAnalysisProducts(in: project, grant: grant, reasons: reasons, submissionEvidence: value.evidence)
+        var checkpoint = ReadingAnalysisCheckpoint(id: grant.chunk.id, unitIDs: grant.chunk.unitIDs, unitHashes: grant.unitHashes,
             configurationHash: grant.chunk.configurationHash, completedStepIDs: grant.chunk.stepIDs, markdown: value.markdown,
             evidence: value.evidence, updatedAt: Date())
+        checkpoint.noChangesReasons = reasons.isEmpty ? nil : reasons
+        checkpoint.hostCitationSummary = hostSummary
         var records = project.smartReading?.analysisCheckpoints ?? []
         if records.contains(where: { $0.id == checkpoint.id }) { return "本部分的分析已保存，保留已有结果。" }
         guard records.count < 100_000 else { throw ReadingError.invalid("分析检查点数量达到上限。") }
@@ -182,7 +309,13 @@ struct StandardReadingToolPlugin: ReadingToolPlugin {
     func register(in registry: inout PluginToolRegistry) throws {
         let id: [String: Any] = ["type": "string", "minLength": 1, "maxLength": 128]
         let schema: [String: Any] = ["type": "function", "function": ["name": "reading_analysis", "description": "提交宿主本次原文块的自然阅读分析。unitIDs和completedStepIDs须与宿主清单完全一致，每个原文单元至少有一条连续精确引文；实际组件内容须先调用知识/阅读层工具保存。只增加标准分析覆盖，绝不伪造逐段复述或精读完成。", "parameters": ["type": "object", "additionalProperties": false, "properties": ["unitIDs": ["type": "array", "items": id, "minItems": 1, "maxItems": 12], "markdown": ["type": "string", "minLength": 1, "maxLength": 16000], "completedStepIDs": ["type": "array", "items": id, "maxItems": 24], "evidence": ["type": "array", "minItems": 1, "maxItems": 128, "items": ["type": "object", "additionalProperties": false, "properties": ["unitID": id, "quote": ["type": "string", "minLength": 1, "maxLength": 32768]], "required": ["unitID", "quote"]]]], "required": ["unitIDs", "markdown", "completedStepIDs", "evidence"]]]]
-        try registry.register(RegisteredReadingTool(pluginID: info.id, schema: schema, phases: [.reading]) { data, project, allowed in
+        var completionSchema = schema, function = schema["function"] as! [String: Any]
+        var parameters = function["parameters"] as! [String: Any], properties = parameters["properties"] as! [String: Any]
+        properties["noChangesReasons"] = ["type": "object", "maxProperties": 30, "additionalProperties": ["type": "string", "minLength": 1, "maxLength": 400]]
+        parameters["properties"] = properties; function["parameters"] = parameters
+        function["description"] = (function["description"] as! String) + " 已启用的要素/伴读步骤和所选组件须有实际内容或有来源的复用；无适用数据时在noChangesReasons逐项用step:<步骤ID>或component:<组件kind>说明，不制造坐标或年代。引用核验由宿主计算，不能传hostCitationSummary。"
+        completionSchema["function"] = function
+        try registry.register(RegisteredReadingTool(pluginID: info.id, schema: completionSchema, phases: [.reading]) { data, project, allowed in
             try SmartReadingRuntime.completeAnalysis(arguments: data, in: &project, allowedUnitIDs: allowed)
         })
         let scope: [String: Any] = ["type": "string", "enum": ["chapter", "book"]]

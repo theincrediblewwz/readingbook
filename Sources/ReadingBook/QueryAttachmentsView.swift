@@ -76,7 +76,7 @@ struct QueryMemoryInspector: View {
     var body: some View {
         let memory = store.currentQueryMemory
         let sourceIDs = Set(((memory?.requirements ?? []) + (memory?.conclusions ?? []) + (memory?.unresolved ?? [])).flatMap(\.sources))
-        let messages = Dictionary(store.currentQueryHistory.filter { sourceIDs.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let messages = Dictionary(store.currentQueryContextHistory.filter { sourceIDs.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Label("对话记忆", systemImage: "brain.head.profile").font(.system(size: 20, weight: .semibold))

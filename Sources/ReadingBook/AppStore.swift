@@ -76,6 +76,7 @@ import ReadingCore
     @Published var readingExperienceError: String?
     @Published var showingLibrarySearch = false
     @Published var readingContextDocumentID: String?
+    @Published var queryHistoryMessageID: String?
     var readingContextCacheKey: ReadingContext?
     var readingContextCache = ReadingContextItems()
     @Published var projectRevision = 0
@@ -216,6 +217,7 @@ import ReadingCore
         navigationGeneration += 1; documentGeneration += 1
         pdfNavigationToken += 1
         pdfPasswordRequest = nil
+        queryHistoryMessageID = nil
         let generation = navigationGeneration
         bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil; documentBaseHash = nil
         loadWorkspaceMemory()
@@ -373,15 +375,19 @@ import ReadingCore
         guard let current = book, canStartQuery, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, providerReady else { return }
         guard question.count <= 4000 else { errorMessage = "问题最多 4000 字，请缩短后再发送；输入内容保留。"; return }
         let context = queryReadingContext, scope = queryScope, preferences = currentQueryPreferences
-        let history = queryHistory(in: current, preferences: preferences)
         let documentIDs = queryDocumentIDs.map { Array($0).sorted() }
         let attachedDocumentIDs = scope == .notes ? [] : queryAttachedDocumentIDs.sorted()
         let authorizedNodeIDs = preferences.interaction == .functional ? queryAuthorizedNodeIDs.sorted() : []
         let snapshot: ReadingQuerySnapshot
-        do { snapshot = try currentQueryTaskSnapshot() }
+        let chatContext: ReadingChatContext
+        do {
+            snapshot = try currentQueryTaskSnapshot()
+            chatContext = try ReadingChatContext(snapshot: snapshot, avoidsSpoilers: preferences.avoidsSpoilers)
+        }
         catch { errorMessage = error.localizedDescription; return }
+        let history = queryContextHistory(in: current, preferences: preferences, snapshot: snapshot)
         let memoryEnabled = queryMemoryEnabled
-        let memory = memoryEnabled ? currentQueryMemory : nil
+        let memory = memoryEnabled ? queryMemory(for: snapshot, history: history) : nil
         let repository = repository
         var requestSettings = settings
         requestSettings.transportSessionID = "readingbook-" + current.id + "-chat-" + preferences.contextIdentity
@@ -395,6 +401,7 @@ import ReadingCore
         lastQuestionContext = snapshot.displayTitle; queryDisclosure = ""; queryRetryQuestion = nil
         var userMessage = ChatMessage(role: "user", content: question)
         userMessage.conversationMode = preferences.interaction; userMessage.answerStyle = preferences.style
+        userMessage.readingContext = chatContext
         let sentMessage = userMessage
         let previousChangeIDs = Set(current.controlledChanges?.receipts.map(\.operationID) ?? [])
         queryTask = Task {
@@ -428,6 +435,7 @@ import ReadingCore
                     preferences: preferences)
                 try Task.checkCancellation()
                 answer.message.conversationMode = preferences.interaction; answer.message.answerStyle = preferences.style
+                answer.message.readingContext = chatContext
                 var result = questionBase; result.chats.append(answer.message)
                 markAIProgressSaving(aiRunID)
                 let committed = try await repository.commitAIResult(base: questionBase, result: result, operationID: "answer-" + answer.message.id)
@@ -436,9 +444,11 @@ import ReadingCore
                 if memoryEnabled { saveQueryMemory(answer.memory, for: snapshot) }
                 if !isSmartReadingRunning { activity = "回答已生成，可以选一段记入笔记。" }
             } catch {
-                finishAIProgress(aiRunID, error: error)
+                let cancelled = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
+                finishAIProgress(aiRunID, error: cancelled ? CancellationError() : error)
                 queryRetryQuestion = question
-                if !(error is CancellationError) && (error as? URLError)?.code != .cancelled { errorMessage = error.localizedDescription }
+                if cancelled { queryDisclosure = "已停止回答，已发送的问题保留。" }
+                else { errorMessage = error.localizedDescription }
                 let saved = book?.id == current.id ? (book?.controlledChanges?.receipts.filter { !previousChangeIDs.contains($0.operationID) && $0.undoneAt == nil }.count ?? 0) : 0
                 if saved > 0 { queryDisclosure = "回答未完成；已保存的授权整理可在记录中查看或撤销。" }
                 requestsUsed = await sharedAIRequests.requestsUsed
@@ -486,6 +496,12 @@ import ReadingCore
                 if !readingExperienceIndex.anchors.contains(where: { $0.id == anchor.id }) { readingExperienceIndex.anchors.append(anchor) }
                 focusedReadingAnchorID = anchor.id
             }
+        }
+        else if kind == "message" {
+            guard book?.chats.contains(where: { $0.id == id }) == true else { errorMessage = "引用的历史对话不存在于这本书中。"; return }
+            if route == "reader" { readingCompanionVisible = true; readingCompanionTab = "chat" }
+            else { route = "query" }
+            queryHistoryMessageID = id
         }
         else if kind == "document", let document = book?.documents.first(where: { $0.id == id }) { await openDocument(document) }
         else { errorMessage = "引用的原文或文档不存在于当前书籍。" }

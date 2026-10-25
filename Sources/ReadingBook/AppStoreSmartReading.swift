@@ -38,6 +38,7 @@ import ReadingCore
         activity = "正在准备阅读范围…"
         readingTask = Task {
             let aiRunID = await beginAIProgress(title: "制定阅读方案", backgroundReading: true)
+            var committedSessionID: String?
             do {
                 var session = try await freezeReadingSelection(selection, project: original, currentUnitID: selectedID)
                 let ids = Set(session.unitIDs)
@@ -56,6 +57,7 @@ import ReadingCore
                 selection.execution?.configureRequestedViews(in: &candidate)
                 try Task.checkCancellation()
                 let frozen = try await repository.commitAIResult(base: original, result: candidate, operationID: "reading-scope-" + session.id)
+                committedSessionID = session.id
                 publish(frozen)
                 updateAIProgressDetail(aiRunID, detail: session.scopeTitle)
                 await readingReader.resetBudget()
@@ -69,7 +71,7 @@ import ReadingCore
                 publish(saved); smartReadingPlanReady = true
                 activity = "阅读方案已生成，请确认方法与组件。"
                 finishAIProgress(aiRunID)
-            } catch { finishAIProgress(aiRunID, error: error); await finishSmartReadingAfterError(error, bookID: original.id) }
+            } catch { finishAIProgress(aiRunID, error: error); await finishSmartReadingAfterError(error, bookID: original.id, sessionID: committedSessionID) }
             requestsUsed = await sharedAIRequests.requestsUsed
             activeReadingUnitID = nil; isSmartReadingRunning = false; readingTask = nil
         }
@@ -96,7 +98,7 @@ import ReadingCore
                 startReading()
             } catch {
                 isCommittingLocalWrite = false
-                await finishSmartReadingAfterError(error, bookID: original.id)
+                await finishSmartReadingAfterError(error, bookID: original.id, sessionID: session.id)
                 isSmartReadingRunning = false; readingTask = nil
             }
         }
@@ -110,6 +112,7 @@ import ReadingCore
         let selectedID = selectedUnitID
         isSmartReadingRunning = true; activity = "正在调整本轮范围…"
         readingTask = Task {
+            var committedSessionID: String?
             do {
                 try PluginEngine.requireActivePlan(in: original)
                 var adjusted = selection; adjusted.preferredMethodIDs = []
@@ -121,10 +124,11 @@ import ReadingCore
                 adjusted.execution?.configureRequestedViews(in: &candidate)
                 try Task.checkCancellation()
                 let saved = try await repository.commitAIResult(base: original, result: candidate, operationID: "reading-rescope-" + session.id)
+                committedSessionID = session.id
                 publish(saved); smartReadingPlanReady = false
                 isSmartReadingRunning = false; readingTask = nil; startReading()
             } catch {
-                await finishSmartReadingAfterError(error, bookID: original.id)
+                await finishSmartReadingAfterError(error, bookID: original.id, sessionID: committedSessionID)
                 isSmartReadingRunning = false; readingTask = nil
             }
         }
@@ -185,7 +189,7 @@ import ReadingCore
                 latest.smartReading?.lastMessage = message
                 let saved = try await repository.commitAIResult(base: base, result: latest, operationID: "reading-finish-" + UUID().uuidString)
                 publish(saved); activity = message; finishAIProgress(aiRunID)
-            } catch { finishAIProgress(aiRunID, error: error); await finishSmartReadingAfterError(error, bookID: readingBookID) }
+            } catch { finishAIProgress(aiRunID, error: error); await finishSmartReadingAfterError(error, bookID: readingBookID, sessionID: sessionID) }
             requestsUsed = await sharedAIRequests.requestsUsed
             activeReadingUnitID = nil; isSmartReadingRunning = false; readingTask = nil
         }
@@ -224,18 +228,25 @@ import ReadingCore
     private func requireSmartReadingSession(_ project: BookProject, bookID: String, sessionID: String) throws {
         guard project.id == bookID, let session = project.smartReading, session.id == sessionID, session.sourceHash == project.sourceHash else { throw CancellationError() }
     }
-    private func finishSmartReadingAfterError(_ error: Error, bookID: String) async {
-        let cancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
+    private func finishSmartReadingAfterError(_ error: Error, bookID: String, sessionID: String?) async {
+        let cancelled = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
         let budget = error is ReadingWorkflowBudgetPause || error.localizedDescription.contains("预算")
         let message = cancelled ? "已暂停，已保存的内容保留。" : budget ? "本轮预算已用完，已保存内容保留；继续时开始新一轮。" : String(error.localizedDescription.prefix(2000))
-        if let base = book, base.id == bookID, base.smartReading != nil {
-            var current = base
-            current.smartReading?.status = cancelled || budget ? .paused : .failed
-            current.smartReading?.updatedAt = Date(); current.smartReading?.lastMessage = message
-            do { let saved = try await repository.commitAIResult(base: base, result: current, operationID: "reading-state-" + UUID().uuidString); publish(saved) }
-            catch { errorMessage = "状态保存失败，已有内容保留：" + error.localizedDescription }
+        var finalMessage = message
+        if let sessionID, book?.id == bookID, book?.smartReading?.id == sessionID {
+            let owner = repository, originalLibrary = libraryRootURL
+            if cancelled { activity = "正在保存暂停状态…" }
+            do {
+                let saved = try await owner.checkpointReadingStop(bookID: bookID, sessionID: sessionID, failed: !cancelled && !budget, message: message)
+                guard libraryRootURL == originalLibrary, book?.id == bookID, book?.smartReading?.id == sessionID else { return }
+                if let saved { publish(saved) }
+                else { finalMessage = "该轮任务已结束，当前阅读安排保持原样。" }
+            } catch {
+                finalMessage = cancelled ? "已停止；暂停状态暂未保存，已生成内容保留。" : "任务已停止；状态暂未保存，已生成内容保留。"
+                errorMessage = finalMessage
+            }
         }
-        activity = message
+        activity = finalMessage
         if !cancelled && !budget { handle(error) }
     }
 }

@@ -159,6 +159,9 @@ extension ReadingQuerySession {
             value.evidence = local
             return value
         }
+        let visible = ReadingSpoilerProjection.Context(project: project, allowedUnitIDs: snapshot.scope == .book ? nil : Set(snapshot.unitIDs))
+        project.entities = project.entities.compactMap { visible.entity($0) }
+        project.events = project.events.compactMap { visible.event($0) }
         project.relations = project.relations.filter { permitted($0.evidence) }
         project.documents = snapshot.documents
         let anchors = ((project.readingExperience?.anchors ?? []) + (project.temporalKnowledge?.anchors ?? [])).filter {

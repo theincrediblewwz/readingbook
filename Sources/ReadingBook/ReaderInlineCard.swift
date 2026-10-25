@@ -3,7 +3,7 @@ import ReadingCore
 
 /// The popup is a disposable projection of existing records, never a second
 /// writer and never a reason to send a provider request.
-struct ReaderInlineContent {
+struct ReaderInlineContent: Sendable {
     let anchor: SourceAnchor
     let title: String
     let kind: String
@@ -16,7 +16,9 @@ struct ReaderInlineContent {
               boundary.allowedUnitIDs?.contains(anchor.unitID) != false,
               let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: book) else { return nil }
         let target = index.mentions.first(where: { $0.anchorID == id })?.targetID ?? book.readingExperience?.mentions.first(where: { $0.anchorID == id })?.targetID
-        let entity = book.entities.first { $0.id == target }, event = book.events.first { $0.id == target }
+        let projection = ReadingSpoilerProjection.Context(project: book, allowedUnitIDs: boundary.allowedUnitIDs)
+        let entity = book.entities.first { $0.id == target }.flatMap { projection.entity($0) }
+        let event = book.events.first { $0.id == target }.flatMap { projection.event($0) }
         let state = book.readingExperience ?? ReadingExperienceState()
         let units = Dictionary(book.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let anchors = Dictionary(state.anchors.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -56,25 +58,27 @@ struct ReaderInlineContent {
         }
         return Self(anchor: anchor, title: title, kind: entity.flatMap { value in book.types.first(where: { $0.id == value.typeID })?.name } ?? (event == nil ? "译注" : "事件"),
             markdown: markdown, objectID: objectID, context: context,
-            composition: configured ?? contextualComposition(objectID: objectID, unitID: anchor.unitID, book: book, boundary: boundary))
+            composition: configured ?? contextualComposition(objectID: objectID, unitID: anchor.unitID, book: book, projection: projection))
     }
-    private static func contextualComposition(objectID: String?, unitID: String, book: BookProject, boundary: KnowledgeReadBoundary) -> ViewDefinition? {
+    private static func contextualComposition(objectID: String?, unitID: String, book: BookProject, projection: ReadingSpoilerProjection.Context) -> ViewDefinition? {
         guard let objectID else { return nil }
-        let events = book.events.filter { event in
-            (event.id == objectID || event.participantIDs.contains(objectID)) && event.evidence.contains { $0.unitID == unitID }
-                && (boundary.allowedUnitIDs.map { allowed in event.evidence.allSatisfy { allowed.contains($0.unitID) } } ?? true)
-        }
+        let events = book.events.filter { ($0.id == objectID || $0.participantIDs.contains(objectID)) && $0.evidence.contains { $0.unitID == unitID } }
+            .compactMap { projection.event($0) }
+            .filter { $0.id == objectID || $0.participantIDs.contains(objectID) }
         let places = Set(events.flatMap(\.placeIDs) + [objectID])
-        let hasMap = book.entities.contains { places.contains($0.id) && $0.latitude != nil && $0.longitude != nil && $0.evidence.contains { $0.unitID == unitID } }
+        let visiblePlaces = book.entities.filter { places.contains($0.id) && $0.evidence.contains { $0.unitID == unitID } }
+            .compactMap { projection.entity($0) }
+        let hasMap = visiblePlaces.contains { $0.latitude != nil && $0.longitude != nil }
         let hasTime = events.contains { $0.startYear != nil }
         var sources: [CompositionDataSource] = [], parts: [CompositionPart] = [], layout: [CompositionLayoutNode] = []
         if hasTime {
-            sources.append(CompositionDataSource(id: "inline-events", collection: .events, relation: .events, sort: .time, limit: 12))
+            let relation: CompositionSelectionRelation = book.events.contains(where: { $0.id == objectID }) ? .selected : .events
+            sources.append(CompositionDataSource(id: "inline-events", collection: .events, relation: relation, sort: .time, limit: 12))
             parts.append(CompositionPart(id: "inline-time", primitive: .timeline, sourceID: "inline-events", title: "与此相关的时间"))
             layout.append(CompositionLayoutNode(id: "inline-time-node", kind: .part, partID: "inline-time"))
         }
         if hasMap {
-            sources.append(CompositionDataSource(id: "inline-places", collection: .objects, relation: book.entities.contains(where: { $0.id == objectID && $0.latitude != nil }) ? .selected : .places, limit: 12))
+            sources.append(CompositionDataSource(id: "inline-places", collection: .objects, relation: visiblePlaces.contains(where: { $0.id == objectID && $0.latitude != nil }) ? .selected : .places, limit: 12))
             parts.append(CompositionPart(id: "inline-map", primitive: .map, sourceID: "inline-places", title: "书中位置"))
             layout.append(CompositionLayoutNode(id: "inline-map-node", kind: .part, partID: "inline-map"))
         }
@@ -105,7 +109,10 @@ struct ReaderInlineContent {
         task?.cancel(); pendingID = value.id
         task = Task { [weak self] in
             if !value.activated { do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return } }
-            guard !Task.isCancelled, let self, let content = ReaderInlineContent.freeze(value.id, book: book, index: index, boundary: boundary) else { return }
+            guard !Task.isCancelled else { return }
+            let worker = Task.detached(priority: .userInitiated) { ReaderInlineContent.freeze(value.id, book: book, index: index, boundary: boundary) }
+            let frozen = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+            guard !Task.isCancelled, let self, let content = frozen else { return }
             self.content = content; self.hover = value; self.pinned = value.activated; self.pendingID = nil
         }
     }
@@ -186,6 +193,14 @@ struct ReaderInlineCard: View {
                 .environment(\.markdownReadingStyle, "companion")
                 .onHover { state.pointer($0) }.onChange(of: content.anchor.id) { _, _ in showsComposition = false }
                 .position(x: placement.midX, y: placement.midY).workspaceChromeBounds("reader-inline")
+        } else if let content = state.content, state.pinned {
+            // A click must still reach its saved content when no safe popup
+            // slot exists. Reuse the existing companion instead of covering
+            // source text, moving other panels or sending a model request.
+            Color.clear.frame(width: 0, height: 0).task(id: content.anchor.id) {
+                store.sourceDecorationTapped(content.anchor.id)
+                state.clear()
+            }
         }
     }
 }

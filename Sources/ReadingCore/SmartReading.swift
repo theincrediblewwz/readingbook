@@ -125,6 +125,17 @@ public struct SmartReadingProgressCache: Sendable {
 }
 
 public enum SmartReadingRuntime {
+    /// A contextual selection follows the currently opened source only when
+    /// explicitly starting a new scope, never by silently widening a running one.
+    public static func selectionMatchesFrozenContext(_ selection: SmartReadingSelection, in project: BookProject, currentUnitID: String?) -> Bool {
+        guard let session = project.smartReading, session.selection == selection else { return false }
+        switch selection.scope {
+        case .currentPage, .currentChapter:
+            guard let currentUnitID else { return false }
+            return session.unitIDs.contains(currentUnitID)
+        case .wholeBook, .pageRange: return true
+        }
+    }
     public static func freeze(_ selection: SmartReadingSelection, in project: BookProject, currentUnitID: String?) throws -> SmartReadingSession {
         try selection.execution?.validate()
         let ordered = project.units.sorted { $0.order == $1.order ? $0.id < $1.id : $0.order < $1.order }
@@ -167,6 +178,11 @@ public enum SmartReadingRuntime {
                   Set(checkpoint.unitHashes.keys) == Set(checkpoint.unitIDs), checkpoint.configurationHash.count == 64,
                   checkpoint.completedStepIDs.count <= 24, Set(checkpoint.completedStepIDs).count == checkpoint.completedStepIDs.count,
                   !checkpoint.markdown.isEmpty, checkpoint.markdown.count <= 16_000,
+                  (checkpoint.noChangesReasons?.count ?? 0) <= 30,
+                  (checkpoint.noChangesReasons ?? [:]).allSatisfy({ key, reason in
+                      key.range(of: "^(step:[A-Za-z0-9_.-]{1,128}|component:(cards|map|timeline|mindmap|relations|knowledge))$", options: .regularExpression) != nil && !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && reason.count <= 400
+                  }),
+                  checkpoint.hostCitationSummary.map({ !$0.isEmpty && $0.count <= 1000 }) ?? true,
                   checkpoint.updatedAt.timeIntervalSince1970.isFinite, (1...128).contains(checkpoint.evidence.count),
                   Set(checkpoint.evidence.map(\.unitID)) == Set(checkpoint.unitIDs),
                   checkpoint.unitIDs.allSatisfy({ allUnits[$0] != nil && checkpoint.unitHashes[$0]?.count == 64 }),

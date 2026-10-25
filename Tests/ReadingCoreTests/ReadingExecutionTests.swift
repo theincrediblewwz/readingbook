@@ -20,8 +20,13 @@ final class ReadingExecutionTests: XCTestCase {
         return ReadingAnalysisAuthority.Grant(bookID: project.id, sessionID: session.id, sourceHash: project.sourceHash,
             chunk: chunk, unitHashes: session.unitHashes.filter { chunk.unitIDs.contains($0.key) })
     }
-    private func completion(_ chunk: ReadingAnalysisChunk, in project: BookProject) throws -> Data {
-        try JSONSerialization.data(withJSONObject: ["unitIDs": chunk.unitIDs, "completedStepIDs": chunk.stepIDs,
+    private func completion(_ chunk: ReadingAnalysisChunk, in project: BookProject, noChangesReasons: [String: String]? = nil) throws -> Data {
+        let configuration = project.smartReading?.selection.execution
+        var defaults: [String: String] = [:]
+        for step in configuration?.enabledSteps ?? [] where chunk.stepIDs.contains(step.id) && ["facts.extract", "reading.enrich"].contains(step.actionID) { defaults["step:" + step.id] = "该测试原文没有本步需要补充的内容。" }
+        for kind in configuration?.componentKinds ?? [] { defaults["component:" + kind.rawValue] = "该测试原文没有可靠的适用数据。" }
+        return try JSONSerialization.data(withJSONObject: ["unitIDs": chunk.unitIDs, "completedStepIDs": chunk.stepIDs,
+            "noChangesReasons": noChangesReasons ?? defaults,
             "markdown": "这一部分写两人相遇，故事继续向前。", "evidence": chunk.unitIDs.map { id in
                 ["unitID": id, "quote": project.units.first(where: { $0.id == id })!.text]
             }])
@@ -243,5 +248,132 @@ final class ReadingExecutionTests: XCTestCase {
         let pageValue = try XCTUnwrap(JSONSerialization.jsonObject(with: page) as? [String: Any])
         XCTAssertEqual((pageValue["items"] as? [[String: Any]])?.count, 1)
         XCTAssertThrowsError(try reviewCall("analysis_read", ["scope": "book", "checkpointIDs": Array(repeating: chunks[0].id, count: 4)], chunk: chunks[2], project: &value))
+    }
+
+    func testSchedulingAndRationaleChangesReuseAnalysisButWorkChangesInvalidateIt() throws {
+        var value = try project(.init(granularity: .page, maximumConcurrentRequests: 1))
+        value.plan?.recommendedParallelism = 1; value.plan?.rationale = "先选一个合适的方法。"
+        let first = try XCTUnwrap(SmartReadingRuntime.nextAnalysisChunk(in: value))
+        let authorization = try grant(first, in: value)
+        try ReadingAnalysisAuthority.$current.withValue(authorization) {
+            _ = try SmartReadingRuntime.completeAnalysis(arguments: completion(first, in: value), in: &value, allowedUnitIDs: Set(first.unitIDs))
+        }
+        value.smartReading?.selection.execution?.maximumConcurrentRequests = 5
+        value.plan?.recommendedParallelism = 4; value.plan?.rationale = "相同方法换一种说明。"
+        let rescheduled = try XCTUnwrap(SmartReadingRuntime.analysisChunks(in: value).first)
+        XCTAssertEqual(rescheduled, first)
+        XCTAssertTrue(SmartReadingRuntime.isChunkComplete(rescheduled, in: value))
+        XCTAssertEqual(try SmartReadingRuntime.nextAnalysisChunk(in: value)?.unitIDs, ["u3"])
+        var changed = value
+        changed.smartReading?.selection.execution?.steps[0].title += "并比较前后的因果变化"
+        let newWork = try XCTUnwrap(SmartReadingRuntime.analysisChunks(in: changed).first)
+        XCTAssertNotEqual(newWork.id, first.id)
+        XCTAssertFalse(SmartReadingRuntime.isChunkComplete(newWork, in: changed))
+        changed = value; changed.plan?.focus = ["新的关注问题"]
+        XCTAssertNotEqual(try SmartReadingRuntime.analysisChunks(in: changed).first?.id, first.id)
+        XCTAssertEqual(value.smartReading?.analysisCheckpoints?.count, 1, "不改写旧检查点或旧分析。")
+    }
+
+    func testLegacyAnalysisMatchesOnlyProvableSameWorkAcrossSchedulingCaps() throws {
+        var value = try project(.init(granularity: .page, steps: [ReadingExecutionStep(id: "base", title: "阅读这一部分")], maximumConcurrentRequests: 1))
+        // A prior checkpoint cannot prove it used newly supplied method goals.
+        for index in value.methods.indices where value.plan?.methodIDs.contains(value.methods[index].id) == true { value.methods[index].goal = "" }
+        value.plan?.recommendedParallelism = 2; value.plan?.rationale = "旧版方案说明。"
+        let first = try XCTUnwrap(SmartReadingRuntime.analysisChunks(in: value).first)
+        let session = try XCTUnwrap(value.smartReading), configuration = try XCTUnwrap(session.selection.execution)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let legacy = try BookImporter.sha256(Data(try configuration.fingerprint().utf8) + encoder.encode(value.plan))
+        let sourceKey = first.unitIDs.map { $0 + ":" + session.unitHashes[$0]! }.joined(separator: "|")
+        let legacyID = "chunk-" + String(try BookImporter.sha256(Data((value.sourceHash + "|" + legacy + "|" + sourceKey).utf8)).prefix(48))
+        let checkpoint = ReadingAnalysisCheckpoint(id: legacyID, unitIDs: first.unitIDs,
+            unitHashes: session.unitHashes.filter { first.unitIDs.contains($0.key) }, configurationHash: legacy,
+            completedStepIDs: first.stepIDs, markdown: "旧版已经保存的内容。",
+            evidence: first.unitIDs.map { id in Evidence(unitID: id, quote: value.units.first { $0.id == id }!.text) }, updatedAt: Date())
+        value.smartReading?.analysisCheckpoints = [checkpoint]
+        value.smartReading?.selection.execution?.maximumConcurrentRequests = 5; value.plan?.recommendedParallelism = 4
+        let compatible = try XCTUnwrap(SmartReadingRuntime.analysisChunks(in: value).first)
+        XCTAssertEqual(compatible.id, legacyID); XCTAssertEqual(compatible.configurationHash, legacy)
+        XCTAssertTrue(SmartReadingRuntime.isChunkComplete(compatible, in: value))
+        var changed = value; changed.smartReading?.selection.execution?.steps[0].title = "不同的实际工作"
+        XCTAssertNotEqual(try SmartReadingRuntime.analysisChunks(in: changed).first?.id, legacyID)
+        changed = value; changed.plan?.focus = ["新增阅读目标"]
+        XCTAssertNotEqual(try SmartReadingRuntime.analysisChunks(in: changed).first?.id, legacyID)
+        changed = value; changed.plan?.rationale = "无法证明是哪一份历史说明。"
+        XCTAssertNotEqual(try SmartReadingRuntime.analysisChunks(in: changed).first?.id, legacyID, "不猜测未保存的旧定义来强行复用。")
+        XCTAssertEqual(value.smartReading?.analysisCheckpoints, [checkpoint])
+    }
+
+    func testCurrentPageAndChapterSelectionsNoticeCursorLeavingFrozenManifest() throws {
+        var value = try project()
+        let page = SmartReadingSelection(scope: .currentPage, execution: .init())
+        value.smartReading = try SmartReadingRuntime.freeze(page, in: value, currentUnitID: "u1")
+        XCTAssertTrue(SmartReadingRuntime.selectionMatchesFrozenContext(page, in: value, currentUnitID: "u2"), "同一页拆成多个源单元时仍是原范围。")
+        XCTAssertFalse(SmartReadingRuntime.selectionMatchesFrozenContext(page, in: value, currentUnitID: "u3"), "翻到新页再选当前页应重新冻结，而非继续旧页。")
+        let chapter = SmartReadingSelection(scope: .currentChapter, execution: .init())
+        value.smartReading = try SmartReadingRuntime.freeze(chapter, in: value, currentUnitID: "u1")
+        XCTAssertTrue(SmartReadingRuntime.selectionMatchesFrozenContext(chapter, in: value, currentUnitID: "u3"))
+        XCTAssertFalse(SmartReadingRuntime.selectionMatchesFrozenContext(chapter, in: value, currentUnitID: "u4"))
+        XCTAssertEqual(value.smartReading?.unitIDs, ["u1", "u2", "u3"], "移动光标不能偷偷改变正在执行的旧范围。")
+        let whole = SmartReadingSelection(execution: .init())
+        value.smartReading = try SmartReadingRuntime.freeze(whole, in: value, currentUnitID: "u1")
+        XCTAssertTrue(SmartReadingRuntime.selectionMatchesFrozenContext(whole, in: value, currentUnitID: "u4"))
+    }
+
+    func testConfiguredProductsCannotBeClaimedByCompletionIDsAlone() throws {
+        var value = try project(.init(granularity: .page, componentKinds: [.map, .mindmap]))
+        let chunk = try XCTUnwrap(SmartReadingRuntime.nextAnalysisChunk(in: value)), authorization = try grant(chunk, in: value)
+        try ReadingAnalysisAuthority.$current.withValue(authorization) {
+            XCTAssertThrowsError(try SmartReadingRuntime.completeAnalysis(arguments: completion(chunk, in: value, noChangesReasons: [:]), in: &value, allowedUnitIDs: Set(chunk.unitIDs)))
+        }
+        XCTAssertTrue((value.smartReading?.analysisCheckpoints ?? []).isEmpty)
+        try ReadingAnalysisAuthority.$current.withValue(authorization) {
+            _ = try SmartReadingRuntime.completeAnalysis(arguments: completion(chunk, in: value), in: &value, allowedUnitIDs: Set(chunk.unitIDs))
+        }
+        let checkpoint = try XCTUnwrap(value.smartReading?.analysisCheckpoints?.first)
+        XCTAssertNotNil(checkpoint.noChangesReasons?["component:map"])
+        let notes = SmartReadingRuntime.analysisCheckpointNotes(checkpoint, in: value)
+        XCTAssertTrue(notes.contains { $0.hasPrefix("地图：") })
+        XCTAssertFalse(notes.contains { $0.contains("step:") || $0.contains("component:") })
+        XCTAssertTrue(value.entities.isEmpty); XCTAssertTrue(value.nodes.isEmpty)
+    }
+
+    func testRealReusedProductsAndHostCitationCheckNeedNoFabricatedOutput() throws {
+        let configuration = ReadingExecutionConfiguration(granularity: .page, componentKinds: [.cards], steps: [
+            ReadingExecutionStep(id: "facts", title: "整理要素", actionID: "facts.extract"),
+            ReadingExecutionStep(id: "citations", title: "核对引用", actionID: "citations.verify")
+        ])
+        var value = try project(configuration)
+        value.entities = [KnowledgeEntity(id: "a", typeID: "person", name: "甲", evidence: [Evidence(unitID: "u1", quote: value.units[0].text)])]
+        let chunk = try XCTUnwrap(SmartReadingRuntime.nextAnalysisChunk(in: value)), authorization = try grant(chunk, in: value)
+        var broken = value
+        broken.relations = [KnowledgeRelation(id: "broken", fromID: "a", toID: "missing", label: "失效关联", evidence: [Evidence(unitID: "u1", quote: value.units[0].text)])]
+        try ReadingAnalysisAuthority.$current.withValue(authorization) {
+            XCTAssertThrowsError(try SmartReadingRuntime.completeAnalysis(arguments: completion(chunk, in: broken, noChangesReasons: [:]), in: &broken, allowedUnitIDs: Set(chunk.unitIDs)))
+            _ = try SmartReadingRuntime.completeAnalysis(arguments: completion(chunk, in: value, noChangesReasons: [:]), in: &value, allowedUnitIDs: Set(chunk.unitIDs))
+        }
+        let checkpoint = try XCTUnwrap(value.smartReading?.analysisCheckpoints?.first)
+        XCTAssertTrue(checkpoint.hostCitationSummary?.contains("宿主核对") == true)
+        XCTAssertTrue(checkpoint.noChangesReasons == nil || checkpoint.noChangesReasons?.isEmpty == true)
+        XCTAssertEqual(value.entities.count, 1, "复用不重建对象或伪造新产物。")
+        XCTAssertTrue((value.paragraphReceipts ?? []).isEmpty, "宿主引文核验不等于逐段回执。")
+        var forged = try XCTUnwrap(JSONSerialization.jsonObject(with: completion(chunk, in: value)) as? [String: Any])
+        forged["hostCitationSummary"] = "模型自报全部核验通过"
+        let forgedData = try JSONSerialization.data(withJSONObject: forged)
+        try ReadingAnalysisAuthority.$current.withValue(authorization) {
+            XCTAssertThrowsError(try SmartReadingRuntime.completeAnalysis(arguments: forgedData, in: &value, allowedUnitIDs: Set(chunk.unitIDs)))
+        }
+    }
+
+    func testRemovedOptionalStepsStayRemovedAndMethodGoalIsPartOfActualWork() throws {
+        var value = try project(.init(granularity: .page, steps: []))
+        let chunk = try XCTUnwrap(SmartReadingRuntime.nextAnalysisChunk(in: value)), authorization = try grant(chunk, in: value)
+        try ReadingAnalysisAuthority.$current.withValue(authorization) {
+            _ = try SmartReadingRuntime.completeAnalysis(arguments: completion(chunk, in: value, noChangesReasons: [:]), in: &value, allowedUnitIDs: Set(chunk.unitIDs))
+        }
+        XCTAssertTrue(SmartReadingRuntime.isChunkComplete(chunk, in: value))
+        let index = try XCTUnwrap(value.methods.firstIndex { value.plan?.methodIDs.contains($0.id) == true })
+        value.methods[index].goal += "新增一个真正的阅读方向。"
+        XCTAssertNotEqual(try SmartReadingRuntime.analysisChunks(in: value).first?.id, chunk.id)
+        XCTAssertEqual(value.smartReading?.analysisCheckpoints?.count, 1)
     }
 }

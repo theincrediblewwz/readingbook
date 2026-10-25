@@ -17,6 +17,11 @@ enum AIToolResultDetails {
         case "events_upsert": return changed(before.events, after.events, id: { $0.id }, title: { $0.name })
         case "methods_define": return changed(before.methods, after.methods, id: { $0.id }, title: { $0.name })
         case "reading_plan": return ["阅读方法：" + (after.plan?.methodIDs.compactMap { id in after.methods.first { $0.id == id }?.name }.joined(separator: "、") ?? "")]
+        case "reading_analysis":
+            let old = Set(before.smartReading?.analysisCheckpoints?.map(\.id) ?? [])
+            return (after.smartReading?.analysisCheckpoints ?? []).filter { !old.contains($0.id) }.flatMap { checkpoint in
+                ["已保存本部分阅读分析；逐段核对另行记录。"] + SmartReadingRuntime.analysisCheckpointNotes(checkpoint, in: after)
+            }
         case "reading_enrich":
             let old = Set(before.readingExperience?.layers.map(\.id) ?? [])
             return Array((after.readingExperience?.layers ?? []).filter { !old.contains($0.id) }.prefix(20).map { "新增伴读：" + $0.title })

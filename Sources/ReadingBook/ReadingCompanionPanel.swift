@@ -1,6 +1,74 @@
 import SwiftUI
 import ReadingCore
 
+private struct CompanionObjectGroup: Identifiable, Sendable {
+    let id: String; let title: String; let icon: String; let entities: [KnowledgeEntity]
+}
+private struct CompanionProjection: Sendable {
+    let items: ReadingContextItems
+    let crossScopeCount: Int
+    let groups: [CompanionObjectGroup]
+    let entities: [String: KnowledgeEntity]
+    let events: [String: KnowledgeEvent]
+
+    static func build(book: BookProject, index: ReadingExperienceState, scope: String,
+                      companionScope: ReadingQueryScope, frozenScope: ReadingQuerySnapshot?,
+                      selectedUnitID: String?, avoidsSpoilers: Bool) -> Self? {
+        guard !Task.isCancelled else { return nil }
+        let state = book.readingExperience ?? ReadingExperienceState()
+        let items: ReadingContextItems, count: Int
+        if scope == "book" {
+            items = ReadingContextItems(anchors: state.anchors, mentions: state.mentions, entities: book.entities,
+                events: book.events, layers: state.layers, alignments: state.alignments); count = 0
+        } else {
+            let selected = book.units.first { $0.id == selectedUnitID }
+            let units: [SourceUnit]
+            if let frozenScope, frozenScope.bookID == book.id {
+                let ids = Set(frozenScope.unitIDs); units = book.units.filter { ids.contains($0.id) }
+            } else if let selected {
+                if companionScope == .chapter { units = book.units.filter { $0.chapter == selected.chapter } }
+                else { units = selected.page.map { page in book.units.filter { $0.page == page } } ?? [selected] }
+            } else { units = [] }
+            let allowed = Set(units.map(\.id))
+            var anchors = state.anchors.filter { allowed.contains($0.unitID) }
+            let existing = Set(anchors.map(\.id))
+            anchors.append(contentsOf: index.anchors.filter { allowed.contains($0.unitID) && !existing.contains($0.id) })
+            let anchorIDs = Set(anchors.map(\.id))
+            var mentions = state.mentions.filter { anchorIDs.contains($0.anchorID) }
+            let existingMentions = Set(mentions.map(\.id))
+            mentions.append(contentsOf: index.mentions.filter { anchorIDs.contains($0.anchorID) && !existingMentions.contains($0.id) })
+            let targets = Set(mentions.map(\.targetID))
+            let cursor = selected.map { unit in unit.page.flatMap { page in book.units.filter { $0.page == page }.max { $0.order < $1.order } } ?? unit }
+            let boundary = avoidsSpoilers ? cursor.flatMap { try? KnowledgeReadBoundary.throughSourceUnit($0.id, in: book).allowedUnitIDs } : nil
+            let projection = ReadingSpoilerProjection.Context(project: book, allowedUnitIDs: boundary)
+            var events: [KnowledgeEvent] = []
+            for event in book.events {
+                guard !Task.isCancelled else { return nil }
+                if targets.contains(event.id) || event.evidence.contains(where: { allowed.contains($0.unitID) }), let value = projection.event(event) { events.append(value) }
+            }
+            let relatedEntities = Set(events.flatMap { $0.placeIDs + $0.participantIDs })
+            var entities: [KnowledgeEntity] = []
+            for entity in book.entities {
+                guard !Task.isCancelled else { return nil }
+                if targets.contains(entity.id) || relatedEntities.contains(entity.id) || entity.evidence.contains(where: { allowed.contains($0.unitID) }), let value = projection.entity(entity) { entities.append(value) }
+            }
+            func fullyLocal(_ ids: [String]) -> Bool { !ids.isEmpty && ids.allSatisfy { anchorIDs.contains($0) } }
+            let layers = state.layers.filter { fullyLocal($0.sourceAnchorIDs) }, alignments = state.alignments.filter { fullyLocal($0.sourceAnchorIDs) }
+            count = state.layers.filter { !anchorIDs.isDisjoint(with: $0.sourceAnchorIDs) && !fullyLocal($0.sourceAnchorIDs) }.count +
+                state.alignments.filter { !anchorIDs.isDisjoint(with: $0.sourceAnchorIDs) && !fullyLocal($0.sourceAnchorIDs) }.count
+            items = ReadingContextItems(anchors: anchors, mentions: mentions, entities: entities, events: events, layers: layers, alignments: alignments)
+        }
+        guard !Task.isCancelled else { return nil }
+        let types = Dictionary(book.types.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let groups = Dictionary(grouping: items.entities, by: \.typeID).map { id, entities in
+            CompanionObjectGroup(id: "type:" + id, title: types[id]?.name ?? "其他线索", icon: types[id]?.icon ?? "folder", entities: entities)
+        }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        return Self(items: items, crossScopeCount: count, groups: groups,
+            entities: Dictionary(items.entities.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
+            events: Dictionary(items.events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }))
+    }
+}
+
 /// One contextual panel shared by source reading and declared plugin views.
 struct ReadingCompanionPanel: View {
     @EnvironmentObject var store: AppStore
@@ -17,6 +85,14 @@ struct ReadingCompanionPanel: View {
     @State private var expandedObjectGroups: Set<String> = []
     @State private var objectLimits: [String: Int] = [:]
     @State private var sourceContextLimit = 4
+    @State private var layerLimit = 8
+    @State private var alignmentLimit = 8
+    @State private var objectGroups: [CompanionObjectGroup] = []
+    @State private var entitiesByID: [String: KnowledgeEntity] = [:]
+    @State private var eventsByID: [String: KnowledgeEvent] = [:]
+    @State private var projectionTask: Task<Void, Never>?
+    @State private var projectionGeneration = 0
+    @State private var displayedScopeKey: String?
     @AppStorage("reading.companionTextScale") private var textScale = 1.0
     private var avoidsSpoilers: Bool { scope != "book" && store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false }
     private var sourceUnits: [SourceUnit] {
@@ -36,8 +112,10 @@ struct ReadingCompanionPanel: View {
         return store.selectedUnit?.locator ?? "请先打开原文"
     }
     private var projectionKey: String {
-        [store.bookID ?? "", String(store.projectRevision), store.selectedUnitID ?? "", companionScope.rawValue,
-         frozenScope?.scopeFingerprint ?? "", scope].joined(separator: "|")
+        scopeKey + "|" + String(store.projectRevision)
+    }
+    private var scopeKey: String {
+        [store.bookID ?? "", store.selectedUnitID ?? "", companionScope.rawValue, frozenScope?.scopeFingerprint ?? "", scope].joined(separator: "|")
     }
     private var effectiveSection: String {
         let value = section == "context" ? store.readingCompanionSection : section
@@ -113,6 +191,8 @@ struct ReadingCompanionPanel: View {
         .onChange(of: companionScope) { _, _ in frozenScope = nil; sourceContextLimit = 4 }
         .onChange(of: store.bookID) { _, _ in frozenScope = nil; companionScope = .page; expandedObjectGroups = []; objectLimits = [:]; refreshItems() }
         .onChange(of: store.selectedObjectID) { _, _ in revealSelectedObjectGroup() }
+        .onChange(of: scopeKey) { _, _ in layerLimit = 8; alignmentLimit = 8; objectLimits = [:] }
+        .onDisappear { projectionTask?.cancel(); projectionGeneration &+= 1 }
         .confirmationDialog("移除这条阅读增强？", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), presenting: removal) { item in
             Button("移除", role: .destructive) { Task { await store.removeReadingItem(item.id, kind: item.kind) } }
         } message: { item in Text("\(item.title)\n原书和已保存的 Markdown 保留。") }
@@ -219,41 +299,37 @@ struct ReadingCompanionPanel: View {
         } else if let unit = sourceUnits.first { store.newNote(for: unit) }
     }
     private func refreshItems() {
-        guard let book = store.book else { items = ReadingContextItems(); crossScopeCount = 0; return }
-        let state = book.readingExperience ?? ReadingExperienceState()
-        if scope == "book" {
-            crossScopeCount = 0
-            items = ReadingContextItems(anchors: state.anchors, mentions: state.mentions, entities: book.entities, events: book.events, layers: state.layers, alignments: state.alignments)
-            revealSelectedObjectGroup()
-            return
+        projectionTask?.cancel(); projectionGeneration &+= 1
+        guard let book = store.book else {
+            items = ReadingContextItems(); crossScopeCount = 0; objectGroups = []; entitiesByID = [:]; eventsByID = [:]; return
         }
-        let allowed = Set(sourceUnits.map(\.id))
-        var anchors = state.anchors.filter { allowed.contains($0.unitID) }
-        let existing = Set(anchors.map(\.id))
-        anchors.append(contentsOf: store.readingExperienceIndex.anchors.filter { allowed.contains($0.unitID) && !existing.contains($0.id) })
-        let anchorIDs = Set(anchors.map(\.id))
-        var mentions = state.mentions.filter { anchorIDs.contains($0.anchorID) }
-        let existingMentions = Set(mentions.map(\.id))
-        mentions.append(contentsOf: store.readingExperienceIndex.mentions.filter { anchorIDs.contains($0.anchorID) && !existingMentions.contains($0.id) })
-        let targets = Set(mentions.map(\.targetID))
-        let events = book.events.filter { targets.contains($0.id) || $0.evidence.contains { allowed.contains($0.unitID) } }
-        let relatedEntities = Set(events.flatMap { $0.placeIDs + $0.participantIDs })
-        func fullyLocal(_ ids: [String]) -> Bool { !ids.isEmpty && ids.allSatisfy { anchorIDs.contains($0) } }
-        let layers = state.layers.filter { fullyLocal($0.sourceAnchorIDs) }
-        let alignments = state.alignments.filter { fullyLocal($0.sourceAnchorIDs) }
-        crossScopeCount = state.layers.filter { !anchorIDs.isDisjoint(with: $0.sourceAnchorIDs) && !fullyLocal($0.sourceAnchorIDs) }.count +
-            state.alignments.filter { !anchorIDs.isDisjoint(with: $0.sourceAnchorIDs) && !fullyLocal($0.sourceAnchorIDs) }.count
-        items = ReadingContextItems(anchors: anchors, mentions: mentions,
-            entities: book.entities.filter { targets.contains($0.id) || relatedEntities.contains($0.id) || $0.evidence.contains { allowed.contains($0.unitID) } },
-            events: events,
-            layers: layers, alignments: alignments)
-        revealSelectedObjectGroup()
+        let expected = projectionKey, expectedScope = scopeKey, generation = projectionGeneration
+        let root = store.libraryRootURL.path, index = store.readingExperienceIndex
+        let requestedScope = scope, requestedCompanionScope = companionScope, frozen = frozenScope
+        let selected = store.selectedUnitID, avoids = avoidsSpoilers
+        if displayedScopeKey != expectedScope {
+            items = ReadingContextItems(); crossScopeCount = 0; objectGroups = []; entitiesByID = [:]; eventsByID = [:]
+        }
+        projectionTask = Task {
+            do { try await Task.sleep(nanoseconds: 35_000_000) } catch { return }
+            let worker = Task.detached(priority: .userInitiated) {
+                CompanionProjection.build(book: book, index: index, scope: requestedScope, companionScope: requestedCompanionScope,
+                    frozenScope: frozen, selectedUnitID: selected, avoidsSpoilers: avoids)
+            }
+            let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+            guard !Task.isCancelled, projectionGeneration == generation, store.bookID == book.id,
+                  store.libraryRootURL.path == root, projectionKey == expected, let result else { return }
+            items = result.items; crossScopeCount = result.crossScopeCount
+            objectGroups = result.groups; entitiesByID = result.entities; eventsByID = result.events
+            displayedScopeKey = expectedScope; projectionTask = nil
+            revealSelectedObjectGroup()
+        }
     }
     @ViewBuilder private var layerSection: some View {
         if items.layers.isEmpty {
             empty(scope == "book" ? "还没有保存的伴读" : "这一页，还可以读得更深", detail: scope == "book" ? "回到原文页，生成解释或留下笔记。" : "生成解释，或围绕当前内容提一个问题。")
         }
-        ForEach(items.layers) { layer in
+        ForEach(Array(items.layers.prefix(layerLimit))) { layer in
             VStack(alignment: .leading, spacing: 10) {
                 itemHeader(layer.title, label: layer.sourceLabel, id: layer.id, kind: "layer")
                 MarkdownText(markdown: layer.markdown).clipShape(RoundedRectangle(cornerRadius: 12))
@@ -262,11 +338,12 @@ struct ReadingCompanionPanel: View {
                 Button { store.newReadingNote(title: layer.title, markdown: layer.markdown + "\n\n_\(layer.sourceLabel)_", anchorIDs: layer.sourceAnchorIDs) } label: { Label("存为笔记草稿", systemImage: "square.and.pencil") }.buttonStyle(.borderless).font(.system(size: 13)).frame(minHeight: 44)
             }.readingCompanionCard()
         }
+        if items.layers.count > layerLimit { Button("继续显示解释 · 还有 \(items.layers.count - layerLimit) 条") { layerLimit += 8 }.buttonStyle(.borderless).frame(minHeight: 40) }
         if !items.alignments.isEmpty { referenceSection }
     }
     @ViewBuilder private var referenceSection: some View {
         if items.alignments.isEmpty { empty("资料对读", detail: "把同一书内相关段落放在一起，分别回到出处。外部资料需有来源，AI 的解释会单独标识。") }
-        ForEach(items.alignments) { alignment in
+        ForEach(Array(items.alignments.prefix(alignmentLimit))) { alignment in
             VStack(alignment: .leading, spacing: 10) {
                 itemHeader(alignment.title, label: "资料对齐 · \(alignment.status == "proposed" ? "待核对" : alignment.status)", id: alignment.id, kind: "alignment")
                 MarkdownText(markdown: alignment.markdown).clipShape(RoundedRectangle(cornerRadius: 12))
@@ -275,12 +352,15 @@ struct ReadingCompanionPanel: View {
                 Button { store.newReadingNote(title: alignment.title, markdown: alignment.markdown, anchorIDs: alignment.sourceAnchorIDs) } label: { Label("存为笔记草稿", systemImage: "square.and.pencil") }.buttonStyle(.borderless).font(.system(size: 13)).frame(minHeight: 44)
             }.readingCompanionCard()
         }
+        if items.alignments.count > alignmentLimit { Button("继续显示对读 · 还有 \(items.alignments.count - alignmentLimit) 条") { alignmentLimit += 8 }.buttonStyle(.borderless).frame(minHeight: 40) }
     }
     @ViewBuilder private var objectSection: some View {
         if items.entities.isEmpty && items.events.isEmpty { empty("读到的人与事", detail: "这一页整理好的人物、地点和线索会留在这里。") }
         ForEach(objectGroups) { group in
             DisclosureGroup(isExpanded: groupBinding(group.id)) {
                 LazyVStack(alignment: .leading, spacing: 10) {
+                    if let selected = store.selectedObjectID.flatMap({ entitiesByID[$0] }), group.id == "type:" + selected.typeID,
+                       !group.entities.prefix(objectLimits[group.id] ?? 24).contains(where: { $0.id == selected.id }) { entityRow(selected) }
                     ForEach(Array(group.entities.prefix(objectLimits[group.id] ?? 24))) { entity in entityRow(entity) }
                     moreObjects(group.id, shown: min(objectLimits[group.id] ?? 24, group.entities.count), total: group.entities.count)
                 }.padding(.top, 10)
@@ -290,20 +370,13 @@ struct ReadingCompanionPanel: View {
         if !items.events.isEmpty {
             DisclosureGroup(isExpanded: groupBinding("events")) {
                 LazyVStack(alignment: .leading, spacing: 10) {
+                    if let selected = store.selectedObjectID.flatMap({ eventsByID[$0] }),
+                       !items.events.prefix(objectLimits["events"] ?? 24).contains(where: { $0.id == selected.id }) { eventRow(selected) }
                     ForEach(Array(items.events.prefix(objectLimits["events"] ?? 24))) { event in eventRow(event) }
                     moreObjects("events", shown: min(objectLimits["events"] ?? 24, items.events.count), total: items.events.count)
                 }.padding(.top, 10)
             } label: { groupLabel("事件", icon: "calendar", count: items.events.count) }.readingCompanionCard()
         }
-    }
-    private struct ObjectGroup: Identifiable {
-        let id: String; let title: String; let icon: String; let entities: [KnowledgeEntity]
-    }
-    private var objectGroups: [ObjectGroup] {
-        Dictionary(grouping: items.entities, by: \.typeID).map { id, entities in
-            let type = store.book?.types.first { $0.id == id }
-            return ObjectGroup(id: "type:" + id, title: type?.name ?? "其他线索", icon: type?.icon ?? "folder", entities: entities)
-        }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
     private func groupBinding(_ id: String) -> Binding<Bool> {
         Binding(get: { expandedObjectGroups.contains(id) }, set: { if $0 { expandedObjectGroups.insert(id) } else { expandedObjectGroups.remove(id) } })
@@ -316,10 +389,9 @@ struct ReadingCompanionPanel: View {
     }
     private func revealSelectedObjectGroup() {
         guard let id = store.selectedObjectID else { return }
-        if let entity = items.entities.first(where: { $0.id == id }) {
+        if let entity = entitiesByID[id] {
             let group = "type:" + entity.typeID; expandedObjectGroups.insert(group)
-            if let index = items.entities.filter({ $0.typeID == entity.typeID }).firstIndex(where: { $0.id == id }) { objectLimits[group] = max(objectLimits[group] ?? 24, index + 1) }
-        } else if let index = items.events.firstIndex(where: { $0.id == id }) { expandedObjectGroups.insert("events"); objectLimits["events"] = max(objectLimits["events"] ?? 24, index + 1) }
+        } else if eventsByID[id] != nil { expandedObjectGroups.insert("events") }
     }
     private func canShowSummary(_ evidence: [Evidence]) -> Bool {
         guard avoidsSpoilers else { return true }
@@ -416,9 +488,18 @@ struct ReadingCompanionPanel: View {
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(relations.prefix(16)) { relation in
                 let other = relation.fromID == id ? relation.toID : relation.fromID
-                Button { store.showReadingObject(other) } label: { Label("\(relation.label) · \(store.objectTitle(other))", systemImage: "point.3.connected.trianglepath.dotted").font(.system(size: 13)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain)
+                if let title = visibleObjectTitle(other) {
+                    Button { store.showReadingObject(other) } label: { Label("\(relation.label) · \(title)", systemImage: "point.3.connected.trianglepath.dotted").font(.system(size: 13)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain)
+                }
             }
         }
+    }
+    private func visibleObjectTitle(_ id: String) -> String? {
+        guard let book = store.book else { return nil }
+        let allowed = avoidsSpoilers ? store.temporalBoundary.allowedUnitIDs : nil
+        if let entity = book.entities.first(where: { $0.id == id }) { return ReadingSpoilerProjection.entity(entity, in: book, allowedUnitIDs: allowed)?.name }
+        if let event = book.events.first(where: { $0.id == id }) { return ReadingSpoilerProjection.event(event, in: book, allowedUnitIDs: allowed)?.name }
+        return nil
     }
 }
 

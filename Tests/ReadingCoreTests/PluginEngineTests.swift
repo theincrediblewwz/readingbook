@@ -66,6 +66,26 @@ final class PluginEngineTests: XCTestCase {
         XCTAssertEqual(try snapshot(value), before)
     }
 
+    func testNewEntityIDRejectsExactSameTypeNamesAndAliasesWithoutMergingExistingData() throws {
+        var value = try project()
+        try command("cards_upsert", ["entities": [["id": "zhou-yu", "typeID": "person", "name": "周瑜", "aliases": ["公瑾"], "summary": "原有介绍", "evidence": evidence()]]], project: &value)
+        let before = try snapshot(value)
+        for input in [
+            ["id": "copy-name", "typeID": "person", "name": "周瑜", "evidence": evidence()] as [String: Any],
+            ["id": "copy-alias", "typeID": "person", "name": "公瑾", "evidence": evidence()],
+            ["id": "alias-collision", "typeID": "person", "name": "周都督", "aliases": ["周瑜"], "evidence": evidence()]
+        ] {
+            XCTAssertThrowsError(try command("cards_upsert", ["entities": [input]], project: &value)) { error in
+                XCTAssertTrue(error.localizedDescription.contains("zhou-yu")); XCTAssertTrue(error.localizedDescription.contains("复用"))
+            }
+            XCTAssertEqual(try snapshot(value), before, "拒绝时不能合并、删除或改写旧卡片。")
+        }
+        try command("cards_upsert", ["entities": [["id": "zhou-yu", "typeID": "person", "name": "周瑜", "summary": "新的原文发展", "evidence": evidence("u2", "周瑜统率水军")]]], project: &value, allowed: ["u2"])
+        XCTAssertEqual(value.entities.count, 1); XCTAssertEqual(value.entities.first?.evidence.count, 2)
+        try command("cards_upsert", ["entities": [["id": "distinct-person", "typeID": "person", "name": "周瑜（同名者）", "evidence": evidence()]]], project: &value)
+        XCTAssertEqual(value.entities.count, 2, "显式区分身份后可创建，不做语义合并。")
+    }
+
     func testMapAndTimelineShareOneExistingEvent() throws {
         var value = try project()
         let userDocuments = value.documents

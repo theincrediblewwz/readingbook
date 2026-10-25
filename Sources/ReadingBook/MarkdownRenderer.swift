@@ -19,6 +19,7 @@ struct RenderedMarkdownSelection: Equatable {
 /// Transient presentation data. Offsets address the exact sourceText UTF-16,
 /// never rendered math, transformed Markdown, or OCR coordinates on a PDF page.
 struct SourceReadingDecoration: Equatable, Sendable {
+    enum Interaction: String, Sendable { case passage, term }
     let id: String
     let targetID: String
     let quote: String
@@ -26,6 +27,7 @@ struct SourceReadingDecoration: Equatable, Sendable {
     var rangeLength: Int? = nil
     var prefix: String? = nil
     var suffix: String? = nil
+    var interaction: Interaction = .passage
 }
 
 struct SourceReadingSelection: Equatable, Sendable {
@@ -297,7 +299,7 @@ private struct MarkdownWebView: NSViewRepresentable {
                 schemeHandler?.authorize(state.directory, revision: revision)
             }
             let decorations: [[String: Any]] = state.decorations.map { decoration in
-                var item: [String: Any] = ["id": decoration.id, "targetID": decoration.targetID, "quote": decoration.quote]
+                var item: [String: Any] = ["id": decoration.id, "targetID": decoration.targetID, "quote": decoration.quote, "interaction": decoration.interaction.rawValue]
                 if let location = decoration.rangeLocation, let length = decoration.rangeLength {
                     item["rangeLocation"] = location; item["rangeLength"] = length
                 }

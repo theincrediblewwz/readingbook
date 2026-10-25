@@ -4,8 +4,11 @@ import ReadingCore
 /// All spatial components ask the same canonical objects for a time snapshot.
 @MainActor extension AppStore {
     var temporalBoundary: KnowledgeReadBoundary {
-        guard let book, book.temporalKnowledge?.profile?.avoidsSpoilers ?? true, let selectedUnitID,
-              let boundary = try? KnowledgeReadBoundary.throughSourceUnit(selectedUnitID, in: book) else { return .all }
+        guard let book, book.temporalKnowledge?.profile?.avoidsSpoilers ?? true, let unit = selectedUnit else { return .all }
+        // A PDF page can span several imported units. The reader can see all
+        // of that page, even though PDF navigation selects its first unit.
+        let cursor = unit.page.flatMap { page in book.units.filter { $0.page == page }.max { $0.order < $1.order } } ?? unit
+        guard let boundary = try? KnowledgeReadBoundary.throughSourceUnit(cursor.id, in: book) else { return .all }
         return boundary
     }
     var temporalPoint: TemporalQueryPoint? {

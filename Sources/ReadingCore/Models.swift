@@ -206,6 +206,7 @@ public struct ChatMessage: Codable, Identifiable, Sendable {
     public var createdAt: Date
     public var conversationMode: ReadingConversationMode? = nil
     public var answerStyle: ReadingAnswerStyle? = nil
+    public var readingContext: ReadingChatContext? = nil
     public init(id: String = UUID().uuidString, role: String, content: String, evidence: [Evidence] = []) { self.id = id; self.role = role; self.content = content; self.evidence = evidence; self.createdAt = Date() }
 }
 public struct ToolAudit: Codable, Identifiable, Sendable {

@@ -151,6 +151,8 @@ public actor AIReader {
             本轮精细度：\(configuration.precision.title)。标准阅读不要求逐段复述；精读所需回执已由宿主在前面的真实批次保存。本次不调用read_receipt、workflow_step_complete或reading_finish。一次分析可以包含同页多个单元或同章多页，但引文必须回到原始unitID，不合并或重写原文。
             本次原文块：\(chunk.title)。unitIDs必须精确为\(try encodedString(chunk.unitIDs))。
             本次步骤：\(try encodedString(steps))。最后调用reading_analysis，completedStepIDs精确为\(try encodedString(chunk.stepIDs))，每个unitID至少有一条连续精确引文。
+            已确认的阅读方向：\(try encodedString(SmartReadingRuntime.readingDirections(in: project)))；关注问题：\(try encodedString(project.plan?.focus ?? []))。这只是理解内容的方向，不是额外必做流水线；实际工作只执行本次启用步骤，已删掉的步骤不能借方法参考重新启用。
+            要素整理、伴读和所选组件必须有实际保存内容或来源仍有效的本地复用。没有适用对象、译文、可靠坐标或年代时，在reading_analysis的noChangesReasons逐项填写step:<步骤ID>或component:<组件kind>的简短原因。不能只报全部stepIDs就声称完成空组件；这些工程key不写进读者Markdown。citations.verify若启用由宿主真实检查引文和对象关联，不代表分析语义正确，也不等于逐段核对。
             章末或本轮结束步骤可先用analysis_outline查看已保存分析目录，再用analysis_read按需读取（每次最多3条、总12KiB）。chapter只看当前章前序，book只看本轮范围内前序；本次当前块另有下方原文。先前分析是派生资料，不是本次新读原文、不可用它伪造新引用或扩大写入unitIDs。看到目录不等于通读，遇到截断如实说明，回顾只概括实际取用内容，不声称已核对所有原文。
             所选组件：\(configuration.componentKinds.map(\.title).joined(separator: "、"))。需要时实际创建实体、事件、关系、时态和导图，不能只在回答中声称创建；用户未启用的步骤不执行。无可靠日期或地点就保留未知，不造坐标。
             先knowledge_search查询本地人物、别名和事件。存在就复用稳定ID和已有介绍，本次只补新的发展和原文出处，不重新堆叠旧摘要。身份不确定保留候选，不按相似名字强行合并。

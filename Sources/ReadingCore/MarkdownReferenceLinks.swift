@@ -108,13 +108,14 @@ public enum MarkdownReferenceLinks {
                 let kind: String, idStart: Int
                 if inside.starts(with: Array("unit:".utf8)) { kind = "unit"; idStart = 5 }
                 else if inside.starts(with: Array("doc:".utf8)) { kind = "document"; idStart = 4 }
+                else if inside.starts(with: Array("message:".utf8)) { kind = "message"; idStart = 8 }
                 else { output.append(value); offset += 1; continue }
                 let idBytes = inside.dropFirst(idStart)
                 if !idBytes.isEmpty, idBytes.allSatisfy(isIdentifier) {
                     let id = String(decoding: idBytes, as: UTF8.self)
                     var url = URLComponents(); url.scheme = "readingbook"; url.host = "book"; url.path = "/\(bookID)/\(kind)/\(id)"
                     if let destination = url.string {
-                        let fallback = kind == "unit" ? "原文" : "笔记"
+                        let fallback = kind == "unit" ? "原文" : kind == "message" ? "历史对话" : "笔记"
                         let label = labelForReference?(kind, id)?.trimmingCharacters(in: .whitespacesAndNewlines)
                         output.append(contentsOf: "[\(escapedLabel(label?.isEmpty == false ? label! : fallback))](\(destination))".utf8)
                         offset = close + 1; continue
@@ -131,7 +132,10 @@ public enum MarkdownReferenceLinks {
             if kind == "unit", let unit = project?.units.first(where: { $0.id == id }) {
                 return unit.page.map { "第 \($0) 页" } ?? (unit.chapter.isEmpty ? "原文" : unit.chapter)
             }
-            return project?.documents.first(where: { $0.id == id })?.title
+            if kind == "message", let message = project?.chats.first(where: { $0.id == id }) {
+                return message.role == "user" ? "先前的问题" : "先前的回答"
+            }
+            return kind == "document" ? project?.documents.first(where: { $0.id == id })?.title : nil
         })
     }
 

@@ -21,8 +21,8 @@ struct ProviderSettingsView: View {
             // A system sheet already supplies its window surface. Fill it so
             // it does not surround another inset card with a second frame.
             let inset: CGFloat = embedded ? 40 : 0
-            let cardWidth = min(860, max(1, geometry.size.width - inset))
-            let cardHeight = min(680, max(1, geometry.size.height - inset))
+            let cardWidth = embedded ? min(860, max(1, geometry.size.width - inset)) : max(1, geometry.size.width)
+            let cardHeight = embedded ? min(680, max(1, geometry.size.height - inset)) : max(1, geometry.size.height)
             let wide = cardWidth >= 800
             VStack(spacing: 0) {
                 SettingsManagementHeader(title: "模型设置", icon: "sparkles", dirty: store.serviceProfileDraft.isDirty(in: store), onClose: requestClose) {

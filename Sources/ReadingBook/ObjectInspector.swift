@@ -28,6 +28,14 @@ import ReadingCore
     private enum PendingAction { case show(String), close }
     private var objectID: String { displayedID ?? id }
     private var hasChanges: Bool { draft?.isDirty == true }
+    private var presentedEntity: KnowledgeEntity? {
+        guard let book = store.book, let value = book.entities.first(where: { $0.id == objectID }) else { return nil }
+        return ReadingSpoilerProjection.entity(value, in: book, allowedUnitIDs: store.temporalBoundary.allowedUnitIDs)
+    }
+    private var presentedEvent: KnowledgeEvent? {
+        guard let book = store.book, let value = book.events.first(where: { $0.id == objectID }) else { return nil }
+        return ReadingSpoilerProjection.event(value, in: book, allowedUnitIDs: store.temporalBoundary.allowedUnitIDs)
+    }
     private var draftBinding: Binding<EntityEditDraft> {
         Binding(get: { draft ?? EntityEditDraft(entity: KnowledgeEntity(id: objectID, typeID: "", name: "")) }, set: { next in
             if draft != nil { draft = next }
@@ -108,13 +116,16 @@ import ReadingCore
     }
 
     @ViewBuilder private var objectContents: some View {
-        if let entity = store.book?.entities.first(where: { $0.id == objectID }) {
+        if let entity = presentedEntity {
             Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent.opacity(0.08), in: Capsule())
             Text(entity.name).font(.system(size: 25, weight: .semibold)).textSelection(.enabled)
             if canShow(entity.evidence), !entity.summary.isEmpty { MarkdownText(markdown: entity.summary).clipShape(RoundedRectangle(cornerRadius: 12)) }
             explanationButton(entity.name)
             HStack(spacing: 12) {
-                Button { draft = EntityEditDraft(entity: entity); localError = nil; restoredDraft = false } label: { Label("编辑", systemImage: "square.and.pencil") }
+                Button {
+                    guard let original = store.book?.entities.first(where: { $0.id == entity.id }) else { return }
+                    draft = EntityEditDraft(entity: original); localError = nil; restoredDraft = false
+                } label: { Label("编辑", systemImage: "square.and.pencil") }
                 Spacer(minLength: 0)
                 Menu { Button("移入回收站…", role: .destructive) { store.requestDeletion(.entity, id: entity.id, title: entity.name) } } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("卡片管理")
             }.buttonStyle(ReadingToolbarButtonStyle()).font(.system(size: 15)).disabled(store.isBusy)
@@ -130,11 +141,11 @@ import ReadingCore
             if canShow(entity.evidence), let note = entity.locationNote, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
-            ForEach((store.book?.events ?? []).filter { canShow($0.evidence) && ($0.participantIDs.contains(objectID) || $0.placeIDs.contains(objectID)) }) { event in
+            ForEach((store.book?.events ?? []).filter { $0.participantIDs.contains(objectID) || $0.placeIDs.contains(objectID) }.compactMap(visibleEvent)) { event in
                 Button { showObject(event.id) } label: { Label(event.name, systemImage: "calendar").frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
             }
             EvidenceList(evidence: visibleEvidence(entity.evidence))
-        } else if let event = store.book?.events.first(where: { $0.id == objectID }) {
+        } else if let event = presentedEvent {
             Text("事件").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent.opacity(0.08), in: Capsule())
             Text(event.name).font(.system(size: 25, weight: .semibold))
             if canShow(event.evidence) { Label(event.dateText, systemImage: "clock").font(.subheadline).foregroundStyle(.secondary) }
@@ -143,6 +154,8 @@ import ReadingCore
             if canShow(event.evidence) { linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs) }
             EvidenceList(evidence: visibleEvidence(event.evidence))
             Menu { Button("移入回收站…", role: .destructive) { store.requestDeletion(.event, id: event.id, title: event.name) } } label: { Label("事件管理", systemImage: "ellipsis").frame(minHeight: 44) }.menuStyle(.borderlessButton).fixedSize().font(.system(size: 14)).disabled(store.isBusy)
+        } else if store.book?.entities.contains(where: { $0.id == objectID }) == true || store.book?.events.contains(where: { $0.id == objectID }) == true {
+            Text("当前阅读位置还没有可显示的介绍。").font(.callout).foregroundStyle(.secondary)
         } else if let document = store.book?.activeDocuments.first(where: { $0.id == objectID }) {
             Text("Markdown 文档").font(.system(size: 13)).foregroundStyle(Palette.accent)
             Text(document.title).font(.system(size: 25, weight: .semibold))
@@ -159,9 +172,9 @@ import ReadingCore
             Text("对象已不存在，或已移入回收站。").font(.callout).foregroundStyle(.secondary)
         }
         ForEach((store.book?.relations ?? []).filter { canShow($0.evidence) && ($0.fromID == objectID || $0.toID == objectID) }) { relation in
-            HStack {
+            if let title = visibleObjectTitle(relation.fromID == objectID ? relation.toID : relation.fromID) { HStack {
                 Button { showObject(relation.fromID == objectID ? relation.toID : relation.fromID) } label: {
-                    Label("\(relation.label) · \(store.objectTitle(relation.fromID == objectID ? relation.toID : relation.fromID))", systemImage: "arrow.up.right").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle())
+                    Label("\(relation.label) · \(title)", systemImage: "arrow.up.right").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundStyle(Palette.accent)
                 Spacer(minLength: 0)
                 Button {
@@ -169,12 +182,24 @@ import ReadingCore
                     Task { guard store.bookID == sourceBookID else { return }; await store.removeConnection(relation.id, relation: true) }
                 } label: { Image(systemName: "xmark.circle") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("将这条知识关系移入回收站").accessibilityLabel("将知识关系移入回收站").disabled(store.isBusy || store.editorDirty)
-            }
+            } }
         }
         ForEach((store.book?.activeDocuments ?? []).filter { $0.linkedIDs.contains(objectID) }) { document in
             Button { Task { await store.openDocument(document) } } label: { Label(document.title, systemImage: "doc.text").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }
                 .buttonStyle(.plain).foregroundStyle(Palette.accent)
         }
+    }
+
+    private func visibleEvent(_ event: KnowledgeEvent) -> KnowledgeEvent? {
+        guard let book = store.book else { return nil }
+        return ReadingSpoilerProjection.event(event, in: book, allowedUnitIDs: store.temporalBoundary.allowedUnitIDs)
+    }
+    private func visibleObjectTitle(_ id: String) -> String? {
+        guard let book = store.book else { return nil }
+        let allowed = store.temporalBoundary.allowedUnitIDs
+        if let entity = book.entities.first(where: { $0.id == id }) { return ReadingSpoilerProjection.entity(entity, in: book, allowedUnitIDs: allowed)?.name }
+        if let event = book.events.first(where: { $0.id == id }) { return ReadingSpoilerProjection.event(event, in: book, allowedUnitIDs: allowed)?.name }
+        return book.activeDocuments.first(where: { $0.id == id })?.title
     }
 
     private func visibleEvidence(_ evidence: [Evidence]) -> [Evidence] {
@@ -270,7 +295,9 @@ import ReadingCore
         VStack(alignment: .leading, spacing: 8) {
             if !ids.isEmpty { Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary) }
             ForEach(ids, id: \.self) { target in
-                Button { showObject(target) } label: { Text(store.objectTitle(target)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                if let name = visibleObjectTitle(target) {
+                    Button { showObject(target) } label: { Text(name).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                }
             }
         }
     }

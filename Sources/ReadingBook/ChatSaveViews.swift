@@ -39,6 +39,7 @@ private struct BookChatContent: View {
     @State private var showingMemory = false
     @State private var showingComposerHelp = false
     @State private var historyBook: BookProject?
+    @State private var historyMessageID: String?
     @AppStorage("reading.companionTextScale") private var textScale = 1.0
     @State private var memorySourceID: String?
     @FocusState private var composerFocused: Bool
@@ -47,7 +48,14 @@ private struct BookChatContent: View {
     var body: some View {
         VStack(spacing: 0) {
             if selectionMode { selectionBar }
-            if store.isQueryBusy {
+            if embedded {
+                HStack(spacing: 8) {
+                    if store.isQueryBusy { queryStatus } else { Spacer(minLength: 0) }
+                    Button { NotificationCenter.default.post(name: Notification.Name("ReadingBookExpandCompanion"), object: nil) } label: {
+                        Label("放大对话", systemImage: "arrow.up.left.and.arrow.down.right").font(.system(size: 13))
+                    }.buttonStyle(ReadingToolbarButtonStyle()).fixedSize().help("放大或还原对话窗口")
+                }.padding(.horizontal, 12).padding(.vertical, 4)
+            } else if store.isQueryBusy {
                 queryStatus.padding(.horizontal, embedded ? 16 : 24).padding(.vertical, 8)
             }
             ScrollViewReader { proxy in
@@ -68,8 +76,10 @@ private struct BookChatContent: View {
             composer
         }.padding(.top, embedded ? 0 : 76).background(embedded ? Color.clear : Palette.canvas)
         .environment(\.markdownTextScale, textScale)
-        .onChange(of: store.bookID) { _, _ in selectionMode = false; selectedAnswers.removeAll(); renderedSelections.removeAll(); saveRequest = nil }
-        .onChange(of: composerIsActive) { _, active in if !active { composerFocused = false } }
+        .onChange(of: store.bookID) { _, _ in selectionMode = false; selectedAnswers.removeAll(); renderedSelections.removeAll(); saveRequest = nil; historyBook = nil; historyMessageID = nil }
+        .onAppear { revealRequestedHistory() }
+        .onChange(of: store.queryHistoryMessageID) { _, _ in revealRequestedHistory() }
+        .onChange(of: composerIsActive) { _, active in if !active { composerFocused = false } else { revealRequestedHistory() } }
         .onChange(of: store.queryInteractionMode) { _, _ in store.queryAllowsOrganizing = false; resetModePresentation() }
         .onChange(of: store.queryAnswerStyle) { _, _ in resetModePresentation() }
         .sheet(item: $saveRequest, onDismiss: {
@@ -84,7 +94,15 @@ private struct BookChatContent: View {
         .sheet(isPresented: $showingMemory) {
             QueryMemoryInspector(onClose: { showingMemory = false }, onSource: { id in showingMemory = false; memorySourceID = id }).environmentObject(store)
         }
-        .sheet(item: $historyBook) { project in SavedConversationHistory(project: project, onClose: { historyBook = nil }).environmentObject(store) }
+        .sheet(item: $historyBook) { project in
+            SavedConversationHistory(project: project, focusedMessageID: historyMessageID, onClose: { historyBook = nil }).environmentObject(store)
+        }
+    }
+
+    private func revealRequestedHistory() {
+        guard composerIsActive, let id = store.queryHistoryMessageID, let project = store.book,
+              project.chats.contains(where: { $0.id == id }) else { return }
+        historyMessageID = id; historyBook = project; store.queryHistoryMessageID = nil
     }
 
     private var questionEmptyState: some View {
@@ -157,7 +175,7 @@ private struct BookChatContent: View {
             }
             readingSizeControls
             Divider()
-            Button { historyBook = store.book } label: { Label("查看全部历史", systemImage: "clock.arrow.circlepath") }
+            Button { historyMessageID = nil; historyBook = store.book } label: { Label("查看全部历史", systemImage: "clock.arrow.circlepath") }
             Toggle(isOn: $store.queryMemoryEnabled) { Label("整理长对话记忆", systemImage: "brain.head.profile") }
             Button { showingMemory = true } label: { Label("查看记忆与原消息", systemImage: "text.bubble") }
             Button { store.clearCurrentQueryMemory() } label: { Label("清除本范围的整理摘要", systemImage: "eraser") }
@@ -353,8 +371,13 @@ private struct QueryProgressButton: View {
 
 private struct SavedConversationHistory: View {
     let project: BookProject
+    var focusedMessageID: String?
     var onClose: () -> Void
     @State private var limit = 60
+    private var visibleLimit: Int {
+        guard let id = focusedMessageID, let index = project.chats.firstIndex(where: { $0.id == id }) else { return limit }
+        return max(limit, project.chats.count - index)
+    }
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -362,10 +385,10 @@ private struct SavedConversationHistory: View {
                 Spacer()
                 Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction)
             }.padding(18)
-            ScrollView {
+            ScrollViewReader { proxy in ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    if project.chats.count > limit { Button("显示更早的对话") { limit += 60 }.buttonStyle(ReadingToolbarButtonStyle()) }
-                    ForEach(Array(project.chats.suffix(limit))) { message in
+                    if project.chats.count > visibleLimit { Button("显示更早的对话") { limit = visibleLimit + 60 }.buttonStyle(ReadingToolbarButtonStyle()) }
+                    ForEach(Array(project.chats.suffix(visibleLimit))) { message in
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text(message.role == "user" ? "你" : "伴读").font(.system(size: 13, weight: .semibold))
@@ -373,10 +396,12 @@ private struct SavedConversationHistory: View {
                                 if let mode = message.conversationMode { Text(mode.title).font(.system(size: 12)).foregroundStyle(.secondary) }
                             }
                             ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(message.content, bookID: project.id, project: project))
-                        }.padding(16).background(Palette.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
+                        }.padding(16).background(message.id == focusedMessageID ? Palette.accent.opacity(0.1) : Palette.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 16)).id(message.id)
                     }
                     if project.chats.isEmpty { Text("还没有保存的对话").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 200) }
                 }.padding(18)
+            }.onAppear { if let id = focusedMessageID { proxy.scrollTo(id, anchor: .center) } }
+                .onChange(of: focusedMessageID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
             }
         }.frame(width: 620, height: 600).background(Palette.canvas).onExitCommand(perform: onClose)
     }

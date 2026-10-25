@@ -568,6 +568,12 @@ public enum PluginEngine {
             try requiredFields(type, properties: old.properties)
             project.entities[index] = old
         } else {
+            let requestedNames = Set([name] + aliases)
+            if let existing = project.entities.first(where: {
+                $0.typeID == typeID && !requestedNames.isDisjoint(with: Set([$0.name] + $0.aliases))
+            }) {
+                throw invalid("同类型中已有名称或别名相同的对象（ID：\(existing.id)）。请复用该稳定 ID；若是同名的不同对象，请用可区分的名称和别名消歧后再创建。")
+            }
             try requiredFields(type, properties: properties)
             project.entities.append(KnowledgeEntity(id: id, typeID: typeID, name: name, summary: summary, properties: properties, aliases: union([], aliases), latitude: latitude, longitude: longitude, locationNote: locationNote, evidence: evidence))
         }

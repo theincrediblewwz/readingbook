@@ -1263,7 +1263,7 @@ struct PDFReaderView: NSViewRepresentable {
         else { sourceDecorationGeneration &+= 1; sourceDecorationTask?.cancel(); sourceDecorationTask = nil }
         let generation = sourceDecorationGeneration, documentID = documentGeneration
         let desired = Dictionary(sourceDecorations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for id in Array(renderedSourceValues.keys) where desired[id] != renderedSourceValues[id] {
+        for id in Set(renderedSourceValues.keys).union(renderedSourceAnnotations.keys) where desired[id] == nil || desired[id] != renderedSourceValues[id] {
             for (owner, annotation) in renderedSourceAnnotations.removeValue(forKey: id) ?? [] {
                 owner.removeAnnotation(annotation); sourceAnnotationIDs.removeValue(forKey: ObjectIdentifier(annotation))
             }
@@ -1272,6 +1272,13 @@ struct PDFReaderView: NSViewRepresentable {
         renderedSourcePage = page; renderedSourceDecorations = sourceDecorations
         let additions = sourceDecorations.filter { renderedSourceValues[$0.id] != $0 }
         guard !additions.isEmpty else { pdfView.needsDisplay = true; return }
+        // An interrupted long quote can have a partial line batch. Remove only
+        // those managed lines before retrying it; user annotations stay intact.
+        for decoration in additions {
+            for (owner, annotation) in renderedSourceAnnotations.removeValue(forKey: decoration.id) ?? [] {
+                owner.removeAnnotation(annotation); sourceAnnotationIDs.removeValue(forKey: ObjectIdentifier(annotation))
+            }
+        }
         guard let text = (quoteCachePage === page ? quoteCacheText.map { $0 as String } : nil) ?? page.string else { return }
         // Only immutable text and value records cross executors. PDFKit text
         // extraction and selection geometry remain on its owning main thread.
@@ -1300,7 +1307,8 @@ struct PDFReaderView: NSViewRepresentable {
                 guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation,
                       self.renderedSourcePage === page else { return }
                 let began = ProcessInfo.processInfo.systemUptime
-                let interval = pdfDecorationSignposter.beginInterval("ApplyDecorationBatch")
+                var interval = pdfDecorationSignposter.beginInterval("ApplyDecorationBatch")
+                var lineBatchBegan = began, lineCount = 0
                 var count = 0
                 repeat {
                     let decoration = additions[cursor]; cursor += 1; count += 1
@@ -1310,20 +1318,30 @@ struct PDFReaderView: NSViewRepresentable {
                         if self.quoteRangeCache.count >= 256 || self.quoteCacheBytes + key.byteCount > 1_048_576 { self.quoteRangeCache = [:]; self.quoteCacheBytes = 0 }
                         self.quoteRangeCache[key] = cached; self.quoteCacheBytes += key.byteCount
                     }
-                    self.renderedSourceValues[decoration.id] = decoration
                     if let range = cached?.range, let selection = page.selection(for: range) {
-                        var annotations: [(PDFPage, PDFAnnotation)] = []
                         for line in selection.selectionsByLine() {
+                            guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation,
+                                  self.renderedSourcePage === page else { pdfDecorationSignposter.endInterval("ApplyDecorationBatch", interval); return }
                             let rect = line.bounds(for: page).intersection(page.bounds(for: .cropBox))
                             guard !rect.isNull, !rect.isEmpty else { continue }
                             let annotation = PDFAnnotation(bounds: rect, forType: .underline, withProperties: nil)
                             annotation.color = NSColor.systemTeal.withAlphaComponent(self.hoveredSourceID == decoration.id ? 1 : 0.4)
                             annotation.contents = "查看“\(decoration.quote)”的关联内容"
-                            page.addAnnotation(annotation); annotations.append((page, annotation))
+                            page.addAnnotation(annotation)
+                            self.renderedSourceAnnotations[decoration.id, default: []].append((page, annotation))
                             self.sourceAnnotationIDs[ObjectIdentifier(annotation)] = decoration.id
+                            lineCount += 1
+                            if lineCount >= 24 || ProcessInfo.processInfo.systemUptime - lineBatchBegan >= 0.003 {
+                                pdfDecorationSignposter.endInterval("ApplyDecorationBatch", interval); self.pdfView.needsDisplay = true
+                                do { try await Task.sleep(nanoseconds: 1_000_000) } catch { return }
+                                guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation,
+                                      self.renderedSourcePage === page else { return }
+                                interval = pdfDecorationSignposter.beginInterval("ApplyDecorationBatch")
+                                lineBatchBegan = ProcessInfo.processInfo.systemUptime; lineCount = 0
+                            }
                         }
-                        self.renderedSourceAnnotations[decoration.id] = annotations
                     }
+                    self.renderedSourceValues[decoration.id] = decoration
                 } while cursor < additions.count && count < 8 && ProcessInfo.processInfo.systemUptime - began < 0.003
                 pdfDecorationSignposter.endInterval("ApplyDecorationBatch", interval)
                 self.pdfView.needsDisplay = true

@@ -273,9 +273,30 @@
         }
         if (begin && finish) {
           const domRange = document.createRange(); domRange.setStart(...begin); domRange.setEnd(...finish);
-          if (domRange.toString() === item.quote && !begin[0].parentElement.closest('.source-mention') && !finish[0].parentElement.closest('.source-mention') && !domRange.cloneContents().querySelector('.source-mention')) {
+          // Containment can be represented without changing source bytes or
+          // cloning an existing mark: a sentence may contain clickable terms.
+          // Crossing intervals have no honest nested DOM representation.
+          const crosses = Array.from(host.querySelectorAll('.source-mention')).some(marker => {
+            const start = Number(marker.dataset.decorationStart), end = Number(marker.dataset.decorationEnd);
+            return (range[0] < start && start < range[1] && range[1] < end) ||
+              (start < range[0] && range[0] < end && end < range[1]);
+          });
+          // If a new outer range ends at a nested mark's text boundary,
+          // extractContents would otherwise clone that partly selected wrapper.
+          // Promote exact boundaries to include the existing node itself.
+          let startMark = begin[0].parentElement.closest('.source-mention');
+          while (startMark && host.contains(startMark)) {
+            if (Number(startMark.dataset.decorationStart) === range[0] && Number(startMark.dataset.decorationEnd) <= range[1]) domRange.setStartBefore(startMark);
+            startMark = startMark.parentElement.closest('.source-mention');
+          }
+          let endMark = finish[0].parentElement.closest('.source-mention');
+          while (endMark && host.contains(endMark)) {
+            if (Number(endMark.dataset.decorationEnd) === range[1] && Number(endMark.dataset.decorationStart) >= range[0]) domRange.setEndAfter(endMark);
+            endMark = endMark.parentElement.closest('.source-mention');
+          }
+          if (domRange.toString() === item.quote && !crosses) {
             const marker = document.createElement('span'); marker.className = 'source-mention';
-            marker.dataset.sourceDecoration = item.id; marker.dataset.sourceTarget = item.targetID;
+            describeDecoration(marker, item, range);
             marker.tabIndex = 0; marker.setAttribute('role', 'button'); marker.setAttribute('aria-label', '查看“' + item.quote + '”的关联内容');
             marker.title = '查看关联内容';
             marker.appendChild(domRange.extractContents()); domRange.insertNode(marker); continue;
@@ -285,7 +306,7 @@
       const block = findBlock(range[0], range[1]);
       if (block) {
         const marker = document.createElement('button'); marker.className = 'source-paragraph-link';
-        marker.dataset.sourceDecoration = item.id; marker.dataset.sourceTarget = item.targetID;
+        describeDecoration(marker, item, range);
         marker.textContent = item.quote.length > 22 ? item.quote.slice(0, 22) + '…' : item.quote;
         marker.title = '定位到本段；此处的 Markdown 结构不支持可靠词位映射';
         marker.setAttribute('aria-label', marker.textContent + '，段落关联，非精确词位'); block.appendChild(marker); approximateCount++;
@@ -296,8 +317,13 @@
       note.textContent = '部分关联显示在对应段落末尾；公式、链接或复杂排版保留原样，未推测词语位置。'; root.appendChild(note);
     }
   }
+  function describeDecoration(marker, item, range) {
+    marker.dataset.sourceDecoration = item.id; marker.dataset.sourceTarget = item.targetID;
+    marker.dataset.sourceRole = item.interaction === 'term' ? 'term' : 'passage';
+    marker.dataset.decorationStart = String(range[0]); marker.dataset.decorationEnd = String(range[1]);
+  }
   function decorationIdentity(item) {
-    return JSON.stringify([item.id, item.targetID, item.quote, item.rangeLocation, item.rangeLength]);
+    return JSON.stringify([item.id, item.targetID, item.quote, item.rangeLocation, item.rangeLength, item.interaction === 'term' ? 'term' : 'passage']);
   }
   function applyDecorations() {
     const root = global.document?.getElementById('content');
@@ -306,13 +332,25 @@
     if (sourcePress || global.getSelection?.()?.isCollapsed === false) { decorationsDeferred = true; return false; }
     decorationsDeferred = false;
     const next = new Map(sourceDecorations.filter(item => item && typeof item.id === 'string').map(item => [item.id, decorationIdentity(item)]));
+    const changedRanges = [];
     root.querySelectorAll('[data-source-decoration]').forEach(node => {
       const id = node.dataset.sourceDecoration;
       if (next.get(id) === appliedDecorations.get(id)) return;
+      changedRanges.push([Number(node.dataset.decorationStart), Number(node.dataset.decorationEnd)]);
       if (node.classList.contains('source-mention')) node.replaceWith(...Array.from(node.childNodes));
       else node.remove();
     });
     const additions = sourceDecorations.filter(item => item && typeof item.id === 'string' && next.get(item.id) !== appliedDecorations.get(item.id));
+    const quoteRanges = new Map();
+    for (const item of additions) { const range = validatedRange(item, quoteRanges); if (range) changedRanges.push(range); }
+    // A crossing neighbor may have forced an otherwise literal term into the
+    // paragraph fallback. Retry only affected fallbacks after neighbors change.
+    const retryIDs = new Set();
+    root.querySelectorAll('.source-paragraph-link').forEach(node => {
+      const from = Number(node.dataset.decorationStart), to = Number(node.dataset.decorationEnd);
+      if (changedRanges.some(range => range[0] < to && from < range[1])) { retryIDs.add(node.dataset.sourceDecoration); node.remove(); }
+    });
+    for (const item of sourceDecorations) if (item && retryIDs.has(item.id) && !additions.some(value => value.id === item.id)) additions.push(item);
     addSourceDecorations(root, additions);
     appliedDecorations = next;
     if (!root.querySelector('.source-paragraph-link')) root.querySelectorAll('.source-location-note').forEach(node => node.remove());
@@ -390,6 +428,17 @@
   if (global.document) {
     let selectionTimer = null;
     let lastSelectionKey = '';
+    function sourceMarker(target, interaction) {
+      if (!target?.closest) return null;
+      const nearest = target.closest('[data-source-decoration]');
+      if (!nearest) return null;
+      if (interaction === 'hover') {
+        // Moving over a named term in a translated sentence keeps the sentence
+        // translation steady; clicking the term opens its own entity card.
+        return nearest.closest('.source-mention[data-source-role="passage"]') || nearest;
+      }
+      return nearest.closest('[data-source-role="term"]') || nearest;
+    }
     function reportSourceHover(node, activated, event) {
       if (!node || (!activated && (sourcePress || global.getSelection()?.isCollapsed === false))) {
         global.webkit?.messageHandlers?.readingbookSourceHover?.postMessage({leaving:true,revision:currentRevision}); return;
@@ -399,12 +448,12 @@
       global.webkit?.messageHandlers?.readingbookSourceHover?.postMessage({id:node.dataset.sourceDecoration,rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},activated:!!activated,revision:currentRevision});
     }
     document.addEventListener('mouseover', event => {
-      const node=event.target.closest?.('[data-source-decoration]');
-      if(node && !node.contains(event.relatedTarget)) reportSourceHover(node,false,event);
+      const node=sourceMarker(event.target,'hover');
+      if(node && node !== sourceMarker(event.relatedTarget,'hover')) reportSourceHover(node,false,event);
     });
     document.addEventListener('mouseout', event => {
-      const node=event.target.closest?.('[data-source-decoration]');
-      if(node && !node.contains(event.relatedTarget)) reportSourceHover(null,false);
+      const node=sourceMarker(event.target,'hover');
+      if(node && node !== sourceMarker(event.relatedTarget,'hover')) reportSourceHover(null,false);
     });
     function finishSourcePress() {
       const press = sourcePress;
@@ -477,7 +526,7 @@
     }, true);
     global.addEventListener('blur', finishSourcePress);
     document.addEventListener('click', event => {
-      const marker = event.target.closest?.('[data-source-decoration]');
+      const marker = sourceMarker(event.target,'click');
       if (marker) {
         // A drag selection ending on a mention should remain a selection.
         if (event.detail !== 0 && (sourcePress?.dragged || global.getSelection()?.isCollapsed === false)) return;

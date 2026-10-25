@@ -37,4 +37,13 @@ final class MarkdownReferenceLinksTests: XCTestCase {
         XCTAssertTrue(unsafe.contains("\\] \\[x\\]\\("))
         XCTAssertTrue(unsafe.hasSuffix("](readingbook://book/book/document/note)"))
     }
+    func testMessageCitationUsesReadableChatLabelAndStableMessageRoute() {
+        var project = BookProject(title: "对话", originalName: "book.txt", sourceHash: "fixture", units: [])
+        project.chats = [ChatMessage(id: "old-answer", role: "assistant", content: "之前的回答")]
+        XCTAssertEqual(MarkdownReferenceLinks.render("参考[message:old-answer]。", bookID: project.id, project: project),
+            "参考[先前的回答](readingbook://book/\(project.id)/message/old-answer)。")
+        XCTAssertEqual(MarkdownReferenceLinks.render("[message:missing]", bookID: "b"), "[历史对话](readingbook://book/b/message/missing)")
+        let literal = "`[message:old-answer]` 与 [message:old-answer](https://example.test)"
+        XCTAssertEqual(MarkdownReferenceLinks.render(literal, bookID: "b"), literal, "代码和已有链接不能被重写。")
+    }
 }
