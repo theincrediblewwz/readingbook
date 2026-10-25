@@ -82,16 +82,33 @@ struct PDFReaderView: NSViewRepresentable {
     private var sourceDecorations: [SourceReadingDecoration] = []
     private var sourceDecorationPage: Int?
     private var sourceDecorationFocusID: String?
+    private struct SourceLineKey: Hashable, Sendable { let id: String; let line: Int }
     private struct SourceGeometry {
         let value: SourceReadingDecoration
         let page: Int
         let lines: [CGRect]
+        let cost: Int
     }
-    private struct SourceGeometryPage {
+    @MainActor private final class SourceGeometryPage {
         let text: String
         let byteCount: Int
         var ranges: [QuoteCacheKey: CachedQuoteRange] = [:]
+        var rangeBytes = 0
         var geometry: [String: SourceGeometry] = [:]
+        var geometryBytes = 0
+        var hitBands = ReadingGeometryBands<SourceLineKey>()
+        var paintBands = ReadingGeometryBands<SourceLineKey>()
+        var cost: Int { byteCount + rangeBytes + geometryBytes }
+        init(text: String, byteCount: Int) { self.text = text; self.byteCount = byteCount }
+        func remember(_ value: SourceGeometry) {
+            geometryBytes += value.cost - (geometry[value.value.id]?.cost ?? 0)
+            geometry[value.value.id] = value
+            for (line, rectangle) in value.lines.enumerated() {
+                let key = SourceLineKey(id: value.value.id, line: line)
+                hitBands.insert(key, rectangle: rectangle)
+                if !value.value.passive { paintBands.insert(key, rectangle: rectangle) }
+            }
+        }
     }
     private var sourceGeometries: [String: SourceGeometry] = [:]
     private var sourceGeometryIDsByPage: [Int: [String]] = [:]
@@ -101,7 +118,10 @@ struct PDFReaderView: NSViewRepresentable {
     private var sourceDecorationGeneration = 0
     private var sourceDecorationRevision: Int?
     private var hoveredSourceID: String?
-    private var renderedSourceDecorations: [SourceReadingDecoration] = []
+    private var sourceInputGeneration = 0
+    private var renderedSourceInputGeneration = -1
+    private var groupedSourceDecorations: [Int: [SourceReadingDecoration]] = [:]
+    private var sourceAvailablePages: Set<Int> = []
     private var renderedSourceWindow: [Int] = []
     private let sourceCanvas = PDFSourceDecorationCanvas()
     private var sourcePointerMonitor: Any?
@@ -427,7 +447,11 @@ struct PDFReaderView: NSViewRepresentable {
         onVisiblePagesChange = input.onVisiblePagesChange
         let sourceDecorationsChanged = sourceChanged || input.url.standardizedFileURL != loadedURL || sourceDecorationPage != requestedPage || (input.sourceDecorationRevision.map { $0 != sourceDecorationRevision }
             ?? (sourceDecorations != input.sourceDecorations))
-        if sourceDecorationsChanged { sourceDecorations = Array(input.sourceDecorations.prefix(12_000)) }
+        if sourceDecorationsChanged {
+            sourceDecorations = Array(input.sourceDecorations.prefix(12_000)); sourceInputGeneration &+= 1
+            groupedSourceDecorations = Dictionary(grouping: sourceDecorations, by: { $0.page ?? requestedPage ?? 1 })
+            sourceAvailablePages = Set(groupedSourceDecorations.keys)
+        }
         sourceDecorationRevision = input.sourceDecorationRevision; sourceDecorationPage = requestedPage
         sourceHash = input.sourceHash; sessionPassword = input.password
         canEditAnnotations = input.canEditAnnotations
@@ -1284,7 +1308,7 @@ struct PDFReaderView: NSViewRepresentable {
     private func clearSourceDecorations() {
         sourceDecorationGeneration &+= 1; sourceDecorationTask?.cancel(); sourceDecorationTask = nil
         sourceGeometries = [:]; sourceGeometryIDsByPage = [:]; sourceGeometryPages = [:]; sourceGeometryPageOrder = []
-        renderedSourceDecorations = []; renderedSourceWindow = []; lastVisiblePages = []
+        renderedSourceInputGeneration = -1; renderedSourceWindow = []; lastVisiblePages = []
         hoveredSourceID = nil; sourcePress = nil; onSourceDecorationHover?(nil); sourceCanvas.needsDisplay = true
     }
     @objc private func visiblePagesChanged(_ notification: Notification) { scheduleVisiblePages() }
@@ -1305,24 +1329,23 @@ struct PDFReaderView: NSViewRepresentable {
     }
     private func renderSourceDecorations() {
         guard let document, !document.isLocked else { clearSourceDecorations(); return }
-        let available = Set(sourceDecorations.compactMap { $0.page ?? sourceDecorationPage })
         let current = currentPageNumber ?? sourceDecorationPage ?? 1
-        let window = ReadingSentenceAnchors.pageWindow(current: current, visible: lastVisiblePages, available: available)
-        guard renderedSourceDecorations != sourceDecorations || renderedSourceWindow != window else { return }
+        let window = ReadingSentenceAnchors.pageWindow(current: current, visible: lastVisiblePages, available: sourceAvailablePages)
+        guard renderedSourceInputGeneration != sourceInputGeneration || renderedSourceWindow != window else { return }
         sourceDecorationGeneration &+= 1; sourceDecorationTask?.cancel(); sourceDecorationTask = nil
-        renderedSourceDecorations = sourceDecorations; renderedSourceWindow = window
-        let generation = sourceDecorationGeneration, documentID = documentGeneration, allowed = Set(window)
-        let desired = sourceDecorations.filter { value in allowed.contains(value.page ?? sourceDecorationPage ?? current) }
+        renderedSourceInputGeneration = sourceInputGeneration; renderedSourceWindow = window
+        let generation = sourceDecorationGeneration, documentID = documentGeneration
+        let desired = window.flatMap { groupedSourceDecorations[$0] ?? [] }
         let desiredIDs = Set(desired.map(\.id))
         sourceGeometries = sourceGeometries.filter { desiredIDs.contains($0.key) }
-        let grouped = Dictionary(grouping: desired, by: { $0.page ?? sourceDecorationPage ?? current })
+        let grouped = groupedSourceDecorations
         sourceGeometryIDsByPage = grouped.mapValues { $0.map(\.id) }
         sourceDecorationTask = Task { [weak self] in
             guard let self else { return }
             for number in window {
                 guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation,
                       let page = document.page(at: number - 1) else { return }
-                var cache: SourceGeometryPage
+                let cache: SourceGeometryPage
                 if let saved = self.sourceGeometryPages[number] { cache = saved }
                 else {
                     guard let text = page.string, text.utf8.count <= 8_000_000 else { continue }
@@ -1361,12 +1384,15 @@ struct PDFReaderView: NSViewRepresentable {
                     }
                     let key = QuoteCacheKey(quote: Data(value.quote.utf8), prefix: value.prefix.map { Data($0.utf8) }, suffix: value.suffix.map { Data($0.utf8) })
                     let matched = ranges[value.id]
-                    if let matched, cache.ranges.count < 2000 { cache.ranges[key] = matched }
+                    if let matched, key.byteCount <= 1_048_576,
+                       cache.ranges[key] != nil || (cache.ranges.count < 2000 && cache.rangeBytes + key.byteCount <= 1_048_576) {
+                        if cache.ranges[key] == nil { cache.rangeBytes += key.byteCount }; cache.ranges[key] = matched
+                    }
                     var lines: [CGRect] = []
                     if let range = matched?.range, let selection = page.selection(for: range) {
                         for line in selection.selectionsByLine() {
                             let rect = line.bounds(for: page).intersection(page.bounds(for: .cropBox))
-                            if !rect.isNull && !rect.isEmpty { lines.append(rect) }
+                            if !rect.isNull && !rect.isEmpty && [rect.minX, rect.minY, rect.maxX, rect.maxY].allSatisfy(\.isFinite) { lines.append(rect) }
                             count += 1
                             if count >= 24 || ProcessInfo.processInfo.systemUptime - began >= 0.003 {
                                 pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval)
@@ -1377,8 +1403,9 @@ struct PDFReaderView: NSViewRepresentable {
                             }
                         }
                     }
-                    let geometry = SourceGeometry(value: value, page: number, lines: lines)
-                    cache.geometry[value.id] = geometry; self.sourceGeometries[value.id] = geometry
+                    let cost = value.quote.utf8.count + (value.prefix?.utf8.count ?? 0) + (value.suffix?.utf8.count ?? 0) + lines.count * 64 + 256
+                    let geometry = SourceGeometry(value: value, page: number, lines: lines, cost: cost)
+                    cache.remember(geometry); self.sourceGeometries[value.id] = geometry
                     self.sourceCanvas.needsDisplay = true; count += 1
                     if count >= 12 || ProcessInfo.processInfo.systemUptime - began >= 0.003 {
                         self.sourceGeometryPages[number] = cache
@@ -1391,8 +1418,12 @@ struct PDFReaderView: NSViewRepresentable {
                 }
                 pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval)
                 self.sourceGeometryPages[number] = cache
-                while self.sourceGeometryPageOrder.count > 16 || self.sourceGeometryPages.values.reduce(0, { $0 + $1.byteCount }) > 12_582_912 {
-                    self.sourceGeometryPages.removeValue(forKey: self.sourceGeometryPageOrder.removeFirst())
+                while self.sourceGeometryPageOrder.count > 16 || self.sourceGeometryPages.values.reduce(0, { $0 + $1.cost }) > 12_582_912 {
+                    // In-use visible geometry must not disappear merely because
+                    // a dense page exceeds the idle-cache target. Only evict
+                    // pages outside this small, already bounded active window.
+                    guard let unused = self.sourceGeometryPageOrder.firstIndex(where: { !window.contains($0) }) else { break }
+                    self.sourceGeometryPages.removeValue(forKey: self.sourceGeometryPageOrder.remove(at: unused))
                 }
             }
             if self.sourceDecorationGeneration == generation { self.sourceDecorationTask = nil }
@@ -1400,15 +1431,32 @@ struct PDFReaderView: NSViewRepresentable {
     }
     private func drawSourceDecorations(in dirty: CGRect) {
         guard let document, !document.isLocked else { return }
-        let visible = Set(lastVisiblePages)
-        for id in visible.flatMap({ sourceGeometryIDsByPage[$0] ?? [] }) {
-            guard let geometry = sourceGeometries[id] else { continue }
-            let active = geometry.value.id == hoveredSourceID
-            guard active || !geometry.value.passive, let page = document.page(at: geometry.page - 1) else { continue }
-            NSColor.systemTeal.withAlphaComponent(active ? 0.95 : 0.38).setStroke()
-            for rect in geometry.lines {
-                let pageRect = sourceCanvas.convert(pdfView.convert(rect, from: page), from: pdfView)
-                guard pageRect.intersects(dirty) else { continue }
+        for number in lastVisiblePages {
+            guard let page = document.page(at: number - 1), let cache = sourceGeometryPages[number] else { continue }
+            let dirtyInPDF = sourceCanvas.convert(dirty, to: pdfView)
+            let visible = pdfView.convert(dirtyInPDF.intersection(pdfView.bounds), to: page).intersection(page.bounds(for: .cropBox))
+            guard !visible.isEmpty, !visible.isNull else { continue }
+            var candidates: Set<SourceLineKey>
+            if cache.paintBands.requiresFallback {
+                candidates = Set((sourceGeometryIDsByPage[number] ?? []).flatMap { id in
+                    guard let geometry = sourceGeometries[id], !geometry.value.passive else { return [SourceLineKey]() }
+                    return geometry.lines.indices.map { SourceLineKey(id: id, line: $0) }
+                })
+            } else { candidates = cache.paintBands.candidates(intersecting: visible) }
+            if let hoveredSourceID, sourceGeometries[hoveredSourceID]?.page == number {
+                if cache.hitBands.requiresFallback, let hovered = sourceGeometries[hoveredSourceID] {
+                    candidates.formUnion(hovered.lines.indices.map { SourceLineKey(id: hoveredSourceID, line: $0) })
+                } else {
+                    candidates.formUnion(cache.hitBands.candidates(intersecting: visible).filter { $0.id == hoveredSourceID })
+                }
+            }
+            for key in candidates {
+                guard let geometry = sourceGeometries[key.id], geometry.page == number, geometry.lines.indices.contains(key.line) else { continue }
+                let active = key.id == hoveredSourceID
+                guard active || !geometry.value.passive else { continue }
+                let rect = geometry.lines[key.line]
+                guard rect.intersects(visible) else { continue }
+                NSColor.systemTeal.withAlphaComponent(active ? 0.95 : 0.38).setStroke()
                 let from = sourceCanvas.convert(pdfView.convert(CGPoint(x: rect.minX, y: rect.minY + 1), from: page), from: pdfView)
                 let to = sourceCanvas.convert(pdfView.convert(CGPoint(x: rect.maxX, y: rect.minY + 1), from: page), from: pdfView)
                 let path = NSBezierPath(); path.lineWidth = active ? 1.6 : 1
@@ -1419,19 +1467,30 @@ struct PDFReaderView: NSViewRepresentable {
     private func sourceHit(at point: CGPoint, preferTerm: Bool) -> PDFSourceDecorationHit? {
         guard let document, let page = pdfView.page(for: point, nearest: false) else { return nil }
         let index = document.index(for: page), local = pdfView.convert(point, to: page)
-        guard index != NSNotFound else { return nil }
+        guard index != NSNotFound, let cache = sourceGeometryPages[index + 1] else { return nil }
         // Native links and real annotations keep their existing actions.
         if page.annotations.contains(where: { $0.bounds.contains(local) }) { return nil }
-        let hits = (sourceGeometryIDsByPage[index + 1] ?? []).compactMap { id -> (SourceGeometry, CGRect)? in
-            guard let geometry = sourceGeometries[id], let rect = geometry.lines.first(where: { $0.contains(local) }) else { return nil }
-            return (geometry, rect)
-        }.sorted { lhs, rhs in
-            let left = lhs.0.value.interaction == .term, right = rhs.0.value.interaction == .term
-            if left != right { return preferTerm ? left : !left }
-            return (lhs.0.value.rangeLength ?? Int.max) < (rhs.0.value.rangeLength ?? Int.max)
+        let candidates: Set<SourceLineKey>
+        if cache.hitBands.requiresFallback {
+            candidates = Set((sourceGeometryIDsByPage[index + 1] ?? []).flatMap { id -> [SourceLineKey] in
+                guard let geometry = sourceGeometries[id] else { return [] }
+                return geometry.lines.indices.map { SourceLineKey(id: id, line: $0) }
+            })
+        } else { candidates = cache.hitBands.candidates(atY: local.y) }
+        var best: (id: String, rect: CGRect, term: Bool, length: Int)?
+        for key in candidates {
+            guard let geometry = sourceGeometries[key.id], geometry.page == index + 1, geometry.lines.indices.contains(key.line) else { continue }
+            let rect = geometry.lines[key.line]
+            guard rect.contains(local) else { continue }
+            let term = geometry.value.interaction == .term, length = geometry.value.rangeLength ?? Int.max
+            if let chosen = best {
+                if term != chosen.term { if term != preferTerm { continue } }
+                else if length > chosen.length || (length == chosen.length && key.id >= chosen.id) { continue }
+            }
+            best = (key.id, rect, term, length)
         }
-        guard let match = hits.first else { return nil }
-        return PDFSourceDecorationHit(id: match.0.value.id, rect: pdfView.convert(match.1, from: page))
+        guard let best else { return nil }
+        return PDFSourceDecorationHit(id: best.id, rect: pdfView.convert(best.rect, from: page))
     }
     private func removeSourcePointerMonitor() {
         if let sourcePointerMonitor { NSEvent.removeMonitor(sourcePointerMonitor) }
@@ -1625,8 +1684,7 @@ private extension ReaderAnnotationColor {
     private func managedAnnotation(at point: CGPoint) -> PDFAnnotation? {
         guard let page = page(for: point, nearest: false) else { return nil }
         let local = convert(point, to: page)
-        let candidates = page.annotations.reversed().filter { isManagedAnnotation?($0) == true && $0.bounds.contains(local) }
-        return candidates.first
+        return page.annotations.reversed().first { isManagedAnnotation?($0) == true && $0.bounds.contains(local) }
     }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)

@@ -24,7 +24,10 @@ public enum ReadingSpoilerProjection {
     }
     private static func entity(_ canonical: KnowledgeEntity, context: Context, usesSavedVersions: Bool = true) -> KnowledgeEntity? {
         guard context.allowed != nil else { return canonical }
-        let original = usesSavedVersions ? (context.versions.entity(canonical.id) ?? canonical) : canonical
+        let canonicalEvidence = evidence(canonical.evidence, context: context)
+        guard !canonicalEvidence.isEmpty else { return nil }
+        let completeCanonical = canonicalEvidence.count == canonical.evidence.count
+        let original = usesSavedVersions && !completeCanonical ? (context.versions.entity(canonical.id) ?? canonical) : canonical
         let local = evidence(original.evidence, context: context)
         guard !local.isEmpty else { return nil }
         let names = ([original.name] + original.aliases).filter { name in
@@ -46,7 +49,10 @@ public enum ReadingSpoilerProjection {
     }
     private static func event(_ canonical: KnowledgeEvent, context: Context, usesSavedVersions: Bool = true) -> KnowledgeEvent? {
         guard context.allowed != nil else { return canonical }
-        let original = usesSavedVersions ? (context.versions.event(canonical.id) ?? canonical) : canonical
+        let canonicalEvidence = evidence(canonical.evidence, context: context)
+        guard !canonicalEvidence.isEmpty else { return nil }
+        let completeCanonical = canonicalEvidence.count == canonical.evidence.count
+        let original = usesSavedVersions && !completeCanonical ? (context.versions.event(canonical.id) ?? canonical) : canonical
         let local = evidence(original.evidence, context: context)
         guard !local.isEmpty else { return nil }
         var result = original

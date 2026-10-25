@@ -53,7 +53,7 @@ enum SentenceTranslationEngine {
             ["role": "user", "content": "【前文，仅作语境】\n" + request.precedingText + "\n【待译原句】\n" + request.anchor.quote + "\n【原句结束】"]
         ]
         let result = try await requestProvider(messages, bounded, min(32_000, try ReadingTokenBudget.operationLimit(for: bounded)))
-        guard result.finishReason != "length", result.message.tool_calls?.isEmpty != false else {
+        guard result.finishReason == "stop", result.message.tool_calls?.isEmpty != false else {
             throw ReadingError.invalid("译文尚未完整返回，请稍后重试；原文没有改变。")
         }
         let markdown = (result.message.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

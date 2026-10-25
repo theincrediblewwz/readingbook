@@ -35,11 +35,15 @@ struct SavedKnowledgeReuse {
     }
 
     func entity(_ original: KnowledgeEntity) -> KnowledgeEntity? {
+        if admits(original.evidence), let current = projection.entitySnapshot(original) { return current }
+        guard !original.evidence.isEmpty else { return nil }
         if let prior = versions.entity(original.id), let safe = projection.entitySnapshot(prior), admits(safe.evidence) { return safe }
         guard let value = projection.entity(original), admits(value.evidence) else { return nil }
         return value
     }
     func event(_ original: KnowledgeEvent) -> KnowledgeEvent? {
+        if admits(original.evidence), let current = projection.eventSnapshot(original) { return current }
+        guard !original.evidence.isEmpty else { return nil }
         if let prior = versions.event(original.id), let safe = projection.eventSnapshot(prior), admits(safe.evidence) { return safe }
         guard let value = projection.event(original), admits(value.evidence) else { return nil }
         return value

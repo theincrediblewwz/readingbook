@@ -157,6 +157,7 @@ public enum ReadingKnowledgeRuntime {
         return project.readingKnowledge?.backgrounds.reversed().first { value in
             value.objectID == request.objectID && value.sourceHash == request.sourceHash &&
                 value.contextFingerprint == request.contextFingerprint && value.avoidsSpoilers == request.avoidsSpoilers &&
+                (!request.avoidsSpoilers || value.cursorOrder <= request.cursorOrder) &&
                 sourcesCurrent(value, units: units, allowed: request.allowedUnitIDs)
         }
     }

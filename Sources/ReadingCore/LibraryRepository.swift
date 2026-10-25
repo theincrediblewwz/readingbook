@@ -1056,10 +1056,12 @@ extension LibraryRepository {
         guard state.receipts.count < 1_000 else { throw ControlledChangeError.denied("此书整理历史已达安全上限；未丢弃任何旧回执。") }
         state.receipts.append(receipt); candidate.controlledChanges = state
         candidate.audit.append(ToolAudit(name: "controlled_changes", summary: "已应用获准整理 \(receipt.operationID)，\(prepared.patches.count) 项记录变更。"))
+        try ReadingKnowledgeRuntime.captureVersions(before: canonical, in: &candidate)
         changeCommitRevisions[proposal.id] = try ControlledChangeRecords.revision(candidate)
         try writeControlledTransaction(candidate, bodies: bodies, expectedHashes: expected, operationID: receipt.operationID, proofOperationID: receipt.operationID, in: directory)
         let committed = try readProject(in: directory)
         changeGrants[grant.id]?.latestRevision = try ControlledChangeRecords.revision(committed)
+        refreshReadableAfterCommit(id: committed.id)
         return ControlledChangeCommitResult(project: committed, receipt: receipt, replayed: false)
     }
 
@@ -1086,8 +1088,10 @@ extension LibraryRepository {
         var candidate = try ControlledChangeRecords.applying(receipt.patches, to: canonical, undo: true)
         candidate.controlledChanges?.receipts[index].undoneAt = Date()
         candidate.audit.append(ToolAudit(name: "controlled_changes_undo", summary: "已撤销整理 \(operationID)，新增笔记保留在回收站。"))
+        try ReadingKnowledgeRuntime.captureVersions(before: canonical, in: &candidate)
         try writeControlledTransaction(candidate, bodies: bodies, expectedHashes: expected, operationID: "undo-" + UUID().uuidString, proofOperationID: receipt.operationID, in: directory)
         let committed = try readProject(in: directory)
+        refreshReadableAfterCommit(id: committed.id)
         return ControlledChangeCommitResult(project: committed, receipt: committed.controlledChanges!.receipts[index], replayed: false)
     }
 

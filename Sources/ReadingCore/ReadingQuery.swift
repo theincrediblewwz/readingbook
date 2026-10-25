@@ -52,6 +52,7 @@ public struct ReadingQuerySnapshot: Sendable {
     public static func freeze(scope: ReadingQueryScope, in project: BookProject, context suppliedContext: ReadingContext? = nil,
                               documentIDs: [String]? = nil, appendedDocumentIDs: [String] = [],
                               authorizedNodeIDs: [String] = []) throws -> ReadingQuerySnapshot {
+        try Task.checkCancellation()
         if let sourceHash = suppliedContext?.sourceHash, sourceHash != project.sourceHash { throw ReadingError.invalid("提问范围属于其他原书版本。") }
         let context: ReadingContext?
         if scope == .selection { context = suppliedContext }
@@ -96,6 +97,7 @@ public struct ReadingQuerySnapshot: Sendable {
         let sortedLayoutIDs = layoutIDs.sorted()
         if !sortedLayoutIDs.isEmpty { title += " · 附加 \(sortedLayoutIDs.count) 个布局节点" }
         let sources = try selectedSlices ?? units.map { unit in
+            try Task.checkCancellation()
             let text = unit.text
             return QuerySourceSlice(unitID: unit.id, locator: unit.locator, chapter: unit.chapter, text: text,
                                     textHash: try BookImporter.sha256(Data(text.utf8)))
@@ -223,6 +225,9 @@ struct ReadingQuerySession {
     /// Host-only authority. A .book snapshot over a pre-cropped component
     /// project is not permission to expose the original canonical identity.
     let allowsFullIdentity: Bool
+    /// Host-only rendering/answer preference. Internal component sessions keep
+    /// research defaults and cannot opt into teacher context via tool arguments.
+    let answerPreferences: ReadingAnswerPreferences
     var hostReceipts: [String] = []
     var taskCreatedNodeIDs = Set<String>()
     var sourceExcerpts: [(String, String)] = []
@@ -235,10 +240,12 @@ struct ReadingQuerySession {
 
     init(snapshot: ReadingQuerySnapshot, history: [ChatMessage], loader: ReadingDocumentLoader?, providedDocuments: [String: String],
          project: BookProject? = nil, workspace: ReadingWorkspaceSnapshot? = nil, hostTools: ReadingHostToolAccess? = nil, proposalAccess: ReadingProposalToolAccess? = nil,
-         allowsFullIdentity: Bool = false) {
+         allowsFullIdentity: Bool = false,
+         answerPreferences: ReadingAnswerPreferences = .init(style: .research, avoidsSpoilers: true)) {
         self.snapshot = snapshot; self.history = history; self.loader = loader; self.providedDocuments = providedDocuments
         self.project = project; self.workspace = workspace; self.hostTools = hostTools; self.proposalAccess = proposalAccess
         self.allowsFullIdentity = allowsFullIdentity && snapshot.scope == .book
+        self.answerPreferences = answerPreferences
     }
 
     /// Repack only genuinely supplied text for a standalone final request.

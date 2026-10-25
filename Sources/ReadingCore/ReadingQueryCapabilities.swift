@@ -296,7 +296,7 @@ extension ReadingQuerySession {
             var row: [String: Any] = ["ok": true, "object": try encoded(object), "documentBodiesProvided": false,
                 "identityOnly": isIdentityStub(object.id), "note": "稳定id可复用关联；跨范围聚合属性隐藏，安全旧简介单列为派生资料。只有本范围实际返回原文可作本次引用。"]
             if let saved = reuse?.record(id: object.id) { row["previouslySaved"] = saved }
-            return try json(row)
+            return try objectResultWithTeacherBackground(row, objectID: object.id, visibleName: object.name, project: project, maximumBytes: maximumBytes)
         case "relations_list":
             guard let id = arguments["objectID"] as? String else { throw invalid("缺少objectID。") }
             let rows = try TemporalKnowledgeRuntime.relations(objectID: id, in: scoped, at: timePoint(arguments), boundary: boundary)

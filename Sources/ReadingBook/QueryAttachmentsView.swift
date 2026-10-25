@@ -109,6 +109,7 @@ struct QueryMemoryInspector: View {
             .task(id: store.queryMemoryPreparationKey) {
                 let key = store.queryMemoryPreparationKey
                 preparedKey = nil
+                do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
                 let result = await store.prepareQueryMemoryDisplay()
                 guard !Task.isCancelled, store.queryMemoryPreparationKey == key else { return }
                 prepared = result; preparedKey = key

@@ -76,7 +76,7 @@ final class ReadingKnowledgeTests: XCTestCase {
     }
 
     func testFutureCacheCannotLeakBackAndSourceSlicesAreRespected() throws {
-        var book = try book(), later = try book()
+        var book = try self.book(), later = try self.book()
         later.entities[0].summary = "后来献策。"; later.entities[0].evidence = [Evidence(unitID: "u2", quote: later.units[1].text)]
         let future = try TeacherBackgroundRequest.freeze(objectID: "jia", in: later, currentUnitID: "u2", avoidsSpoilers: true)
         book.readingKnowledge = ReadingKnowledgeState(); book.readingKnowledge?.backgrounds = [record(future)]

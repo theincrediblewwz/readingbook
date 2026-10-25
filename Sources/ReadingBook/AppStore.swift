@@ -141,7 +141,9 @@ import ReadingCore
         }
     }
     @Published var catalogOperations = 0
-    @Published var libraryRootURL: URL
+    @Published var libraryRootURL: URL {
+        didSet { if oldValue != libraryRootURL { teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); queryTask?.cancel() } }
+    }
     @Published var lastTrashedProjectURL: URL?
     let storageState = StorageSettingsState()
     @Published var deletionRequest: WorkspaceDeletion?
@@ -423,6 +425,8 @@ import ReadingCore
                 try Task.checkCancellation()
                 guard bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
                 let memory = memoryEnabled ? await loadPreparedQueryMemory(snapshot: snapshot, history: history, root: requestRoot) : nil
+                try Task.checkCancellation()
+                guard bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
                 lastQuestionContext = snapshot.displayTitle; queryDisclosure = ""
                 var sentMessage = ChatMessage(role: "user", content: question)
                 sentMessage.conversationMode = preferences.interaction; sentMessage.answerStyle = preferences.style

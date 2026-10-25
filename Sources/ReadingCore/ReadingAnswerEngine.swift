@@ -21,7 +21,7 @@ enum ReadingAnswerEngine {
         guard remainingRequests > 0 else { throw ReadingError.invalid("本轮问答请求预算已用完。") }
         var session = ReadingQuerySession(snapshot: snapshot, history: history, loader: loader, providedDocuments: documents,
             project: project, workspace: functional ? workspace : nil, hostTools: functional ? hostTools : nil, proposalAccess: functional ? proposalAccess : nil,
-            allowsFullIdentity: scope == .book)
+            allowsFullIdentity: scope == .book, answerPreferences: preferences)
         let available = ReadingQueryToolCatalog.schemas(snapshot: snapshot, host: functional ? hostTools : nil, proposals: functional ? proposalAccess : nil)
         let tools = functional ? available : available.filter { tool in
             let name = (tool["function"] as? [String: Any])?["name"] as? String ?? ""
@@ -50,7 +50,10 @@ enum ReadingAnswerEngine {
         遇到已读过的人物或概念，先查已有对象，复用稳定ID和安全的旧简介。previouslySaved是此前保存的派生资料，不是本次原文证据；不要据它虚构本次已读取的引用，有新发展才补充。
         原书的具体内容请用实际读到的短句说明，引用写成[unit:原文ID]或[doc:笔记ID]，界面会显示可读标签。不要把这些ID、工具参数、JSON、查阅计数或软件工作步骤写进正文。保留正常Markdown与LaTeX公式；不要用代码框包裹普通回答。
         """
-        let system: [String: Any] = ["role": "system", "content": (functional ? functionalInstructions : readingInstructions) + "\n" + preferences.voiceInstructions]
+        let cachedBackgroundInstructions = preferences.style == .mentor
+            ? "\n显式读取人物object_get若返回cachedTeacherBackground，可复用这段本地老师介绍，新的发展才补充。它是AI背景讲解，不是原书事实、不授予原文引用；与本次原文分开讲，不必重新生成同一份介绍。"
+            : ""
+        let system: [String: Any] = ["role": "system", "content": (functional ? functionalInstructions : readingInstructions) + "\n" + preferences.voiceInstructions + cachedBackgroundInstructions]
         let header: [String: Any] = ["role": "user", "content": functional
             ? "本次范围：\(snapshot.displayTitle)。书名：\(String(project.title.prefix(200)))。范围内原文\(snapshot.unitIDs.count)单元，笔记\(snapshot.documentIDs.count)篇，显式附加布局节点\(snapshot.authorizedNodeIDs.count)个。仅提供目录能力，正文由只读工具按需获取；布局授权不共享其他原文或挂载正文。"
             : "我们正在读《\(String(project.title.prefix(200)))》，这次看\(snapshot.displayTitle)。原文请按需读取；没有分享的内容不要猜。"]
