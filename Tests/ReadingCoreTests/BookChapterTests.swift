@@ -26,7 +26,8 @@ final class BookChapterTests: XCTestCase {
         let first = try entry("第一章", unit: book.units[0], in: book), second = try entry("第二章", unit: book.units[0], in: book)
         let repeated = try entry("第一章", unit: book.units[1], in: book)
         book.originalBookOutline = try native([first, second, repeated], in: book)
-        let before = try JSONEncoder().encode(book.units)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(book.units)
         let index = try XCTUnwrap(BookChapterRuntime.index(in: book))
         XCTAssertEqual(index.chapters.count, 3); XCTAssertEqual(index.segments.count, 4)
         XCTAssertEqual(index.chapters[0].ranges.map { try! $0.text(in: book) }.joined(), "第一章\n甲章正文。\n")
@@ -34,7 +35,7 @@ final class BookChapterTests: XCTestCase {
         XCTAssertNotEqual(index.chapters[0].id, index.chapters[2].id)
         XCTAssertThrowsError(try index.chapter(unitID: "u0"))
         XCTAssertEqual(try index.chapter(unitID: "u0", offsetUTF16: second.anchor!.utf16Location).id, second.id)
-        XCTAssertEqual(try JSONEncoder().encode(book.units), before)
+        XCTAssertEqual(try encoder.encode(book.units), before)
     }
 
     func testParentAndChildMayShareStartButParentEndsAtNextSibling() throws {
