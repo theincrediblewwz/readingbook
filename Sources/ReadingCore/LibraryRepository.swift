@@ -420,7 +420,8 @@ public actor LibraryRepository {
         let directory = try bookDirectory(project.id, mustExist: true)
         try recoverDocument(in: directory)
         let existing = try readProject(in: directory)
-        guard existing.sourceHash == project.sourceHash, existing.units == project.units else { throw ReadingError.invalid("识别期间原文层已变化，请重新载入后继续。") }
+        guard existing.sourceHash == project.sourceHash, existing.units == project.units,
+              zip(existing.units, project.units).allSatisfy({ $0.text.utf8.elementsEqual($1.text.utf8) }) else { throw ReadingError.invalid("识别期间原文层已变化，请重新载入后继续。") }
         try checkOCRPage(project: existing, page: result.page)
         let updated = try OCRIntegration.applying(result, to: existing)
         try validate(updated)

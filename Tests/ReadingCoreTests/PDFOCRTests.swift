@@ -29,6 +29,51 @@ final class PDFOCRTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testLateOCRRejectsCanonicallyEquivalentSourceEditWithoutChangingCurrentLibrary() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ReadingBook-OCR-SourceBytes-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pdf = NSMutableData(), source = directory.appendingPathComponent("book.pdf")
+        let consumer = try XCTUnwrap(CGDataConsumer(data: pdf as CFMutableData))
+        var media = CGRect(x: 0, y: 0, width: 600, height: 800)
+        let renderer = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &media, nil))
+        renderer.beginPDFPage(nil); renderer.endPDFPage(); renderer.closePDF()
+        let originalPDF = pdf as Data
+        try originalPDF.write(to: source)
+        let oldText = "Cafe\u{301} 的原文。", currentText = "Caf\u{e9} 的原文。"
+        XCTAssertEqual(oldText, currentText, "回归必须覆盖Swift规范等价。")
+        XCTAssertFalse(oldText.utf8.elementsEqual(currentText.utf8))
+        var old = BookProject(title: "OCR原文字节", originalName: "book.pdf", sourceHash: try BookImporter.sha256(originalPDF),
+            units: [SourceUnit(id: "u1", order: 0, chapter: "一", page: 1, text: oldText)])
+        PluginEngine.seed(&old)
+        let root = directory.appendingPathComponent("library", isDirectory: true), repository = LibraryRepository(rootURL: root)
+        try await repository.create(old, sourceURL: source)
+        var current = old; current.units[0].text = currentText; current.bookmarks = ["u1"]
+        let saved = try await repository.save(current)
+        XCTAssertEqual(old.units, saved.units, "仅使用Swift单元相等无法发现此来源编辑。")
+        let metadataURL = root.appendingPathComponent("books/\(old.id)/project.json")
+        let preservedMetadata = try Data(contentsOf: metadataURL)
+        let result = OCRPageResult(page: 1, markdown: "迟到的识别结果", issues: [], model: "fixture-vision")
+        do {
+            _ = try await repository.saveOCRPage(project: old, result: result)
+            XCTFail("原文字节已变化，迟到OCR必须拒绝，不能覆盖当前内容。")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("识别期间原文层已变化"))
+        }
+        let loaded = try await repository.loadAll()
+        let retained = try XCTUnwrap(loaded.first)
+        XCTAssertTrue(retained.units[0].text.utf8.elementsEqual(currentText.utf8))
+        XCTAssertEqual(retained.units.map(\.id), ["u1"])
+        XCTAssertEqual(retained.bookmarks, ["u1"])
+        XCTAssertNil(retained.ocrPages)
+        XCTAssertEqual(try Data(contentsOf: metadataURL), preservedMetadata)
+        let storedSource = await repository.sourceURL(for: retained)
+        XCTAssertEqual(try Data(contentsOf: storedSource), originalPDF)
+        let fresh = try await repository.saveOCRPage(project: saved, result: result)
+        XCTAssertEqual(fresh.units.map(\.text).joined(), result.markdown, "对当前相同字节版本的OCR仍能正常保存。")
+        XCTAssertEqual(try Data(contentsOf: storedSource), originalPDF)
+    }
+
     func testPageRenderingRespectsCropRotationAndOutputBoundsWithoutNetwork() throws {
         let output = NSMutableData()
         let consumer = try XCTUnwrap(CGDataConsumer(data: output as CFMutableData))
