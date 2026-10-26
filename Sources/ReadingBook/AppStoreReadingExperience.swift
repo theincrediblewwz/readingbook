@@ -682,7 +682,7 @@ private struct CompanionScopePreparation: Sendable {
     @discardableResult
     func enhanceSourceScope(scope: ReadingQueryScope) async -> ReadingQuerySnapshot? {
         guard !Task.isCancelled, [.page, .chapter].contains(scope), let initial = book, let unit = selectedUnit, !isBusy else { return nil }
-        let root = libraryRootURL, runID = UUID()
+        let root = libraryRootURL, runID = UUID(), ownerRepository = repository
         var context = ReadingContext(sourceHash: initial.sourceHash, unitID: unit.id, page: unit.page)
         if scope == .chapter { context.selectedSourceAnchor = chapterReadingAnchor(in: initial, unitID: unit.id) }
         let frozenContext = context
@@ -748,10 +748,13 @@ private struct CompanionScopePreparation: Sendable {
                     try Task.checkCancellation()
                     guard companionScopeRunID == runID, libraryRootURL == root, var starting = book,
                           starting.id == snapshot.bookID, starting.sourceHash == snapshot.sourceHash else { throw CancellationError() }
+                    let before = starting
                     starting.audit.append(try progress.audit("companion_scope_started"))
                     // Persist the run before its first paid request so a restart
                     // can distinguish a continuation from a deliberate refresh.
-                    publish(try await repository.save(starting))
+                    let saved = try await ownerRepository.commitAIResult(base: before, result: starting, operationID: "companion-scope-start-" + progress.runID)
+                    guard companionScopeRunID == runID, libraryRootURL == root, bookID == snapshot.bookID else { throw CancellationError() }
+                    publish(saved)
                 }
                 await reader.resetBudget()
                 for (index, unitID) in remainingIDs.enumerated() {
@@ -784,7 +787,9 @@ private struct CompanionScopePreparation: Sendable {
                         guard completed || receiptCount > previousReceipts else { throw ReadingError.invalid("这部分没有新增核对回执或伴读结果，已停止以避免重复请求。") }
                         if completed { result.audit.append(try progress.audit("companion_scope_checkpoint", unitID: unitID)) }
                         markAIProgressSaving(aiRunID)
-                        publish(try await repository.save(result))
+                        let saved = try await ownerRepository.commitAIResult(base: current, result: result, operationID: "companion-batch-" + UUID().uuidString)
+                        guard companionScopeRunID == runID, libraryRootURL == root, bookID == snapshot.bookID else { throw CancellationError() }
+                        publish(saved)
                         requestsUsed = await reader.requestCount
                         if completed { break }
                     }
@@ -792,8 +797,11 @@ private struct CompanionScopePreparation: Sendable {
                 try Task.checkCancellation()
                 guard companionScopeRunID == runID, libraryRootURL == root, var finished = book,
                       finished.id == snapshot.bookID, finished.sourceHash == snapshot.sourceHash else { throw CancellationError() }
+                let before = finished
                 finished.audit.append(try progress.audit("companion_scope_finished"))
-                publish(try await repository.save(finished))
+                let saved = try await ownerRepository.commitAIResult(base: before, result: finished, operationID: "companion-scope-finish-" + progress.runID)
+                guard companionScopeRunID == runID, libraryRootURL == root, bookID == snapshot.bookID else { throw CancellationError() }
+                publish(saved)
                 activity = "\(snapshot.displayTitle)的伴读已保存，请结合原文核对。"
             } catch {
                 finishAIProgress(aiRunID, error: error)

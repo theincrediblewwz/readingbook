@@ -24,7 +24,7 @@ import ReadingCore
             // cursor, never the beginning of a native drag on another page.
             context.documentID = nil; context.unitID = selectedUnitID; context.page = selectedUnit?.page
             if scope == .chapter, let book, let anchor = chapterReadingAnchor(in: book, unitID: selectedUnitID),
-               anchor.unitID == selectedUnitID, anchor.sourceHash == book?.sourceHash {
+               anchor.unitID == selectedUnitID, anchor.sourceHash == book.sourceHash {
                 context.selectedSourceAnchor = anchor
             }
         case .selection:

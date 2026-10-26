@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import ReadingCore
 
 /// A bounded process cache also remembers that a verified PDF has no outline.
@@ -32,7 +33,8 @@ private actor OriginalChapterOutlineCache {
         if let position = values.firstIndex(where: { $0.key == before }) {
             let bytes = try Data(contentsOf: url, options: .mappedIfSafe)
             try Task.checkCancellation()
-            guard bytes.count == before.size, try BookImporter.sha256(bytes) == project.sourceHash,
+            let sourceHash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            guard bytes.count == before.size, sourceHash == project.sourceHash,
                   try key() == before else { throw ReadingError.invalid("原书文件已变化，请重新打开书籍。") }
             let value = values.remove(at: position); values.append(value); return value.outline
         }

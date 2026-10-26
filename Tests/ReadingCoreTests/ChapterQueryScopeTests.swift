@@ -95,6 +95,20 @@ final class ChapterQueryScopeTests: XCTestCase {
         XCTAssertEqual(saved.paragraphReceipts, book.paragraphReceipts)
         XCTAssertNil(saved.smartReading)
         XCTAssertEqual(saved.audit.last?.name, "reading_enrich")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ChapterEnrichMerge-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("book.pdf")
+        try Data("chapter-source".utf8).write(to: source)
+        let repository = LibraryRepository(rootURL: directory.appendingPathComponent("library"))
+        try await repository.create(book, sourceURL: source)
+        var concurrent = book
+        concurrent.entities.append(KnowledgeEntity(id: "peer", typeID: "person", name: "另一条已保存资料",
+            evidence: [Evidence(unitID: "shared", quote: "甲章原文。")]))
+        _ = try await repository.commitAIResult(base: book, result: concurrent, operationID: "peer-while-enriching")
+        let merged = try await repository.commitAIResult(base: book, result: saved, operationID: "manual-chapter-enrich")
+        XCTAssertEqual(merged.entities.map(\.id), ["peer"], "手动伴读的旧快照不能覆盖等待期间另一条分析已保存的资料")
+        XCTAssertEqual(merged.audit.last?.name, "reading_enrich")
     }
 
     func testExcerptGrantRejectsOtherChapterFactsAndExistingAnchorReuse() throws {
