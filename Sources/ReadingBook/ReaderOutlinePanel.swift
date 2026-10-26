@@ -99,10 +99,9 @@ struct ReaderOutlinePanel: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        if !bookmarksOnly && query.isEmpty {
+                        if isPDF && !bookmarksOnly && query.isEmpty {
                             directoryHeader
                             ForEach(visibleOutline) { row in chapterRow(row, selected: currentOutlineID == row.id) }
-                            if !isPDF && visibleOutline.isEmpty { Text("暂无章节目录").font(.system(size: 14)).foregroundStyle(.secondary).padding(24) }
                         } else {
                             ForEach(visibleUnits) { unit in outlineRow(unit) }
                         }
@@ -138,8 +137,10 @@ struct ReaderOutlinePanel: View {
             .task(id: currentRequest) { await search(currentRequest) }
             .task(id: outlineOwner) {
                 collapsed = []
-                guard isPDF else { return }
-                await outline.load(owner: outlineOwner, project: store.book, url: store.sourceFileURL, password: store.pdfPassword(for: store.bookID))
+                // Also reset/cancel the PDF-owned task on a switch to text or
+                // EPUB. A guard-return here leaves the old request alive.
+                await outline.load(owner: outlineOwner, project: isPDF ? store.book : nil,
+                    url: isPDF ? store.sourceFileURL : nil, password: store.pdfPassword(for: store.bookID))
             }
             .onDisappear { outline.cancel(); sourceRefreshTask?.cancel() }
     }
