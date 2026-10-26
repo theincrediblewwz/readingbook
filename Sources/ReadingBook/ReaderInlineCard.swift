@@ -132,9 +132,18 @@ struct ReaderInlineContent: Sendable {
             // A modern event may have only dated/narrative metadata, without
             // the legacy year fields. Use the same provenance gate as the
             // timeline; future metadata must not create an apparent entry.
+            let eventIDs = Set(events.map(\.id))
+            let parentIDs = Set((book.temporalKnowledge?.eventMetadata ?? []).filter { eventIDs.contains($0.eventID) }.compactMap(\.parentEventID)).subtracting(eventIDs)
             var scoped = book; scoped.events = events
+            // A dated child can refer to a visible parent that does not itself
+            // involve this person. Keep that reference for the provenance gate;
+            // only the originally related events can make this timeline appear.
+            for event in book.events where parentIDs.contains(event.id) {
+                guard !Task.isCancelled else { return nil }
+                if let value = projection.event(event) { scoped.events.append(value) }
+            }
             hasTime = (try? TemporalKnowledgeRuntime.events(in: scoped, boundary: boundary))?.contains {
-                $0.extent.start != nil || $0.extent.end != nil || $0.extent.narrativeStart != nil
+                eventIDs.contains($0.object.id) && ($0.extent.start != nil || $0.extent.end != nil || $0.extent.narrativeStart != nil)
             } == true
         }
         var sources: [CompositionDataSource] = [], parts: [CompositionPart] = [], layout: [CompositionLayoutNode] = []
