@@ -15,6 +15,8 @@ public struct ReadingAnalysisRunQueue: Sendable {
 
     private let chunks: [ReadingAnalysisChunk]
     private let indices: [String: Int]
+    private var runningAliases: [String: Int]
+    private var aliasedRunningIndices: Set<Int>
     private let unitIndices: [String: Int]
     private let memberships: [[Int]]
     private var barriers: [Barrier]
@@ -26,9 +28,16 @@ public struct ReadingAnalysisRunQueue: Sendable {
     public private(set) var runningCount: Int
     public private(set) var dispatchCount: Int
     public var count: Int { chunks.count }
+    public var scheduledChunks: [ReadingAnalysisChunk] { chunks }
+
+    func runningChunk(_ id: String) -> ReadingAnalysisChunk? {
+        guard let index = indices[id] ?? runningAliases[id], running[index] else { return nil }
+        return chunks[index]
+    }
 
     public init(chunks: [ReadingAnalysisChunk], steps: [ReadingExecutionStep], chapters: [String: String],
-                completed: Set<String>, running: Set<String> = [], dispatchCount: Int = 0) throws {
+                completed: Set<String>, running: Set<String> = [], dispatchCount: Int = 0,
+                runningAliases: [String: String] = [:]) throws {
         var indices: [String: Int] = [:], unitIndices: [String: Int] = [:]
         var chapterBarriers: [String: Int] = [:]
         var barriers = [Barrier()]
@@ -50,8 +59,16 @@ public struct ReadingAnalysisRunQueue: Sendable {
                 memberships[index].append(barrier)
             }
         }
+        var aliasIndices: [String: Int] = [:], aliasedIndices = Set<Int>()
+        for (old, current) in runningAliases {
+            guard running.contains(old), indices[old] == nil, let index = indices[current],
+                  !running.contains(current), aliasedIndices.insert(index).inserted else {
+                throw ReadingError.invalid("进行中的分析块身份无法唯一对应，已保存内容保留。")
+            }
+            aliasIndices[old] = index
+        }
         let completeBits = chunks.map { completed.contains($0.id) }
-        let runningBits = chunks.map { running.contains($0.id) }
+        let runningBits = chunks.enumerated().map { running.contains($0.element.id) || aliasedIndices.contains($0.offset) }
         for id in barriers.indices {
             try Task.checkCancellation()
             while barriers[id].firstIncomplete < barriers[id].members.count,
@@ -81,7 +98,8 @@ public struct ReadingAnalysisRunQueue: Sendable {
                 }
             }
         }
-        self.chunks = chunks; self.indices = indices; self.unitIndices = unitIndices
+        self.chunks = chunks; self.indices = indices; self.runningAliases = aliasIndices; self.aliasedRunningIndices = aliasedIndices
+        self.unitIndices = unitIndices
         self.memberships = memberships; self.barriers = barriers
         self.completed = completeBits; self.running = runningBits; self.pending = pending
         self.ready = ReadingReadyIndex(completeBits.indices.map { !completeBits[$0] && !runningBits[$0] && pending[$0] == 0 })
@@ -111,7 +129,17 @@ public struct ReadingAnalysisRunQueue: Sendable {
     /// incomplete job to ready. The caller commits receipt results before it
     /// admits another job. Completion never follows from this method.
     public mutating func finish(_ id: String) {
-        guard let index = indices[id], running[index] else { return }
+        // An identity-only queue recovery may leave an old worker in flight.
+        // Its alias reserves the equivalent job and is consumed exactly once.
+        let target: Int?
+        if let index = indices[id] {
+            guard !aliasedRunningIndices.contains(index) else { return }
+            target = index
+        } else {
+            target = runningAliases.removeValue(forKey: id)
+            if let target { aliasedRunningIndices.remove(target) }
+        }
+        guard let index = target, running[index] else { return }
         running[index] = false; runningCount -= 1
         if !completed[index] && pending[index] == 0 { ready.set(index, true) }
     }

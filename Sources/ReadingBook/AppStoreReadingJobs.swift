@@ -48,8 +48,9 @@ private final class ReadingPublicationCompletion: @unchecked Sendable {
                     // source bytes, work identity or append-only checkpoints.
                     let revision = projectRevision, stamp = latest.publicationStamp
                     let previous = completedIDs, active = running, dispatched = queue.dispatchCount
+                    let scheduled = queue
                     let check = Task.detached(priority: .utility) {
-                        try catalog.reconcile(in: latest, previouslyCompleted: previous, running: active, dispatchCount: dispatched)
+                        try catalog.reconcile(in: latest, previouslyCompleted: previous, running: active, dispatchCount: dispatched, currentQueue: scheduled)
                     }
                     let update: ReadingAnalysisRunUpdate
                     do {

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import XCTest
 @testable import ReadingCore
 
@@ -10,7 +11,14 @@ final class LocalCredentialStoreTests: XCTestCase {
         var file: URL { directory.appendingPathComponent("credentials.json") }
     }
     private func fixture() throws -> Fixture {
-        let temporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        // Foundation's resolving/standardized URL APIs strip /private on macOS,
+        // so they can reintroduce the system /var symlink. Only the trusted test
+        // base is resolved here; the store must still reject arbitrary links.
+        guard let physical = realpath(FileManager.default.temporaryDirectory.path, nil) else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { free(physical) }
+        let temporary = URL(fileURLWithPath: String(cString: physical), isDirectory: true)
             .appendingPathComponent("ReadingBook-Credentials-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: false,
             attributes: [.posixPermissions: 0o700])
@@ -48,6 +56,28 @@ final class LocalCredentialStoreTests: XCTestCase {
         XCTAssertEqual(try f.store.key(for: "local-server"), "")
         try f.store.remove(for: "missing")
         XCTAssertEqual(try f.store.key(for: "legacy"), "new-fixture")
+    }
+
+    func testPhysicalPathIsPreservedWhileUntrustedURLsAndAliasAncestorsAreRejected() throws {
+        let f = try fixture(); defer { try? FileManager.default.removeItem(at: f.temporary) }
+        try f.store.save("fixture", for: "a")
+        XCTAssertEqual(try f.store.key(for: "a"), "fixture", "A physical path must not be rewritten through a Foundation system alias.")
+        let original = try Data(contentsOf: f.file)
+        for url in [
+            try XCTUnwrap(URL(string: "file://credentials.invalid" + f.directory.path)),
+            f.temporary.appendingPathComponent("../" + f.temporary.lastPathComponent + "/ReadingBook-Private", isDirectory: true),
+            try XCTUnwrap(URL(string: f.temporary.absoluteString + "bad%00path/"))
+        ] {
+            let untrusted = LocalCredentialStore(directoryURL: url)
+            XCTAssertThrowsError(try untrusted.key(for: "a"))
+            XCTAssertThrowsError(try untrusted.save("must-not-write", for: "a"))
+        }
+        let alias = f.temporary.appendingPathComponent("alias", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: f.temporary)
+        let aliased = LocalCredentialStore(directoryURL: alias.appendingPathComponent("ReadingBook-Private", isDirectory: true))
+        XCTAssertThrowsError(try aliased.key(for: "a"))
+        XCTAssertThrowsError(try aliased.save("must-not-write", for: "a"))
+        XCTAssertEqual(try Data(contentsOf: f.file), original)
     }
 
     func testDirectoryAndFileSymlinksCannotRedirectSecrets() throws {

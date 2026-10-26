@@ -172,6 +172,75 @@ final class ReadingAnalysisRunQueueTests: XCTestCase {
         XCTAssertTrue(edited.completedIDs.isEmpty); XCTAssertNotNil(edited.replacementQueue)
     }
 
+    func testIdentityRecoveryUsesCurrentQueueWhenCheckpointRemovalReturnsToBaseID() throws {
+        var book = try project()
+        let catalog = try ReadingAnalysisRunCatalog(in: book, allowedUnitIDs: ["u0", "u1"])
+        let original = catalog.chunks, second = original[1]
+        let initialQueue = try catalog.makeQueue(completed: [], dispatchCount: 7)
+        var invalid = checkpoint(second, in: book); invalid.completedStepIDs = []
+        book.smartReading?.analysisCheckpoints = [invalid]
+        let derivedUpdate = try catalog.reconcile(in: book, previouslyCompleted: [], running: [], dispatchCount: 7, currentQueue: initialQueue)
+        let derivedQueue = try XCTUnwrap(derivedUpdate.replacementQueue)
+        XCTAssertTrue(derivedUpdate.completedIDs.isEmpty)
+        XCTAssertNotEqual(derivedQueue.scheduledChunks[1].id, second.id)
+        XCTAssertEqual(derivedQueue.scheduledChunks[1].stepIDs, second.stepIDs)
+
+        book.smartReading?.analysisCheckpoints = []
+        let restored = try catalog.reconcile(in: book, previouslyCompleted: [], running: [], dispatchCount: 7, currentQueue: derivedQueue)
+        let baseQueue = try XCTUnwrap(restored.replacementQueue, "当前队列仍有派生ID，即使目录最初也是base也必须重建。")
+        XCTAssertEqual(baseQueue.scheduledChunks, original)
+        XCTAssertEqual(baseQueue.dispatchCount, 7)
+        XCTAssertTrue(restored.completedIDs.isEmpty)
+        XCTAssertTrue(restored.newlyCompletedIDs.isEmpty)
+
+        var changed = book
+        changed.smartReading?.selection.execution?.steps[0].title = "实际工作改变"
+        XCTAssertThrowsError(try catalog.reconcile(in: changed, previouslyCompleted: [], running: [], dispatchCount: 7, currentQueue: baseQueue), "身份恢复不能放宽配置验证。")
+    }
+
+    func testIdentityRecoveryReservesEquivalentRunningWorkUntilOldWorkerFinishesOnce() throws {
+        var book = try project()
+        let catalog = try ReadingAnalysisRunCatalog(in: book, allowedUnitIDs: ["u0", "u1"])
+        let first = catalog.chunks[0], second = catalog.chunks[1]
+        var initialQueue = try catalog.makeQueue(completed: [])
+        XCTAssertTrue(initialQueue.begin(second.id))
+        var invalid = checkpoint(second, in: book); invalid.completedStepIDs = []
+        book.smartReading?.analysisCheckpoints = [invalid]
+        let update = try catalog.reconcile(in: book, previouslyCompleted: [], running: [second.id], dispatchCount: initialQueue.dispatchCount, currentQueue: initialQueue)
+        var derivedQueue = try XCTUnwrap(update.replacementQueue)
+        let derived = derivedQueue.scheduledChunks[1]
+        XCTAssertNotEqual(derived.id, second.id)
+        XCTAssertEqual(derivedQueue.runningCount, 1)
+        XCTAssertFalse(derivedQueue.begin(derived.id), "旧worker尚在处理相同工作，不能再次派发。")
+        XCTAssertFalse(derivedQueue.begin(second.id), "运行别名不是新的派发权限。")
+        derivedQueue.markComplete(second.id)
+        XCTAssertEqual(derivedQueue.completedCount, 0, "运行别名不授予完成权限。")
+        derivedQueue.finish(derived.id)
+        XCTAssertEqual(derivedQueue.runningCount, 1, "新ID不能释放旧worker的占用。")
+        XCTAssertEqual(derivedQueue.next(currentUnitID: "u1")?.id, first.id)
+        derivedQueue.finish(second.id)
+        XCTAssertEqual(derivedQueue.runningCount, 0)
+        XCTAssertTrue(derivedQueue.begin(derived.id))
+        derivedQueue.finish(second.id)
+        XCTAssertEqual(derivedQueue.runningCount, 1, "旧worker的别名只消费一次，不可释放新worker。")
+
+        book.smartReading?.analysisCheckpoints = []
+        let restored = try catalog.reconcile(in: book, previouslyCompleted: [], running: [derived.id], dispatchCount: derivedQueue.dispatchCount, currentQueue: derivedQueue)
+        var baseQueue = try XCTUnwrap(restored.replacementQueue)
+        XCTAssertEqual(baseQueue.scheduledChunks[1], second)
+        XCTAssertEqual(baseQueue.runningCount, 1)
+        XCTAssertFalse(baseQueue.begin(second.id))
+        baseQueue.finish(derived.id)
+        XCTAssertEqual(baseQueue.runningCount, 0)
+        XCTAssertEqual(baseQueue.next(currentUnitID: "u1")?.id, second.id)
+        XCTAssertTrue(baseQueue.begin(second.id))
+        baseQueue.finish(derived.id)
+        XCTAssertEqual(baseQueue.runningCount, 1)
+        baseQueue.finish(second.id)
+        XCTAssertEqual(baseQueue.runningCount, 0)
+        XCTAssertEqual(baseQueue.completedCount, 0)
+    }
+
     func testChangedSourceWorkLayoutAndSessionFailClosedButSchedulingKnobsStayCompatible() throws {
         let book = try project(), catalog = try ReadingAnalysisRunCatalog(in: book, allowedUnitIDs: ["u0", "u1"])
         var changed = book; changed.smartReading?.selection.execution?.maximumConcurrentRequests = 5

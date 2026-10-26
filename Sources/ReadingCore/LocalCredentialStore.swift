@@ -99,9 +99,15 @@ public struct LocalCredentialStore: Sendable {
     /// Traverse with directory descriptors rather than resolving a user-created
     /// symlink. Only the final private directory may be created or chmodded.
     private func openDirectory(create: Bool) throws -> Int32? {
-        guard directoryURL.isFileURL, directoryURL.path.hasPrefix("/"),
-              directoryURL.standardizedFileURL.path == directoryURL.path else { throw failure() }
-        let components = directoryURL.path.split(separator: "/").map(String.init)
+        let path = directoryURL.path
+        // Foundation standardization may turn a physical /private/var path back
+        // into the /var symlink on macOS. Validate lexically, then let each
+        // O_NOFOLLOW open prove the actual directory instead of rewriting it.
+        guard directoryURL.isFileURL, path.hasPrefix("/"), !path.utf8.contains(0),
+              directoryURL.host.map({ $0.isEmpty || $0 == "localhost" }) ?? true,
+              directoryURL.user == nil, directoryURL.password == nil, directoryURL.port == nil,
+              directoryURL.query == nil, directoryURL.fragment == nil else { throw failure() }
+        let components = path.split(separator: "/").map(String.init)
         guard components.count >= 2, !components.contains("."), !components.contains("..") else { throw failure() }
         var current = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard current >= 0 else { throw failure() }
