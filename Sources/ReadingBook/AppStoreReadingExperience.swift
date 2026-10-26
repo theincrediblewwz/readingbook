@@ -448,7 +448,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         let object = selectedObjectID.flatMap { id in
             book?.entities.contains { $0.id == id } == true || book?.events.contains { $0.id == id } == true ? id : nil
         }
-        let anchor = focusedReadingAnchorID.flatMap { id in readingExperienceIndex.anchors.first { $0.id == id } }
+        let anchor = focusedReadingSourceAnchor
         let persistentAnchor = anchor.flatMap { value in book?.readingExperience?.anchors.contains { $0.id == value.id } == true ? value.id : nil }
         let selection = selectedSourceAnchor
         let document = book?.activeDocuments.first { $0.id == readingContextDocumentID }
@@ -468,6 +468,12 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                               objectID: object, documentID: document?.id,
                               page: document == nil ? sourcePage : nil, timeFrom: timeFrom, timeTo: timeTo,
                               selectionEndPage: document == nil ? sourceReadingSelection?.endPage : nil)
+    }
+    var focusedReadingSourceAnchor: SourceAnchor? {
+        guard let book, let id = focusedReadingAnchorID,
+              let anchor = readingPageSnapshots.anchorsByID[id] ?? readingExperienceIndex.anchors.first(where: { $0.id == id }),
+              anchor.sourceHash == book.sourceHash else { return nil }
+        return anchor
     }
     var readingContextItems: ReadingContextItems {
         guard let book else { return ReadingContextItems() }
@@ -593,6 +599,28 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         focusedReadingAnchorID = anchor.id; sourceReadingSelection = nil; readingContextDocumentID = nil
         selectedObjectID = readingExperienceIndex.mentions.first { $0.anchorID == id }?.targetID
         readingCompanionSection = selectedObjectID == nil ? "layers" : "mentions"; readingCompanionVisible = true; readingCompanionTab = "companion"
+    }
+    /// Opening a conversation is an explicit selection of the card's original
+    /// anchor, not a request to read whichever native selection remains behind
+    /// the popup. No anchor or chat is persisted merely by opening this panel.
+    @discardableResult
+    func openReadingConversation(anchor: SourceAnchor, objectID: String?, question: String) -> Bool {
+        guard let book, !storageState.working,
+              (try? ReadingExperienceRuntime.resolve(anchor, in: book)) != nil else {
+            readingExperienceError = "这句话的原文位置已变化，请重新悬停后再聊。"; return false
+        }
+        sourceReadingSelection = nil; readingContextDocumentID = nil
+        if let position = readingExperienceIndex.anchors.firstIndex(where: { $0.id == anchor.id }) {
+            readingExperienceIndex.anchors[position] = anchor
+        } else { readingExperienceIndex.anchors.append(anchor) }
+        readingPageSnapshots.anchorsByID[anchor.id] = anchor
+        selectedObjectID = objectID.flatMap { id in
+            book.entities.contains(where: { $0.id == id }) || book.events.contains(where: { $0.id == id }) ? id : nil
+        }
+        focusedReadingAnchorID = anchor.id
+        queryScope = .selection; readingCompanionVisible = true; readingCompanionTab = "chat"
+        queryComposerDraft.text = question
+        return true
     }
     func focusReadingAnchor(_ id: String) {
         guard let book, let anchor = readingExperienceIndex.anchors.first(where: { $0.id == id }) ?? book.readingExperience?.anchors.first(where: { $0.id == id }) else { return }

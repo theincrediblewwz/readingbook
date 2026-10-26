@@ -221,7 +221,9 @@ struct PDFReaderView: NSViewRepresentable {
     private var onSourceSelection: ((SourceReadingSelection?) -> Void)?
     private var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
     private var pendingQuote: (page: Int, quote: String, prefix: String?, suffix: String?)?
-    private var isFocusingQuote = false
+    /// Navigation emphasis is not a user text selection. In particular, a
+    /// remounted reader may restore a focused anchor while hover stays usable.
+    private var quoteFocusHighlight: PDFSelection?
     private var pendingWorkspaceMemory: WorkspacePDFMemory?
     private var appliedMemoryRevision: Int?
     private var memoryCallback: ((WorkspacePDFMemory) -> Void)?
@@ -581,6 +583,7 @@ struct PDFReaderView: NSViewRepresentable {
         if sourceDecorationsChanged || newProofMetadata { renderSourceDecorations() }
         if sourceDecorationFocusID != input.focusedDecorationID {
             sourceDecorationFocusID = input.focusedDecorationID
+            clearQuoteFocusHighlight()
             appliedSourceDecorationFocusID = nil; pendingQuote = nil
         }
         focusSourceDecorationIfReady()
@@ -679,6 +682,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     private func invalidateNavigation() {
         invalidateSourcePress()
+        clearQuoteFocusHighlight()
         navigationRequestID &+= 1; pageObservationID &+= 1; pendingNavigation = nil; pendingQuote = nil
     }
 
@@ -1172,7 +1176,7 @@ struct PDFReaderView: NSViewRepresentable {
         document?.delegate = nil; document?.cancelFindString(); searchDelegate = nil
         matches = []; matchIndex = -1; searching = false; searchLimited = false
         highlightUpdateScheduled = false; allowsSearchAutoNavigation = false
-        pdfView.highlightedSelections = nil; pdfView.clearSelection()
+        updateSelectionHighlights(); pdfView.clearSelection()
         resultLabel.stringValue = ""; refreshControls()
     }
 
@@ -1201,7 +1205,15 @@ struct PDFReaderView: NSViewRepresentable {
         if matches.isEmpty { setStatus("没有找到匹配文字。扫描页没有文字层时，原生搜索无法查到图中的字。") }
     }
 
-    private func updateHighlights() { pdfView.highlightedSelections = matches; updateSearchDisplay(); refreshControls() }
+    private func updateSelectionHighlights() {
+        if let quoteFocusHighlight { pdfView.highlightedSelections = matches + [quoteFocusHighlight] }
+        else { pdfView.highlightedSelections = matches.isEmpty ? nil : matches }
+    }
+    private func clearQuoteFocusHighlight() {
+        guard quoteFocusHighlight != nil else { return }
+        quoteFocusHighlight = nil; updateSelectionHighlights()
+    }
+    private func updateHighlights() { updateSelectionHighlights(); updateSearchDisplay(); refreshControls() }
     private func updateSearchDisplay() {
         if matches.isEmpty { resultLabel.stringValue = searching ? "查找中…" : "无结果" }
         else { resultLabel.stringValue = "\(matchIndex + 1)/\(matches.count)\(searchLimited ? "+" : searching ? "…" : "")" }
@@ -1304,7 +1316,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     @objc private func selectionChanged(_ notification: Notification) {
         refreshControls()
-        guard !isFocusingQuote else { return }
+        if pdfView.currentSelection?.pages.isEmpty == false { clearQuoteFocusHighlight() }
         sourceSelectionObservation &+= 1
         let observation = sourceSelectionObservation, generation = documentGeneration
         let deliver: (SourceReadingSelection?) -> Void = { [weak self] selection in
@@ -1381,11 +1393,15 @@ struct PDFReaderView: NSViewRepresentable {
               let selection = page.selection(for: range) else {
             setStatus("已定位到原页；原生文字无法唯一匹配此引文，未推测词位。扫描页请对照原页与识别稿。"); return
         }
-        isFocusingQuote = true
         selection.color = NSColor.systemTeal.withAlphaComponent(0.3)
-        pdfView.setCurrentSelection(selection, animate: !reduceReadingMotion)
+        // currentSelection belongs to native text selection. Using it for a
+        // restored citation makes the hover guard treat every mouse move as
+        // an active user selection after original/annotation mode switches.
+        // Keep the emphasis in PDFKit's independent highlight presentation.
+        pdfView.clearSelection()
+        quoteFocusHighlight = selection; updateSelectionHighlights()
         pdfView.go(to: selection)
-        isFocusingQuote = false; refreshControls()
+        refreshControls()
     }
 
     private func clearSourceDecorations() {
@@ -1750,6 +1766,7 @@ struct PDFReaderView: NSViewRepresentable {
             reportSourceHover(sourceHit(at: point, preferTerm: false))
         case .leftMouseDown:
             invalidateSourcePress()
+            clearQuoteFocusHighlight()
             reportSourceHover(nil)
             sourcePress = event.clickCount == 1 ? sourceHit(at: point, preferTerm: true).map { ($0, point, sourceInteractionGeneration) } : nil
         case .leftMouseDragged, .scrollWheel:

@@ -188,6 +188,14 @@ extension LibraryRepository {
         }
         var guide = "# \(readableLabel(project.title))\n\n" + note
         guide += "[打开原书](\(target("source/" + project.originalName))) · [笔记文件夹](\(target("docs")))\n\n"
+        if let outline = project.generatedOutline, outline.sourceHash == project.sourceHash {
+            guide += "## AI 整理的章节目录\n\n" + (outline.complete ? "" : "尚未整理完，已保存当前结果。\n\n")
+            for entry in outline.entries {
+                let destination = target("source/" + project.originalName) + (entry.page.map { "#page=\($0)" } ?? "")
+                guide += String(repeating: "  ", count: min(entry.level, 5)) + "- [\(readableLabel(entry.title))](\(destination))\n"
+            }
+            guide += "\n"
+        }
         guide += "## 笔记与保存的回答\n\n"
         if project.documents.isEmpty { guide += "暂无保存的 Markdown。\n\n" }
         for document in project.documents {

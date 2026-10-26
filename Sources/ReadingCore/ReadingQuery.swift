@@ -120,7 +120,23 @@ public struct ReadingQuerySnapshot: Sendable {
     private static func selectionSlices(quote: String, context: ReadingContext, project: BookProject, ordered: [SourceUnit]) throws -> [QuerySourceSlice] {
         try Task.checkCancellation()
         guard quote.utf8.count <= 400_000 else { throw ReadingError.invalid("选段过长，请缩小选择或改用章节范围。") }
-        guard (context.selectedPrefix?.utf8.count ?? 0) <= 1000, (context.selectedSuffix?.utf8.count ?? 0) <= 1000 else { throw ReadingError.invalid("选段定位前后文过长，请重新选择。") }
+        // Inline sentence anchors retain up to 1024 UTF-8 bytes on each side.
+        // The query boundary must accept that same bounded, literal context;
+        // a lower limit makes normal mid-page hover conversations unsendable.
+        guard (context.selectedPrefix?.utf8.count ?? 0) <= 1_024, (context.selectedSuffix?.utf8.count ?? 0) <= 1_024 else { throw ReadingError.invalid("选段定位前后文过长，请重新选择。") }
+        if context.selectedSourceAnchor != nil {
+            // A card knows the exact source unit and literal range. A page-wide
+            // re-search can incorrectly reject identical sentences in another
+            // unit on the same page. Only this full, revalidated anchor proof
+            // may bypass that search; ordinary native drags retain it below.
+            let validated = try ReadingExperienceRuntime.validatedContext(context, in: project)
+            guard let anchor = validated.selectedSourceAnchor,
+                  let unit = ordered.first(where: { $0.id == anchor.unitID }),
+                  quote.utf8.elementsEqual(anchor.quote.utf8) else { throw ReadingError.invalid("原句锚点与提问范围不一致。") }
+            try Task.checkCancellation()
+            return [QuerySourceSlice(unitID: unit.id, locator: unit.locator, chapter: unit.chapter,
+                text: anchor.quote, textHash: try BookImporter.sha256(Data(anchor.quote.utf8)))]
+        }
         if context.selectedAnchorID != nil {
             _ = try ReadingExperienceRuntime.validatedContext(context, in: project)
         }
@@ -320,7 +336,7 @@ struct ReadingQuerySession {
         var documentSearch = search; documentSearch["scanOffset"] = offset
         let reading: [String: Any] = ["id": string, "offset": offset, "length": ["type": "integer", "minimum": 1, "maximum": 12000], "expectedHash": string]
         return [
-            tool("source_outline", "仅列当前冻结范围内原文目录；nextOffset分页。目录不代表正文已读。", paging),
+            tool("source_outline", "仅列当前冻结范围内原文单元索引，并非PDF书签目录；nextOffset分页。索引不代表正文已读。", paging),
             tool("source_search", "检索当前范围原文，1至8关键词any/all；返回有界实际片段和定位，范围外无法读取。", search, ["keywords"]),
             tool("source_read", "按目录id/字符offset分段读取当前范围原文；选段范围只返回选段，按nextOffset续读，不增加阅读覆盖。", reading, ["id"]),
             tool("documents_list", "只列本次显式授权的笔记目录；原文范围不会自动附加笔记。目录不是正文。", paging),

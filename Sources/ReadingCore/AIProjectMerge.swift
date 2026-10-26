@@ -27,6 +27,7 @@ enum AIProjectMerge {
         try protect("readerAnnotations", \.readerAnnotations); try protect("manualTrash", \.manualTrash)
         try protect("aiRequestHistory", \.aiRequestHistory); try protect("readingKnowledge", \.readingKnowledge)
         try protect("controlledChanges", \.controlledChanges)
+        try protect("generatedOutline", \.generatedOutline)
         var canonical = latest
         func patch<T: Codable>(_ key: String, _ path: WritableKeyPath<BookProject, T>) throws {
             let before = try encoder.encode(base[keyPath: path]), after = try encoder.encode(result[keyPath: path])

@@ -99,6 +99,9 @@ public struct PluginToolRegistry: Sendable {
             throw ReadingError.invalid("插件不能修改原书或用户Markdown文档。")
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        guard try encoder.encode(candidate.generatedOutline) == encoder.encode(project.generatedOutline) else {
+            throw ReadingError.invalid("插件不能改写宿主目录；请由读者从目录界面生成。")
+        }
         guard try encoder.encode(candidate.bookSchemes) == encoder.encode(project.bookSchemes) else {
             throw ReadingError.invalid("插件不能直接改写书本方案的预览、应用和撤销记录；请由用户在宿主界面确认。")
         }

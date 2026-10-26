@@ -4,25 +4,48 @@ import ReadingCore
 
 @MainActor extension AppStore {
     var queryReadingContext: ReadingContext {
+        readingQueryContext(for: queryScope)
+    }
+    private func readingQueryContext(for scope: ReadingQueryScope) -> ReadingContext {
         var context = currentReadingContext
-        if queryScope != .notes {
-            context.documentID = nil
-            // A pinned sentence may belong to another simultaneously visible
-            // PDF page. Its text, unit and page must remain one frozen scope.
-            if queryScope != .selection || sourceReadingSelection != nil {
-                context.unitID = selectedSourceAnchor?.unitID ?? selectedUnitID
-                context.page = sourceReadingSelection?.page ?? selectedUnit?.page
-            }
+        if scope != .selection {
+            // Changing the chosen query scope must not mix a neighboring
+            // page's focused sentence with the cursor page/notes scope.
+            context.selectedSourceAnchor = nil; context.selectedAnchorID = nil
+            context.selectedText = nil; context.selectedPrefix = nil; context.selectedSuffix = nil
+            context.selectionEndPage = nil
         }
-        if queryScope == .selection, let selection = sourceReadingSelection {
-            context.selectedText = selection.text
-            context.selectionEndPage = selection.endPage
+        switch scope {
+        case .notes:
+            // Notes do not inherit an unrelated source cursor or selection.
+            context.unitID = nil; context.page = nil
+        case .page, .chapter, .book:
+            // These controls and their preview refer to the current reading
+            // cursor, never the beginning of a native drag on another page.
+            context.documentID = nil; context.unitID = selectedUnitID; context.page = selectedUnit?.page
+        case .selection:
+            context.documentID = nil
+            // A pinned sentence may belong to a simultaneously visible page.
+            // Keep its complete context unless an explicit native drag wins.
+            if let selection = sourceReadingSelection {
+                let anchor = selectedSourceAnchor
+                context.unitID = anchor?.unitID ?? selection.page.flatMap { page in book?.units.first(where: { $0.page == page })?.id } ?? selectedUnitID
+                context.page = selection.page ?? selectedUnit?.page
+                context.selectedAnchorID = nil; context.selectedSourceAnchor = nil
+                context.selectedText = selection.text
+                context.selectedPrefix = anchor?.prefix; context.selectedSuffix = anchor?.suffix
+                context.selectionEndPage = selection.endPage
+            } else if context.selectedText != nil {
+                // The complete proof belongs only to a sentence question;
+                // general reading/map/graph contexts keep their prior cost.
+                context.selectedSourceAnchor = focusedReadingSourceAnchor
+            }
         }
         return context
     }
     var queryScopePreview: String {
         switch queryScope {
-        case .selection: return (sourceReadingSelection?.text ?? selectedSourceAnchor?.quote).map { "所选文字 · \($0.count) 字" } ?? "请先在原文选择文字"
+        case .selection: return querySelectionText.map { "所选文字 · \($0.count) 字" } ?? "请先在原文选择文字"
         case .page: return selectedUnit?.page.map { "当前页 · 第 \($0) 页" } ?? "当前阅读位置"
         case .chapter: return selectedUnit?.chapter.isEmpty == false ? selectedUnit!.chapter : "当前章节"
         case .book: return "整本书 · \(book?.title ?? "")"
@@ -31,11 +54,24 @@ import ReadingCore
     }
     func canUseQueryScope(_ scope: ReadingQueryScope) -> Bool {
         switch scope {
-        case .selection: return sourceReadingSelection?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false || selectedSourceAnchor != nil
+        case .selection: return querySelectionText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         case .notes: return book?.activeDocuments.isEmpty == false && queryDocumentIDs?.isEmpty != true
         case .page, .chapter: return selectedUnit != nil
         case .book: return book?.units.isEmpty == false
         }
+    }
+    /// Native selections and a sentence explicitly opened from its inline card
+    /// are the same query capability. Keep the composer gate and preview on the
+    /// exact context the request will freeze, rather than requiring an AppKit
+    /// drag selection that an inline-card click deliberately does not create.
+    private var querySelectionText: String? {
+        // The scope menu can ask about selection while the active scope is
+        // still page/notes. Use the would-be selection context here so native
+        // multi-unit/cross-page selections remain selectable from that menu.
+        let context = readingQueryContext(for: .selection)
+        guard context.sourceHash == book?.sourceHash,
+              context.unitID != nil || context.page != nil else { return nil }
+        return context.selectedText
     }
     func setQueryDocument(_ id: String, included: Bool) {
         var selected = queryDocumentIDs ?? Set(book?.activeDocuments.map(\.id) ?? [])

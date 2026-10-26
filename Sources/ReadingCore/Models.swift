@@ -287,6 +287,9 @@ public struct BookProject: Codable, Identifiable, Sendable {
     /// Host-owned AI knowledge history and clearly separated teacher context.
     /// Optional so existing projects keep their original objects and documents.
     public var readingKnowledge: ReadingKnowledgeState? = nil
+    /// Host-generated navigation, never a replacement for the original PDF outline.
+    /// Missing on older books; source and extraction versions are checked before reuse.
+    public var generatedOutline: GeneratedBookOutline? = nil
     /// In-memory delivery order only; never part of library data, grants or caches.
     public internal(set) var publicationStamp: LibraryPublicationStamp? = nil
     private enum CodingKeys: String, CodingKey {
@@ -294,7 +297,7 @@ public struct BookProject: Codable, Identifiable, Sendable {
         case views, methods, plan, insights, syntheses, documents, nodes, edges, chats, audit, aiRequestHistory
         case plugins, disabledPluginIDs, appliedOperationIDs, lastUnitID, bookmarks, ocrPages, paragraphReceipts
         case readingStepResults, workflowRuns, receiptBatch, smartReading, readerAnnotations, readingExperience
-        case bookSchemes, mathVerifications, temporalKnowledge, graphGroups, controlledChanges, manualTrash, readingKnowledge
+        case bookSchemes, mathVerifications, temporalKnowledge, graphGroups, controlledChanges, manualTrash, readingKnowledge, generatedOutline
     }
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units

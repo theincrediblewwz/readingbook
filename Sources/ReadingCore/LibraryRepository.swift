@@ -126,7 +126,7 @@ public actor LibraryRepository {
 
     /// Canonical metadata after host-only caches have been merged. Callers
     /// publishing a saved result must use this returned value, not their draft.
-    func saveCanonicalProject(_ project: BookProject) throws -> BookProject {
+    func saveCanonicalProject(_ project: BookProject, generatedOutline: GeneratedBookOutline? = nil) throws -> BookProject {
         let directory = try bookDirectory(project.id, mustExist: true)
         try recoverDocument(in: directory)
         let existing = try readProject(in: directory)
@@ -141,6 +141,7 @@ public actor LibraryRepository {
         var updated = project
         updated.aiRequestHistory = try AIRequestHistoryMerge.merge(proposed: project.aiRequestHistory, canonical: existing.aiRequestHistory)
         updated.readerAnnotations = existing.readerAnnotations
+        updated.generatedOutline = generatedOutline ?? existing.generatedOutline
         // Only the explicit trash/restore API changes this canonical status. A stale reader
         // or editor window cannot silently revive a document through a routine save.
         let documentIndices = Dictionary(updated.documents.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
@@ -184,6 +185,7 @@ public actor LibraryRepository {
         var updated = project
         updated.aiRequestHistory = try AIRequestHistoryMerge.merge(proposed: project.aiRequestHistory, canonical: existing.aiRequestHistory)
         updated.readerAnnotations = existing.readerAnnotations
+        updated.generatedOutline = existing.generatedOutline
         // Retain references written by another window before this editor was opened.
         // Index positions only: leave the original array intact so validation
         // still rejects duplicate proposed IDs instead of silently deduplicating.
@@ -587,6 +589,7 @@ public actor LibraryRepository {
         }
         try TemporalKnowledgeRuntime.validateStoredState(in: project)
         try ReadingKnowledgeRuntime.validateStoredState(in: project)
+        try BookOutlineRuntime.validateStored(project.generatedOutline)
         try ControlledGraphRuntime.validate(in: project)
         try ControlledChangeRecords.validate(in: project)
         try ManualTrashRuntime.validateStoredState(in: project)

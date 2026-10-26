@@ -140,7 +140,7 @@ struct AIProgressPresentationState: Equatable {
     }
     static func toolTitle(_ name: String?) -> String {
         switch name ?? "" {
-        case "source_outline", "source_list": return "查看原书目录"
+        case "source_outline", "source_list": return "查看原文范围"
         case "source_search": return "查找相关原文"
         case "source_read": return "阅读原文片段"
         case "analysis_outline": return "查看已有分析目录"

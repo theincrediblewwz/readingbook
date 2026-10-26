@@ -59,6 +59,15 @@ public actor AIReader {
         }
     }
 
+    /// User-started navigation only. The model selects frozen candidate IDs;
+    /// it receives no writing tools and cannot invent a page or source quote.
+    public func generateBookOutline(request: BookOutlineBatch, settings: ProviderSettings, apiKey: String) async throws -> [BookOutlineEntry] {
+        try beginOperation(settings: settings); defer { operationActive = false }
+        return try await BookOutlineEngine.generate(request: request, settings: settings) { [self] messages, requestSettings, remainingTokens in
+            try await self.request(messages: messages, tools: [], settings: requestSettings, apiKey: apiKey, remainingTokens: remainingTokens)
+        }
+    }
+
     public func plan(project: BookProject, settings: ProviderSettings, apiKey: String,
                      allowedUnitIDs: Set<String>? = nil, preferredMethodIDs: [String] = []) async throws -> BookProject {
         guard project.bookSchemes?.pending == nil else { throw ReadingError.invalid("请先采纳或放弃当前书本方案，再重新预读；未发送请求。") }

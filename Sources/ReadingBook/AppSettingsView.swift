@@ -108,6 +108,7 @@ private struct ReadingSettingsPane: View {
     @AppStorage("reading.defaultDirection") private var direction = "vertical"
     @AppStorage("reading.defaultContinuous") private var continuous = true
     @AppStorage("reading.showProgress") private var progress = true
+    @AppStorage("reading.hoverTranslation") private var hoverTranslation = false
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             typographyControls
@@ -118,6 +119,9 @@ private struct ReadingSettingsPane: View {
             Text("新书使用默认值；已打开的书保留本书设置。") .font(.system(size: 13)).foregroundStyle(.secondary)
             Divider().opacity(0.5)
             Toggle("显示左下角阅读百分比", isOn: $progress)
+            Toggle("悬停自动翻译", isOn: $hoverTranslation)
+            Text("句旁卡片停留一秒后翻译；已有译文直接读取。开启后会按需调用模型。")
+                .font(.system(size: 13)).foregroundStyle(.secondary)
         }.font(.system(size: 14))
     }
 

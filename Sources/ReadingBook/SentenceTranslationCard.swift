@@ -51,7 +51,12 @@ import ReadingCore
         let key = key(anchor: anchor, store: store)
         guard !store.storageState.working, tasks[key] == nil, let project = store.book else { return }
         if entries[key]?.markdown != nil { return }
-        guard tasks.count < 3 else { return }
+        guard tasks.count < 3 else {
+            var value = entries[key] ?? Entry()
+            value.message = "已有翻译在处理，请稍后再试。"
+            entries[key] = value; trimEntries(keeping: key)
+            return
+        }
         let repository = store.repository, root = store.libraryRootURL, coordinator = store.sharedAIRequests, startingRevision = store.projectRevision
         var settings = store.settings; settings.transportSessionID = "readingbook-" + project.id + "-sentence"
         let requestSettings = settings, apiKey = store.apiKey, limit = store.aiConcurrencyLimit
@@ -159,37 +164,93 @@ struct SentenceTranslationCard: View {
     @EnvironmentObject private var store: AppStore
     let anchor: SourceAnchor
     var fallbackMarkdown: String? = nil
-    var body: some View { SentenceTranslationCardBody(state: store.sentenceTranslation, anchor: anchor, fallbackMarkdown: fallbackMarkdown) }
+    var automaticHoverActive = false
+    var body: some View {
+        SentenceTranslationCardBody(state: store.sentenceTranslation, anchor: anchor, fallbackMarkdown: fallbackMarkdown,
+            automaticHoverActive: automaticHoverActive)
+            .id(store.sentenceTranslation.key(anchor: anchor, store: store))
+    }
 }
 
 private struct SentenceTranslationCardBody: View {
     @EnvironmentObject private var store: AppStore
     @ObservedObject var state: SentenceTranslationState
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("reading.hoverTranslation") private var automaticHoverTranslation = false
+    @State private var selectedTab = "analysis"
+    @State private var tabWasChosen = false
+    @State private var dwell = ReadingHoverTranslationDwell()
     let anchor: SourceAnchor
     let fallbackMarkdown: String?
+    let automaticHoverActive: Bool
     private var key: String { state.key(anchor: anchor, store: store) }
+    private var canAutomaticallyTranslate: Bool {
+        automaticHoverTranslation && automaticHoverActive && scenePhase == .active && !store.storageState.working &&
+            !store.settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    private struct AutomaticIntent: Hashable {
+        let key: String
+        let active: Bool
+    }
+    private func showTranslation() {
+        dwell.suppress(); tabWasChosen = true; selectedTab = "translation"
+        state.load(anchor: anchor, store: store, generate: true)
+    }
     var body: some View {
         let entry = state.entries[key]
+        let showsTranslation = fallbackMarkdown == nil || selectedTab == "translation"
         VStack(alignment: .leading, spacing: 10) {
-            if let markdown = entry?.markdown {
+            if fallbackMarkdown != nil {
+                HStack(spacing: 18) {
+                    Button("解读") { dwell.suppress(); tabWasChosen = true; selectedTab = "analysis" }
+                        .foregroundStyle(selectedTab == "analysis" ? Palette.accent : .secondary)
+                    Button("译文") { showTranslation() }
+                        .foregroundStyle(selectedTab == "translation" ? Palette.accent : .secondary)
+                    Spacer(minLength: 0)
+                }.font(.system(size: 13, weight: .medium)).buttonStyle(.plain)
+            }
+            if !showsTranslation, let fallbackMarkdown { MarkdownText(markdown: fallbackMarkdown) }
+            if showsTranslation, let markdown = entry?.markdown {
                 HStack { Text("句译").font(.system(size: 12, weight: .medium)); Spacer(); Text(entry?.cached == true ? "本地已存" : "已保存").font(.system(size: 11)).foregroundStyle(.secondary) }
                 MarkdownText(markdown: markdown)
-            } else if let entry, entry.running {
+            }
+            if let entry, entry.running {
                 HStack {
                     ProgressView().controlSize(.small); Text(entry.progress.phaseTitle).font(.system(size: 13))
-                    Spacer(); Button { state.cancel(anchor: anchor, store: store) } label: { Image(systemName: "stop.circle") }.buttonStyle(.plain).help("停止翻译")
+                    Spacer(); Button { dwell.suppress(); state.cancel(anchor: anchor, store: store) } label: { Image(systemName: "stop.circle") }.buttonStyle(.plain).help("停止翻译")
                 }
                 if entry.progress.reasoningCharacters > 0 || entry.progress.answerCharacters > 0 {
                     Text("思考 \(entry.progress.reasoningCharacters.formatted()) · 输出 \(entry.progress.answerCharacters.formatted()) 字符").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
-            } else {
-                if let fallbackMarkdown { MarkdownText(markdown: fallbackMarkdown) }
+            } else if entry?.markdown == nil {
                 if let message = entry?.message { Text(message).font(.system(size: 13)).foregroundStyle(.secondary) }
-                Button { state.load(anchor: anchor, store: store, generate: true) } label: { Label("翻译这句", systemImage: "character.bubble") }
+                if dwell.pending != nil, canAutomaticallyTranslate {
+                    Text("停留一秒后翻译…").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                Button { showTranslation() } label: { Label("翻译这句", systemImage: "character.bubble") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("生成后保存在本书，下次直接读取")
             }
         }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
             .readingTextContext(.companion)
             .task(id: key + "|revision:" + String(store.projectRevision)) { await state.refresh(anchor: anchor, store: store) }
+            .task(id: AutomaticIntent(key: key, active: canAutomaticallyTranslate)) {
+                let owner = key
+                if canAutomaticallyTranslate, state.entries[owner]?.markdown != nil {
+                    dwell.update(key: owner, enabled: false, active: false)
+                    if !tabWasChosen { selectedTab = "translation" }
+                    return
+                }
+                guard let ticket = dwell.update(key: owner, enabled: automaticHoverTranslation, active: canAutomaticallyTranslate) else { return }
+                // Cache lookup stays independent of the dwell and never sends
+                // a provider request. load also rechecks canonical source/cache.
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+                guard !Task.isCancelled, owner == key, canAutomaticallyTranslate, dwell.consume(ticket) else { return }
+                if !tabWasChosen { selectedTab = "translation" }
+                state.load(anchor: anchor, store: store, generate: true)
+            }
+            .onChange(of: entry?.markdown != nil) { _, available in
+                if available, canAutomaticallyTranslate, !tabWasChosen { selectedTab = "translation" }
+            }
+            .onDisappear { dwell.update(key: key, enabled: false, active: false) }
     }
 }

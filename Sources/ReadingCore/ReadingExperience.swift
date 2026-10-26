@@ -151,12 +151,15 @@ public struct ReadingContext: Codable, Hashable, Sendable {
     public var timeTo: Double?
     /// Only a query selection may span pages; source anchors remain unit-local.
     public var selectionEndPage: Int? = nil
-    public init(sourceHash: String? = nil, unitID: String? = nil, selectedAnchorID: String? = nil, selectedText: String? = nil, selectedPrefix: String? = nil, selectedSuffix: String? = nil, objectID: String? = nil, documentID: String? = nil, page: Int? = nil, startYear: Int? = nil, endYear: Int? = nil, timeFrom: Double? = nil, timeTo: Double? = nil, selectionEndPage: Int? = nil) {
+    /// An explicit, unit-local source click may supply its complete disposable
+    /// anchor without first saving it. Native drag selections leave this nil.
+    public var selectedSourceAnchor: SourceAnchor? = nil
+    public init(sourceHash: String? = nil, unitID: String? = nil, selectedAnchorID: String? = nil, selectedText: String? = nil, selectedPrefix: String? = nil, selectedSuffix: String? = nil, objectID: String? = nil, documentID: String? = nil, page: Int? = nil, startYear: Int? = nil, endYear: Int? = nil, timeFrom: Double? = nil, timeTo: Double? = nil, selectionEndPage: Int? = nil, selectedSourceAnchor: SourceAnchor? = nil) {
         self.sourceHash = sourceHash; self.unitID = unitID; self.selectedAnchorID = selectedAnchorID
         self.selectedText = selectedText; self.objectID = objectID; self.documentID = documentID; self.page = page
         self.selectedPrefix = selectedPrefix; self.selectedSuffix = selectedSuffix
         self.startYear = startYear; self.endYear = endYear; self.timeFrom = timeFrom; self.timeTo = timeTo
-        self.selectionEndPage = selectionEndPage
+        self.selectionEndPage = selectionEndPage; self.selectedSourceAnchor = selectedSourceAnchor
     }
 }
 
@@ -327,7 +330,21 @@ public enum ReadingExperienceRuntime {
         var result = context
         if let hash = context.sourceHash, hash != project.sourceHash { throw invalid("阅读上下文属于其他原书版本。") }
         result.sourceHash = project.sourceHash
-        if let unitID = context.unitID { _ = try sourceUnit(unitID, in: project) }
+        if context.selectedSourceAnchor == nil, let unitID = context.unitID { _ = try sourceUnit(unitID, in: project) }
+        if let anchor = context.selectedSourceAnchor {
+            let resolved = try resolve(anchor, in: project)
+            guard context.selectedAnchorID == nil || context.selectedAnchorID == anchor.id,
+                  context.unitID == nil || context.unitID == resolved.unitID,
+                  context.page == nil || context.page == resolved.page,
+                  context.selectionEndPage == nil || context.selectionEndPage == resolved.page else {
+                throw invalid("原句锚点与提问位置不一致。")
+            }
+            if let selected = context.selectedText, !selected.utf8.elementsEqual(anchor.quote.utf8) { throw invalid("原句锚点与所选文字不一致。") }
+            if let prefix = context.selectedPrefix, !prefix.utf8.elementsEqual(anchor.prefix.utf8) { throw invalid("原句锚点与定位前文不一致。") }
+            if let suffix = context.selectedSuffix, !suffix.utf8.elementsEqual(anchor.suffix.utf8) { throw invalid("原句锚点与定位后文不一致。") }
+            result.unitID = resolved.unitID; result.page = resolved.page; result.selectedText = anchor.quote
+            result.selectedPrefix = anchor.prefix; result.selectedSuffix = anchor.suffix
+        }
         if let anchorID = context.selectedAnchorID {
             guard let anchor = state.anchors.first(where: { $0.id == anchorID }) else { throw invalid("当前选段锚点不存在。") }
             let resolved = try resolve(anchor, in: project)
@@ -336,6 +353,8 @@ public enum ReadingExperienceRuntime {
             if let selected = context.selectedText, !selected.utf8.elementsEqual(anchor.quote.utf8) { throw invalid("当前选中文字与锚点不一致。") }
             result.unitID = resolved.unitID; result.page = resolved.page; result.selectedText = anchor.quote
             result.selectedPrefix = anchor.prefix; result.selectedSuffix = anchor.suffix
+        } else if context.selectedSourceAnchor != nil {
+            // The complete source identity and literal range were proved above.
         } else if let selected = context.selectedText, !selected.isEmpty {
             guard let unitID = context.unitID else { throw invalid("选中文字必须明确属于一个源单元。") }
             let anchor = try createAnchor(sourceHash: project.sourceHash, unitID: unitID, quote: selected, prefix: context.selectedPrefix ?? "", suffix: context.selectedSuffix ?? "", in: project)

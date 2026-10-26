@@ -42,6 +42,92 @@ final class ReadingQueryTests: XCTestCase {
         var duplicate = project; duplicate.units[0].text = "同名。同名。"
         XCTAssertThrowsError(try ReadingQuerySnapshot.freeze(scope: .selection, in: duplicate, context: ReadingContext(unitID: "u1", selectedText: "同名", page: 1)))
     }
+    func testUnsavedHoverSentenceWithFullAnchorContextSharesOnlyItsExactQuote() throws {
+        var project = book()
+        project.units[1].text = String(repeating: "前", count: 400) + "刘备在此。" + String(repeating: "后", count: 400)
+        let original = project.units
+        let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash,
+            unitID: "u2", quote: "刘备在此。", in: project)
+        XCTAssertEqual(anchor.prefix.utf8.count, 1_023)
+        XCTAssertEqual(anchor.suffix.utf8.count, 1_023)
+        XCTAssertNil(project.readingExperience, "悬停的自动句锚不必先写入书库")
+        let resolved = try ReadingExperienceRuntime.resolve(anchor, in: project)
+        let hoverContext = ReadingContext(sourceHash: anchor.sourceHash, unitID: anchor.unitID,
+            selectedText: anchor.quote, selectedPrefix: anchor.prefix, selectedSuffix: anchor.suffix, page: resolved.page,
+            selectedSourceAnchor: anchor)
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .selection, in: project, context: hoverContext)
+        XCTAssertEqual(snapshot.unitIDs, ["u2"], "浮窗可来自相邻可见页，不得回退到阅读光标页")
+        XCTAssertEqual(snapshot.sources.map(\.text), [anchor.quote])
+        let manual = try ReadingQuerySnapshot.freeze(scope: .selection, in: project,
+            context: ReadingContext(sourceHash: project.sourceHash, unitID: "u2", selectedText: anchor.quote, page: 2))
+        XCTAssertEqual(snapshot.scopeFingerprint, manual.scopeFingerprint,
+            "同一句的悬停追问与手动选段应复用同一范围的对话历史")
+        var tooLong = hoverContext; tooLong.selectedPrefix = String(repeating: "x", count: 1_025)
+        XCTAssertThrowsError(try ReadingQuerySnapshot.freeze(scope: .selection, in: project, context: tooLong))
+        var otherSource = project; otherSource.sourceHash = "other-source"
+        XCTAssertThrowsError(try ReadingQuerySnapshot.freeze(scope: .selection, in: otherSource, context: hoverContext))
+        var edited = project; edited.units[1].text += "原文已更新"
+        XCTAssertThrowsError(try ReadingExperienceRuntime.resolve(anchor, in: edited), "发送前仍核对完整原锚，不能重定向旧卡")
+        XCTAssertEqual(project.units, original)
+        XCTAssertNil(project.readingExperience)
+    }
+    func testExactHoverAnchorDisambiguatesSamePageUnitsWithoutNarrowingNativeDrags() throws {
+        let project = BookProject(id: "same-page", title: "同页", originalName: "book.pdf", sourceHash: "source", units: [
+            SourceUnit(id: "u1", order: 0, chapter: "一", page: 1, text: "重复句。"),
+            SourceUnit(id: "u2", order: 1, chapter: "一", page: 1, text: "重复句。"),
+            SourceUnit(id: "u3", order: 2, chapter: "一", page: 2, text: "第二页。")])
+        let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash,
+            unitID: "u2", quote: "重复句。", in: project)
+        let context = ReadingContext(sourceHash: project.sourceHash, unitID: "u2", selectedText: anchor.quote,
+            selectedPrefix: anchor.prefix, selectedSuffix: anchor.suffix, page: 1, selectedSourceAnchor: anchor)
+        let exact = try ReadingQuerySnapshot.freeze(scope: .selection, in: project, context: context)
+        XCTAssertEqual(exact.unitIDs, ["u2"])
+        XCTAssertEqual(exact.sources.map(\.text), ["重复句。"])
+        let unitLocal = try ReadingQuerySnapshot.freeze(scope: .selection, in: project,
+            context: ReadingContext(unitID: "u2", selectedText: "重复句。"))
+        XCTAssertEqual(exact.scopeFingerprint, unitLocal.scopeFingerprint)
+        var noProof = context; noProof.selectedSourceAnchor = nil
+        XCTAssertThrowsError(try ReadingQuerySnapshot.freeze(scope: .selection, in: project, context: noProof),
+            "只有完整原锚证明可以消歧，unitID本身不能默默缩小普通拖选")
+        let samePageDrag = try ReadingQuerySnapshot.freeze(scope: .selection, in: project,
+            context: ReadingContext(unitID: "u1", selectedText: "重复句。\n重复句。", page: 1))
+        XCTAssertEqual(samePageDrag.unitIDs, ["u1", "u2"])
+        XCTAssertEqual(samePageDrag.sources.map(\.text), ["重复句。", "重复句。"])
+        let crossPageDrag = try ReadingQuerySnapshot.freeze(scope: .selection, in: project,
+            context: ReadingContext(unitID: "u1", selectedText: "重复句。\n第二页。", page: 1, selectionEndPage: 2))
+        XCTAssertEqual(crossPageDrag.unitIDs, ["u2", "u3"])
+        let legacy = try JSONDecoder().decode(ReadingContext.self,
+            from: Data(#"{"sourceHash":"source","unitID":"u2","selectedText":"重复句。","page":1}"#.utf8))
+        XCTAssertNil(legacy.selectedSourceAnchor)
+        XCTAssertEqual(try JSONDecoder().decode(ReadingContext.self, from: JSONEncoder().encode(context)), context)
+        XCTAssertNil(project.readingExperience, "精确临时锚不写入原有阅读数据")
+    }
+    func testHoverAnchorProofRejectsConflictingFieldsAndChangedSourceInEveryContext() throws {
+        let project = book()
+        let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash, unitID: "u1", quote: "刘备在此。", in: project)
+        let context = ReadingContext(sourceHash: project.sourceHash, unitID: anchor.unitID, selectedText: anchor.quote,
+            selectedPrefix: anchor.prefix, selectedSuffix: anchor.suffix, page: 1, selectedSourceAnchor: anchor)
+        var cases: [ReadingContext] = []
+        var bad = context; bad.unitID = "u2"; cases.append(bad)
+        bad = context; bad.page = 2; cases.append(bad)
+        bad = context; bad.selectionEndPage = 2; cases.append(bad)
+        bad = context; bad.selectedText = "甲地战役。"; cases.append(bad)
+        bad = context; bad.selectedPrefix = "别处"; cases.append(bad)
+        bad = context; bad.selectedSuffix = "别处"; cases.append(bad)
+        bad = context; bad.selectedAnchorID = "other-anchor"; cases.append(bad)
+        bad = context; bad.selectedSourceAnchor?.unitTextHash = "forged"; cases.append(bad)
+        bad = context; bad.selectedSourceAnchor?.utf16Location = 0; cases.append(bad)
+        bad = context; bad.selectedSourceAnchor?.sourceHash = "other-source"; cases.append(bad)
+        bad = context; bad.objectID = "missing-object"; cases.append(bad)
+        for value in cases {
+            XCTAssertThrowsError(try ReadingQuerySnapshot.freeze(scope: .selection, in: project, context: value))
+            XCTAssertThrowsError(try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: value),
+                "完整锚不能让非selection上下文跳过来源和对象校验")
+        }
+        var edited = project; edited.units[0].text += "新文字"
+        XCTAssertThrowsError(try ReadingQuerySnapshot.freeze(scope: .selection, in: edited, context: context))
+        XCTAssertThrowsError(try ReadingExperienceRuntime.validatedContext(context, in: edited))
+    }
     func testLazyNotesAndBoundedSearchOnlyAuthorizeActuallyReturnedEvidence() async throws {
         let project = book(), snapshot = try ReadingQuerySnapshot.freeze(scope: .notes, in: project, documentIDs: ["d1"])
         let reads = QueryReadCounter()

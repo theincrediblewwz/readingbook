@@ -2,7 +2,8 @@ import SwiftUI
 import ReadingCore
 
 /// The popup is a disposable projection of existing records, never a second
-/// writer and never a reason to send a provider request.
+/// writer. Provider requests are separately enabled by an explicit action or
+/// the reader's hover-translation preference after its cancellable dwell.
 struct ReaderInlineContent: Sendable {
     let anchor: SourceAnchor
     let title: String
@@ -61,27 +62,31 @@ struct ReaderInlineContent: Sendable {
             }
             let structuralBoundaries = passageBoundaries ?? ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter, syntax: syntax)
             var localProject = book; localProject.units = [resolved.unit]
+            let resolveLocal: ((SourceAnchor) throws -> ResolvedSourceAnchor)? = state.layers.isEmpty ? nil :
+                try? ReadingExperienceRuntime.anchorResolver(sourceHash: book.sourceHash, unitID: resolved.unit.id, in: localProject)
             var rangesByID: [String: NSRange] = [:], invalidIDs = Set<String>()
             func precedes(_ lhs: ReadingLayer, _ rhs: ReadingLayer) -> Bool {
-                let left = lhs.kind == "translation" ? 0 : 1, right = rhs.kind == "translation" ? 0 : 1
-                return left == right ? lhs.id < rhs.id : left < right
+                lhs.id < rhs.id
             }
             for layer in state.layers {
                 guard !Task.isCancelled else { return nil }
-                guard !layer.sourceAnchorIDs.isEmpty else { continue }
+                // Translation has its own exact-source cache and tab. Mixing
+                // it into this projection made a saved translation displace
+                // the analysis, including after a background publication.
+                guard layer.kind != "translation", !layer.sourceAnchorIDs.isEmpty else { continue }
                 var ranges: [NSRange] = [], valid = true
                 for value in layer.sourceAnchorIDs {
                     guard !Task.isCancelled else { return nil }
                     guard let candidate = anchors[value], !invalidIDs.contains(value) else { valid = false; break }
                     if let range = rangesByID[value] { ranges.append(range); continue }
-                    guard let source = try? ReadingExperienceRuntime.resolve(candidate, in: localProject),
+                    guard let resolveLocal, let source = try? resolveLocal(candidate),
                           !structuralBoundaries.crossesStructuralBoundary(source.range) else {
                         invalidIDs.insert(value); valid = false; break
                     }
                     rangesByID[value] = source.range; ranges.append(source.range)
                 }
                 guard valid else { continue }
-                let matches = layer.kind == "translation" ? ranges.count == 1 && ranges[0] == resolved.range : ranges.contains { NSIntersectionRange($0, resolved.range).length > 0 }
+                let matches = ranges.contains { NSIntersectionRange($0, resolved.range).length > 0 }
                 if matches {
                     // Only three layers can be shown. Preserve the exact old
                     // ordering without sorting/retaining all matching layers.
@@ -91,7 +96,7 @@ struct ReaderInlineContent: Sendable {
             }
         }
         guard !Task.isCancelled else { return nil }
-        let title = entity?.name ?? event?.name ?? (localLayers.first?.kind == "translation" ? "这句话的意思" : "读到这里")
+        let title = entity?.name ?? event?.name ?? "读到这里"
         let markdown: String
         if hasSummary { markdown = summary }
         else if !localLayers.isEmpty { markdown = localLayers.map(\.markdown).joined(separator: "\n\n") }
@@ -176,6 +181,7 @@ struct ReaderInlineContent: Sendable {
     @Published var hover: SourceReadingHover?
     @Published var content: ReaderInlineContent?
     @Published var pinned = false
+    @Published private(set) var automaticTranslationActive = false
     private var pendingID: String?
     private var task: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
@@ -185,16 +191,23 @@ struct ReaderInlineContent: Sendable {
     private var interactionGeneration = 0
     private var displayedSerial: Int?
     private var inside = false
+    private var sourceInside = false
     private var closing = false
     var lastHover: SourceReadingHover?
     func receive(_ value: SourceReadingHover?, book: BookProject?, index: ReadingExperienceState, scope: String,
                  boundary: (String) -> KnowledgeReadBoundary) {
         if self.scope != nil, self.scope != scope { clear() }
         if let value { lastHover = value }
-        if pinned && value?.activated != true { return }
+        if pinned && value?.activated != true {
+            sourceInside = value?.id == hover?.id
+            automaticTranslationActive = inside || sourceInside
+            return
+        }
         guard let value, let book else { leave(); return }
-        if hover?.id == value.id && !value.activated { cancelPending(); refreshDisplayed(); return }
+        sourceInside = true
+        if hover?.id == value.id && !value.activated { automaticTranslationActive = true; cancelPending(); refreshDisplayed(); return }
         if pendingID == value.id && !value.activated { return }
+        automaticTranslationActive = false
         cancelPending(); invalidateRefresh(); pendingID = value.id
         updateInputs(book: book, index: index, scope: scope, boundary: boundary)
         let generation = interactionGeneration
@@ -212,6 +225,7 @@ struct ReaderInlineContent: Sendable {
                 guard self.inputs[value.id]?.serial == input.serial else { continue }
                 guard let content = frozen else { self.clear(); return }
                 self.content = content; self.hover = value; self.pinned = value.activated
+                self.automaticTranslationActive = self.sourceInside || self.inside
                 self.pendingID = nil; self.task = nil; self.displayedSerial = input.serial; self.inputs = [value.id: input]
                 return
             }
@@ -262,12 +276,16 @@ struct ReaderInlineContent: Sendable {
             }
         }
     }
-    func leave() { scheduleClose() }
-    func pointer(_ value: Bool) { inside = value; if value { cancelPending(); refreshDisplayed() } else { scheduleClose() } }
+    func leave() { sourceInside = false; automaticTranslationActive = inside; scheduleClose() }
+    func pointer(_ value: Bool) {
+        inside = value; automaticTranslationActive = inside || (sourceInside && pendingID == nil)
+        if value { cancelPending(); refreshDisplayed() } else { scheduleClose() }
+    }
     func pin() { cancelPending(); pinned = true; refreshDisplayed() }
     func clear() {
         task?.cancel(); task = nil; closing = false; pendingID = nil; invalidateRefresh()
-        inputs = [:]; scope = nil; displayedSerial = nil; hover = nil; content = nil; pinned = false; inside = false; lastHover = nil
+        inputs = [:]; scope = nil; displayedSerial = nil; hover = nil; content = nil; pinned = false
+        inside = false; sourceInside = false; automaticTranslationActive = false; lastHover = nil
     }
     private func scheduleClose() {
         guard !pinned, !closing else { return }
@@ -331,7 +349,8 @@ struct ReaderInlineCard: View {
                                 TeacherBackgroundCard(objectID: objectID, unitID: content.anchor.unitID)
                             }
                         } else {
-                            SentenceTranslationCard(anchor: content.anchor, fallbackMarkdown: content.savedMarkdown)
+                            SentenceTranslationCard(anchor: content.anchor, fallbackMarkdown: content.savedMarkdown,
+                                automaticHoverActive: state.automaticTranslationActive)
                         }
                         if let composition = content.composition {
                             DisclosureGroup("时间与相关内容", isExpanded: $showsComposition) {
@@ -340,11 +359,8 @@ struct ReaderInlineCard: View {
                         }
                         HStack {
                             Button("继续聊聊") {
-                                if let id = content.objectID { store.selectedObjectID = id }
-                                store.focusedReadingAnchorID = content.anchor.id
-                                store.queryScope = .selection; store.readingCompanionVisible = true; store.readingCompanionTab = "chat"
-                                store.queryComposerDraft.text = content.objectID == nil ? "给我讲讲这句话的意思。" : "给我讲讲\(content.title)，像一起读书时那样。"
-                                state.clear()
+                                let question = content.objectID == nil ? "给我讲讲这句话的意思。" : "给我讲讲\(content.title)，像一起读书时那样。"
+                                if store.openReadingConversation(anchor: content.anchor, objectID: content.objectID, question: question) { state.clear() }
                             }.buttonStyle(ReadingToolbarButtonStyle())
                             Spacer()
                             Button("在伴读中打开") { store.sourceDecorationTapped(content.anchor.id); state.clear() }.buttonStyle(ReadingToolbarButtonStyle())
