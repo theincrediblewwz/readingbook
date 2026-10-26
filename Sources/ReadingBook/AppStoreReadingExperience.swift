@@ -23,6 +23,9 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         let decorations: [SourceReadingDecoration]
         let sourceStamp: LibraryPublicationStamp?
         let pageSourceText: PDFPageSourceText?
+        /// Conservative history-cache charge, not an RSS measurement. Shared
+        /// strings may be counted twice; active pages are outside this budget.
+        let estimatedRetainedCost: Int
     }
     struct Request: Sendable {
         let project: BookProject; let selectedUnitID: String?; let owner: String; let scope: String; let visiblePages: [Int]
@@ -45,6 +48,8 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
     // bytes) or comparing full snapshots never happens during publication.
     var entries: [Int: Snapshot] = [:]
     var order: [Int] = []
+    private var historyEstimatedCost = 0
+    private static let historyCostLimit = 24 * 1_024 * 1_024
     var window: [Snapshot] = []
     var presentationRevision = 0
     var visiblePDFPages: [Int] = []
@@ -55,15 +60,29 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
     var anchorsByID: [String: SourceAnchor] = [:]
     func reset() {
         pendingScope = nil; pendingRevision = nil; queued = nil; current = nil; currentBase = nil; entries = [:]; order = []
+        historyEstimatedCost = 0
         window = []; presentationRevision &+= 1; visiblePDFPages = []; unitIndices = [:]; pageIndices = [:]; boundariesByPage = [:]
         currentBoundary = nil; anchorsByID = [:]
     }
     func remember(_ value: Snapshot) {
-        entries[value.key] = value; order.removeAll { $0 == value.key }; order.append(value.key)
-        while order.count > 24 { entries.removeValue(forKey: order.removeFirst()) }
+        if let old = entries.removeValue(forKey: value.key) { historyEstimatedCost -= old.estimatedRetainedCost }
+        order.removeAll { $0 == value.key }
+        // Oversized current/window snapshots still publish normally. Only the
+        // optional history is skipped; no source text or marks are discarded.
+        guard value.estimatedRetainedCost <= Self.historyCostLimit else { return }
+        entries[value.key] = value; order.append(value.key)
+        // Both operands are bounded by historyCostLimit before this addition.
+        historyEstimatedCost += value.estimatedRetainedCost
+        while order.count > 24 || historyEstimatedCost > Self.historyCostLimit {
+            if let removed = entries.removeValue(forKey: order.removeFirst()) { historyEstimatedCost -= removed.estimatedRetainedCost }
+        }
     }
-    nonisolated static func prepare(_ request: Request, entries: [Int: Snapshot], current: Snapshot?, previousBase: ReadingExperienceState?, previousDecorations: [[SourceReadingDecoration]] = [], includeWindow: Bool = true) -> Prepared? {
+    nonisolated static func prepare(_ request: Request, entries: [Int: Snapshot], current: Snapshot?, currentWindow: [Snapshot] = [], previousBase: ReadingExperienceState?, previousDecorations: [[SourceReadingDecoration]] = [], includeWindow: Bool = true) -> Prepared? {
         let book = request.project
+        // These pages are already retained for display. Reuse them on exact
+        // input equality even when an oversized page is not admitted to history.
+        // Keys only narrow candidates; they never authorize a source match.
+        let activeByKey = Dictionary(grouping: currentWindow + (current.map { [$0] } ?? []), by: \.key)
         var unitIndices: [String: Int] = [:], pageIndices: [Int: [Int]] = [:]
         var duplicateUnitIDs = Set<String>()
         for (index, unit) in book.units.enumerated() {
@@ -136,9 +155,17 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
             // Exact equality on the worker protects against a compact-key
             // collision; literalBytes also rejects Unicode-normalized matches.
             guard !Task.isCancelled else { return nil }
-            if let saved = entries[key], saved.input == input {
+            var reusable: Snapshot?
+            if let saved = entries[key], saved.input == input { reusable = saved }
+            if reusable == nil {
+                for saved in activeByKey[key] ?? [] {
+                    guard !Task.isCancelled else { return nil }
+                    if saved.input == input { reusable = saved; break }
+                }
+            }
+            if let saved = reusable {
                 snapshots.append(Snapshot(key: saved.key, input: saved.input, index: saved.index, decorations: saved.decorations,
-                    sourceStamp: book.publicationStamp, pageSourceText: saved.pageSourceText))
+                    sourceStamp: book.publicationStamp, pageSourceText: saved.pageSourceText, estimatedRetainedCost: saved.estimatedRetainedCost))
             } else {
                 guard let snapshot = build(input, key: key, project: book) else { return nil }
                 snapshots.append(snapshot)
@@ -177,7 +204,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         guard input.sourceUnitsAreUnique else {
             // A page-local compact project cannot prove a globally duplicated
             // source ID. Keep the stored records; do not guess automatic marks.
-            return Snapshot(key: key, input: input, index: initial, decorations: [],
+            return makeSnapshot(input, key: key, index: initial, decorations: [],
                 sourceStamp: project.publicationStamp, pageSourceText: nil)
         }
         var index = ReadingExperienceRuntime.indexEvidence(in: compact, state: initial, unitIDs: Set(input.units.map(\.id)))
@@ -243,8 +270,70 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
            input.units.allSatisfy({ $0.page == page }) {
             pageSourceText = try? PDFPageSourceText(page: page, text: input.units.map(\.text).joined())
         } else { pageSourceText = nil }
-        return Snapshot(key: key, input: input, index: index, decorations: decorations,
+        return makeSnapshot(input, key: key, index: index, decorations: decorations,
             sourceStamp: project.publicationStamp, pageSourceText: pageSourceText)
+    }
+    /// Computed once when the worker builds a snapshot, never in remember or a
+    /// View getter. This bounds historical payload estimates, not App memory:
+    /// live windows, canonical books and in-flight work retain their own values.
+    nonisolated private static func makeSnapshot(_ input: Input, key: Int, index: ReadingExperienceState,
+                                                decorations: [SourceReadingDecoration], sourceStamp: LibraryPublicationStamp?,
+                                                pageSourceText: PDFPageSourceText?) -> Snapshot? {
+        var cost = MemoryLayout<Snapshot>.stride
+        func add(_ bytes: Int) {
+            let (sum, overflow) = cost.addingReportingOverflow(bytes)
+            cost = overflow ? Int.max : sum
+        }
+        func storage(_ count: Int, _ stride: Int) {
+            let (bytes, overflow) = count.multipliedReportingOverflow(by: stride)
+            add(overflow ? Int.max : bytes)
+        }
+        func text(_ value: String) { add(value.utf8.count); add(32) }
+        func anchor(_ value: SourceAnchor) {
+            text(value.id); text(value.sourceHash); text(value.unitID); text(value.unitTextHash)
+            text(value.quote); text(value.prefix); text(value.suffix)
+        }
+        func mention(_ value: SourceMention) { text(value.anchorID); text(value.targetID) }
+        text(input.owner)
+        storage(input.units.count, MemoryLayout<SourceUnit>.stride)
+        for unit in input.units {
+            guard !Task.isCancelled else { return nil }
+            text(unit.id); text(unit.chapter); text(unit.text)
+            if let warning = unit.warning { text(warning) }
+        }
+        storage(input.objects.count, MemoryLayout<ObjectInput>.stride)
+        for object in input.objects {
+            guard !Task.isCancelled else { return nil }
+            text(object.id); storage(object.names.count, MemoryLayout<String>.stride)
+            for name in object.names { guard !Task.isCancelled else { return nil }; text(name) }
+            storage(object.evidence.count, MemoryLayout<Evidence>.stride)
+            for item in object.evidence { guard !Task.isCancelled else { return nil }; text(item.unitID); text(item.quote) }
+        }
+        storage(input.literalBytes.count, MemoryLayout<Data>.stride)
+        for bytes in input.literalBytes { guard !Task.isCancelled else { return nil }; add(bytes.count); add(32) }
+        storage(input.markdownUnitIDs.count, MemoryLayout<String>.stride + 32)
+        for id in input.markdownUnitIDs { guard !Task.isCancelled else { return nil }; text(id) }
+        storage(input.anchors.count, MemoryLayout<SourceAnchor>.stride)
+        for value in input.anchors { guard !Task.isCancelled else { return nil }; anchor(value) }
+        storage(input.mentions.count, MemoryLayout<SourceMention>.stride)
+        for value in input.mentions { guard !Task.isCancelled else { return nil }; mention(value) }
+        // This page-only index contains anchors/mentions, not layer bodies or
+        // whole-book analyses. Count shared source strings conservatively again.
+        storage(index.anchors.count, MemoryLayout<SourceAnchor>.stride)
+        for value in index.anchors { guard !Task.isCancelled else { return nil }; anchor(value) }
+        storage(index.mentions.count, MemoryLayout<SourceMention>.stride)
+        for value in index.mentions { guard !Task.isCancelled else { return nil }; mention(value) }
+        storage(decorations.count, MemoryLayout<SourceReadingDecoration>.stride)
+        for value in decorations {
+            guard !Task.isCancelled else { return nil }
+            text(value.id); text(value.targetID); text(value.quote)
+            if let prefix = value.prefix { text(prefix) }
+            if let suffix = value.suffix { text(suffix) }
+        }
+        if let source = pageSourceText { text(source.text); text(source.identity) }
+        guard !Task.isCancelled else { return nil }
+        return Snapshot(key: key, input: input, index: index, decorations: decorations,
+            sourceStamp: sourceStamp, pageSourceText: pageSourceText, estimatedRetainedCost: cost)
     }
 }
 
@@ -304,9 +393,10 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                 for includeWindow in (needsFirstPage ? [false, true] : [true]) {
                 let entries = self.readingPageSnapshots.entries
                 let current = self.readingPageSnapshots.current, base = self.readingPageSnapshots.currentBase
-                let previousDecorations = self.readingPageSnapshots.window.map(\.decorations)
+                let currentWindow = self.readingPageSnapshots.window
+                let previousDecorations = currentWindow.map(\.decorations)
                 let calculation = Task.detached(priority: .userInitiated) {
-                    ReadingPageSnapshotCache.prepare(frozen, entries: entries, current: current, previousBase: base, previousDecorations: previousDecorations, includeWindow: includeWindow)
+                    ReadingPageSnapshotCache.prepare(frozen, entries: entries, current: current, currentWindow: currentWindow, previousBase: base, previousDecorations: previousDecorations, includeWindow: includeWindow)
                 }
                 let prepared = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
                 guard !Task.isCancelled, self.readingIndexGeneration == generation, self.bookID == book.id,

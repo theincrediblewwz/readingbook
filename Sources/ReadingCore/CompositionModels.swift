@@ -9,9 +9,11 @@ public enum CompositionMapTimeMode: String, CaseIterable, Hashable, Sendable { c
 public enum CompositionSelectionRelation: String, Codable, Sendable { case none, selected, neighbors, participants, places, events, documents }
 public enum CompositionSort: String, Codable, Sendable { case name, sourceOrder, time }
 public enum CompositionFilterOperation: String, Codable, Sendable { case equals, contains, oneOf, exists }
+public enum CompositionTraversalDirection: String, Codable, CaseIterable, Hashable, Sendable { case outgoing, incoming, both }
 public enum CompositionPrimitive: String, Codable, CaseIterable, Sendable {
     case objectList = "object.list", objectDetail = "object.detail", sourceExcerpt = "source.excerpt", markdown = "document.markdown"
     case map = "geo.map", timeline = "time.axis", relations = "relation.graph", documentGraph = "document.graph"
+    case table = "object.table"
 }
 public enum CompositionLayoutKind: String, Codable, Sendable { case row, column, tabs, overlay, part }
 
@@ -32,6 +34,41 @@ public struct CompositionFilter: Codable, Hashable, Sendable {
     }
 }
 
+/// Refines the existing neighbors query. Absent means the original one-hop
+/// behavior; no declarations execute code or invent transitive book facts.
+public struct CompositionTraversal: Codable, Hashable, Sendable {
+    public var labels: [String]
+    public var direction: CompositionTraversalDirection
+    public var depth: Int
+    public var maxNodes: Int
+    public var maxEdges: Int
+    public init(labels: [String] = [], direction: CompositionTraversalDirection = .both, depth: Int = 1, maxNodes: Int = 100, maxEdges: Int = 400) {
+        self.labels = labels; self.direction = direction; self.depth = depth; self.maxNodes = maxNodes; self.maxEdges = maxEdges
+    }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case labels, direction, depth, maxNodes, maxEdges }
+    public init(from decoder: Decoder) throws {
+        try compositionKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        labels = try c.decodeIfPresent([String].self, forKey: .labels) ?? []
+        direction = try c.decodeIfPresent(CompositionTraversalDirection.self, forKey: .direction) ?? .both
+        depth = try c.decodeIfPresent(Int.self, forKey: .depth) ?? 1
+        maxNodes = try c.decodeIfPresent(Int.self, forKey: .maxNodes) ?? 100
+        maxEdges = try c.decodeIfPresent(Int.self, forKey: .maxEdges) ?? 400
+    }
+}
+
+public struct CompositionTableColumn: Codable, Hashable, Sendable {
+    public var field: String
+    public var title: String?
+    public init(field: String, title: String? = nil) { self.field = field; self.title = title }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case field, title }
+    public init(from decoder: Decoder) throws {
+        try compositionKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        field = try c.decode(String.self, forKey: .field); title = try c.decodeIfPresent(String.self, forKey: .title)
+    }
+}
+
 public struct CompositionDataSource: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var collection: CompositionCollection
@@ -43,11 +80,13 @@ public struct CompositionDataSource: Codable, Hashable, Identifiable, Sendable {
     public var filters: [CompositionFilter]
     public var sort: CompositionSort
     public var limit: Int
-    public init(id: String, collection: CompositionCollection, scope: CompositionScope = .current, typeIDs: [String] = [], selectionGroup: String = "main", timeGroup: String = "main", relation: CompositionSelectionRelation = .none, filters: [CompositionFilter] = [], sort: CompositionSort = .sourceOrder, limit: Int = 100) {
+    public var traversal: CompositionTraversal?
+    public init(id: String, collection: CompositionCollection, scope: CompositionScope = .current, typeIDs: [String] = [], selectionGroup: String = "main", timeGroup: String = "main", relation: CompositionSelectionRelation = .none, filters: [CompositionFilter] = [], sort: CompositionSort = .sourceOrder, limit: Int = 100, traversal: CompositionTraversal? = nil) {
         self.id = id; self.collection = collection; self.scope = scope; self.typeIDs = typeIDs; self.selectionGroup = selectionGroup; self.timeGroup = timeGroup
         self.relation = relation; self.filters = filters; self.sort = sort; self.limit = limit
+        self.traversal = traversal
     }
-    private enum CodingKeys: String, CodingKey, CaseIterable { case id, collection, scope, typeIDs, selectionGroup, timeGroup, relation, filters, sort, limit }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, collection, scope, typeIDs, selectionGroup, timeGroup, relation, filters, sort, limit, traversal }
     public init(from decoder: Decoder) throws {
         try compositionKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -56,6 +95,7 @@ public struct CompositionDataSource: Codable, Hashable, Identifiable, Sendable {
         selectionGroup = try c.decodeIfPresent(String.self, forKey: .selectionGroup) ?? "main"; timeGroup = try c.decodeIfPresent(String.self, forKey: .timeGroup) ?? "main"
         relation = try c.decodeIfPresent(CompositionSelectionRelation.self, forKey: .relation) ?? .none; filters = try c.decodeIfPresent([CompositionFilter].self, forKey: .filters) ?? []
         sort = try c.decodeIfPresent(CompositionSort.self, forKey: .sort) ?? .sourceOrder; limit = try c.decodeIfPresent(Int.self, forKey: .limit) ?? 100
+        traversal = try c.decodeIfPresent(CompositionTraversal.self, forKey: .traversal)
     }
 }
 
@@ -66,16 +106,19 @@ public struct CompositionPart: Codable, Hashable, Identifiable, Sendable {
     public var title: String
     public var selectionGroup: String
     public var timeGroup: String
-    public init(id: String, primitive: CompositionPrimitive, sourceID: String, title: String = "", selectionGroup: String = "main", timeGroup: String = "main") {
+    public var columns: [CompositionTableColumn]?
+    public init(id: String, primitive: CompositionPrimitive, sourceID: String, title: String = "", selectionGroup: String = "main", timeGroup: String = "main", columns: [CompositionTableColumn]? = nil) {
         self.id = id; self.primitive = primitive; self.sourceID = sourceID; self.title = title; self.selectionGroup = selectionGroup; self.timeGroup = timeGroup
+        self.columns = columns
     }
-    private enum CodingKeys: String, CodingKey, CaseIterable { case id, primitive, sourceID, title, selectionGroup, timeGroup }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, primitive, sourceID, title, selectionGroup, timeGroup, columns }
     public init(from decoder: Decoder) throws {
         try compositionKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id); primitive = try c.decode(CompositionPrimitive.self, forKey: .primitive); sourceID = try c.decode(String.self, forKey: .sourceID)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""; selectionGroup = try c.decodeIfPresent(String.self, forKey: .selectionGroup) ?? "main"
         timeGroup = try c.decodeIfPresent(String.self, forKey: .timeGroup) ?? "main"
+        columns = try c.decodeIfPresent([CompositionTableColumn].self, forKey: .columns)
     }
 }
 
@@ -152,6 +195,7 @@ public struct CompositionItem: Identifiable, Hashable, Sendable {
 public struct CompositionEdge: Identifiable, Hashable, Sendable {
     public var id: String; public var fromID: String; public var toID: String; public var label: String; public var kind: String
     public var temporalMatch: TemporalMatch? = nil
+    public var evidence: [Evidence] = []
 }
 public struct CompositionMapPoint: Identifiable, Hashable, Sendable {
     public var id: String; public var targetID: String; public var title: String; public var subtitle: String

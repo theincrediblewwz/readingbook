@@ -82,6 +82,7 @@ struct CompositionWorkspaceView: View {
             .onChange(of: store.currentReadingContext) { _, _ in refresh() }
             .onChange(of: contextOverride) { _, _ in reset() }
             .onChange(of: currentScope) { _, _ in reset() }
+            .onChange(of: store.libraryRootURL) { _, _ in reset() }
             .onChange(of: store.bookID) { _, _ in reset() }
             .onChange(of: definition) { _, _ in reset() }
             .onChange(of: selections) { _, _ in refresh(retainingContent: true) }
@@ -289,6 +290,7 @@ struct CompositionWorkspaceView: View {
         case .map: return "地图"
         case .relations: return "关系"
         case .documentGraph: return "文档导图"
+        case .table: return "对象对照"
         }
     }
     private func icon(_ part: CompositionPart) -> String {
@@ -301,6 +303,7 @@ struct CompositionWorkspaceView: View {
         case .map: return "map"
         case .relations: return "point.3.filled.connected.trianglepath.dotted"
         case .documentGraph: return "point.3.connected.trianglepath.dotted"
+        case .table: return "tablecells"
         }
     }
     private func partCard(_ part: CompositionPart, width: CGFloat) -> some View {
@@ -342,6 +345,8 @@ struct CompositionWorkspaceView: View {
             CompositionObjectList(items: projection.items, selected: selected) { select($0, group: part.selectionGroup) }
         case .objectDetail:
             CompositionObjectDetails(items: projection.items, selected: selected)
+        case .table:
+            CompositionObjectTable(items: projection.items, columns: part.columns ?? [], selected: selected) { select($0, group: part.selectionGroup) }
         case .sourceExcerpt:
             CompositionExcerpts(items: projection.items)
         case .markdown:
@@ -384,6 +389,103 @@ private struct CompositionEmptyState: View {
             Image(systemName: icon).font(.system(size: 27)).foregroundStyle(Palette.accent.opacity(0.65))
             Text(text).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 340)
         }.padding(28).frame(maxWidth: .infinity, minHeight: 150)
+    }
+}
+
+private struct CompositionObjectTable: View {
+    @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var typography: ReadingTypographySettings
+    let items: [CompositionItem]
+    let columns: [CompositionTableColumn]
+    let selected: Set<String>
+    var select: (String) -> Void
+    @State private var onlySelected = false
+    @State private var detailID: String?
+    @State private var evidenceID: String?
+    private var visible: [CompositionItem] { onlySelected ? items.filter { selected.contains($0.id) } : items }
+    private var valueColumns: [CompositionTableColumn] { columns.filter { $0.field != "name" } }
+    private var nameTitle: String { columns.first { $0.field == "name" }?.title ?? "对象" }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Toggle("仅看所选", isOn: $onlySelected).toggleStyle(.checkbox)
+                Spacer(minLength: 8)
+                Text("⌘ 点选可同时选择多个对象").font(.caption).foregroundStyle(.secondary)
+            }.padding(.horizontal, 16).frame(minHeight: 44)
+            if visible.isEmpty {
+                CompositionEmptyState(text: onlySelected ? "先从同组列表、图或表中选择要比较的对象。" : "当前范围还没有这个类型的对象。", icon: "tablecells")
+            } else {
+                ScrollView([.horizontal, .vertical]) {
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        Section {
+                            ForEach(visible) { item in tableRow(item) }
+                        } header: {
+                            HStack(alignment: .top, spacing: 0) {
+                                Text(nameTitle).frame(width: 190, alignment: .leading)
+                                ForEach(valueColumns, id: \.field) { column in Text(columnTitle(column)).frame(width: 220, alignment: .leading) }
+                                Text("对象依据").frame(width: 160, alignment: .leading)
+                            }.font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(14).background(Palette.paper)
+                        }
+                    }
+                }.frame(height: min(480, max(220, CGFloat(visible.count) * 116 + 50)))
+            }
+            Text("空值表示未记录；依据按对象保存，未单独标注每个字段的来源。")
+                .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.bottom, 14)
+        }.onChange(of: items.map(\.id)) { _, ids in
+            if let detailID, !ids.contains(detailID) { self.detailID = nil }
+            if let evidenceID, !ids.contains(evidenceID) { self.evidenceID = nil }
+        }
+    }
+    private func columnTitle(_ column: CompositionTableColumn) -> String {
+        if let title = column.title { return title }
+        let key = column.field.hasPrefix("properties.") ? String(column.field.dropFirst(11)) : column.field
+        return store.book?.types.first { $0.id == items.first?.typeID }?.fields.first { $0.key == key }?.label
+            ?? ["name": "对象", "summary": "说明", "kind": "类别", "typeID": "类型", "origin": "笔记来源", "dateText": "原书时间", "phaseOrder": "阶段"][key] ?? key
+    }
+    private func tableRow(_ item: CompositionItem) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Button { select(item.id) } label: {
+                    HStack(alignment: .top, spacing: 7) {
+                        if selected.contains(item.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.accent) }
+                        Text(item.title).font(typography.font(for: .knowledge, weight: .medium)).multilineTextAlignment(.leading).lineLimit(3)
+                    }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                Button("完整内容") { detailID = item.id }.font(.caption).buttonStyle(.borderless).frame(minHeight: 36)
+                    .popover(isPresented: Binding(get: { detailID == item.id }, set: { if !$0 { detailID = nil } })) {
+                        CompositionObjectDetails(items: items.filter { $0.id == item.id }, selected: [item.id]).frame(width: 480, height: 480)
+                    }
+            }.frame(width: 190, alignment: .leading)
+            ForEach(valueColumns, id: \.field) { column in
+                let value = displayValue(column.field, item: item)
+                Text(value.map { String($0.prefix(600)) } ?? "未记录").font(typography.font(for: .knowledge))
+                    .foregroundStyle(value == nil ? Color.secondary : Palette.ink).lineLimit(5).textSelection(.enabled)
+                    .frame(width: 220, alignment: .topLeading)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                if item.evidence.isEmpty { Text("暂无原文依据").font(.caption).foregroundStyle(.secondary) }
+                else {
+                    Button("查看 \(item.evidence.count) 处依据") { evidenceID = item.id }
+                        .font(.caption).buttonStyle(.borderless).frame(minHeight: 44)
+                        .popover(isPresented: Binding(get: { evidenceID == item.id }, set: { if !$0 { evidenceID = nil } })) {
+                            ScrollView { CompositionEvidenceList(evidence: items.first { $0.id == item.id }?.evidence ?? []).padding(18) }
+                                .frame(width: 460, height: 440)
+                        }
+                }
+                if let match = item.fields["temporalMatch"], ["unknown", "possible"].contains(match) {
+                    Text(match == "unknown" ? "时间未明" : "时间待考").font(.caption).foregroundStyle(.secondary)
+                }
+            }.frame(width: 160, alignment: .leading)
+        }.padding(14).frame(minHeight: 100, alignment: .topLeading)
+            .background(selected.contains(item.id) ? Palette.accent.opacity(0.07) : Color.clear)
+            .overlay(alignment: .bottom) { Rectangle().fill(Palette.line.opacity(0.5)).frame(height: 0.5) }
+    }
+    private func displayValue(_ field: String, item: CompositionItem) -> String? {
+        guard let value = CompositionRuntime.tableValue(field, in: item) else { return nil }
+        if field == "kind" { return ["entity": "要素", "event": "事件", "document": "笔记"][value] ?? "要素" }
+        if field == "typeID" { return store.book?.types.first { $0.id == value }?.name ?? ["event": "事件", "document": "笔记"][value] ?? "要素" }
+        if field == "origin" { return ["user": "我的笔记", "saved-answer": "保存的 AI 回答", "ai": "保存的 AI 回答", "import": "导入笔记"][value] ?? value }
+        return value
     }
 }
 
@@ -505,13 +607,26 @@ private struct CompositionMarkdown: View {
     @State private var chosen: String?
     @State private var markdown: String?
     @State private var issue: String?
+    @State private var loadedRequest: DocumentRequest?
+    private struct DocumentRequest: Hashable {
+        let libraryRoot: URL
+        let bookID: String
+        let sourceHash: String
+        let documentID: String
+        let relativePath: String
+        let updatedAt: Date
+    }
     private var ids: [String] {
         var seen = Set<String>()
         return items.compactMap(\.documentID).filter { seen.insert($0).inserted }
     }
     private var documentID: String? { chosen.flatMap { ids.contains($0) ? $0 : nil } ?? ids.first(where: selected.contains) ?? ids.first }
     private var document: DocumentRecord? { store.book?.activeDocuments.first { $0.id == documentID } }
-    private var loadKey: String { (store.bookID ?? "") + "|" + (document?.id ?? "") + "|" + String(document?.updatedAt.timeIntervalSince1970 ?? 0) }
+    private var loadRequest: DocumentRequest? {
+        guard let book = store.book, let document else { return nil }
+        return DocumentRequest(libraryRoot: store.libraryRootURL, bookID: book.id, sourceHash: book.sourceHash,
+            documentID: document.id, relativePath: document.relativePath, updatedAt: document.updatedAt)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if ids.count > 1 {
@@ -526,21 +641,24 @@ private struct CompositionMarkdown: View {
                     Button { Task { await store.openDocument(document) } } label: { Image(systemName: "arrow.up.right").frame(width: 48, height: 48) }
                         .buttonStyle(.plain).help("打开这篇笔记").accessibilityLabel("打开这篇笔记")
                 }.padding(.horizontal, 18)
-                if let issue { Text(issue).font(.callout).foregroundStyle(.secondary).textSelection(.enabled).padding(20) }
-                else if let markdown { ScrollView { MarkdownText(markdown: markdown).readingTextContext(.notes).padding(20) }.frame(maxHeight: 460) }
+                if loadedRequest == loadRequest, let issue { Text(issue).font(.callout).foregroundStyle(.secondary).textSelection(.enabled).padding(20) }
+                else if loadedRequest == loadRequest, let markdown { ScrollView { MarkdownText(markdown: markdown).readingTextContext(.notes).padding(20) }.frame(maxHeight: 460) }
                 else { ProgressView().frame(maxWidth: .infinity, minHeight: 150) }
             } else { CompositionEmptyState(text: "这里显示已关联、主动保存的 Markdown 笔记。", icon: "doc.text") }
-        }.task(id: loadKey) { await load() }.onChange(of: selected) { _, _ in chosen = nil }
+        }.task(id: loadRequest) { await load() }.onChange(of: selected) { _, _ in chosen = nil }
     }
     private func load() async {
-        markdown = nil; issue = nil
-        guard let bookID = store.bookID, let document, ids.contains(document.id) else { return }
+        markdown = nil; issue = nil; loadedRequest = nil
+        guard let request = loadRequest, let document, ids.contains(document.id) else { return }
+        let repository = store.repository
         do {
-            let value = try await store.repository.readDocument(bookID: bookID, document: document)
+            let value = try await repository.readDocument(bookID: request.bookID, document: document)
             try Task.checkCancellation()
-            guard store.bookID == bookID, document.id == documentID else { return }
-            markdown = value
-        } catch is CancellationError {} catch { if !Task.isCancelled { issue = error.localizedDescription } }
+            guard loadRequest == request else { return }
+            markdown = value; loadedRequest = request
+        } catch is CancellationError {} catch {
+            if !Task.isCancelled, loadRequest == request { issue = error.localizedDescription; loadedRequest = request }
+        }
     }
 }
 
@@ -686,6 +804,8 @@ private struct CompositionGraph: View {
     var select: (String) -> Void
     var deselect: () -> Void
     @State private var positions: [String: CGPoint] = [:]
+    @State private var showsRelationEvidence = false
+    @State private var shownRelations = 24
     private struct SourcePosition: Hashable { var x: Double; var y: Double }
     private var items: [GraphItem] {
         let origins: [String: SourcePosition] = Dictionary(uniqueKeysWithValues: projection.items.compactMap { item -> (String, SourcePosition)? in
@@ -707,8 +827,9 @@ private struct CompositionGraph: View {
                 return CGPoint(x: origin.x + Double(slot % 3) * 280, y: origin.y + Double(slot / 3) * 180)
             }
             let point = positions[item.id] ?? sourcePoint ?? CGPoint(x: cos(angle) * radius, y: sin(angle) * radius)
+            let uncertainty = item.fields["temporalMatch"] == "unknown" ? "时间未明" : item.fields["temporalMatch"] == "possible" ? "时间待考" : "书中要素"
             return GraphItem(id: item.id, targetID: item.objectID ?? item.documentID ?? item.id, title: item.title,
-                subtitle: item.documentID == nil ? "书中要素" : "Markdown", x: point.x, y: point.y,
+                subtitle: item.documentID == nil ? uncertainty : "Markdown", x: point.x, y: point.y,
                 documentIDs: item.documentID.map { [$0] } ?? [])
         }
     }
@@ -722,6 +843,7 @@ private struct CompositionGraph: View {
     var body: some View {
         if items.isEmpty { CompositionEmptyState(text: documents ? "当前范围没有已保存的文档节点。" : "当前选择和时间没有可显示的关系。", icon: "point.3.connected.trianglepath.dotted") }
         else {
+            VStack(alignment: .leading, spacing: 8) {
             GraphSurface(items: items, lines: lines, selectedID: selected.sorted().first, select: select,
                 open: { id in
                     if let document = store.book?.activeDocuments.first(where: { $0.id == id }), projection.items.contains(where: { $0.documentID == id }) {
@@ -731,6 +853,31 @@ private struct CompositionGraph: View {
                 deselect: deselect, title: "composition.\(viewID).\(partID)", isEnabled: !store.isBusy, ambientMotion: !documents)
                 .frame(height: max(340, min(520, width * 0.65))).clipShape(RoundedRectangle(cornerRadius: 18)).padding(8)
                 .onChange(of: store.bookID) { _, _ in positions = [:] }
+            if !documents, !projection.edges.isEmpty {
+                DisclosureGroup("关系与依据 · \(projection.edges.count)", isExpanded: $showsRelationEvidence) {
+                    if showsRelationEvidence {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(Array(projection.edges.prefix(shownRelations))) { edge in
+                                DisclosureGroup {
+                                    CompositionEvidenceList(evidence: edge.evidence)
+                                } label: {
+                                    Text(relationTitle(edge)).font(.system(size: 14)).textSelection(.enabled)
+                                }
+                            }
+                            if shownRelations < projection.edges.count {
+                                Button("继续显示关系依据") { shownRelations += 24 }.buttonStyle(.borderless).frame(minHeight: 44)
+                            }
+                        }.padding(.top, 10)
+                    }
+                }.font(.caption).padding(.horizontal, 16).padding(.bottom, 12)
+            }
+            }.onChange(of: projection.edges.map(\.id)) { _, _ in shownRelations = 24 }
         }
+    }
+    private func relationTitle(_ edge: CompositionEdge) -> String {
+        let from = projection.items.first { $0.id == edge.fromID }?.title ?? "当前对象"
+        let to = projection.items.first { $0.id == edge.toID }?.title ?? "当前对象"
+        let uncertainty = edge.temporalMatch == .possible ? " · 时间待考" : edge.temporalMatch == .unknown ? " · 时间未明" : ""
+        return from + " → " + edge.label + " → " + to + uncertainty
     }
 }

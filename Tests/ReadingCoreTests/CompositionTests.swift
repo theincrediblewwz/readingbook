@@ -36,6 +36,44 @@ final class CompositionTests: XCTestCase {
         return CompositionDefinition(sources: sources, parts: parts, layout: layout, rootID: parts.count == 1 ? layout[0].id : "root")
     }
 
+    private func traversalFixture() throws -> BookProject {
+        let units = [SourceUnit(id: "u1", order: 0, chapter: "前文", page: 1, text: "概念甲、概念乙、概念丙、概念丁、概念庚。前提与结论。208年旧事，209年关系变更。"),
+            SourceUnit(id: "u2", order: 1, chapter: "后文", page: 2, text: "后文概念戊带来新增关联。")]
+        let hash = try BookImporter.sha256(Data(units.map(\.text).joined().utf8))
+        var book = BookProject(title: "关系与对照", originalName: "arguments.txt", sourceHash: hash, units: units)
+        PluginEngine.seed(&book)
+        book.types += [EntityType(id: "proof-concept", name: "概念", fields: [TypeField(key: "definition", label: "定义"), TypeField(key: "condition", label: "条件")]),
+            EntityType(id: "proof-claim", name: "论点", fields: [TypeField(key: "reason", label: "理由")])]
+        let first = Evidence(unitID: "u1", quote: units[0].text), second = Evidence(unitID: "u2", quote: units[1].text)
+        book.entities = [KnowledgeEntity(id: "a", typeID: "proof-concept", name: "概念甲", properties: ["definition": "前提", "condition": "结论"], evidence: [first]),
+            KnowledgeEntity(id: "b", typeID: "proof-concept", name: "概念乙", properties: ["definition": "结论"], evidence: [first]),
+            KnowledgeEntity(id: "c", typeID: "proof-concept", name: "概念丙", evidence: [first]),
+            KnowledgeEntity(id: "d", typeID: "proof-claim", name: "概念丁", properties: ["reason": "前提"], evidence: [first]),
+            KnowledgeEntity(id: "e", typeID: "proof-concept", name: "后文概念戊", properties: ["definition": "新增关联"], evidence: [second]),
+            KnowledgeEntity(id: "g", typeID: "proof-concept", name: "概念庚", evidence: [first])]
+        func proof(_ quote: String, future: Bool = false) -> [Evidence] { [Evidence(unitID: future ? "u2" : "u1", quote: quote)] }
+        book.relations = [KnowledgeRelation(id: "ab", fromID: "a", toID: "b", label: "依赖", evidence: proof("前提")),
+            KnowledgeRelation(id: "ab2", fromID: "a", toID: "b", label: "依赖", evidence: proof("结论")),
+            KnowledgeRelation(id: "bc", fromID: "b", toID: "c", label: "依赖", evidence: proof("概念乙")),
+            KnowledgeRelation(id: "ca", fromID: "c", toID: "a", label: "回指", evidence: proof("概念丙")),
+            KnowledgeRelation(id: "self", fromID: "b", toID: "b", label: "依赖", evidence: proof("前提")),
+            KnowledgeRelation(id: "ba", fromID: "b", toID: "a", label: "反对", evidence: proof("结论")),
+            KnowledgeRelation(id: "ad", fromID: "a", toID: "d", label: "解释", evidence: proof("概念甲")),
+            KnowledgeRelation(id: "dc", fromID: "d", toID: "c", label: "解释", evidence: proof("概念丁")),
+            KnowledgeRelation(id: "future", fromID: "a", toID: "e", label: "依赖", evidence: proof("新增关联", future: true)),
+            KnowledgeRelation(id: "futureBridge", fromID: "e", toID: "g", label: "依赖", evidence: proof("新增关联", future: true)),
+            KnowledgeRelation(id: "eventIn", fromID: "a", toID: "ev", label: "事件链", evidence: proof("旧事")),
+            KnowledgeRelation(id: "eventOut", fromID: "ev", toID: "c", label: "事件链", evidence: proof("旧事")),
+            KnowledgeRelation(id: "timed", fromID: "a", toID: "g", label: "时限", evidence: proof("关系变更"))]
+        book.events = [KnowledgeEvent(id: "ev", name: "旧事", dateText: "208年", startYear: 208, evidence: [first])]
+        let anchors = try units.map { try ReadingExperienceRuntime.createAnchor(sourceHash: hash, unitID: $0.id, quote: $0.text, in: book) }
+        func extent(_ year: Int) -> TemporalExtent { TemporalExtent(sourceText: "\(year)年", calendar: "gregorian", start: TemporalDate(year: year), precision: .year, uncertainty: .exact) }
+        book.temporalKnowledge = TemporalKnowledgeState(anchors: anchors,
+            eventMetadata: [EventTemporalMetadata(eventID: "ev", extent: extent(208), sourceAnchorIDs: [anchors[0].id], assertion: .explicit)],
+            relationMetadata: [RelationTemporalMetadata(id: "timed-209", relationID: "timed", validity: extent(209), sourceAnchorIDs: [anchors[0].id], assertion: .explicit)])
+        return book
+    }
+
     func testOldViewsRoundTripAndClosedTypedCompositionValidation() throws {
         let book = try fixture()
         let old = try JSONDecoder().decode(ViewDefinition.self, from: Data(#"{"id":"old","title":"旧组件","kind":"map"}"#.utf8))
@@ -296,5 +334,134 @@ final class CompositionTests: XCTestCase {
         XCTAssertEqual(result.mapPoints.count, 400); XCTAssertTrue(result.partial)
         XCTAssertFalse(result.diagnostics.isEmpty)
         XCTAssertEqual(result.mapPoints.map(\.id), try CompositionRuntime.project(value, in: book, selections: ["main": ["cao"]])["people"]!.mapPoints.map(\.id))
+    }
+
+    func testTraversalDirectionsCyclesParallelEdgesAndBudgets() throws {
+        let book = try traversalFixture(), selected: [String: Set<String>] = ["main": ["a"]]
+        var source = CompositionDataSource(id: "graph", collection: .relations, scope: .book, relation: .neighbors,
+            traversal: CompositionTraversal(labels: ["依赖"], direction: .outgoing, depth: 1))
+        func project(_ source: CompositionDataSource) throws -> CompositionProjection {
+            try CompositionRuntime.project(definition([source], primitives: [.relations]), in: book, selections: selected)["graph"]!
+        }
+        let first = try project(source)
+        XCTAssertEqual(Set(first.items.map(\.id)), ["a", "b", "e"])
+        XCTAssertEqual(first.edges.filter { $0.fromID == "a" && $0.toID == "b" }.map(\.id), ["ab", "ab2"])
+        XCTAssertEqual(first.edges.first { $0.id == "ab" }?.evidence.first?.quote, "前提")
+        XCTAssertEqual(first.edges.first { $0.id == "ab2" }?.evidence.first?.quote, "结论")
+        source.traversal!.depth = 2
+        let second = try project(source)
+        XCTAssertTrue(second.items.contains { $0.id == "c" }); XCTAssertTrue(second.items.contains { $0.id == "g" })
+        XCTAssertEqual(second.edges.filter { $0.id == "self" }.count, 1)
+        source.traversal = CompositionTraversal(labels: ["反对"], direction: .incoming)
+        let incoming = try project(source)
+        XCTAssertEqual(incoming.edges.map(\.id), ["ba"])
+        XCTAssertEqual(incoming.edges.first?.fromID, "b"); XCTAssertEqual(incoming.edges.first?.toID, "a")
+        source.traversal = CompositionTraversal(direction: .both, depth: 4)
+        let cyclic = try project(source)
+        XCTAssertEqual(cyclic.items.count, 7); XCTAssertEqual(cyclic.edges.count, book.relations.count); XCTAssertFalse(cyclic.partial)
+        source.traversal = CompositionTraversal(labels: ["依赖"], direction: .outgoing, depth: 2, maxNodes: 2)
+        let nodeBound = try project(source)
+        XCTAssertEqual(Set(nodeBound.items.map(\.id)), ["a", "b"]); XCTAssertTrue(nodeBound.partial)
+        source.traversal = CompositionTraversal(labels: ["依赖"], direction: .outgoing, depth: 2, maxEdges: 1)
+        let edgeBound = try project(source)
+        XCTAssertEqual(edgeBound.edges.map(\.id), ["ab"]); XCTAssertTrue(edgeBound.partial)
+        XCTAssertEqual(try project(source).items, edgeBound.items, "Truncation must be deterministic.")
+    }
+
+    func testTraversalFiltersTimeAndPermissionBeforeWalkingAndDoesNotInventBridges() throws {
+        var book = try traversalFixture()
+        let selected: [String: Set<String>] = ["main": ["a"]]
+        var source = CompositionDataSource(id: "graph", collection: .relations, scope: .book, typeIDs: ["proof-concept"], relation: .neighbors,
+            traversal: CompositionTraversal(labels: ["解释"], direction: .outgoing, depth: 2))
+        var value = definition([source], primitives: [.relations])
+        let hidden = try CompositionRuntime.project(value, in: book, selections: selected)["graph"]!
+        XCTAssertEqual(Set(hidden.items.map(\.id)), ["a", "c"]); XCTAssertTrue(hidden.edges.isEmpty)
+        XCTAssertTrue(hidden.partial); XCTAssertTrue(hidden.diagnostics.contains { $0.contains("端点") })
+        source.typeIDs = []; source.traversal!.labels = ["依赖"]; source.traversal!.depth = 4
+        value = definition([source], primitives: [.relations])
+        let bounded = try CompositionRuntime.project(value, in: book, selections: selected, boundary: KnowledgeReadBoundary(allowedUnitIDs: ["u1"]))["graph"]!
+        XCTAssertEqual(Set(bounded.items.map(\.id)), ["a", "b", "c"])
+        XCTAssertFalse(bounded.edges.contains { $0.id == "future" || $0.id == "futureBridge" })
+        source.traversal!.labels = ["事件链"]
+        value = definition([source], primitives: [.relations])
+        func window(_ year: Int) -> [String: TemporalQueryWindow] { ["main": .date(from: TemporalDate(year: year), to: TemporalDate(year: year), calendar: "gregorian")] }
+        let outside = try CompositionRuntime.project(value, in: book, selections: selected, windows: window(209))["graph"]!
+        XCTAssertEqual(outside.items.map(\.id), ["a"]); XCTAssertTrue(outside.edges.isEmpty)
+        let possible = try CompositionRuntime.project(value, in: book, selections: selected, windows: window(208))["graph"]!
+        XCTAssertEqual(Set(possible.items.map(\.id)), ["a", "c", "ev"])
+        XCTAssertTrue(possible.edges.allSatisfy { $0.temporalMatch == .unknown })
+        XCTAssertTrue(possible.diagnostics.contains { $0.contains("时间待考") })
+        source.traversal!.labels = ["时限"]; value = definition([source], primitives: [.relations])
+        XCTAssertTrue(try CompositionRuntime.project(value, in: book, selections: selected, windows: window(208))["graph"]!.edges.isEmpty)
+        let matched = try CompositionRuntime.project(value, in: book, selections: selected, windows: window(209))["graph"]!
+        XCTAssertEqual(matched.edges.map(\.id), ["timed"]); XCTAssertEqual(matched.edges.first?.temporalMatch, .matches)
+        XCTAssertTrue(matched.edges.first!.evidence.contains { $0.quote.contains("209年") }, "Keep the independent temporal provenance as well as the relation quote.")
+        let first = book.entities[0].evidence[0], anchorID = book.temporalKnowledge!.anchors[0].id
+        book.events.append(KnowledgeEvent(id: "undated", name: "前提", evidence: [first]))
+        book.relations += [KnowledgeRelation(id: "unknownIn", fromID: "a", toID: "undated", label: "未知链", evidence: [first]),
+            KnowledgeRelation(id: "unknownOut", fromID: "undated", toID: "c", label: "未知链", evidence: [first])]
+        let time = TemporalExtent(sourceText: "209年", calendar: "gregorian", start: TemporalDate(year: 209), precision: .year, uncertainty: .exact)
+        var state = book.temporalKnowledge!
+        state.relationMetadata += ["unknownIn", "unknownOut"].map { RelationTemporalMetadata(id: "date." + $0, relationID: $0, validity: time, sourceAnchorIDs: [anchorID], assertion: .explicit) }
+        book.temporalKnowledge = state
+        source.traversal!.labels = ["未知链"]; value = definition([source], primitives: [.relations])
+        let unknownNode = try CompositionRuntime.project(value, in: book, selections: selected, windows: window(209))["graph"]!
+        XCTAssertTrue(unknownNode.edges.allSatisfy { $0.temporalMatch == .matches })
+        XCTAssertEqual(unknownNode.items.first { $0.id == "undated" }?.fields["temporalMatch"], "unknown")
+        XCTAssertTrue(unknownNode.diagnostics.contains { $0.contains("时间待考") }, "Dated edges cannot promote an undated intermediate event into a confirmed time.")
+        let unauthorized = try CompositionRuntime.project(value, in: book, selections: ["main": ["e"]], boundary: KnowledgeReadBoundary(allowedUnitIDs: ["u1"]))["graph"]!
+        XCTAssertTrue(unauthorized.items.isEmpty); XCTAssertTrue(unauthorized.edges.isEmpty)
+    }
+
+    func testObjectTableReadsDeclaredFieldsAndKeepsUnknownsSourcesAndFullValues() throws {
+        var book = try traversalFixture()
+        let longDefinition = String(repeating: "长内容", count: 300)
+        book.entities[0].properties["definition"] = longDefinition
+        let source = CompositionDataSource(id: "table", collection: .objects, scope: .book, typeIDs: ["proof-concept"])
+        var value = definition([source], primitives: [.table])
+        value.parts[0].columns = [CompositionTableColumn(field: "name", title: "概念"), CompositionTableColumn(field: "properties.definition", title: "定义"), CompositionTableColumn(field: "properties.condition")]
+        XCTAssertNoThrow(try CompositionRuntime.validate(value, in: book))
+        XCTAssertEqual(try JSONDecoder().decode(CompositionDefinition.self, from: JSONEncoder().encode(value)), value)
+        let projected = try CompositionRuntime.project(value, in: book, boundary: KnowledgeReadBoundary(allowedUnitIDs: ["u1"]))["table"]!
+        let first = try XCTUnwrap(projected.items.first { $0.id == "a" }), second = try XCTUnwrap(projected.items.first { $0.id == "b" })
+        XCTAssertEqual(CompositionRuntime.tableValue("properties.definition", in: first), longDefinition)
+        XCTAssertNil(CompositionRuntime.tableValue("properties.condition", in: second))
+        XCTAssertEqual(first.evidence, book.entities[0].evidence)
+        XCTAssertFalse(projected.items.contains { $0.id == "e" || $0.id == "d" || $0.id == "ev" })
+        var invalid = value; invalid.parts[0].columns = [CompositionTableColumn(field: "properties.reason")]
+        XCTAssertThrowsError(try CompositionRuntime.validate(invalid, in: book), "A field declared only by another type is not a table capability.")
+        invalid = value; invalid.sources[0].typeIDs.append("proof-claim")
+        XCTAssertThrowsError(try CompositionRuntime.validate(invalid, in: book))
+        invalid = value; invalid.parts[0].columns = [CompositionTableColumn(field: "summary"), CompositionTableColumn(field: "summary")]
+        XCTAssertThrowsError(try CompositionRuntime.validate(invalid, in: book))
+        invalid = value; invalid.parts[0].primitive = .objectList
+        XCTAssertThrowsError(try CompositionRuntime.validate(invalid, in: book))
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
+        _ = try PluginEngine.apply(name: "views_configure", arguments: JSONSerialization.data(withJSONObject: ["views": [["id": "compare", "title": "概念对照", "kind": "knowledge", "rendererID": "reading.composition", "composition": encoded]]]), to: &book, allowedUnitIDs: [])
+        XCTAssertEqual(book.views.first { $0.id == "compare" }?.composition, value)
+    }
+
+    func testOptionalTraversalAndTableAreClosedCompatibleAndShareTheActualToolSchema() throws {
+        let book = try traversalFixture()
+        let legacy = definition([CompositionDataSource(id: "legacy", collection: .objects)])
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+        XCTAssertNil((raw["sources"] as? [[String: Any]])?.first?["traversal"])
+        XCTAssertNil((raw["parts"] as? [[String: Any]])?.first?["columns"])
+        XCTAssertThrowsError(try JSONDecoder().decode(CompositionTraversal.self, from: Data(#"{"depth":2,"script":"run()"}"#.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(CompositionTraversal.self, from: Data(#"{"direction":"sideways"}"#.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(CompositionTableColumn.self, from: Data(#"{"field":"summary","request":"https://example.invalid"}"#.utf8)))
+        var value = definition([CompositionDataSource(id: "graph", collection: .relations, scope: .book, relation: .neighbors, traversal: CompositionTraversal())], primitives: [.relations])
+        XCTAssertEqual(try JSONDecoder().decode(CompositionDefinition.self, from: JSONEncoder().encode(value)), value)
+        for invalid in [CompositionTraversal(depth: 0), CompositionTraversal(depth: 5), CompositionTraversal(maxNodes: 0), CompositionTraversal(maxNodes: 201), CompositionTraversal(maxEdges: 0), CompositionTraversal(maxEdges: 801), CompositionTraversal(labels: ["依赖", "依赖"])] {
+            value.sources[0].traversal = invalid; XCTAssertThrowsError(try CompositionRuntime.validate(value, in: book))
+        }
+        value.sources[0].traversal = CompositionTraversal(); value.sources[0].relation = .selected
+        XCTAssertThrowsError(try CompositionRuntime.validate(value, in: book))
+        let function = try XCTUnwrap(PluginEngine.tools.compactMap { $0["function"] as? [String: Any] }.first { $0["name"] as? String == "views_configure" })
+        let parameters = try XCTUnwrap(function["parameters"] as? [String: Any])
+        let properties = try XCTUnwrap(parameters["properties"] as? [String: Any])
+        let views = try XCTUnwrap(properties["views"] as? [String: Any]), items = try XCTUnwrap(views["items"] as? [String: Any])
+        let viewProperties = try XCTUnwrap(items["properties"] as? [String: Any]), actual = try XCTUnwrap(viewProperties["composition"] as? [String: Any])
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: actual, options: .sortedKeys), try JSONSerialization.data(withJSONObject: CompositionSchema.definition, options: .sortedKeys))
     }
 }

@@ -39,6 +39,14 @@ public enum CompositionRuntime {
             try identifier(source.selectionGroup); try identifier(source.timeGroup)
             guard (1...200).contains(source.limit), source.typeIDs.count <= 32, Set(source.typeIDs).count == source.typeIDs.count,
                   Set(source.typeIDs).isSubset(of: types), source.filters.count <= 8 else { throw invalid("组合数据源的类型、筛选或数量无效。") }
+            if let traversal = source.traversal {
+                guard source.relation == .neighbors, (1...4).contains(traversal.depth), (1...200).contains(traversal.maxNodes),
+                      (1...800).contains(traversal.maxEdges), traversal.labels.count <= 16,
+                      Set(traversal.labels).count == traversal.labels.count,
+                      traversal.labels.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 400 }) else {
+                    throw invalid("关系展开仅用于neighbors，最多4层、200个对象、800条关系和16个不同名称。")
+                }
+            }
             for filter in source.filters {
                 let builtin = ["name", "summary", "typeID", "kind", "origin", "label"]
                 let custom = filter.field.hasPrefix("properties.") && declaredFields.contains(String(filter.field.dropFirst(11)))
@@ -62,7 +70,7 @@ public enum CompositionRuntime {
             usedSources.insert(part.sourceID)
             let compatible: Bool
             switch part.primitive {
-            case .objectList, .objectDetail: compatible = [.objects, .events, .documents].contains(source.collection)
+            case .objectList, .objectDetail, .table: compatible = [.objects, .events, .documents].contains(source.collection)
             case .sourceExcerpt: compatible = true
             case .markdown, .documentGraph: compatible = source.collection == .documents
             case .map: compatible = [.objects, .events, .relations].contains(source.collection)
@@ -70,6 +78,20 @@ public enum CompositionRuntime {
             case .relations: compatible = source.collection == .relations
             }
             guard compatible else { throw invalid("组合元件和数据源类型不匹配。") }
+            if part.primitive == .table {
+                guard source.typeIDs.count == 1, let columns = part.columns, (1...8).contains(columns.count),
+                      Set(columns.map(\.field)).count == columns.count else { throw invalid("对照表需指定一个对象类型和1至8个不同字段。") }
+                let fields = Set(project.types.first { $0.id == source.typeIDs[0] }?.fields.map(\.key) ?? [])
+                    .union(source.collection == .events ? ["dateText", "kind", "phaseOrder"] : [])
+                for column in columns {
+                    let builtin = ["name", "summary", "kind", "typeID", "origin"].contains(column.field)
+                    let custom = column.field.hasPrefix("properties.") && fields.contains(String(column.field.dropFirst(11)))
+                    guard column.field.utf8.count <= 140, builtin || custom,
+                          column.title.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 400 }) ?? true else {
+                        throw invalid("对照表只能读取当前对象类型的已声明字段，列标题最多400字节。")
+                    }
+                }
+            } else if part.columns != nil { throw invalid("只有object.table元件可以声明columns。") }
         }
         guard usedSources.count == sources.count, layouts[definition.rootID] != nil else { throw invalid("组合布局含有未使用的数据源或缺少根。") }
         var parents: [String: String] = [:], usedParts = Set<String>()
@@ -110,6 +132,7 @@ public enum CompositionRuntime {
         var result: [String: CompositionProjection] = [:]
         var queries = TemporalQueryCache()
         var relatedCache: [RelatedQueryKey: Set<String>] = [:]
+        var traversalCache: [TraversalQueryKey: TraversalResult] = [:]
         for source in prepared.definition.sources {
             try Task.checkCancellation()
             guard let base = prepared.bases[source.scope] else { throw invalid("组合输入缺少已校验的数据范围。") }
@@ -120,13 +143,28 @@ public enum CompositionRuntime {
             let relations = try queries.relations(scope: source.scope, base: base, point: point, window: window)
             // Host selection is a hint, never authority to cross a source boundary.
             let selected = (selections[source.selectionGroup] ?? []).intersection(base.objectIDs)
-            let relatedKey = RelatedQueryKey(query: TemporalQueryKey(scope: source.scope, time: QueryTime(point: point, window: window)),
-                relation: source.relation.rawValue, selected: selected)
+            let queryKey = TemporalQueryKey(scope: source.scope, time: QueryTime(point: point, window: window))
             let related: Set<String>
-            if let cached = relatedCache[relatedKey] { related = cached }
-            else {
-                related = try relatedIDs(source.relation, selected: selected, base: base, events: events, relations: relations, point: point, window: window)
-                relatedCache[relatedKey] = related
+            let expanded: TraversalResult?
+            if let traversal = source.traversal {
+                let key = TraversalQueryKey(query: queryKey, traversal: traversal, selected: selected,
+                    labelFilters: source.filters.filter { $0.field == "label" })
+                let value: TraversalResult
+                if let cached = traversalCache[key] { value = cached }
+                else {
+                    let graph = try queries.graph(key: queryKey, base: base, events: eventResult, relations: relations)
+                    value = try traverse(graph, selected: selected, policy: traversal, labelFilters: key.labelFilters)
+                    traversalCache[key] = value
+                }
+                expanded = value; related = value.ids
+            } else {
+                expanded = nil
+                let key = RelatedQueryKey(query: queryKey, relation: source.relation.rawValue, selected: selected)
+                if let cached = relatedCache[key] { related = cached }
+                else {
+                    related = try relatedIDs(source.relation, selected: selected, base: base, events: events, relations: relations, point: point, window: window)
+                    relatedCache[key] = related
+                }
             }
             var items: [CompositionItem]
             var edges: [CompositionEdge] = []
@@ -146,22 +184,33 @@ public enum CompositionRuntime {
             case .documents: items = base.objects.filter { $0.kind == .document }.map { item($0, order: base.order) }
             case .relations:
                 let endpointIDs = Set(relations.flatMap { [$0.relation.fromID, $0.relation.toID] })
-                items = base.objects.filter { endpointIDs.contains($0.id) }.map { item($0, order: base.order) }
+                let candidateIDs = expanded?.ids ?? endpointIDs
+                items = base.objects.filter { candidateIDs.contains($0.id) }.map { item($0, order: base.order) }
                 var seen = Set<String>()
                 edges = try relations.compactMap { value in
                     try Task.checkCancellation()
                     let relation = value.relation
                     guard seen.insert(relation.id).inserted else { return nil }
-                    if source.relation != .none, !selected.isEmpty, !selected.contains(relation.fromID), !selected.contains(relation.toID) { return nil }
+                    if let expanded {
+                        guard expanded.edgeIDs.contains(relation.id) else { return nil }
+                    } else if source.relation != .none, !selected.isEmpty, !selected.contains(relation.fromID), !selected.contains(relation.toID) { return nil }
                     if source.filters.contains(where: { $0.field == "label" && !matches(relation.label, filter: $0) }) { return nil }
                     return CompositionEdge(id: relation.id, fromID: relation.fromID, toID: relation.toID, label: relation.label, kind: "knowledge", temporalMatch: value.match)
                 }
-                let linked = Set(edges.flatMap { [$0.fromID, $0.toID] }), edgeIDs = Set(edges.map(\.id))
-                let proofsByEndpoint = try relationEvidence(relations, edgeIDs: edgeIDs)
+                let linked = Set(edges.flatMap { [$0.fromID, $0.toID] }).union(expanded?.ids ?? []), edgeIDs = Set(edges.map(\.id))
+                let proofs = try relationEvidence(relations, edgeIDs: edgeIDs, anchorsByID: base.anchorsByID)
+                edges = edges.map { original in var edge = original; edge.evidence = proofs.byEdge[edge.id] ?? []; return edge }
                 items = try items.filter { linked.contains($0.id) }.map { original in
                     try Task.checkCancellation()
                     var row = original, seen = Set(original.evidence)
-                    row.evidence += (proofsByEndpoint[row.id] ?? []).filter { seen.insert($0).inserted }
+                    row.evidence += (proofs.byEndpoint[row.id] ?? []).filter { seen.insert($0).inserted }
+                    return row
+                }
+            }
+            if expanded != nil {
+                items = items.map { original in
+                    var row = original
+                    if let event = eventResult.byID[row.id] { row.fields["temporalMatch"] = event.match.rawValue }
                     return row
                 }
             }
@@ -186,12 +235,23 @@ public enum CompositionRuntime {
             if let point { items = try items.map { try timedItem($0, base: base, at: point) } }
             let itemIDs = Set(items.map(\.id))
             var diagnostics = base.diagnostics
+            if let expanded {
+                if expanded.partial { diagnostics.append("关系展开已达到对象或关系数量上限，仅显示部分关联；可减少层数或缩小范围。") }
+                if selected.isEmpty { diagnostics.append("先在同组选择当前范围内的对象，再展开关联。") }
+                else if expanded.ids.isEmpty { diagnostics.append("所选对象不在当前可比较时间与获准来源范围内。") }
+                if (point != nil || window != nil) && expanded.hasUncertainTime {
+                    diagnostics.append("展开中含时间待考或未明的对象、关系；关联路径不代表已确认同时成立，也不代表推论已经证明。")
+                }
+            }
             if source.collection == .documents {
                 let layout = try documentEdges(in: base.project, documentIDs: itemIDs)
                 edges = layout.edges
                 if layout.usesMounts { diagnostics.append("这里的连线沿用原画布节点关联；同节点挂载的文档共享该布局关系，不代表额外的书中事实。") }
             }
+            let beforeVisibleEdges = edges.count
             edges = edges.filter { itemIDs.contains($0.fromID) && itemIDs.contains($0.toID) }
+            let hiddenTraversalEdges = expanded != nil && beforeVisibleEdges > edges.count
+            if hiddenTraversalEdges { diagnostics.append("部分展开关系的端点被结果筛选隐藏；这里只显示两端均可见的关系。") }
             let edgeTruncated = edges.count > 800
             edges = Array(edges.prefix(800))
             let allPoints: [CompositionMapPoint]
@@ -213,7 +273,7 @@ public enum CompositionRuntime {
                 diagnostics.append("标为时间待考的记录仍保留供核对；时间未明、推测或历法不同不代表已确认落在这个区间。")
             }
             result[source.id] = CompositionProjection(items: items, edges: edges, mapPoints: mapPoints, total: total,
-                partial: total > source.limit || edgeTruncated || pointTruncated, diagnostics: diagnostics)
+                partial: total > source.limit || edgeTruncated || pointTruncated || expanded?.partial == true || hiddenTraversalEdges, diagnostics: diagnostics)
         }
         return result
     }
@@ -225,6 +285,7 @@ public enum CompositionRuntime {
         var objectsByID: [String: TypedObject]
         var names: [String: String]
         var objectIDs: Set<String>
+        var anchorsByID: [String: SourceAnchor]
         var order: [String: Int]
         var diagnostics: [String]
     }
@@ -238,6 +299,23 @@ public enum CompositionRuntime {
     }
     private struct TemporalQueryKey: Hashable { var scope: CompositionScope; var time: QueryTime }
     private struct RelatedQueryKey: Hashable { var query: TemporalQueryKey; var relation: String; var selected: Set<String> }
+    private struct TraversalQueryKey: Hashable {
+        var query: TemporalQueryKey; var traversal: CompositionTraversal; var selected: Set<String>; var labelFilters: [CompositionFilter]
+    }
+    private struct TraversalGraph {
+        var relations: [TemporalRelationSnapshot] = []
+        var eligibleIDs: Set<String>
+        var uncertainIDs: Set<String>
+        var outgoing: [String: [Int]] = [:]
+        var incoming: [String: [Int]] = [:]
+        var both: [String: [Int]] = [:]
+    }
+    private struct TraversalResult {
+        var ids: Set<String>
+        var edgeIDs = Set<String>()
+        var partial = false
+        var hasUncertainTime = false
+    }
     private struct EventProjection {
         var events: [TemporalEventSnapshot]
         var byID: [String: TemporalEventSnapshot]
@@ -247,6 +325,7 @@ public enum CompositionRuntime {
     private struct TemporalQueryCache {
         var eventResults: [TemporalQueryKey: EventProjection] = [:]
         var relationResults: [TemporalQueryKey: [TemporalRelationSnapshot]] = [:]
+        var graphResults: [TemporalQueryKey: TraversalGraph] = [:]
         mutating func events(scope: CompositionScope, base: ScopeBase, point: TemporalQueryPoint?, window: TemporalQueryWindow?) throws -> EventProjection {
             try Task.checkCancellation()
             let key = TemporalQueryKey(scope: scope, time: QueryTime(point: point, window: window))
@@ -270,10 +349,64 @@ public enum CompositionRuntime {
             relationResults[key] = values
             return values
         }
+        mutating func graph(key: TemporalQueryKey, base: ScopeBase, events: EventProjection, relations: [TemporalRelationSnapshot]) throws -> TraversalGraph {
+            if let cached = graphResults[key] { return cached }
+            let eligible = Set(base.objects.filter { $0.kind != .event || events.byID[$0.id] != nil }.map(\.id))
+            let uncertain = Set(events.events.filter { $0.match == .possible || $0.match == .unknown }.map { $0.object.id })
+            var graph = TraversalGraph(eligibleIDs: eligible, uncertainIDs: uncertain), seen = Set<String>()
+            for value in relations {
+                try Task.checkCancellation()
+                let relation = value.relation
+                guard eligible.contains(relation.fromID), eligible.contains(relation.toID), seen.insert(relation.id).inserted else { continue }
+                let index = graph.relations.count
+                graph.relations.append(value)
+                graph.outgoing[relation.fromID, default: []].append(index)
+                graph.incoming[relation.toID, default: []].append(index)
+                graph.both[relation.fromID, default: []].append(index)
+                if relation.fromID != relation.toID { graph.both[relation.toID, default: []].append(index) }
+            }
+            graphResults[key] = graph
+            return graph
+        }
     }
 
-    private static func relationEvidence(_ relations: [TemporalRelationSnapshot], edgeIDs: Set<String>) throws -> [String: [Evidence]] {
+    private static func traverse(_ graph: TraversalGraph, selected: Set<String>, policy: CompositionTraversal,
+                                 labelFilters: [CompositionFilter]) throws -> TraversalResult {
+        let seeds = selected.intersection(graph.eligibleIDs).sorted()
+        var result = TraversalResult(ids: Set(seeds.prefix(policy.maxNodes)))
+        result.partial = seeds.count > policy.maxNodes
+        result.hasUncertainTime = !result.ids.isDisjoint(with: graph.uncertainIDs)
+        var queue = seeds.prefix(policy.maxNodes).map { (id: $0, depth: 0) }, head = 0
+        let labels = Set(policy.labels)
+        while head < queue.count {
+            try Task.checkCancellation()
+            let node = queue[head]; head += 1
+            guard node.depth < policy.depth else { continue }
+            let candidates: [Int]
+            switch policy.direction {
+            case .outgoing: candidates = graph.outgoing[node.id] ?? []
+            case .incoming: candidates = graph.incoming[node.id] ?? []
+            case .both: candidates = graph.both[node.id] ?? []
+            }
+            for index in candidates {
+                try Task.checkCancellation()
+                let value = graph.relations[index], edge = value.relation
+                guard labels.isEmpty || labels.contains(edge.label), labelFilters.allSatisfy({ matches(edge.label, filter: $0) }),
+                      !result.edgeIDs.contains(edge.id) else { continue }
+                let next = edge.fromID == node.id ? edge.toID : edge.fromID
+                if !result.ids.contains(next), result.ids.count >= policy.maxNodes { result.partial = true; continue }
+                guard result.edgeIDs.count < policy.maxEdges else { result.partial = true; return result }
+                result.edgeIDs.insert(edge.id)
+                if value.match == .possible || value.match == .unknown || graph.uncertainIDs.contains(next) { result.hasUncertainTime = true }
+                if result.ids.insert(next).inserted { queue.append((next, node.depth + 1)) }
+            }
+        }
+        return result
+    }
+
+    private static func relationEvidence(_ relations: [TemporalRelationSnapshot], edgeIDs: Set<String>, anchorsByID: [String: SourceAnchor]) throws -> (byEndpoint: [String: [Evidence]], byEdge: [String: [Evidence]]) {
         var result: [String: [Evidence]] = [:], seen: [String: Set<Evidence>] = [:]
+        var byEdge: [String: [Evidence]] = [:], seenByEdge: [String: Set<Evidence>] = [:]
         for value in relations {
             try Task.checkCancellation()
             let relation = value.relation
@@ -285,8 +418,15 @@ public enum CompositionRuntime {
                     if seen[endpoint, default: []].insert(evidence).inserted { result[endpoint, default: []].append(evidence) }
                 }
             }
+            let metadataProofs = (value.metadata?.sourceAnchorIDs ?? []).compactMap { id in
+                anchorsByID[id].map { Evidence(unitID: $0.unitID, quote: $0.quote) }
+            }
+            for evidence in relation.evidence + metadataProofs {
+                try Task.checkCancellation()
+                if seenByEdge[relation.id, default: []].insert(evidence).inserted { byEdge[relation.id, default: []].append(evidence) }
+            }
         }
-        return result
+        return (result, byEdge)
     }
     private static func scoped(_ scope: CompositionScope, project original: BookProject, context: ReadingContext?,
                                currentScope: CompositionCurrentScope, boundary: KnowledgeReadBoundary) throws -> ScopeBase {
@@ -336,6 +476,7 @@ public enum CompositionRuntime {
         let objectsByID = Dictionary(objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return ScopeBase(project: safe, snapshot: finalSnapshot, objects: objects, objectsByID: objectsByID,
             names: objectsByID.mapValues(\.name), objectIDs: Set(objectsByID.keys),
+            anchorsByID: Dictionary(((safe.temporalKnowledge?.anchors ?? []) + (safe.readingExperience?.anchors ?? [])).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
             order: Dictionary(original.units.map { ($0.id, $0.order) }, uniquingKeysWith: { first, _ in first }), diagnostics: diagnostics)
     }
 
@@ -483,6 +624,12 @@ public enum CompositionRuntime {
         switch field { case "name": return item.title; case "summary": return item.summary; case "kind": return item.kind
         case "typeID": return item.typeID ?? ""; case "origin": return item.fields["origin"] ?? ""
         default: return field.hasPrefix("properties.") ? item.fields[String(field.dropFirst(11))] ?? "" : "" }
+    }
+    /// Read-only, already scoped object values. Missing is distinct from a claim
+    /// that the original book does not contain this information.
+    public static func tableValue(_ field: String, in item: CompositionItem) -> String? {
+        let value = self.field(field, in: item)
+        return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
     }
     private static func matches(_ value: String, filter: CompositionFilter) -> Bool {
         switch filter.operation { case .exists: return !value.isEmpty; case .equals: return value == filter.value

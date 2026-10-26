@@ -13,7 +13,6 @@ enum ReadingMarkdownStructure {
         let start: Int
         let contentEnd: Int
         let end: Int
-        let utf8Length: Int
     }
     private struct Group {
         var first: Int
@@ -80,6 +79,7 @@ enum ReadingMarkdownStructure {
             let shadow = structureShadow(source, lines: lines)
             if !Task.isCancelled, let shadow,
                let candidate = try? AttributedString(markdown: shadow, options: options),
+               !hasInlineCode(candidate),
                let before = signature(of: original, lineCount: lines.count),
                let after = signature(of: candidate, lineCount: lines.count), before == after {
                 parsed = candidate
@@ -98,10 +98,12 @@ enum ReadingMarkdownStructure {
             if parsed.characters[run.range].allSatisfy(\.isWhitespace) { continue }
             let position = run.markdownSourcePosition
             let mappedLines: NSRange?
+            // Lazy lines can retain a virtual ancestor indentation in their
+            // columns (for example col 5...6 on a four-byte "  $$" line).
+            // Only proven block identity and valid physical rows map source;
+            // these columns never authorize an original byte/UTF16 position.
             if let position, position.startLine > 0, position.endLine >= position.startLine,
-               position.endLine <= lines.count, position.startColumn > 0, position.endColumn > 0,
-               position.startColumn <= lines[position.startLine - 1].utf8Length,
-               position.endColumn <= lines[position.endLine - 1].utf8Length {
+               position.endLine <= lines.count {
                 mappedLines = NSRange(location: position.startLine - 1, length: position.endLine - position.startLine + 1)
             } else { mappedLines = nil }
             guard let intent = run.presentationIntent else {
@@ -205,32 +207,6 @@ enum ReadingMarkdownStructure {
     }
 
     #if os(macOS)
-    // Temporary failing-fixture diagnostics; called only by Core tests.
-    static func diagnoseSourceMapping(_ text: String) {
-        let lines = sourceLines(text), source = text as NSString
-        var options = AttributedString.MarkdownParsingOptions()
-        options.interpretedSyntax = .full; options.failurePolicy = .throwError
-        options.appliesSourcePositionAttributes = true
-        print("READING_MD_DIAG4_SOURCE", text.debugDescription)
-        let shadow = structureShadow(source, lines: lines)
-        let original = try? AttributedString(markdown: text, options: options)
-        let replacement = shadow.flatMap { try? AttributedString(markdown: $0, options: options) }
-        print("READING_MD_DIAG4_SIGNATURE", String(describing: original.flatMap { signature(of: $0, lineCount: lines.count) }),
-              "shadow", String(describing: replacement.flatMap { signature(of: $0, lineCount: lines.count) }))
-        for (phase, value) in [("original", original), ("shadow", replacement)] {
-            guard let value else { continue }
-            for run in value.runs {
-                let content = String(value.characters[run.range]), position = run.markdownSourcePosition
-                let firstWidth = position.flatMap { $0.startLine > 0 && $0.startLine <= lines.count ? lines[$0.startLine - 1].utf8Length : nil }
-                let lastWidth = position.flatMap { $0.endLine > 0 && $0.endLine <= lines.count ? lines[$0.endLine - 1].utf8Length : nil }
-                print("READING_MD_DIAG4_RUN", phase, content.debugDescription, "intent", String(describing: run.presentationIntent),
-                      "inline", String(describing: run.inlinePresentationIntent), "position", String(describing: position),
-                      "physicalUTF8Widths", String(describing: firstWidth), String(describing: lastWidth))
-            }
-        }
-        print("READING_MD_DIAG4_BASE", String(describing: blocks(in: text, displayMath: { _ in [] })?.map(\.range)))
-    }
-
     private struct SignatureBlock: Equatable {
         var first: Int
         var blockHTML: Bool
@@ -243,6 +219,19 @@ enum ReadingMarkdownStructure {
             default: return false
             }
         }
+    }
+
+    private static func hasInlineCode(_ value: AttributedString) -> Bool {
+        for run in value.runs {
+            if Task.isCancelled { return true }
+            guard run.inlinePresentationIntent?.contains(.code) == true else { continue }
+            guard let intent = run.presentationIntent, let leaf = Self.leaf(in: intent) else { return true }
+            switch leaf.kind {
+            case .paragraph, .header: return true
+            default: break
+            }
+        }
+        return false
     }
 
     /// Full intent values include every container's kind, identity and ordinal.
@@ -285,25 +274,25 @@ enum ReadingMarkdownStructure {
     #endif
 
     private static func sourceLines(_ text: String) -> [Line] {
-        // One sequential UTF8 pass gives both original UTF16 offsets and byte
-        // columns. No per-run seek from the beginning of a Swift String.
+        // One sequential UTF8 pass gives original UTF16 line offsets without
+        // per-run seeks from the beginning of a Swift String.
         let bytes = Array(text.utf8)
-        var result: [Line] = [], start = 0, byteStart = 0, cursor = 0, byteCursor = 0
+        var result: [Line] = [], start = 0, cursor = 0, byteCursor = 0
         while byteCursor < bytes.count {
             if Task.isCancelled { return [] }
             let value = bytes[byteCursor]
             if value == 10 || value == 13 {
-                let contentEnd = cursor, byteLength = byteCursor - byteStart
+                let contentEnd = cursor
                 let width = value == 13 && byteCursor + 1 < bytes.count && bytes[byteCursor + 1] == 10 ? 2 : 1
                 cursor += width; byteCursor += width
-                result.append(Line(start: start, contentEnd: contentEnd, end: cursor, utf8Length: byteLength))
-                start = cursor; byteStart = byteCursor
+                result.append(Line(start: start, contentEnd: contentEnd, end: cursor))
+                start = cursor
             } else {
                 if value < 0x80 || value >= 0xc0 { cursor += value >= 0xf0 ? 2 : 1 }
                 byteCursor += 1
             }
         }
-        result.append(Line(start: start, contentEnd: cursor, end: cursor, utf8Length: byteCursor - byteStart))
+        result.append(Line(start: start, contentEnd: cursor, end: cursor))
         return result
     }
 

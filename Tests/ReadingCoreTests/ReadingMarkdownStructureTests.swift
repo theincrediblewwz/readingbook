@@ -59,9 +59,7 @@ final class ReadingMarkdownStructureTests: XCTestCase {
             "- 列表 `跨行\n  继续?`结束。"
         ] {
             let text = first + "下一句。"
-            let actual = quotes(text), expected = [first, "下一句。"]
-            if actual != expected { ReadingMarkdownStructure.diagnoseSourceMapping(text) }
-            XCTAssertEqual(actual, expected, text)
+            XCTAssertEqual(quotes(text), [first, "下一句。"], text)
         }
         let nested = "- 外层尚无标点\n  - 嵌套 `跨行\n    继续?`结束。"
         XCTAssertEqual(quotes(nested), ["- 外层尚无标点", "- 嵌套 `跨行\n    继续?`结束。"])
@@ -105,6 +103,19 @@ final class ReadingMarkdownStructureTests: XCTestCase {
         XCTAssertFalse(result.contains("代码 `x`。"), "影子若把无效HTML标签变成HTML块，不得伪称结构等价。")
     }
 
+    func testShadowRetainingInlineCodeDoesNotGrantATruncatedParagraph() {
+        // Ordered item 2 cannot interrupt this paragraph. Both tick runs look
+        // like fences to the shadow's prefix guard, yet remain inline code.
+        let paragraph = "段落开始\n2. ```跨行\n2. ```收尾。"
+        let text = "- 前文。\n\n" + paragraph + "\n\n- 后文。"
+        XCTAssertEqual(quotes(text), ["- 前文。", "- 后文。"])
+        let index = ReadingSentenceAnchors.boundaryIndex(in: text, syntax: .markdown)
+        let range = (text as NSString).range(of: paragraph, options: .literal)
+        XCTAssertTrue(index.crossesStructuralBoundary(range))
+        let firstLine = (text as NSString).range(of: "段落开始", options: .literal)
+        XCTAssertTrue(index.crossesStructuralBoundary(firstLine), "未移除inline code的影子不能将缺尾首行当作有效段落。")
+    }
+
     func testContainerCodeIsNotTurnedIntoSentenceButtonsOrFakeMath() {
         let quotedCode = "> ```swift\n> let cash = \"$$?\"\n> ```\n>\n> 后文。"
         XCTAssertEqual(quotes(quotedCode), ["> 后文。"])
@@ -120,14 +131,10 @@ final class ReadingMarkdownStructureTests: XCTestCase {
     func testCustomDisplayMathKeepsItsBlankLinesAndListLookingContentAtomic() {
         let dollar = "- 开始。\n\n  $$\n  x?\n\n  - y!\n  $$\n\n- 结束。"
         let dollarMath = "$$\n  x?\n\n  - y!\n  $$"
-        let actualDollar = quotes(dollar), expectedDollar = ["- 开始。", dollarMath, "- 结束。"]
-        if actualDollar != expectedDollar { ReadingMarkdownStructure.diagnoseSourceMapping(dollar) }
-        XCTAssertEqual(actualDollar, expectedDollar)
+        XCTAssertEqual(quotes(dollar), ["- 开始。", dollarMath, "- 结束。"])
         let escaped = "> \\[\n> a? + b\n>\n> - c!\n> \\]\n>\n> 结束。"
         let escapedMath = "> \\[\n> a? + b\n>\n> - c!\n> \\]"
-        let actualEscaped = quotes(escaped), expectedEscaped = [escapedMath, "> 结束。"]
-        if actualEscaped != expectedEscaped { ReadingMarkdownStructure.diagnoseSourceMapping(escaped) }
-        XCTAssertEqual(actualEscaped, expectedEscaped)
+        XCTAssertEqual(quotes(escaped), [escapedMath, "> 结束。"])
         for (text, math) in [(dollar, dollarMath), (escaped, escapedMath)] {
             let source = text as NSString, range = source.range(of: math, options: .literal)
             XCTAssertNotEqual(range.location, NSNotFound)
