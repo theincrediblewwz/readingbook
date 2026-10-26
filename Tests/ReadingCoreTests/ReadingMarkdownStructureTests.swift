@@ -39,7 +39,50 @@ final class ReadingMarkdownStructureTests: XCTestCase {
         XCTAssertFalse(ReadingMarkdownStructure.needsStructure("普通原文同一句\n继续软换行。"))
     }
 
+    func testSetextSyntaxGateFindsShortUnderlinesWithoutBroadeningOrdinaryProse() {
+        for underline in ["=", "==", "-", "--", "===", "---", "   == \t"] {
+            for newline in ["\n", "\r\n"] {
+                XCTAssertTrue(ReadingMarkdownStructure.needsStructure("标题" + newline + underline), underline)
+                XCTAssertTrue(ReadingMarkdownStructure.needsStructure("标题" + newline + underline + newline + "正文。"), underline)
+            }
+        }
+        for text in ["标题\n==不是下划线\n正文。", "标题\n= =\n正文。", "标题\n-词语\n正文。", "普通原文同一句\n继续软换行。"] {
+            XCTAssertFalse(ReadingMarkdownStructure.needsStructure(text), text)
+        }
+    }
+
     #if os(macOS)
+    func testShortAndMultilineSetextHeadingsNeverBorrowTheOpeningBodySentence() throws {
+        for newline in ["\n", "\r\n"] {
+            for underline in ["=", "==", "-", "--"] {
+                for title in ["标题😀e\u{301}", "标题第一行" + newline + "标题第二行😀e\u{301}"] {
+                    let text = title + newline + underline + newline + "正文第一句。下一句。"
+                    let values = quotes(text)
+                    XCTAssertEqual(values.count, 3, text)
+                    XCTAssertTrue(values.first?.hasPrefix(title) == true, text)
+                    XCTAssertEqual(Array(values.suffix(2)), ["正文第一句。", "下一句。"], text)
+                    let index = ReadingSentenceAnchors.boundaryIndex(in: text, syntax: .markdown)
+                    XCTAssertTrue(index.crossesStructuralBoundary(NSRange(location: 0, length: (text as NSString).length)), text)
+                    let book = project(text)
+                    let anchors = ReadingSentenceAnchors.anchors(in: book.units[0], project: book)
+                    XCTAssertEqual(anchors.map(\.quote), values, text)
+                    for anchor in anchors {
+                        let resolved = try ReadingExperienceRuntime.resolve(anchor, in: book)
+                        XCTAssertTrue((text as NSString).substring(with: resolved.range).utf8.elementsEqual(anchor.quote.utf8), text)
+                        XCTAssertFalse(index.crossesStructuralBoundary(resolved.range), text)
+                    }
+                }
+            }
+        }
+        let pdfText = "标题\n==\n正文第一句。"
+        XCTAssertEqual(ReadingSentenceAnchors.ranges(in: pdfText, syntax: .plainText).map {
+            (pdfText as NSString).substring(with: $0)
+        }, [pdfText], "Markdown识别不得把PDF原文的两字符行猜成标题。")
+        let book = project(pdfText)
+        let oldMixed = try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: "u1", quote: pdfText, in: book)
+        XCTAssertThrowsError(try SentenceTranslationRequest.freeze(anchor: oldMixed, in: book), "旧的跨标题正文范围仍保留，但不能作为该标题的句译缓存。")
+    }
+
     func testIndependentQuoteAndListParagraphsCannotShareACodeSpan() {
         let quote = "正文 `未闭合\n> 引用?`下一句。"
         XCTAssertEqual(quotes(quote), ["正文 `未闭合", "> 引用?", "`下一句。"])

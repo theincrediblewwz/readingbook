@@ -111,6 +111,13 @@ extension SmartReadingRuntime {
         let retainedIDs = Set(retained.flatMap(\.unitIDs))
         let eligible = allowed.subtracting(retainedIDs)
         let selectionByUnit = Dictionary(grouping: selected, by: \.unitID)
+        var confirmedBlankByID: [String: Bool] = [:]
+        func confirmedBlank(_ unit: SourceUnit) -> Bool {
+            if let checked = confirmedBlankByID[unit.id] { return checked }
+            let checked = isConfirmedBlank(unit, in: project)
+            confirmedBlankByID[unit.id] = checked
+            return checked
+        }
         struct Group { var chapter: BookChapterRange; var ranges: [ReadingSourceRange] }
         var groups: [Group] = []
         let granularity = configuration.granularity == .adaptive ? (project.plan?.recommendedGranularity ?? .adaptive) : configuration.granularity
@@ -119,7 +126,7 @@ extension SmartReadingRuntime {
             func finish() { if !pending.isEmpty { groups.append(Group(chapter: chapter, ranges: pending)); pending = []; characterCount = 0 } }
             for declared in chapter.ranges where eligible.contains(declared.unitID) {
                 try Task.checkCancellation()
-                guard let unit = source[declared.unitID], !ReadingLedger.isDeferred(unitID: unit.id, in: project), !isConfirmedBlank(unit, in: project) else { continue }
+                guard let unit = source[declared.unitID], !ReadingLedger.isDeferred(unitID: unit.id, in: project), !confirmedBlank(unit) else { continue }
                 for selected in selectionByUnit[unit.id] ?? [] {
                     let start = max(selected.startUTF16, declared.startUTF16), end = min(selected.endUTF16, declared.endUTF16)
                     guard end > start else { continue }
@@ -140,18 +147,30 @@ extension SmartReadingRuntime {
             }
             finish()
         }
-        let chaptersByID = Dictionary(index.chapters.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // Explicitly confirmed blank tails need no AI work. A deferred tail is
+        // still unread and must not turn the preceding content into a chapter end.
+        func workEnd(_ chapter: BookChapterRange) -> ReadingSourceRange? {
+            chapter.ranges.last { range in
+                guard let unit = source[range.unitID] else { return true }
+                return !confirmedBlank(unit)
+            }
+        }
+        let chapterEnds = Dictionary(index.chapters.compactMap { chapter -> (String, ReadingSourceRange)? in
+            workEnd(chapter).map { (chapter.id, $0) }
+        }, uniquingKeysWith: { first, _ in first })
+        let checkpointsByID = Dictionary((session.analysisCheckpoints ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var result = try groups.enumerated().map { offset, group -> ReadingAnalysisChunk in
             let ranges = group.ranges
             var seen = Set<String>()
             let ids = ranges.map(\.unitID).filter { seen.insert($0).inserted }
-            let declaredEnd = chaptersByID[group.chapter.id]?.ranges.last ?? group.chapter.ranges.last
+            let declaredEnd = chapterEnds[group.chapter.id] ?? workEnd(group.chapter)
             let actualEnd = ranges.last
             let chapterEnd = declaredEnd.map { declared in actualEnd.map { $0.unitID == declared.unitID && $0.endUTF16 == declared.endUTF16 } ?? false } ?? false
             let steps = configuration.enabledSteps.filter { $0.frequency == .chunk || ($0.frequency == .chapter && chapterEnd && group.chapter.isComplete) || ($0.frequency == .book && offset == groups.count - 1) }.map(\.id)
             let proof = ranges.map { "\($0.unitID):\(session.unitHashes[$0.unitID] ?? ""):\($0.startUTF16):\($0.endUTF16)" }.joined(separator: "|")
             let identity = try BookImporter.sha256(Data((base + "|" + group.chapter.id).utf8))
-            let id = "chunk-" + String(try BookImporter.sha256(Data((project.sourceHash + "|" + identity + "|" + proof).utf8)).prefix(48))
+            let baseID = "chunk-" + String(try BookImporter.sha256(Data((project.sourceHash + "|" + identity + "|" + proof).utf8)).prefix(48))
+            let id = try analysisChunkID(baseID: baseID, stepIDs: steps, checkpointsByID: checkpointsByID)
             return ReadingAnalysisChunk(id: id, title: group.chapter.title, unitIDs: ids, configurationHash: identity, stepIDs: steps,
                 sourceRanges: ranges, chapterID: group.chapter.id)
         }

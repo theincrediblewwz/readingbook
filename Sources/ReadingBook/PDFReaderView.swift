@@ -87,6 +87,8 @@ struct PDFReaderView: NSViewRepresentable {
     private var sourceDecorationPage: Int?
     private var sourceDecorationFocusID: String?
     private var appliedSourceDecorationFocusID: String?
+    private var appliedSourceDecorationProofIdentity: String?
+    private var awaitingSourceFocusProof = false
     private struct SourceLineKey: Hashable, Sendable { let id: String; let line: Int }
     private struct SourceGeometry {
         let value: SourceReadingDecoration
@@ -220,7 +222,7 @@ struct PDFReaderView: NSViewRepresentable {
     private var onSourceDecorationTap: ((String) -> Void)?
     private var onSourceSelection: ((SourceReadingSelection?) -> Void)?
     private var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
-    private var pendingQuote: (page: Int, quote: String, prefix: String?, suffix: String?)?
+    private var pendingQuote: (page: Int, quote: String, prefix: String?, suffix: String?, decoration: SourceReadingDecoration?)?
     /// Navigation emphasis is not a user text selection. In particular, a
     /// remounted reader may restore a focused anchor while hover stays usable.
     private var quoteFocusHighlight: PDFSelection?
@@ -589,7 +591,7 @@ struct PDFReaderView: NSViewRepresentable {
         if sourceDecorationFocusID != input.focusedDecorationID {
             sourceDecorationFocusID = input.focusedDecorationID
             clearQuoteFocusHighlight()
-            appliedSourceDecorationFocusID = nil; pendingQuote = nil
+            appliedSourceDecorationFocusID = nil; appliedSourceDecorationProofIdentity = nil; pendingQuote = nil
         }
         focusSourceDecorationIfReady()
         refreshControls()
@@ -600,7 +602,7 @@ struct PDFReaderView: NSViewRepresentable {
         resetPageGesture(); observedClip = nil
         if !editingAnnotationSheet { closeAnnotationPanel() }
         pdfView.cancelRegionSelection()
-        clearSourceDecorations(); resetQuoteCache(); sourceDecorationFocusID = nil; appliedSourceDecorationFocusID = nil; pendingQuote = nil
+        clearSourceDecorations(); resetQuoteCache(); sourceDecorationFocusID = nil; appliedSourceDecorationFocusID = nil; appliedSourceDecorationProofIdentity = nil; pendingQuote = nil
         invalidateNavigation(); installingDocument = true
         defer { installingDocument = false }
         allowsSearchAutoNavigation = false; lastCallback = nil
@@ -688,6 +690,7 @@ struct PDFReaderView: NSViewRepresentable {
     private func invalidateNavigation() {
         invalidateSourcePress()
         clearQuoteFocusHighlight()
+        awaitingSourceFocusProof = false
         navigationRequestID &+= 1; pageObservationID &+= 1; pendingNavigation = nil; pendingQuote = nil
     }
 
@@ -735,7 +738,7 @@ struct PDFReaderView: NSViewRepresentable {
         pendingNavigation = nil; refreshControls()
         restoreWorkspaceDestination()
         if let quote = pendingQuote, quote.page == pending.page {
-            pendingQuote = nil; applyQuoteFocus(on: quote.page, quote: quote.quote, prefix: quote.prefix, suffix: quote.suffix)
+            pendingQuote = nil; applyQuoteFocus(on: quote.page, quote: quote.quote, prefix: quote.prefix, suffix: quote.suffix, decoration: quote.decoration)
         }
         if pending.notifyParent { schedulePageCallback(pending.page) }
         else { lastEmittedPage = pending.page }
@@ -947,6 +950,7 @@ struct PDFReaderView: NSViewRepresentable {
         guard !interactionBlocked, !installingDocument,
               let owner = window, owner.attachedSheet == nil, !editingAnnotationSheet,
               let responder = owner.firstResponder, ownsResponder(responder) else { return false }
+        awaitingSourceFocusProof = false
         if pendingNavigation != nil { return true }
         guard let edges = pageBoundaries() else { return false }
         let boundary = offset < 0 ? edges.start : edges.end
@@ -1288,6 +1292,7 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     private func perform(_ command: PDFReaderCommand) {
+        awaitingSourceFocusProof = false
         switch command {
         case .prev: previousPage()
         case .next: nextPage()
@@ -1375,26 +1380,40 @@ struct PDFReaderView: NSViewRepresentable {
         NativeQuoteRangeMatcher.range(of: quote, prefix: prefix, suffix: suffix, in: text)
     }
 
-    private func focusQuote(on number: Int, quote: String, prefix: String? = nil, suffix: String? = nil) {
+    private func focusQuote(on number: Int, quote: String, prefix: String? = nil, suffix: String? = nil,
+                            decoration: SourceReadingDecoration? = nil) {
         guard let document, !document.isLocked, (1...document.pageCount).contains(number) else { return }
         navigate(to: number)
         // Set after navigate(), which invalidates every older navigation target.
-        pendingQuote = (number, quote, prefix, suffix)
+        pendingQuote = (number, quote, prefix, suffix, decoration)
     }
 
     private func focusSourceDecorationIfReady() {
-        guard let id = sourceDecorationFocusID, appliedSourceDecorationFocusID != id,
+        guard let id = sourceDecorationFocusID,
               document?.isLocked == false,
               let decoration = sourceDecorations.first(where: { $0.id == id }),
               let page = decoration.page ?? sourceDecorationPage else { return }
+        let identity = sourcePageTexts[page]?.identity
+        // A repeated quote may fail unique matching before the page snapshot
+        // arrives. Retry once for that new proof, without restarting navigation
+        // on every publication or repeatedly retrying a proven mismatch.
+        guard appliedSourceDecorationFocusID != id ||
+                (awaitingSourceFocusProof && identity != nil && appliedSourceDecorationProofIdentity != identity) else { return }
         // The target page snapshot may arrive after the navigation request.
         // Keep that one request pending instead of consuming its ID too soon.
-        focusQuote(on: page, quote: decoration.quote, prefix: decoration.prefix, suffix: decoration.suffix)
-        appliedSourceDecorationFocusID = id
+        focusQuote(on: page, quote: decoration.quote, prefix: decoration.prefix, suffix: decoration.suffix, decoration: decoration)
+        appliedSourceDecorationFocusID = id; appliedSourceDecorationProofIdentity = identity
+        awaitingSourceFocusProof = identity == nil
     }
 
-    private func applyQuoteFocus(on number: Int, quote: String, prefix: String? = nil, suffix: String? = nil) {
-        guard let page = document?.page(at: number - 1), let range = nativeQuoteRange(quote, prefix: prefix, suffix: suffix, on: page),
+    private func applyQuoteFocus(on number: Int, quote: String, prefix: String? = nil, suffix: String? = nil,
+                                 decoration: SourceReadingDecoration? = nil) {
+        // A deferred navigation must still address the host-validated mark
+        // that requested it. Generic quote commands retain unique matching.
+        if let decoration, sourceDecorationValuesByID[decoration.id] != decoration { return }
+        guard let page = document?.page(at: number - 1) else { return }
+        let provenRange = decoration.flatMap { sourceQuoteFocusRange($0, on: page, number: number) }
+        guard let range = provenRange ?? nativeQuoteRange(quote, prefix: prefix, suffix: suffix, on: page),
               let selection = page.selection(for: range) else {
             setStatus("已定位到原页；原生文字无法唯一匹配此引文，未推测词位。扫描页请对照原页与识别稿。"); return
         }
@@ -1407,6 +1426,27 @@ struct PDFReaderView: NSViewRepresentable {
         quoteFocusHighlight = selection; updateSelectionHighlights()
         pdfView.go(to: selection)
         refreshControls()
+    }
+
+    private func sourceQuoteFocusRange(_ value: SourceReadingDecoration, on page: PDFPage, number: Int) -> NSRange? {
+        guard (value.page ?? sourceDecorationPage) == number, let source = sourcePageTexts[number] else { return nil }
+        let cache = sourceGeometryPages[number]
+        let proof: NativePageTextProof?
+        if cache?.sourceTextProofIdentity == source.identity {
+            proof = cache?.sourceTextProof
+        } else {
+            // Explicit navigation can precede the progressive geometry worker.
+            // Only a byte-exact whole page can promote canonical unit offsets
+            // into native ranges; OCR/missing metadata keeps the old fallback.
+            guard let text = cache?.text ?? page.string else { return nil }
+            proof = NativePageTextProof.prove(page: number, nativeText: text, source: source)
+            if let cache, (proof?.byteCount ?? 0) <= 2_097_152 {
+                cache.sourceTextProofIdentity = source.identity; cache.sourceTextProof = proof
+            }
+        }
+        // This is a particular mark's range, never a page-wide unique result.
+        // Do not put it in the quote/context cache used by generic commands.
+        return proof?.range(of: value.quote, location: value.rangeLocation, length: value.rangeLength)
     }
 
     private func clearSourceDecorations() {
@@ -1746,6 +1786,10 @@ struct PDFReaderView: NSViewRepresentable {
         sourceInteractionGeneration &+= 1; sourcePress = nil
     }
     private func observeSourcePointer(_ event: NSEvent) {
+        // A later click, drag or wheel expresses a newer reader intention.
+        // Late acceleration metadata must not pull the viewport back to an
+        // earlier sentence after that action (including scrollbar dragging).
+        if event.type != .mouseMoved, event.window === window { awaitingSourceFocusProof = false }
         if event.type == .mouseMoved {
             guard event.timestamp - lastSourcePointerTime >= 1.0 / 30, NSEvent.pressedMouseButtons == 0 else { return }
             lastSourcePointerTime = event.timestamp

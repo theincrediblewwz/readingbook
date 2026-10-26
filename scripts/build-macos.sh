@@ -30,6 +30,8 @@ lipo -create "$PACKAGE_ROOT/ReadingBook-arm64" "$PACKAGE_ROOT/ReadingBook-x86_64
 chmod 755 "$APP_PATH/Contents/MacOS/ReadingBook"
 lipo "$APP_PATH/Contents/MacOS/ReadingBook" -verify_arch arm64 x86_64
 cp packaging/Info.plist "$APP_PATH/Contents/Info.plist"
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
+APP_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
 if [[ -z "$RESOURCE_BUNDLE" || -z "$(find "$RESOURCE_BUNDLE" -type f -path '*/Markdown/index.html' -print -quit)" ]]; then
   echo "Offline Markdown resource bundle is missing from the SwiftPM build." >&2
   exit 1
@@ -44,7 +46,7 @@ codesign --verify --strict --verbose=2 "$APP_PATH"
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" dist/ReadingBook-macos-universal.zip
 shasum -a 256 dist/ReadingBook-macos-universal.zip > dist/ReadingBook-macos-universal.zip.sha256
 {
-  echo "ReadingBook 0.23.3 preview"
+  echo "ReadingBook $APP_VERSION (build $APP_BUILD)"
   echo "Source commit: $(git rev-parse HEAD)"
   echo "Built UTC: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   echo "Architectures: $(lipo -archs "$APP_PATH/Contents/MacOS/ReadingBook")"

@@ -144,6 +144,7 @@ extension SmartReadingRuntime {
             for hash in hashes { for plan in plans { legacyFingerprints.insert(try BookImporter.sha256(Data(hash.utf8) + plan)) } }
         }
         let checkpoints = Dictionary(grouping: session.analysisCheckpoints ?? [], by: \.unitIDs)
+        let checkpointsByID = Dictionary((session.analysisCheckpoints ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let granularity = configuration.granularity == .adaptive ? (project.plan?.recommendedGranularity ?? .adaptive) : configuration.granularity
         var groups: [[SourceUnit]] = [], pending: [SourceUnit] = [], characters = 0
         for unit in units {
@@ -173,8 +174,17 @@ extension SmartReadingRuntime {
             }) { id = previous.id; identity = previous.configurationHash }
             let pages = Array(Set(group.compactMap(\.page))).sorted()
             let title = pages.first.map { start in pages.last == start ? "第 \(start) 页" : "第 \(start)–\(pages.last ?? start) 页" } ?? group.first?.chapter ?? "本部分"
+            id = try analysisChunkID(baseID: id, stepIDs: stepIDs, checkpointsByID: checkpointsByID)
             return ReadingAnalysisChunk(id: id, title: title, unitIDs: ids, configurationHash: identity, stepIDs: stepIDs)
         }
+    }
+    /// Excluding or restoring a tail can move chapter/book steps without changing
+    /// this block's source. Preserve the old checkpoint and use a stable identity
+    /// for the new step contract rather than colliding with its immutable record.
+    static func analysisChunkID(baseID: String, stepIDs: [String], checkpointsByID: [String: ReadingAnalysisCheckpoint]) throws -> String {
+        guard let previous = checkpointsByID[baseID], Set(previous.completedStepIDs) != Set(stepIDs) else { return baseID }
+        let payload: [String: Any] = ["version": "reading-chunk-steps-v1", "baseID": baseID, "stepIDs": stepIDs.sorted()]
+        return "chunk-" + String(try BookImporter.sha256(JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])).prefix(48))
     }
     public static func isChunkComplete(_ chunk: ReadingAnalysisChunk, in project: BookProject) -> Bool {
         guard let session = project.smartReading else { return false }

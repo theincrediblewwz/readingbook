@@ -25,9 +25,28 @@ enum ReadingMarkdownStructure {
     /// gate; the caller must also know that the source really is Markdown.
     static func needsStructure(_ text: String) -> Bool {
         var atStart = true, spaces = 0, digits = 0, marker = false
+        var underline: Unicode.Scalar?, underlinePossible = true, underlineTrailingSpace = false
         for scalar in text.unicodeScalars {
             if Task.isCancelled { return false }
-            if scalar == "\n" || scalar == "\r" { atStart = true; spaces = 0; digits = 0; marker = false; continue }
+            if scalar == "\n" || scalar == "\r" {
+                if underline != nil, underlinePossible { return true }
+                atStart = true; spaces = 0; digits = 0; marker = false
+                underline = nil; underlinePossible = true; underlineTrailingSpace = false
+                continue
+            }
+            // Setext underlines may contain just one '=' or '-'. The plain
+            // scanner's conservative PDF heading heuristic requires three,
+            // and cannot prove multiline Markdown headings. Send genuine
+            // underline candidates through Foundation's block map instead.
+            // This shares the syntax-gate pass, without per-line substring
+            // allocation or broadening the plain-text/PDF heading rules.
+            if underlinePossible {
+                if let underline {
+                    if scalar == " " || scalar == "\t" { underlineTrailingSpace = true }
+                    else if scalar != underline || underlineTrailingSpace { underlinePossible = false }
+                } else if scalar == "=" || scalar == "-" { underline = scalar }
+                else if scalar != " " { underlinePossible = false }
+            }
             guard atStart else { continue }
             if marker {
                 if scalar == " " || scalar == "\t" { return true }
@@ -41,7 +60,7 @@ enum ReadingMarkdownStructure {
             if digits > 0, scalar == "." || scalar == ")" { marker = true; continue }
             atStart = false
         }
-        return false
+        return underline != nil && underlinePossible
     }
 
     static func blocks(in text: String, displayMath: ([Int]) -> [NSRange]) -> [Block]? {
