@@ -33,7 +33,7 @@ public struct ReadingHoverTranslationDwell: Sendable {
         return true
     }
     /// An explicit translate/stop/tab choice takes precedence over the timer.
-    public mutating func suppress() {
-        generation &+= 1; pending = nil; consumed = true
+    public mutating func suppress(key: String) {
+        self.key = key; generation &+= 1; pending = nil; consumed = true
     }
 }

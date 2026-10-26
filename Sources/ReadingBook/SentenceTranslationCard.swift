@@ -164,10 +164,13 @@ struct SentenceTranslationCard: View {
     @EnvironmentObject private var store: AppStore
     let anchor: SourceAnchor
     var fallbackMarkdown: String? = nil
+    // Read the live pointer owner again when the timer wakes; a SwiftUI task
+    // may otherwise retain the earlier View's true Boolean until reconciliation.
+    var automaticHoverState: ReaderInlineState? = nil
     var automaticHoverActive = false
     var body: some View {
         SentenceTranslationCardBody(state: store.sentenceTranslation, anchor: anchor, fallbackMarkdown: fallbackMarkdown,
-            automaticHoverActive: automaticHoverActive)
+            automaticHoverState: automaticHoverState, automaticHoverActive: automaticHoverActive)
             .id(store.sentenceTranslation.key(anchor: anchor, store: store))
     }
 }
@@ -182,10 +185,13 @@ private struct SentenceTranslationCardBody: View {
     @State private var dwell = ReadingHoverTranslationDwell()
     let anchor: SourceAnchor
     let fallbackMarkdown: String?
+    let automaticHoverState: ReaderInlineState?
+    /// Also invalidates this value view when its parent's pointer state changes.
     let automaticHoverActive: Bool
     private var key: String { state.key(anchor: anchor, store: store) }
     private var canAutomaticallyTranslate: Bool {
-        automaticHoverTranslation && automaticHoverActive && scenePhase == .active && !store.storageState.working &&
+        automaticHoverTranslation && automaticHoverActive && automaticHoverState?.automaticTranslationActive == true &&
+            automaticHoverState?.content?.anchor.id == anchor.id && scenePhase == .active && !store.storageState.working &&
             !store.settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     private struct AutomaticIntent: Hashable {
@@ -193,7 +199,7 @@ private struct SentenceTranslationCardBody: View {
         let active: Bool
     }
     private func showTranslation() {
-        dwell.suppress(); tabWasChosen = true; selectedTab = "translation"
+        dwell.suppress(key: key); tabWasChosen = true; selectedTab = "translation"
         state.load(anchor: anchor, store: store, generate: true)
     }
     var body: some View {
@@ -202,7 +208,7 @@ private struct SentenceTranslationCardBody: View {
         VStack(alignment: .leading, spacing: 10) {
             if fallbackMarkdown != nil {
                 HStack(spacing: 18) {
-                    Button("解读") { dwell.suppress(); tabWasChosen = true; selectedTab = "analysis" }
+                    Button("解读") { dwell.suppress(key: key); tabWasChosen = true; selectedTab = "analysis" }
                         .foregroundStyle(selectedTab == "analysis" ? Palette.accent : .secondary)
                     Button("译文") { showTranslation() }
                         .foregroundStyle(selectedTab == "translation" ? Palette.accent : .secondary)
@@ -217,7 +223,7 @@ private struct SentenceTranslationCardBody: View {
             if let entry, entry.running {
                 HStack {
                     ProgressView().controlSize(.small); Text(entry.progress.phaseTitle).font(.system(size: 13))
-                    Spacer(); Button { dwell.suppress(); state.cancel(anchor: anchor, store: store) } label: { Image(systemName: "stop.circle") }.buttonStyle(.plain).help("停止翻译")
+                    Spacer(); Button { dwell.suppress(key: key); state.cancel(anchor: anchor, store: store) } label: { Image(systemName: "stop.circle") }.buttonStyle(.plain).help("停止翻译")
                 }
                 if entry.progress.reasoningCharacters > 0 || entry.progress.answerCharacters > 0 {
                     Text("思考 \(entry.progress.reasoningCharacters.formatted()) · 输出 \(entry.progress.answerCharacters.formatted()) 字符").font(.system(size: 11)).foregroundStyle(.secondary)

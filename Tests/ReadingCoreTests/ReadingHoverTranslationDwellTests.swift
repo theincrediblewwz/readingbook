@@ -27,11 +27,17 @@ final class ReadingHoverTranslationDwellTests: XCTestCase {
     func testManualTranslateOrStopCannotBeRestartedByTheOldTimer() throws {
         var intent = ReadingHoverTranslationDwell()
         let ticket = try XCTUnwrap(intent.update(key: "sentence", enabled: true, active: true))
-        intent.suppress()
+        intent.suppress(key: "sentence")
         XCTAssertFalse(intent.consume(ticket))
         XCTAssertNil(intent.update(key: "sentence", enabled: true, active: true))
         intent.update(key: "sentence", enabled: true, active: false)
         XCTAssertNil(intent.update(key: "sentence", enabled: true, active: true))
         XCTAssertNotNil(intent.update(key: "other-sentence", enabled: true, active: true))
+    }
+    func testManualActionBeforeTheFirstTimerTaskStillSuppressesThatSentence() {
+        var intent = ReadingHoverTranslationDwell()
+        intent.suppress(key: "sentence")
+        XCTAssertNil(intent.update(key: "sentence", enabled: true, active: true))
+        XCTAssertNotNil(intent.update(key: "next-sentence", enabled: true, active: true))
     }
 }

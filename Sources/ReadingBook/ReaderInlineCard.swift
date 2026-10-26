@@ -350,7 +350,7 @@ struct ReaderInlineCard: View {
                             }
                         } else {
                             SentenceTranslationCard(anchor: content.anchor, fallbackMarkdown: content.savedMarkdown,
-                                automaticHoverActive: state.automaticTranslationActive)
+                                automaticHoverState: state, automaticHoverActive: state.automaticTranslationActive)
                         }
                         if let composition = content.composition {
                             DisclosureGroup("时间与相关内容", isExpanded: $showsComposition) {
