@@ -3,6 +3,8 @@ import ReadingCore
 
 struct SmartReadingProgressPanel: View {
     var maximumExpandedHeight: CGFloat = 360
+    var compactInteraction: FloatingLauncherInteraction?
+    var resetCompactPosition: (() -> Void)?
     @EnvironmentObject private var store: AppStore
     @Environment(\.readingReduceMotion) private var reduceMotion
     @State private var expanded = false
@@ -41,11 +43,17 @@ struct SmartReadingProgressPanel: View {
                 Image(systemName: statusIcon).font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
                     .frame(width: 52, height: 52).contentShape(Circle())
             }.buttonStyle(.plain).readingGlass(radius: 26, interactive: true)
-                .help("\(title)；点击展开进度")
+                .overlay {
+                    if let compactInteraction {
+                        FloatingLauncherPointerInput(interaction: compactInteraction) { minimized = false; expanded = true }
+                    }
+                }
+                .help("\(title)；点击展开进度，拖动调整位置")
                 .accessibilityLabel("展开智能阅读进度")
                 .accessibilityValue(title + (countText.map { "，已处理 " + $0 } ?? ""))
                 .contextMenu {
                     if store.isSmartReadingRunning || store.aiProgress.isRunning { Button("停止任务，保留已保存内容") { store.pause() } }
+                    if let resetCompactPosition { Button("还原浮钮位置", action: resetCompactPosition) }
                 }
         } else {
         VStack(spacing: 0) {
@@ -63,7 +71,7 @@ struct SmartReadingProgressPanel: View {
                     if progress.isStandardAnalysis {
                         statusRow("已分析 · \(progress.completed)/\(progress.total)", completed: progress.completed == progress.total)
                     } else {
-                        statusRow("逐段核对 · \(progress.receiptCount)/\(progress.receiptTotal)", completed: progress.receiptTotal > 0 && progress.receiptCount == progress.receiptTotal)
+                        statusRow("逐段细读 · \(progress.receiptCount)/\(progress.receiptTotal)", completed: progress.receiptTotal > 0 && progress.receiptCount == progress.receiptTotal)
                     }
                     if progress.excludedCount > 0 || progress.blankCount > 0 {
                         Text("\(progress.excludedCount) 个片段暂缓未读，\(progress.blankCount) 个片段由你确认空白。")
@@ -115,7 +123,7 @@ struct SmartReadingProgressPanel: View {
                     Spacer(minLength: 0)
                     if let countText { Text(countText).font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85).layoutPriority(1) }
                 }.padding(.leading, 15).padding(.trailing, 5).frame(maxWidth: .infinity, minHeight: 52).contentShape(Rectangle())
-            }.buttonStyle(.plain).help("\(title)；点击\(expanded ? "收起" : "展开")检查点")
+            }.buttonStyle(.plain).help("\(title)；点击\(expanded ? "收起" : "展开")进度")
                 .accessibilityLabel(expanded ? "收起智能阅读详情" : "展开智能阅读详情")
                 .accessibilityValue(title + (countText.map { "，已处理 " + $0 } ?? ""))
             if store.isSmartReadingRunning || (store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID) {

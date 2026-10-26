@@ -110,8 +110,9 @@ struct ReaderMethodView: View {
                 }.font(.system(size: 13))
             }
             Divider().opacity(0.35)
-            Label("分析多少", systemImage: "scope").font(.system(size: 17, weight: .semibold))
-            Picker("分析范围", selection: $scope) { ForEach(SmartReadingScope.allCases, id: \.self) { Text($0.displayTitle).tag($0) } }.pickerStyle(.segmented).controlSize(.large)
+            sectionHeading("阅读范围", detail: "这一次，想读到哪里？", icon: "scope")
+            Picker("阅读范围", selection: $scope) { ForEach(SmartReadingScope.allCases, id: \.self) { Text($0.displayTitle).tag($0) } }
+                .pickerStyle(.segmented).labelsHidden().controlSize(.large)
             if scope == .currentChapter, store.book?.originalName.lowercased().hasSuffix(".pdf") == true {
                 Text("按原书目录或已整理的目录确定章首、章尾；边界未确定时先整理目录。")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
@@ -132,30 +133,44 @@ struct ReaderMethodView: View {
     }
     private var rangeHint: some View { Text("暂停后可改范围；已保存内容保留").font(.system(size: 12)).foregroundStyle(.secondary) }
     private var executionOptions: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 22) {
             Divider().opacity(0.35)
-            Text("阅读方式").font(.system(size: 17, weight: .semibold))
-            Picker("阅读精细度", selection: $execution.precision) {
-                ForEach(ReadingAnalysisPrecision.allCases, id: \.self) { Text($0.title).tag($0) }
-            }.pickerStyle(.segmented)
-            Text(execution.precision == .standard ? "直接分析内容；逐段复述可省略。" : "先逐段核对，再分析；核对覆盖单独记录。")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
-            Picker("每次分析", selection: $execution.granularity) {
-                ForEach(ReadingAnalysisGranularity.allCases, id: \.self) { Text($0.title).tag($0) }
-            }.pickerStyle(.segmented)
-            Text("想用哪些组件").font(.system(size: 14, weight: .medium))
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
+            sectionHeading("怎样读", detail: "选择讲解的细致程度。", icon: "text.book.closed")
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 12) { precisionChoice(.standard); precisionChoice(.close) }
+                VStack(spacing: 12) { precisionChoice(.standard); precisionChoice(.close) }
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("每次读多少").font(.system(size: 14, weight: .medium))
+                    Spacer(minLength: 8)
+                    Text("每次交给 AI 的原文范围").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                Picker("每次读多少", selection: $execution.granularity) {
+                    ForEach(ReadingAnalysisGranularity.allCases, id: \.self) { Text($0.title).tag($0) }
+                }.pickerStyle(.segmented).labelsHidden().controlSize(.large)
+            }
+            Divider().opacity(0.35)
+            sectionHeading("随书组件", detail: "选上想看的，AI 会在阅读时一起整理。", icon: "square.grid.2x2")
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
                 ForEach(ReadingExecutionConfiguration.offeredComponents, id: \.self) { kind in
                     Button {
                         if execution.componentKinds.contains(kind) { execution.componentKinds.removeAll { $0 == kind } }
                         else { execution.componentKinds.append(kind) }
                     } label: {
-                        Label(kind.title, systemImage: execution.componentKinds.contains(kind) ? "checkmark.circle.fill" : kind.icon)
-                            .frame(maxWidth: .infinity, minHeight: 40).contentShape(Rectangle())
-                    }.buttonStyle(ReadingToolbarButtonStyle(selected: execution.componentKinds.contains(kind)))
+                        HStack(spacing: 10) {
+                            Image(systemName: kind.icon).font(.system(size: 18)).foregroundStyle(Palette.accent).frame(width: 24)
+                            Text(kind.title).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                            Spacer(minLength: 4)
+                            Image(systemName: execution.componentKinds.contains(kind) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(execution.componentKinds.contains(kind) ? Palette.accent : Color.secondary.opacity(0.3))
+                        }.padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 56)
+                            .background(Palette.accent.opacity(execution.componentKinds.contains(kind) ? 0.1 : 0.035), in: RoundedRectangle(cornerRadius: 12))
+                            .contentShape(RoundedRectangle(cornerRadius: 12))
+                    }.buttonStyle(.plain).accessibilityAddTraits(execution.componentKinds.contains(kind) ? .isSelected : [])
                 }
             }
-            DisclosureGroup("调整分析步骤") {
+            DisclosureGroup("自定义阅读步骤") {
                 VStack(spacing: 12) {
                     Label("阅读原文（基础）", systemImage: "book.pages").font(.system(size: 13)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -171,7 +186,7 @@ struct ReaderMethodView: View {
                                 Picker("处理方式", selection: $step.actionID) {
                                     Text("内容讲解").tag("ai.analyze"); Text("整理要素").tag("facts.extract")
                                     Text("译注与解释").tag("reading.enrich"); Text("回顾").tag("reading.review")
-                                    Text("核对引用").tag("citations.verify")
+                                    Text("查看引文出处").tag("citations.verify")
                                 }.labelsHidden()
                                 Picker("执行频率", selection: $step.frequency) {
                                     ForEach(ReadingStepFrequency.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -183,9 +198,43 @@ struct ReaderMethodView: View {
                         .buttonStyle(.borderless).disabled(execution.steps.count >= 24)
                 }.padding(.top, 12)
             }.font(.system(size: 13))
-            Stepper("AI 并行上限：\(execution.maximumConcurrentRequests)", value: $execution.maximumConcurrentRequests, in: 1...5)
-                .font(.system(size: 13))
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("同时处理").font(.system(size: 14, weight: .medium))
+                    Text("忙时仍可翻页阅读").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                Stepper(value: $execution.maximumConcurrentRequests, in: 1...5) {
+                    Text("最多 \(execution.maximumConcurrentRequests) 项").monospacedDigit()
+                }.fixedSize().accessibilityLabel("AI 同时处理任务上限")
+            }.font(.system(size: 13)).padding(.top, 2)
         }
+    }
+    private func sectionHeading(_ title: String, detail: String, icon: String) -> some View {
+        HStack(alignment: .top, spacing: 11) {
+            Image(systemName: icon).font(.system(size: 18)).foregroundStyle(Palette.accent).frame(width: 24).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.system(size: 17, weight: .semibold))
+                Text(detail).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+    private func precisionChoice(_ precision: ReadingAnalysisPrecision) -> some View {
+        let selected = execution.precision == precision
+        return Button { execution.precision = precision } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(precision == .standard ? "自然阅读" : "逐段细读").font(.system(size: 15, weight: .semibold))
+                    Spacer(minLength: 8)
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? Palette.accent : Color.secondary.opacity(0.3))
+                }
+                Text(precision == .standard ? "直接讲解内容，按需整理线索。" : "逐段留下简短释意，再连起来讲解。")
+                    .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }.padding(16).frame(minWidth: 180, maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+                .background(Palette.accent.opacity(selected ? 0.09 : 0.03), in: RoundedRectangle(cornerRadius: 14))
+                .contentShape(RoundedRectangle(cornerRadius: 14))
+        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
     }
     private var prepareButton: some View {
         Button { store.prepareSmartReading(selection) } label: { Label(activeMethods.isEmpty ? "预读并制定方案" : "预读新方案", systemImage: "sparkles") }
@@ -206,7 +255,7 @@ struct ReaderMethodView: View {
         VStack(alignment: .leading, spacing: 27) {
             Text("接下来会发生什么").font(.system(size: 12)).foregroundStyle(.tertiary)
             journeyStep("01", "先了解这本书", "预读只用于选方法，还没有读完整本书。")
-            journeyStep("02", "按合适的节奏读", "按页、按章或自适应分析；逐段核对留给精读。")
+            journeyStep("02", "按合适的节奏读", "先选讲解的细致程度，再决定每次读一页、一章，或让 AI 安排。")
             journeyStep("03", "在组件里看见结果", "人物、战役与地点使用同一对象；适用时，地图、时间和关系同步呈现。")
             Button { store.requestedWorkspaceRoute = "reader" } label: { Label("先回原文，稍后再分析", systemImage: "book.pages") }.buttonStyle(.borderless).font(.system(size: 13))
         }.padding(.top, 20)

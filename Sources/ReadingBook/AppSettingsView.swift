@@ -5,36 +5,90 @@ import ReadingCore
 struct AppSettingsView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    var embedded = false
     var onClose: (() -> Void)? = nil
     @State private var tab = "storage"
     @State private var models = false
     @State private var guide = false
+    private struct Category: Identifiable {
+        let id: String
+        let title: String
+        let icon: String
+        let detail: String
+    }
+    private let categories = [
+        Category(id: "storage", title: "存储与备份", icon: "folder", detail: "书籍和阅读所得，都有清楚的去处。"),
+        Category(id: "reading", title: "阅读", icon: "textformat.size", detail: "调成适合自己的字体与阅读节奏。"),
+        Category(id: "appearance", title: "外观", icon: "circle.lefthalf.filled", detail: "让界面更安静、更舒适。"),
+        Category(id: "diagnostics", title: "本地诊断", icon: "waveform.path.ecg", detail: "遇到卡顿时，记录本机的响应情况。")
+    ]
     var body: some View {
-        VStack(spacing: 0) {
+        GeometryReader { geometry in
+          let cardWidth = embedded ? min(960, max(1, geometry.size.width - 40)) : geometry.size.width
+          let cardHeight = embedded ? min(720, max(1, geometry.size.height - 40)) : geometry.size.height
+          VStack(spacing: 0) {
             SettingsManagementHeader(title: "设置", icon: "gearshape", dirty: false, onClose: { if let onClose { onClose() } else { dismiss() } }) {
                 DockIconButton(title: "模型服务", icon: "sparkles") { models = true }.disabled(store.isBusy)
                 DockIconButton(title: "使用指南", icon: "questionmark.circle") { guide = true }
             }
-            Picker("设置分类", selection: $tab) {
-                Text("存储与备份").tag("storage")
-                Text("阅读").tag("reading")
-                Text("外观").tag("appearance")
-                Text("本地诊断").tag("diagnostics")
-            }.pickerStyle(.segmented).padding(.horizontal, 20).padding(.bottom, 16)
             Divider().opacity(0.4)
-            ScrollView {
-                Group {
-                    switch tab {
-                    case "reading": ReadingSettingsPane()
-                    case "appearance": AppearanceSettingsPane()
-                    case "diagnostics": DiagnosticsSettingsPane(onStart: onClose)
-                    default: StorageSettingsPane(state: store.storageState)
-                    }
-                }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+            if cardWidth < 720 {
+                Picker("设置分类", selection: $tab) {
+                    ForEach(categories) { Text($0.title).tag($0.id) }
+                }.pickerStyle(.segmented).labelsHidden().padding(18)
             }
-        }.frame(maxWidth: 900, maxHeight: 690).readingGlass(radius: 22, prominent: true).padding(20)
+            HStack(alignment: .top, spacing: 0) {
+                if cardWidth >= 720 {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(categories) { category in
+                            Button { tab = category.id } label: {
+                                Label(category.title, systemImage: category.icon)
+                                    .font(.system(size: 14, weight: tab == category.id ? .semibold : .regular))
+                                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(.horizontal, 12)
+                                    .foregroundStyle(tab == category.id ? Palette.accent : Palette.ink)
+                                    .background(Palette.accent.opacity(tab == category.id ? 0.1 : 0), in: RoundedRectangle(cornerRadius: 11))
+                                    .contentShape(RoundedRectangle(cornerRadius: 11))
+                            }.buttonStyle(.plain).accessibilityAddTraits(tab == category.id ? .isSelected : [])
+                        }
+                        Spacer(minLength: 0)
+                    }.padding(14).frame(width: 180).frame(maxHeight: .infinity)
+                        .background(Palette.accent.opacity(0.025))
+                    Divider().opacity(0.35)
+                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
+                        if let category = categories.first(where: { $0.id == tab }) {
+                            VStack(alignment: .leading, spacing: 7) {
+                                Text(category.title).font(.system(size: 23, weight: .semibold))
+                                Text(category.detail).font(.system(size: 13)).foregroundStyle(.secondary)
+                            }
+                        }
+                        Group {
+                            switch tab {
+                            case "reading": ReadingSettingsPane()
+                            case "appearance": AppearanceSettingsPane()
+                            case "diagnostics": DiagnosticsSettingsPane(onStart: onClose)
+                            default: StorageSettingsPane(state: store.storageState)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: 680, alignment: .leading).padding(cardWidth < 720 ? 22 : 30)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+            }
+          }.frame(width: cardWidth, height: cardHeight).modifier(AppSettingsSurface(embedded: embedded))
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
             .sheet(isPresented: $models) { ProviderSettingsView(onClose: { models = false }).environmentObject(store).frame(minWidth: 760, minHeight: 600) }
             .sheet(isPresented: $guide) { ReadingGuideView(onClose: { guide = false }) }
+    }
+}
+
+private struct AppSettingsSurface: ViewModifier {
+    let embedded: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if embedded { content.readingGlass(radius: 22, prominent: true) }
+        else { content.background(Palette.surface) }
     }
 }
 
@@ -114,12 +168,20 @@ private struct ReadingSettingsPane: View {
             typographyControls
             Divider().opacity(0.5)
             Text("默认阅读方式").font(.system(size: 16, weight: .semibold))
-            Picker("翻页方向", selection: $direction) { Text("上下").tag("vertical"); Text("左右").tag("horizontal") }.pickerStyle(.segmented)
-            Picker("页面布局", selection: $continuous) { Text("连续").tag(true); Text("单页").tag(false) }.pickerStyle(.segmented)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("翻页方向").foregroundStyle(.secondary)
+                Picker("翻页方向", selection: $direction) { Text("上下").tag("vertical"); Text("左右").tag("horizontal") }
+                    .pickerStyle(.segmented).labelsHidden().controlSize(.large)
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                Text("页面布局").foregroundStyle(.secondary)
+                Picker("页面布局", selection: $continuous) { Text("连续").tag(true); Text("单页").tag(false) }
+                    .pickerStyle(.segmented).labelsHidden().controlSize(.large)
+            }
             Text("新书使用默认值；已打开的书保留本书设置。") .font(.system(size: 13)).foregroundStyle(.secondary)
             Divider().opacity(0.5)
-            Toggle("显示左下角阅读百分比", isOn: $progress)
-            Toggle("悬停自动翻译", isOn: $hoverTranslation)
+            Toggle("显示左下角阅读百分比", isOn: $progress).toggleStyle(.switch)
+            Toggle("悬停自动翻译", isOn: $hoverTranslation).toggleStyle(.switch)
             Text("句旁卡片停留一秒后翻译；已有译文直接读取。开启后会按需调用模型。")
                 .font(.system(size: 13)).foregroundStyle(.secondary)
         }.font(.system(size: 14))
@@ -202,9 +264,12 @@ private struct AppearanceSettingsPane: View {
     @AppStorage("appearance.reduceTransparency") private var transparency = false
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Picker("外观", selection: $appearance) { Text("跟随系统").tag("system"); Text("浅色").tag("light"); Text("深色").tag("dark") }.pickerStyle(.segmented)
-            Toggle("减少动效", isOn: $motion)
-            Toggle("减少透明度", isOn: $transparency)
+            Text("显示模式").font(.system(size: 16, weight: .semibold))
+            Picker("外观", selection: $appearance) { Text("跟随系统").tag("system"); Text("浅色").tag("light"); Text("深色").tag("dark") }
+                .pickerStyle(.segmented).labelsHidden().controlSize(.large)
+            Divider().opacity(0.4)
+            Toggle("减少动效", isOn: $motion).toggleStyle(.switch)
+            Toggle("减少透明度", isOn: $transparency).toggleStyle(.switch)
             Text("同时遵循系统辅助功能设置。") .font(.system(size: 13)).foregroundStyle(.secondary)
         }.font(.system(size: 14))
     }

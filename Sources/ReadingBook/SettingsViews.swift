@@ -33,14 +33,14 @@ struct ProviderSettingsView: View {
                 Divider().opacity(0.4)
                 HStack(spacing: 0) {
                     if wide && showServices {
-                        serviceList.frame(width: 240)
+                        serviceList.frame(width: 216).background(Palette.accent.opacity(0.025))
                         Divider().opacity(0.4)
                     }
                     modelConfiguration(wide: wide && showServices).frame(maxWidth: .infinity)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.frame(width: cardWidth, height: cardHeight)
                 .font(.system(size: 15))
-                .readingGlass(radius: 22, prominent: true)
+                .modifier(ProviderSettingsSurface(embedded: embedded))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear { presentationSize = geometry.size }
                 .onChange(of: geometry.size) { _, size in presentationSize = size }
@@ -99,7 +99,7 @@ struct ProviderSettingsView: View {
     private func modelConfiguration(wide: Bool) -> some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 26) {
                     HStack(spacing: 8) {
                         if wide {
                             Text(store.serviceName.isEmpty ? "选择或新建服务" : store.serviceName).font(.system(size: 15, weight: .medium)).lineLimit(1)
@@ -116,6 +116,11 @@ struct ProviderSettingsView: View {
                             .disabled(store.selectedServiceID == nil || store.isBusy)
                     }
                     ServiceProfileLocalError(draft: store.serviceProfileDraft)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("连接服务").font(.system(size: 20, weight: .semibold))
+                        Text("阅读、对话与书中组件共用这项服务。")
+                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
                     connectionFields
                     Divider().opacity(0.5)
                     budgetFields
@@ -126,7 +131,7 @@ struct ProviderSettingsView: View {
                             .textSelection(.enabled).padding(14).frame(maxWidth: .infinity, alignment: .leading)
                             .background(Palette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
                     }
-                }.padding(16)
+                }.frame(maxWidth: 660, alignment: .leading).padding(24).frame(maxWidth: .infinity, alignment: .topLeading)
             }
             Divider().opacity(0.5)
             HStack(spacing: 8) {
@@ -136,7 +141,7 @@ struct ProviderSettingsView: View {
                 Spacer(minLength: 0)
                 Button { store.saveServiceProfileForUI() } label: { Label("保存配置", systemImage: "checkmark") }
                     .buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: ReadingLayout.controlHeight).disabled(store.isBusy)
-            }.padding(16)
+            }.padding(.horizontal, 20).padding(.vertical, 14)
         }.controlSize(.large)
     }
 
@@ -163,7 +168,18 @@ struct ProviderSettingsView: View {
         VStack(alignment: .leading, spacing: 18) {
             SettingsFormRow("服务名称") { TextField("例如：我的 DeepSeek", text: $store.serviceName).settingsTextField() }
             SettingsFormRow("接口地址") { TextField("完整 HTTPS 或本机服务 URL", text: $store.settings.baseURL).settingsTextField() }
-            SettingsFormRow("API Key") { SecureField("API Key", text: $store.apiKey).settingsTextField() }
+            SettingsFormRow("API Key") {
+                VStack(alignment: .leading, spacing: 8) {
+                    SecureField("API Key", text: $store.apiKey).settingsTextField()
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) { credentialActions }
+                        VStack(alignment: .leading, spacing: 8) { credentialActions }
+                    }
+                    if !store.legacyKeyRecoveryStatus.isEmpty {
+                        Text(store.legacyKeyRecoveryStatus).font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                }
+            }
             SettingsFormRow("模型 ID") {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("精确模型 API ID", text: $store.settings.model).settingsTextField()
@@ -178,6 +194,17 @@ struct ProviderSettingsView: View {
                     .font(.system(size: 14))
             }
         }.disabled(store.isBusy)
+    }
+
+    @ViewBuilder private var credentialActions: some View {
+        Text("仅保存在本机，不随书库备份。")
+            .font(.system(size: 12)).foregroundStyle(.secondary)
+        if store.apiKey.isEmpty, store.selectedServiceID != nil {
+            Button(store.isRecoveringLegacyKey ? "正在取回…" : "取回旧钥匙串密钥") { store.recoverLegacyServiceKey() }
+                .buttonStyle(.borderless).font(.system(size: 12))
+                .disabled(store.isBusy || store.isRecoveringLegacyKey)
+                .help("仅此次主动读取旧钥匙串，取回后保存在本机")
+        }
     }
 
     private var budgetFields: some View {
@@ -241,6 +268,14 @@ struct ProviderSettingsView: View {
                     .font(.system(size: 13)).foregroundStyle(.secondary).padding(.top, 8)
             }.font(.system(size: 14))
         }.disabled(store.isBusy)
+    }
+}
+
+private struct ProviderSettingsSurface: ViewModifier {
+    let embedded: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if embedded { content.readingGlass(radius: 22, prominent: true) }
+        else { content.background(Palette.surface) }
     }
 }
 

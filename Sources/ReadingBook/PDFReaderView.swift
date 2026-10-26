@@ -195,7 +195,8 @@ struct PDFReaderView: NSViewRepresentable {
     private var sourcePointerMonitor: Any?
     private var sourcePress: (hit: PDFSourceDecorationHit, point: CGPoint, generation: Int)?
     private var sourceInteractionGeneration = 0
-    private var lastSourcePointerTime = 0.0
+    private var sourceHoverRefresh = ReadingHoverRefresh()
+    private var sourceHoverRefreshWork: DispatchWorkItem?
     private var sourceScrollQuietUntil = 0.0
     private var onVisiblePagesChange: (([Int]) -> Void)?
     private var lastVisiblePages: [Int] = []
@@ -345,7 +346,7 @@ struct PDFReaderView: NSViewRepresentable {
         }
         pdfView.onRegionError = { [weak self] message in self?.setStatus(message) }
         pdfView.isManagedAnnotation = { [weak self] annotation in self?.annotationIDs[ObjectIdentifier(annotation)] != nil }
-        pdfView.onSourcePointerLeft = { [weak self] in self?.reportSourceHover(nil) }
+        pdfView.onSourcePointerLeft = { [weak self] in self?.cancelSourceHoverRefresh(); self?.reportSourceHover(nil) }
         sourceCanvas.wantsLayer = true
         sourceCanvas.layer?.backgroundColor = NSColor.clear.cgColor
         sourceCanvas.paint = { [weak self] dirty in self?.drawSourceDecorations(in: dirty) }
@@ -883,8 +884,11 @@ struct PDFReaderView: NSViewRepresentable {
         return phase.isEmpty ? .none : .changed
     }
     private func ownsPDFHit(_ event: NSEvent, in owner: NSWindow) -> Bool {
+        ownsPDFHit(at: event.locationInWindow, in: owner)
+    }
+    private func ownsPDFHit(at windowPoint: CGPoint, in owner: NSWindow) -> Bool {
         guard let content = owner.contentView else { return false }
-        let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+        let point = content.superview?.convert(windowPoint, from: nil) ?? windowPoint
         guard let hit = content.hitTest(point), hit === pdfView || hit.isDescendant(of: pdfView) else { return false }
         // A scrollbar is a native control rather than a page-turn surface.
         return !(hit is NSScroller)
@@ -1048,6 +1052,7 @@ struct PDFReaderView: NSViewRepresentable {
         sourceScrollQuietUntil = ProcessInfo.processInfo.systemUptime + 0.15
         invalidateSourcePress(); reportSourceHover(nil)
         sourceCanvas.needsDisplay = true; scheduleVisiblePages(); scheduleWorkspaceCapture()
+        scheduleSourceHoverRefresh()
     }
     private func observePDFViewport() {
         func findClip(_ view: NSView) -> NSClipView? {
@@ -1470,6 +1475,10 @@ struct PDFReaderView: NSViewRepresentable {
             if pages != self.lastVisiblePages {
                 self.invalidateSourcePress()
                 self.lastVisiblePages = pages; self.onVisiblePagesChange?(pages); self.renderSourceDecorations()
+                // Visibility can change while the prepared page window stays
+                // identical. renderSourceDecorations then has no worker to
+                // rearm the tail that invalidateSourcePress just cancelled.
+                self.scheduleSourceHoverRefresh()
             }
         }
     }
@@ -1545,6 +1554,7 @@ struct PDFReaderView: NSViewRepresentable {
                     cache.rebuildPassageIndexIfNeeded()
                     self.sourceGeometryPages[number] = cache
                     self.trimSourceGeometryCache(keeping: window)
+                    self.scheduleSourceHoverRefresh()
                     continue
                 }
                 let text = cache.text, saved = cache.ranges, matchingAdditions = additions
@@ -1649,6 +1659,7 @@ struct PDFReaderView: NSViewRepresentable {
                 cache.rebuildPassageIndexIfNeeded()
                 self.sourceGeometryPages[number] = cache
                 self.trimSourceGeometryCache(keeping: window)
+                self.scheduleSourceHoverRefresh()
             }
             if self.sourceDecorationGeneration == generation {
                 self.sourceDecorationTask = nil
@@ -1783,7 +1794,44 @@ struct PDFReaderView: NSViewRepresentable {
         sourcePointerMonitor = nil; invalidateSourcePress()
     }
     private func invalidateSourcePress() {
+        cancelSourceHoverRefresh()
         sourceInteractionGeneration &+= 1; sourcePress = nil
+    }
+    private func cancelSourceHoverRefresh() {
+        sourceHoverRefreshWork?.cancel(); sourceHoverRefreshWork = nil
+        sourceHoverRefresh.cancel()
+    }
+    private func scheduleSourceHoverRefresh() {
+        let previous = sourceHoverRefresh.pending
+        guard let ticket = sourceHoverRefresh.request(at: ProcessInfo.processInfo.systemUptime, quietUntil: sourceScrollQuietUntil) else { return }
+        if previous == ticket, sourceHoverRefreshWork != nil { return }
+        sourceHoverRefreshWork?.cancel()
+        let documentID = documentGeneration, interaction = sourceInteractionGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.documentGeneration == documentID, self.sourceInteractionGeneration == interaction,
+                  self.sourceHoverRefresh.pending == ticket else { return }
+            self.sourceHoverRefreshWork = nil
+            guard self.sourceHoverRefresh.consume(ticket, at: ProcessInfo.processInfo.systemUptime, quietUntil: self.sourceScrollQuietUntil) else {
+                self.scheduleSourceHoverRefresh(); return
+            }
+            // Scheduling never makes a former mouse position authoritative.
+            // Geometry may finish after leaving the page or opening a panel;
+            // only the pointer's current frontmost window and hit are eligible.
+            guard let owner = self.window, NSApp.isActive, owner.isKeyWindow,
+                  NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == owner.windowNumber,
+                  !self.interactionBlocked, !self.isHiddenOrHasHiddenAncestor, !self.installingDocument,
+                  owner.attachedSheet == nil, NSApp.modalWindow == nil, !self.pdfView.isRegionSelectionArmed,
+                  NSEvent.pressedMouseButtons == 0,
+                  NSEvent.modifierFlags.intersection([.option, .command, .control]).isEmpty,
+                  self.pdfView.currentSelection?.pages.isEmpty != false else {
+                self.reportSourceHover(nil); return
+            }
+            let point = owner.mouseLocationOutsideOfEventStream
+            guard self.ownsPDFHit(at: point, in: owner) else { self.reportSourceHover(nil); return }
+            self.reportSourceHover(self.sourceHit(at: self.pdfView.convert(point, from: nil), preferTerm: false))
+        }
+        sourceHoverRefreshWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, ticket.deadline - ProcessInfo.processInfo.systemUptime), execute: work)
     }
     private func observeSourcePointer(_ event: NSEvent) {
         // A later click, drag or wheel expresses a newer reader intention.
@@ -1791,14 +1839,17 @@ struct PDFReaderView: NSViewRepresentable {
         // earlier sentence after that action (including scrollbar dragging).
         if event.type != .mouseMoved, event.window === window { awaitingSourceFocusProof = false }
         if event.type == .mouseMoved {
-            guard event.timestamp - lastSourcePointerTime >= 1.0 / 30, NSEvent.pressedMouseButtons == 0 else { return }
-            lastSourcePointerTime = event.timestamp
+            guard event.window === window, NSEvent.pressedMouseButtons == 0 else {
+                cancelSourceHoverRefresh(); reportSourceHover(nil); return
+            }
+            scheduleSourceHoverRefresh(); return
         }
         // Wheel events keep their original recipient. Clearing an existing
         // hover needs neither a window hit-test nor a full-book read boundary.
         if event.type == .scrollWheel {
             guard event.window === window else { return }
-            invalidateSourcePress(); reportSourceHover(nil); return
+            sourceScrollQuietUntil = ProcessInfo.processInfo.systemUptime + 0.15
+            invalidateSourcePress(); reportSourceHover(nil); scheduleSourceHoverRefresh(); return
         }
         guard let owner = window, event.window === owner, !interactionBlocked, !isHiddenOrHasHiddenAncestor,
               !installingDocument, owner.attachedSheet == nil, NSApp.modalWindow == nil,
@@ -1808,11 +1859,6 @@ struct PDFReaderView: NSViewRepresentable {
         }
         let point = pdfView.convert(event.locationInWindow, from: nil)
         switch event.type {
-        case .mouseMoved:
-            // Do not extract a potentially whole-book selected string on each
-            // mouse move merely to learn whether selection owns the gesture.
-            if pdfView.currentSelection?.pages.isEmpty == false { reportSourceHover(nil); return }
-            reportSourceHover(sourceHit(at: point, preferTerm: false))
         case .leftMouseDown:
             invalidateSourcePress()
             clearQuoteFocusHighlight()

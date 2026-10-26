@@ -30,8 +30,9 @@ extension AppStore {
                     apiKey = try keyForService(first.id)
                 } else { selectedServiceID = nil; serviceName = "新服务"; settings = ProviderSettings(); apiKey = "" }
             } else {
-                apiKey = try Keychain.read()
-                // The legacy key remains in its old account until the user saves.
+                // Starting the app never opens Keychain. Existing credentials
+                // remain there until the reader explicitly asks to recover one.
+                apiKey = try localCredentials.key(for: "legacy") ?? ""
                 selectedServiceID = "legacy"; serviceName = "我的 AI"
                 savedServices = [SavedAIService(id: "legacy", name: serviceName, settings: settings)]
             }
@@ -43,12 +44,12 @@ extension AppStore {
     }
 
     func selectService(_ id: String) {
-        guard !isBusy, id != selectedServiceID, savedServices.contains(where: { $0.id == id }) else { return }
+        guard !isBusy, !isRecoveringLegacyKey, id != selectedServiceID, savedServices.contains(where: { $0.id == id }) else { return }
         requestServiceChange(.select(id))
     }
 
     func newService(_ preset: ProviderPreset? = nil) {
-        guard !isBusy else { return }
+        guard !isBusy, !isRecoveringLegacyKey else { return }
         requestServiceChange(.create(preset))
     }
 
@@ -62,7 +63,7 @@ extension AppStore {
     }
 
     func resolveServiceChange(save: Bool) {
-        guard !isBusy, let change = serviceProfileDraft.pendingChange else { return }
+        guard !isBusy, !isRecoveringLegacyKey, let change = serviceProfileDraft.pendingChange else { return }
         serviceProfileDraft.pendingChange = nil
         do {
             if save { try persistServiceProfile() }
@@ -78,13 +79,15 @@ extension AppStore {
             switch change {
             case .select(let id):
                 guard let profile = savedServices.first(where: { $0.id == id }) else { throw ReadingError.invalid("所选配置已不存在。当前输入已保留。") }
-                // Read first, so a Keychain failure leaves every draft field intact.
+                // Read first, so a local-file failure leaves the draft intact.
                 let key = try keyForService(id)
                 settings = profile.settings; serviceName = profile.name; selectedServiceID = profile.id; apiKey = key
                 connectionStatus = ""; UserDefaults.standard.set(id, forKey: "selected-service")
+                legacyKeyRecoveryStatus = ""
                 serviceProfileDraft.capture(from: self)
             case .create(let preset):
                 selectedServiceID = nil; apiKey = ""; connectionStatus = ""
+                legacyKeyRecoveryStatus = ""
                 serviceName = preset?.name ?? "新服务"
                 settings = ProviderSettings(baseURL: preset?.baseURL ?? "https://api.openai.com/v1/chat/completions")
                 if let model = preset?.models.first { chooseModel(model) }
@@ -98,7 +101,7 @@ extension AppStore {
         catch { serviceProfileDraft.errorMessage = error.localizedDescription }
     }
     func discardServiceDraftForNavigation() -> Bool {
-        guard !isBusy else { return false }
+        guard !isBusy, !isRecoveringLegacyKey else { return false }
         serviceProfileDraft.errorMessage = ""
         if let id = selectedServiceID ?? savedServices.first?.id {
             performServiceChange(.select(id))
@@ -124,7 +127,7 @@ extension AppStore {
     }
 
     func persistServiceProfile() throws {
-        guard !isBusy, !serviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !isBusy, !isRecoveringLegacyKey, !serviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               (1...2000).contains(settings.maxRequestsPerRun), (64...1_048_576).contains(settings.maxOutputTokens),
               settings.contextWindowTokens.map({ (1024...4_194_304).contains($0) }) ?? true else { throw ReadingError.invalid("请填写配置名称、模型与有效的请求/token 上限。") }
@@ -135,23 +138,26 @@ extension AppStore {
         var profiles = savedServices
         if let index = profiles.firstIndex(where: { $0.id == id }) { profiles[index] = profile } else { profiles.append(profile) }
         let metadata = try JSONEncoder().encode(profiles)
-        try Keychain.write(apiKey, account: "profile-\(id)")
+        // An older profile initially has no local entry. Saving only its model
+        // settings must not turn that absence into an intentional empty key and
+        // block a later explicit recovery. Clearing an existing local key or
+        // saving a brand-new keyless local service remains explicit and valid.
+        let existingLocalKey = try localCredentials.key(for: id)
+        if selectedServiceID == nil || !apiKey.isEmpty || existingLocalKey != nil {
+            try localCredentials.save(apiKey, for: id)
+        }
         savedServices = profiles; selectedServiceID = id; serviceName = profile.name
         UserDefaults.standard.set(metadata, forKey: "service-profiles")
         UserDefaults.standard.set(id, forKey: "selected-service")
         UserDefaults.standard.set(ocrServiceID, forKey: "ocr-service")
         serviceProfileDraft.capture(from: self)
-        if id == "legacy" {
-            UserDefaults.standard.set(true, forKey: "legacy-profile-migrated")
-            try Keychain.remove(account: "api-key")
-        }
+        legacyKeyRecoveryStatus = ""
     }
 
     func removeService(_ id: String) {
-        guard !isBusy else { return }
+        guard !isBusy, !isRecoveringLegacyKey else { return }
         do {
-            try Keychain.remove(account: "profile-\(id)")
-            if id == "legacy" { try Keychain.remove(account: "api-key"); UserDefaults.standard.set(true, forKey: "legacy-profile-migrated") }
+            try localCredentials.remove(for: id)
             savedServices.removeAll { $0.id == id }
             UserDefaults.standard.set(try JSONEncoder().encode(savedServices), forKey: "service-profiles")
             if ocrServiceID == id { ocrServiceID = nil; UserDefaults.standard.removeObject(forKey: "ocr-service") }
@@ -224,9 +230,42 @@ extension AppStore {
         }
     }
     private func keyForService(_ id: String) throws -> String {
-        let key = try Keychain.read(account: "profile-\(id)")
-        if id == "legacy", key.isEmpty, !UserDefaults.standard.bool(forKey: "legacy-profile-migrated") { return try Keychain.read() }
-        return key
+        try localCredentials.key(for: id) ?? ""
+    }
+
+    /// The sole Keychain entry point is an explicit reader action. Recovery is
+    /// additive: it neither deletes the old item nor overwrites a local key.
+    func recoverLegacyServiceKey() {
+        guard !isBusy, !isRecoveringLegacyKey else { return }
+        guard let id = selectedServiceID, savedServices.contains(where: { $0.id == id }) else {
+            legacyKeyRecoveryStatus = "请先选择已有配置。"; return
+        }
+        guard apiKey.isEmpty else { legacyKeyRecoveryStatus = "当前已有密钥输入，请先保存。"; return }
+        do {
+            guard try localCredentials.key(for: id) == nil else {
+                legacyKeyRecoveryStatus = "本机已有此配置的密钥，未覆盖。"; return
+            }
+        } catch { serviceProfileDraft.errorMessage = error.localizedDescription; return }
+        isRecoveringLegacyKey = true; legacyKeyRecoveryStatus = "正在取回旧密钥…"
+        let local = localCredentials
+        Task {
+            defer { isRecoveringLegacyKey = false }
+            do {
+                let key = try await Task.detached(priority: .userInitiated) {
+                    let profile = try LegacyServiceKeychain.read(account: "profile-\(id)")
+                    if id == "legacy", profile.isEmpty { return try LegacyServiceKeychain.read() }
+                    return profile
+                }.value
+                guard !key.isEmpty else { legacyKeyRecoveryStatus = "旧钥匙串中没有找到此配置的密钥。"; return }
+                let saved = try local.saveIfAbsent(key, for: id)
+                if selectedServiceID == id, apiKey.isEmpty {
+                    let draftWasEdited = serviceProfileDraft.isDirty(in: self)
+                    apiKey = saved
+                    if !draftWasEdited { serviceProfileDraft.capture(from: self) }
+                }
+                legacyKeyRecoveryStatus = "旧密钥已保存到本机，旧钥匙串保留。"
+            } catch { legacyKeyRecoveryStatus = "未取回旧密钥；已有配置保留。" }
+        }
     }
 }
 

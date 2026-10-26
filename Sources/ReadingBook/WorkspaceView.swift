@@ -19,6 +19,12 @@ struct WorkspaceView: View {
     @StateObject private var bookSchemeDrafts = BookSchemeViewDraftStore()
     @State private var workspaceHeight: CGFloat = 600
     @State private var progressSize = CGSize(width: 260, height: 52)
+    @AppStorage("reading.progressLauncher.positionX.v1") private var progressLauncherX = -1.0
+    @AppStorage("reading.progressLauncher.positionY.v1") private var progressLauncherY = -1.0
+    @State private var progressLauncherDragOrigin: CGPoint?
+    @State private var progressLauncherMovingCenter: CGPoint?
+    @State private var progressLauncherDragEpoch = 0
+    @State private var progressLauncherDraggingFallback = false
     @State private var readerShowsPDF = true
     @State private var readerOutline = false
     @State private var readerBookmarks = false
@@ -110,7 +116,7 @@ struct WorkspaceView: View {
             Button("保存并继续") { resolveModelNavigation(to: destination, save: true) }.disabled(store.isBusy)
             Button("放弃更改并继续", role: .destructive) { resolveModelNavigation(to: destination, save: false) }.disabled(store.isBusy)
             Button("继续编辑", role: .cancel) { pendingModelRoute = nil; opensCompanionAfterNavigation = false; showsModelRouteConfirmation = false }
-        } message: { _ in Text("保存会写入本机配置与钥匙串；取消可继续编辑。") }
+        } message: { _ in Text("保存到本机配置；取消可继续编辑。") }
         .onChange(of: showsRouteConfirmation) { _, visible in
             if !visible && !resolvingNavigation { pendingRoute = nil; opensCompanionAfterNavigation = false }
         }
@@ -208,10 +214,40 @@ struct WorkspaceView: View {
         }
         let preferred = CGPoint(x: geometry.size.width < 700 ? 68 : 80, y: geometry.size.height - 104 - progressSize.height)
         let placement = FloatingChromeGeometry.place(size: progressSize, preferredOrigin: preferred, within: available, avoiding: obstacles)
-        let compact = placement == nil ? FloatingChromeGeometry.place(size: CGSize(width: 52, height: 52), preferredOrigin: preferred, within: available, avoiding: obstacles) : nil
-        let frame = placement ?? CGRect(origin: preferred, size: progressSize)
+        let circle = CGSize(width: 52, height: 52)
+        let usesFallback = placement == nil || (progressLauncherDragOrigin != nil && progressLauncherDraggingFallback)
+        let compact = usesFallback ? FloatingChromeGeometry.place(size: circle, preferredOrigin: preferred, within: available, avoiding: obstacles) : nil
+        let saved = WorkspacePoint(x: progressLauncherX, y: progressLauncherY)
+        let manualPanelCenter = progressLauncherMovingCenter.map { FloatingLauncherGeometry.clampedCenter($0, viewport: geometry.size, control: progressSize) }
+            ?? FloatingLauncherGeometry.restoredCenter(saved, viewport: geometry.size, control: progressSize)
+        let frame = manualPanelCenter.map { CGRect(x: $0.x - progressSize.width / 2, y: $0.y - progressSize.height / 2, width: progressSize.width, height: progressSize.height) }
+            ?? placement ?? CGRect(origin: preferred, size: progressSize)
+        let compactCenter = progressLauncherMovingCenter.map { FloatingLauncherGeometry.clampedCenter($0, viewport: geometry.size, control: circle) }
+            ?? FloatingLauncherGeometry.restoredCenter(saved, viewport: geometry.size, control: circle)
+            ?? FloatingLauncherGeometry.clampedCenter(compact.map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: preferred.x + 26, y: preferred.y + 26), viewport: geometry.size, control: circle)
+        func cancelDrag() {
+            progressLauncherDragOrigin = nil; progressLauncherMovingCenter = nil; progressLauncherDraggingFallback = false
+        }
+        func resetPosition() {
+            progressLauncherDragEpoch += 1; cancelDrag(); progressLauncherX = -1; progressLauncherY = -1
+        }
+        func interaction(at center: CGPoint, fallback: Bool) -> FloatingLauncherInteraction {
+            FloatingLauncherInteraction(epoch: progressLauncherDragEpoch, begin: {
+                progressLauncherDragOrigin = center; progressLauncherDraggingFallback = fallback
+            }, move: { delta, finished in
+                guard let start = progressLauncherDragOrigin else { return }
+                let point = FloatingLauncherGeometry.clampedCenter(CGPoint(x: start.x + delta.width, y: start.y + delta.height), viewport: geometry.size, control: circle)
+                if finished {
+                    if let normalized = FloatingLauncherGeometry.normalizedPosition(point, viewport: geometry.size, control: circle) {
+                        progressLauncherX = normalized.x; progressLauncherY = normalized.y
+                    }
+                    cancelDrag()
+                } else { progressLauncherMovingCenter = point }
+            }, cancel: cancelDrag)
+        }
         return ZStack(alignment: .topLeading) {
-          SmartReadingProgressPanel(maximumExpandedHeight: max(100, min(430, geometry.size.height - 220))).environmentObject(store)
+          SmartReadingProgressPanel(maximumExpandedHeight: max(100, min(430, geometry.size.height - 220)),
+              compactInteraction: interaction(at: CGPoint(x: frame.midX, y: frame.midY), fallback: false), resetCompactPosition: resetPosition).environmentObject(store)
             .background {
                 GeometryReader { panel in Color.clear.preference(key: WorkspaceProgressSizePreference.self, value: panel.size) }
             }
@@ -221,22 +257,28 @@ struct WorkspaceView: View {
                 progressSize = value
             }
             .workspaceChromeBounds("smart-progress")
-            .transformPreference(WorkspaceChromeBoundsPreference.self) { if placement == nil { $0.removeValue(forKey: "smart-progress") } }
-            .opacity(placement == nil ? 0 : 1).allowsHitTesting(placement != nil).accessibilityHidden(placement == nil)
+            .transformPreference(WorkspaceChromeBoundsPreference.self) { if usesFallback { $0.removeValue(forKey: "smart-progress") } }
+            .opacity(usesFallback ? 0 : 1).allowsHitTesting(!usesFallback).accessibilityHidden(usesFallback)
             .position(x: frame.midX, y: frame.midY)
-          if let compact {
+          if usesFallback {
             Button { navigate("workflow") } label: {
                 Image(systemName: store.isSmartReadingRunning ? "sparkles" : "book.pages")
                     .font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
                     .frame(width: 52, height: 52).contentShape(Circle())
             }.buttonStyle(.plain).readingGlass(radius: 26, interactive: true)
-                .help("空间有限；点击查看智能阅读进度与结果")
+                .overlay { FloatingLauncherPointerInput(interaction: interaction(at: compactCenter, fallback: true)) { navigate("workflow") } }
+                .help("点击查看智能阅读进度与结果；拖动调整位置")
                 .accessibilityLabel("查看智能阅读进度")
-                .contextMenu { if store.isSmartReadingRunning { Button("暂停分析，保留检查点") { store.pause() } } }
+                .contextMenu {
+                    if store.isSmartReadingRunning { Button("暂停分析，保留已读内容") { store.pause() } }
+                    Button("还原浮钮位置", action: resetPosition)
+                }
                 .workspaceChromeBounds("smart-progress")
-                .position(x: compact.midX, y: compact.midY)
+                .position(compactCenter)
           }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .onChange(of: geometry.size) { _, _ in progressLauncherDragEpoch += 1; cancelDrag() }
+            .onChange(of: store.bookID) { _, _ in progressLauncherDragEpoch += 1; cancelDrag() }
     }
     private func restoreReaderMemory() {
         readerShowsPDF = store.workspaceMemory.readerShowsPDF
@@ -483,7 +525,7 @@ struct WorkspaceView: View {
         ZStack {
             Color.black.opacity(0.025).contentShape(Rectangle()).onTapGesture { }
             if route == "models" { ProviderSettingsView(embedded: true, onClose: closeManagement).environmentObject(store) }
-            else if route == "preferences" { AppSettingsView(onClose: closeManagement).environmentObject(store) }
+            else if route == "preferences" { AppSettingsView(embedded: true, onClose: closeManagement).environmentObject(store) }
             else if route == "plugins" { PluginLibraryView(embedded: true, onClose: closeManagement, draftStore: pluginDefinitionDrafts).environmentObject(store) }
             else { BookSchemeWorkspaceView(onClose: closeManagement).environmentObject(store) }
         }.accessibilityAddTraits(.isModal)

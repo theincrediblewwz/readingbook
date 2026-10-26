@@ -154,6 +154,9 @@ import ReadingCore
     @Published var settings = ProviderSettings()
     @Published var providerCatalog = ProviderCatalog.current
     @Published var apiKey = ""
+    @Published var isRecoveringLegacyKey = false
+    @Published var legacyKeyRecoveryStatus = ""
+    let localCredentials = LocalCredentialStore()
     @Published var requestsUsed = 0
     @Published var timeFrom = -5000.0
     @Published var timeTo = 3000.0
@@ -298,7 +301,7 @@ import ReadingCore
     func saveSettings() {
         do {
             try persistServiceProfile()
-            showingSettings = false; activity = "模型配置已保存，密钥保存在系统钥匙串。"
+            showingSettings = false; activity = "模型配置与密钥已保存到本机。"
         } catch { errorMessage = error.localizedDescription }
     }
     func newDocument() {
@@ -749,24 +752,13 @@ import ReadingCore
     func objectTitle(_ id: String) -> String { book?.entities.first { $0.id == id }?.name ?? book?.events.first { $0.id == id }?.name ?? book?.documents.first { $0.id == id }?.title ?? id }
 }
 
-enum Keychain {
+/// Read-only compatibility; only the explicit recovery action calls this.
+enum LegacyServiceKeychain {
     static let service = "org.readingbook.provider"
     static func read(account: String = "api-key") throws -> String {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         var item: CFTypeRef?; let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { return "" }
         guard status == errSecSuccess, let data = item as? Data, let text = String(data: data, encoding: .utf8) else { throw ReadingError.invalid("钥匙串读取失败（\(status)）。") }; return text
-    }
-    static func write(_ value: String, account: String = "api-key") throws {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
-        let attributes: [String: Any] = [kSecValueData as String: Data(value.utf8)]
-        var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound { var addition = query; addition[kSecValueData as String] = Data(value.utf8); status = SecItemAdd(addition as CFDictionary, nil) }
-        guard status == errSecSuccess else { throw ReadingError.invalid("钥匙串保存失败（\(status)）。") }
-    }
-    static func remove(account: String) throws {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw ReadingError.invalid("钥匙串删除失败（\(status)）。") }
     }
 }
