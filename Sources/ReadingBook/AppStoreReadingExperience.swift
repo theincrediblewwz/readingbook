@@ -13,12 +13,16 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
     struct Input: Hashable, Sendable {
         let owner: String; let units: [SourceUnit]; let objects: [ObjectInput]
         let anchors: [SourceAnchor]; let mentions: [SourceMention]; let literalBytes: [Data]
+        let markdownUnitIDs: Set<String>
+        let sourceUnitsAreUnique: Bool
     }
     struct Snapshot: Sendable {
         let key: Int
         let input: Input
         let index: ReadingExperienceState
         let decorations: [SourceReadingDecoration]
+        let sourceStamp: LibraryPublicationStamp?
+        let pageSourceText: PDFPageSourceText?
     }
     struct Request: Sendable {
         let project: BookProject; let selectedUnitID: String?; let owner: String; let scope: String; let visiblePages: [Int]
@@ -61,16 +65,25 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
     nonisolated static func prepare(_ request: Request, entries: [Int: Snapshot], current: Snapshot?, previousBase: ReadingExperienceState?, previousDecorations: [[SourceReadingDecoration]] = [], includeWindow: Bool = true) -> Prepared? {
         let book = request.project
         var unitIndices: [String: Int] = [:], pageIndices: [Int: [Int]] = [:]
+        var duplicateUnitIDs = Set<String>()
         for (index, unit) in book.units.enumerated() {
-            unitIndices[unit.id] = index
+            guard !Task.isCancelled else { return nil }
+            if unitIndices.updateValue(index, forKey: unit.id) != nil { duplicateUnitIDs.insert(unit.id) }
             if let page = unit.page { pageIndices[page, default: []].append(index) }
         }
         guard !Task.isCancelled, let position = request.selectedUnitID.flatMap({ unitIndices[$0] }) else { return nil }
         let selectedUnit = book.units[position], base = book.readingExperience ?? ReadingExperienceState()
         let pages = selectedUnit.page.map { includeWindow ? ReadingSentenceAnchors.pageWindow(current: $0, visible: request.visiblePages, available: Set(pageIndices.keys)) : [$0] } ?? []
         let groups = pages.isEmpty ? [[selectedUnit]] : pages.map { (pageIndices[$0] ?? []).map { book.units[$0] } }
-        let anchorsByUnit = Dictionary(grouping: base.anchors, by: \.unitID)
-        let mentionsByAnchor = Dictionary(grouping: base.mentions, by: \.anchorID)
+        var anchorsByUnit: [String: [SourceAnchor]] = [:], mentionsByAnchor: [String: [SourceMention]] = [:]
+        for anchor in base.anchors {
+            guard !Task.isCancelled else { return nil }
+            anchorsByUnit[anchor.unitID, default: []].append(anchor)
+        }
+        for mention in base.mentions {
+            guard !Task.isCancelled else { return nil }
+            mentionsByAnchor[mention.anchorID, default: []].append(mention)
+        }
         var snapshots: [Snapshot] = [], boundaries: [Int: KnowledgeReadBoundary] = [:]
         for units in groups {
             guard !Task.isCancelled else { return nil }
@@ -80,30 +93,68 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
             }
             let anchors = units.flatMap { anchorsByUnit[$0.id] ?? [] }
             var objects: [ObjectInput] = []
+            func localEvidence(_ values: [Evidence]) -> [Evidence]? {
+                var result: [Evidence] = []
+                for item in values {
+                    guard !Task.isCancelled else { return nil }
+                    if unitIDs.contains(item.unitID) { result.append(item) }
+                }
+                return result
+            }
             for object in book.entities {
-                let evidence = object.evidence.filter { unitIDs.contains($0.unitID) }
+                guard !Task.isCancelled, let evidence = localEvidence(object.evidence) else { return nil }
                 if !evidence.isEmpty { objects.append(.init(id: object.id, names: [object.name] + object.aliases, evidence: evidence, event: false)) }
             }
             for object in book.events {
-                let evidence = object.evidence.filter { unitIDs.contains($0.unitID) }
+                guard !Task.isCancelled, let evidence = localEvidence(object.evidence) else { return nil }
                 if !evidence.isEmpty { objects.append(.init(id: object.id, names: [object.name], evidence: evidence, event: true)) }
+            }
+            var literalBytes: [Data] = []
+            for unit in units {
+                guard !Task.isCancelled else { return nil }; literalBytes.append(Data(unit.text.utf8))
+            }
+            for object in objects {
+                for name in object.names {
+                    guard !Task.isCancelled else { return nil }; literalBytes.append(Data(name.utf8))
+                }
+                for item in object.evidence {
+                    guard !Task.isCancelled else { return nil }; literalBytes.append(Data(item.quote.utf8))
+                }
+            }
+            for anchor in anchors {
+                guard !Task.isCancelled else { return nil }
+                literalBytes.append(contentsOf: [Data(anchor.quote.utf8), Data(anchor.prefix.utf8), Data(anchor.suffix.utf8)])
             }
             let input = Input(owner: request.owner, units: units, objects: objects, anchors: anchors,
                 mentions: anchors.flatMap { mentionsByAnchor[$0.id] ?? [] },
-                literalBytes: units.map { Data($0.text.utf8) } + objects.flatMap { $0.names.map { Data($0.utf8) } + $0.evidence.map { Data($0.quote.utf8) } }
-                    + anchors.flatMap { [Data($0.quote.utf8), Data($0.prefix.utf8), Data($0.suffix.utf8)] })
+                literalBytes: literalBytes, markdownUnitIDs: Set(units.filter {
+                    ReadingSentenceAnchors.syntax(for: $0, in: book) == .markdown
+                }.map(\.id)), sourceUnitsAreUnique: units.allSatisfy { !duplicateUnitIDs.contains($0.id) })
+            guard !Task.isCancelled else { return nil }
             var hasher = Hasher(); input.hash(into: &hasher); let key = hasher.finalize()
             // Exact equality on the worker protects against a compact-key
             // collision; literalBytes also rejects Unicode-normalized matches.
-            let saved = entries[key].flatMap { $0.input == input ? $0 : nil }
-            snapshots.append(saved ?? build(input, key: key, project: book))
+            guard !Task.isCancelled else { return nil }
+            if let saved = entries[key], saved.input == input {
+                snapshots.append(Snapshot(key: saved.key, input: saved.input, index: saved.index, decorations: saved.decorations,
+                    sourceStamp: book.publicationStamp, pageSourceText: saved.pageSourceText))
+            } else {
+                guard let snapshot = build(input, key: key, project: book) else { return nil }
+                snapshots.append(snapshot)
+            }
         }
         guard !Task.isCancelled, let selected = snapshots.first(where: { $0.input.units.contains(where: { $0.id == selectedUnit.id }) }) else { return nil }
         var index = base
         var anchorIDs = Set(base.anchors.map(\.id)), mentionIDs = Set(base.mentions.map(\.id))
         for snapshot in snapshots {
-            for anchor in snapshot.index.anchors where anchorIDs.insert(anchor.id).inserted { index.anchors.append(anchor) }
-            for mention in snapshot.index.mentions where mentionIDs.insert(mention.id).inserted { index.mentions.append(mention) }
+            for anchor in snapshot.index.anchors {
+                guard !Task.isCancelled else { return nil }
+                if anchorIDs.insert(anchor.id).inserted { index.anchors.append(anchor) }
+            }
+            for mention in snapshot.index.mentions {
+                guard !Task.isCancelled else { return nil }
+                if mentionIDs.insert(mention.id).inserted { index.mentions.append(mention) }
+            }
         }
         let changed = current?.input != selected.input || previousBase != base || current?.index != selected.index
         let decorationsChanged = previousDecorations.flatMap { $0 } != snapshots.flatMap(\.decorations)
@@ -112,37 +163,87 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
             currentBoundary: selectedUnit.page.flatMap { boundaries[$0] } ?? (try? KnowledgeReadBoundary.throughSourceUnit(selectedUnit.id, in: book)),
             anchorsByID: Dictionary(index.anchors.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }))
     }
-    nonisolated static func build(_ input: Input, key: Int, project: BookProject) -> Snapshot {
+    nonisolated static func build(_ input: Input, key: Int, project: BookProject) -> Snapshot? {
         let interval = pageEvidenceSignposter.beginInterval("BuildPageSnapshot")
         defer { pageEvidenceSignposter.endInterval("BuildPageSnapshot", interval) }
+        guard !Task.isCancelled else { return nil }
         var compact = project; compact.units = input.units
         compact.entities = input.objects.filter { !$0.event }.map {
             KnowledgeEntity(id: $0.id, typeID: "snapshot", name: $0.names.first ?? "", aliases: Array($0.names.dropFirst()), evidence: $0.evidence)
         }
         compact.events = input.objects.filter(\.event).map { KnowledgeEvent(id: $0.id, name: $0.names.first ?? "", evidence: $0.evidence) }
         let initial = ReadingExperienceState(anchors: input.anchors, mentions: input.mentions)
+        guard input.sourceUnitsAreUnique else {
+            // A page-local compact project cannot prove a globally duplicated
+            // source ID. Keep the stored records; do not guess automatic marks.
+            return Snapshot(key: key, input: input, index: initial, decorations: [],
+                sourceStamp: project.publicationStamp, pageSourceText: nil)
+        }
         var index = ReadingExperienceRuntime.indexEvidence(in: compact, state: initial, unitIDs: Set(input.units.map(\.id)))
+        guard !Task.isCancelled else { return nil }
         var existing = Set(index.anchors.map(\.id)), candidates = Set<String>()
         for unit in input.units {
+            guard !Task.isCancelled else { return nil }
             for anchor in ReadingSentenceAnchors.anchors(in: unit, project: compact) where existing.insert(anchor.id).inserted {
                 index.anchors.append(anchor); candidates.insert(anchor.id)
             }
         }
         var offsets: [String: Int] = [:], offset = 0
-        for unit in input.units { offsets[unit.id] = offset; offset += (unit.text as NSString).length }
+        for unit in input.units {
+            guard !Task.isCancelled else { return nil }
+            offsets[unit.id] = offset; offset += (unit.text as NSString).length
+        }
         let mentions = Dictionary(grouping: index.mentions, by: \.anchorID)
         let units = Dictionary(input.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let structuralBoundaries = units.mapValues { ReadingSentenceAnchors.boundaryIndex(in: $0.text, chapterTitle: $0.chapter) }
+        var structuralBoundaries: [String: ReadingPassageBoundaryIndex] = [:]
+        for unit in units.values {
+            guard !Task.isCancelled else { return nil }
+            structuralBoundaries[unit.id] = ReadingSentenceAnchors.boundaryIndex(in: unit.text, chapterTitle: unit.chapter,
+                syntax: ReadingSentenceAnchors.syntax(for: unit, in: project))
+        }
+        let storedIDs = Set(input.anchors.map(\.id))
+        var resolvers: [String: (SourceAnchor) throws -> ResolvedSourceAnchor] = [:]
+        var unavailableUnits = Set<String>()
         let decorations = index.anchors.compactMap { anchor -> SourceReadingDecoration? in
-            guard !Task.isCancelled, let start = offsets[anchor.unitID], let location = anchor.utf16Location, let length = anchor.utf16Length else { return nil }
+            guard !Task.isCancelled, let start = offsets[anchor.unitID] else { return nil }
+            let range: NSRange
+            if storedIDs.contains(anchor.id) {
+                // A repository stamp identifies a frozen publication; it is
+                // not proof that a hand-edited stored anchor is still valid.
+                // Resolve canonical records including dual-nil legacy ranges.
+                guard !unavailableUnits.contains(anchor.unitID) else { return nil }
+                if resolvers[anchor.unitID] == nil {
+                    guard let resolver = try? ReadingExperienceRuntime.anchorResolver(sourceHash: project.sourceHash, unitID: anchor.unitID, in: project) else {
+                        unavailableUnits.insert(anchor.unitID); return nil
+                    }
+                    resolvers[anchor.unitID] = resolver
+                }
+                guard let resolver = resolvers[anchor.unitID], let resolved = try? resolver(anchor) else { return nil }
+                range = resolved.range
+            } else {
+                // New evidence/sentence anchors came from this build's host
+                // factories and already passed the exact source checks.
+                guard let location = anchor.utf16Location, let length = anchor.utf16Length else { return nil }
+                range = NSRange(location: location, length: length)
+            }
             let isTerm = mentions[anchor.id]?.isEmpty == false
-            guard isTerm || structuralBoundaries[anchor.unitID]?.crossesStructuralBoundary(NSRange(location: location, length: length)) == false else { return nil }
+            guard isTerm || structuralBoundaries[anchor.unitID]?.crossesStructuralBoundary(range) == false else { return nil }
             return SourceReadingDecoration(id: anchor.id, targetID: mentions[anchor.id]?.first?.targetID ?? anchor.id, quote: anchor.quote,
-                rangeLocation: start + location, rangeLength: length, prefix: anchor.prefix, suffix: anchor.suffix,
+                rangeLocation: start + range.location, rangeLength: range.length, prefix: anchor.prefix, suffix: anchor.suffix,
                 interaction: mentions[anchor.id]?.isEmpty == false ? .term : .passage,
                 page: units[anchor.unitID]?.page, passive: candidates.contains(anchor.id))
         }
-        return Snapshot(key: key, input: input, index: index, decorations: decorations)
+        // prepare groups every canonical unit of one PDF page in book order.
+        // This immutable proof is constructed once on the worker, never in a
+        // View getter or per native quote lookup.
+        let pageSourceText: PDFPageSourceText?
+        guard !Task.isCancelled else { return nil }
+        if !Task.isCancelled, let page = input.units.first?.page,
+           input.units.allSatisfy({ $0.page == page }) {
+            pageSourceText = try? PDFPageSourceText(page: page, text: input.units.map(\.text).joined())
+        } else { pageSourceText = nil }
+        return Snapshot(key: key, input: input, index: index, decorations: decorations,
+            sourceStamp: project.publicationStamp, pageSourceText: pageSourceText)
     }
 }
 
@@ -315,18 +416,16 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
     }
     var sourceReadingDecorations: [SourceReadingDecoration] {
         guard let book, let snapshot = readingPageSnapshots.current,
-              snapshot.input.owner == libraryRootURL.path + "|" + book.id + "|" + book.sourceHash else { return [] }
+              snapshot.input.units.contains(where: { $0.id == selectedUnitID }),
+              readingSnapshotIsCurrent(snapshot, in: book) else { return [] }
         let units = visibleSourceUnits
-        guard snapshot.input.units.count == units.count,
-              zip(snapshot.input.units, units).allSatisfy({ $0.id == $1.id && $0.text.utf8.elementsEqual($1.text.utf8) }) else { return [] }
         var values = snapshot.decorations
         // Explicit citation navigation may add one transient anchor. Resolve
         // that single focus, rather than revalidating every mark in View.body.
         if let id = focusedReadingAnchorID, !values.contains(where: { $0.id == id }),
            let anchor = readingExperienceIndex.anchors.first(where: { $0.id == id }),
            let unit = units.first(where: { $0.id == anchor.unitID }) {
-            var compact = book; compact.units = units
-            if let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: compact) {
+            if let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: book) {
                 let start = units.prefix { $0.id != unit.id }.reduce(0) { $0 + ($1.text as NSString).length }
                 values.append(SourceReadingDecoration(id: anchor.id, targetID: id, quote: anchor.quote, rangeLocation: start + resolved.utf16Location,
                     rangeLength: resolved.utf16Length, prefix: anchor.prefix, suffix: anchor.suffix))
@@ -335,6 +434,35 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         return values
     }
     var pdfSourceReadingDecorationRevision: Int { readingPageSnapshots.presentationRevision }
+    private func readingSnapshotIsCurrent(_ snapshot: ReadingPageSnapshotCache.Snapshot, in book: BookProject) -> Bool {
+        guard snapshot.input.owner == libraryRootURL.path + "|" + book.id + "|" + book.sourceHash else { return false }
+        if let current = book.publicationStamp, snapshot.sourceStamp == current { return true }
+        // A note/AI publication changes the general stamp without necessarily
+        // changing source text. Preserve existing marks via exact source bytes
+        // while the worker prepares its next stamp. Nil never proves equality.
+        let ids = Set(snapshot.input.units.map(\.id)), page = snapshot.input.units.first?.page
+        var currentUnits: [SourceUnit] = [], seen = Set<String>()
+        for unit in book.units {
+            if ids.contains(unit.id), !seen.insert(unit.id).inserted { return false }
+            if let page {
+                if unit.page == page { currentUnits.append(unit) }
+            } else if ids.contains(unit.id) { currentUnits.append(unit) }
+        }
+        return currentUnits.count == snapshot.input.units.count && zip(snapshot.input.units, currentUnits).allSatisfy {
+            $0.id == $1.id && $0.page == $1.page && $0.text.utf8.elementsEqual($1.text.utf8) &&
+                snapshot.input.markdownUnitIDs.contains($1.id) == (ReadingSentenceAnchors.syntax(for: $1, in: book) == .markdown)
+        }
+    }
+    var pdfSourcePageTexts: [Int: PDFPageSourceText] {
+        guard let book else { return [:] }
+        guard let stamp = book.publicationStamp else { return [:] }
+        var result: [Int: PDFPageSourceText] = [:]
+        let owner = libraryRootURL.path + "|" + book.id + "|" + book.sourceHash
+        for snapshot in readingPageSnapshots.window where snapshot.input.owner == owner && snapshot.sourceStamp == stamp {
+            if let value = snapshot.pageSourceText { result[value.page] = value }
+        }
+        return result
+    }
     func inlineReadingBoundary(for id: String?) -> KnowledgeReadBoundary {
         guard let book, book.temporalKnowledge?.profile?.avoidsSpoilers ?? true,
               let id, let anchor = readingPageSnapshots.anchorsByID[id], anchor.sourceHash == book.sourceHash,
@@ -352,21 +480,19 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
     }
     var pdfSourceReadingDecorations: [SourceReadingDecoration] {
         guard let book else { return [] }
-        let cache = readingPageSnapshots, owner = libraryRootURL.path + "|" + book.id + "|" + book.sourceHash
+        let cache = readingPageSnapshots
         var values = cache.window.flatMap { snapshot -> [SourceReadingDecoration] in
-            guard snapshot.input.owner == owner,
-                  snapshot.input.units.allSatisfy({ unit in
-                      guard let index = cache.unitIndices[unit.id], book.units.indices.contains(index) else { return false }
-                      return book.units[index].id == unit.id && book.units[index].text.utf8.elementsEqual(unit.text.utf8)
-                  }) else { return [] }
+            guard readingSnapshotIsCurrent(snapshot, in: book) else { return [] }
             return snapshot.decorations
         }
         if let id = focusedReadingAnchorID, !values.contains(where: { $0.id == id }),
            let anchor = readingExperienceIndex.anchors.first(where: { $0.id == id }),
            let unit = book.units.first(where: { $0.id == anchor.unitID }), let page = unit.page,
            let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: book) {
+            let pageUnits = book.units.filter { $0.page == page }
+            let start = pageUnits.prefix { $0.id != unit.id }.reduce(0) { $0 + ($1.text as NSString).length }
             values.append(SourceReadingDecoration(id: anchor.id, targetID: id, quote: anchor.quote,
-                rangeLocation: resolved.utf16Location, rangeLength: resolved.utf16Length,
+                rangeLocation: start + resolved.utf16Location, rangeLength: resolved.utf16Length,
                 prefix: anchor.prefix, suffix: anchor.suffix, page: page))
         }
         return values

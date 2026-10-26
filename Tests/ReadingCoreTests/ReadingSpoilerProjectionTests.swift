@@ -39,6 +39,28 @@ final class ReadingSpoilerProjectionTests: XCTestCase {
         var unsupportedConversion = current; unsupportedConversion.dateText = "初平元年"
         XCTAssertNil(ReadingSpoilerProjection.event(unsupportedConversion, in: book, allowedUnitIDs: ["u1"])?.startYear)
     }
+
+    func testOneContextKeepsEventDetailAndRelatedNamesInsideTheSameBoundary() throws {
+        var book = book()
+        book.entities.append(KnowledgeEntity(id: "camp", typeID: "place", name: "后文都城", summary: "后文才揭晓的地点。", aliases: ["营"],
+            evidence: [Evidence(unitID: "u1", quote: "入营"), Evidence(unitID: "u2", quote: "200年")]))
+        book.events = [KnowledgeEvent(id: "entry", name: "入营", summary: "人物进入营地。", dateText: "190年", startYear: 190,
+            placeIDs: ["camp"], participantIDs: ["hidden", "known", "future"], evidence: [Evidence(unitID: "u1", quote: book.units[0].text)])]
+        book.documents = [DocumentRecord(id: "my-note", title: "我主动保存的笔记", linkedIDs: ["hidden"])]
+        let originals = book.entities, notes = book.documents
+        let context = ReadingSpoilerProjection.Context(project: book, allowedUnitIDs: ["u1"])
+        let event = try XCTUnwrap(context.event(book.events[0]))
+        let related = Set(event.placeIDs + event.participantIDs)
+        let names = book.entities.filter { related.contains($0.id) }.compactMap { context.entity($0)?.name }
+        XCTAssertEqual(Set(names), ["营", "神秘人", "徐晃"])
+        XCTAssertFalse(names.contains("曹操")); XCTAssertFalse(names.contains("许褚")); XCTAssertFalse(names.contains("后文都城"))
+        XCTAssertEqual(context.entity(book.entities[0])?.summary, "")
+        XCTAssertTrue(context.entity(book.entities[0])?.properties.isEmpty == true)
+        XCTAssertEqual(book.entities, originals); XCTAssertEqual(book.documents, notes, "派生详情不改变用户主动保存的笔记路径。")
+        let open = ReadingSpoilerProjection.Context(project: book, allowedUnitIDs: nil)
+        XCTAssertEqual(open.event(book.events[0]), book.events[0])
+        XCTAssertEqual(open.entity(book.entities[0])?.name, "曹操")
+    }
     func testQueryAndEmbeddedCompositionProjectionDoNotRestoreHiddenCanonicalValues() throws {
         var book = book()
         book.events = [KnowledgeEvent(id: "event", name: "曹操称王", summary: "曹操后来称王。", dateText: "200年", startYear: 200,

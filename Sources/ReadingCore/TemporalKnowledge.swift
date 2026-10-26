@@ -53,6 +53,12 @@ public enum TemporalQueryPoint: Hashable, Sendable {
     case date(TemporalDate, calendar: String)
     case narrative(Int)
 }
+/// A transient inclusive filter. Nil endpoints are open bounds; at least one
+/// endpoint is required. It does not change any persisted temporal assertion.
+public enum TemporalQueryWindow: Hashable, Sendable {
+    case date(from: TemporalDate?, to: TemporalDate?, calendar: String)
+    case narrative(from: Int?, to: Int?)
+}
 public enum TemporalMatch: String, Codable, Hashable, Sendable { case matches, possible, unknown, outside }
 
 /// Participation alone never grants a location. Only an independently anchored
@@ -591,4 +597,242 @@ public extension TemporalKnowledgeRuntime {
         guard value.count <= maximum, !value.contains("\0"), allowEmpty || !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw invalid("文本为空、含空字符或超过长度限制。") }
     }
     private static func invalid(_ message: String) -> ReadingError { .invalid("时态知识：" + message) }
+}
+
+extension TemporalKnowledgeRuntime {
+    public static func validate(window: TemporalQueryWindow) throws {
+        switch window {
+        case .date(let from, let to, let calendar):
+            try text(calendar, maximum: 80)
+            guard from != nil || to != nil else { throw invalid("查询时期至少需要一个日期边界。") }
+            for value in [from, to].compactMap({ $0 }) { try validateDate(value, calendar: calendar) }
+            if let from, let to, dateKey(from, upper: false) > dateKey(to, upper: true) { throw invalid("查询时期的结束早于开始。") }
+        case .narrative(let from, let to):
+            guard from != nil || to != nil else { throw invalid("查询时期至少需要一个叙事边界。") }
+            for value in [from, to].compactMap({ $0 }) {
+                guard (0...1_000_000_000).contains(value) else { throw invalid("查询叙事次序超出范围。") }
+            }
+            if let from, let to, from > to { throw invalid("查询叙事时期的结束早于开始。") }
+        }
+    }
+
+    public static func match(_ extent: TemporalExtent, within window: TemporalQueryWindow) -> TemporalMatch {
+        do { try validate(window: window) } catch { return .unknown }
+        return windowMatch(extent, within: window)
+    }
+
+    /// Time classification only; use entitySnapshot to also enforce source and
+    /// object visibility. Inferred presences never become known footprints.
+    public static func match(_ presence: EntityPresence, within window: TemporalQueryWindow) -> TemporalMatch {
+        do { try validate(window: window) } catch { return .unknown }
+        return assertedMatch(presence.extent, assertion: presence.assertion, within: window)
+    }
+
+    private static func windowMatch(_ extent: TemporalExtent, within window: TemporalQueryWindow) -> TemporalMatch {
+        switch window {
+        case .narrative(let from, let to):
+            guard extent.precision == .narrative, let lower = extent.narrativeStart else { return .unknown }
+            let upper = extent.narrativeEnd ?? (extent.kind == .interval ? nil : lower)
+            if let to, to < lower { return .outside }
+            if let from, let upper, from > upper { return .outside }
+        case .date(let from, let to, let calendar):
+            guard extent.calendar == calendar, [.year, .month, .day].contains(extent.precision),
+                  extent.start != nil || extent.end != nil else { return .unknown }
+            let lower = extent.start.map { dateKey($0, upper: false) }
+            let upper = (extent.end ?? (extent.kind == .interval ? nil : extent.start)).map { dateKey($0, upper: true) }
+            if let to, let lower, dateKey(to, upper: true) < lower { return .outside }
+            if let from, let upper, dateKey(from, upper: false) > upper { return .outside }
+            let queryPrecision = [from, to].compactMap { $0 }.map { $0.day != nil ? 3 : ($0.month != nil ? 2 : 1) }.max() ?? 1
+            let precision = extent.precision == .day ? 3 : (extent.precision == .month ? 2 : 1)
+            if queryPrecision > precision { return .possible }
+        }
+        return extent.kind == .uncertainRange || extent.uncertainty != .exact ? .possible : .matches
+    }
+
+    private static func assertedMatch(_ extent: TemporalExtent, assertion: KnowledgeAssertion?, within window: TemporalQueryWindow) -> TemporalMatch {
+        let result = windowMatch(extent, within: window)
+        guard result != .outside else { return result }
+        if assertion == .unknown { return .unknown }
+        return assertion == .inferred && result == .matches ? .possible : result
+    }
+
+    /// A wide window must not join an event at one time to a participant at a
+    /// different time. Only a common event ∩ participant ∩ window is simultaneous.
+    private static func jointWindowMatch(_ event: TemporalExtent, _ participant: TemporalExtent,
+                                         assertion: KnowledgeAssertion, within window: TemporalQueryWindow) -> TemporalMatch {
+        let eventMatch = windowMatch(event, within: window)
+        let participantMatch = assertedMatch(participant, assertion: assertion, within: window)
+        if eventMatch == .outside || participantMatch == .outside { return .outside }
+        switch window {
+        case .narrative(let from, let to):
+            guard event.precision == .narrative, participant.precision == .narrative,
+                  let eventStart = event.narrativeStart, let participantStart = participant.narrativeStart else { return .unknown }
+            let starts: [Int?] = [eventStart, participantStart, from]
+            let ends = [event.narrativeEnd ?? (event.kind == .interval ? nil : eventStart),
+                        participant.narrativeEnd ?? (participant.kind == .interval ? nil : participantStart), to]
+            if let lower = starts.compactMap({ $0 }).max(), let upper = ends.compactMap({ $0 }).min(), lower > upper { return .outside }
+        case .date(let from, let to, let calendar):
+            guard event.calendar == calendar, participant.calendar == calendar,
+                  [.year, .month, .day].contains(event.precision), [.year, .month, .day].contains(participant.precision),
+                  event.start != nil || event.end != nil, participant.start != nil || participant.end != nil else { return .unknown }
+            let starts = [event.start, participant.start, from].compactMap { $0 }.map { dateKey($0, upper: false) }
+            let ends = [event.end ?? (event.kind == .interval ? nil : event.start),
+                        participant.end ?? (participant.kind == .interval ? nil : participant.start), to].compactMap { $0 }.map { dateKey($0, upper: true) }
+            if let lower = starts.max(), let upper = ends.min(), lower > upper { return .outside }
+        }
+        if eventMatch == .unknown || participantMatch == .unknown { return .unknown }
+        return eventMatch == .possible || participantMatch == .possible ? .possible : .matches
+    }
+
+    private struct WindowReadIndex {
+        let anchors: [String: SourceAnchor]
+        let visibleIDs: Set<String>
+        let referenceIDs: Set<String>?
+    }
+    private static func windowReadIndex(in project: BookProject, boundary: KnowledgeReadBoundary) throws -> WindowReadIndex {
+        var anchors: [String: SourceAnchor] = [:], visible = Set<String>()
+        for values in [project.readingExperience?.anchors ?? [], project.temporalKnowledge?.anchors ?? []] {
+            for anchor in values {
+                try Task.checkCancellation()
+                if anchors[anchor.id] == nil { anchors[anchor.id] = anchor }
+            }
+        }
+        for entity in project.entities { try Task.checkCancellation(); if admits(entity.evidence, boundary: boundary) { visible.insert(entity.id) } }
+        for event in project.events { try Task.checkCancellation(); if admits(event.evidence, boundary: boundary) { visible.insert(event.id) } }
+        for document in project.activeDocuments { try Task.checkCancellation(); if admits(document.evidence, boundary: boundary) { visible.insert(document.id) } }
+        var references: Set<String>?
+        if let allowed = boundary.allowedUnitIDs {
+            var ids = visible.union(allowed)
+            for insight in project.insights {
+                try Task.checkCancellation()
+                if !insight.unitIDs.isEmpty, Set(insight.unitIDs).isSubset(of: allowed) { ids.insert(insight.id) }
+            }
+            references = ids
+        }
+        try Task.checkCancellation()
+        return WindowReadIndex(anchors: anchors, visibleIDs: visible, referenceIDs: references)
+    }
+
+    public static func events(in project: BookProject, entityID: String? = nil, placeID: String? = nil,
+                              within window: TemporalQueryWindow, boundary: KnowledgeReadBoundary) throws -> [TemporalEventSnapshot] {
+        try validate(window: window)
+        let index = try windowReadIndex(in: project, boundary: boundary)
+        if let entityID, let ids = index.referenceIDs, !ids.contains(entityID) { return [] }
+        if let placeID, let ids = index.referenceIDs, !ids.contains(placeID) { return [] }
+        var metadata: [String: EventTemporalMetadata] = [:], participationByEvent: [String: [Participation]] = [:], presenceByEvent: [String: [EntityPresence]] = [:]
+        for value in project.temporalKnowledge?.eventMetadata ?? [] { try Task.checkCancellation(); if metadata[value.eventID] == nil { metadata[value.eventID] = value } }
+        if let entityID {
+            for value in project.temporalKnowledge?.participations ?? [] {
+                try Task.checkCancellation()
+                if value.entityID == entityID, admits(value.sourceAnchorIDs, anchors: index.anchors, boundary: boundary) { participationByEvent[value.eventID, default: []].append(value) }
+            }
+            for value in project.temporalKnowledge?.presences ?? [] {
+                try Task.checkCancellation()
+                if value.entityID == entityID, let eventID = value.eventID,
+                   value.placeID.map({ index.referenceIDs?.contains($0) ?? true }) ?? true,
+                   admits(value.sourceAnchorIDs, anchors: index.anchors, boundary: boundary) { presenceByEvent[eventID, default: []].append(value) }
+            }
+        }
+        var result: [TemporalEventSnapshot] = []
+        for event in project.events {
+            try Task.checkCancellation()
+            guard admits(event.evidence, boundary: boundary), placeID.map({ event.placeIDs.contains($0) }) ?? true else { continue }
+            let visible = visibleMetadata(metadata[event.id], anchors: index.anchors, boundary: boundary, referenceIDs: index.referenceIDs)
+            let extent = visible?.extent ?? legacyExtent(event)
+            var state = assertedMatch(extent, assertion: visible?.assertion, within: window)
+            guard state != .outside else { continue }
+            var participations: [Participation] = [], presences: [EntityPresence] = [], states: [TemporalMatch] = [], participantMatch: TemporalMatch?
+            if let entityID {
+                let participation = participationByEvent[event.id] ?? [], presence = presenceByEvent[event.id] ?? []
+                if !participation.isEmpty || !presence.isEmpty {
+                    for value in participation {
+                        try Task.checkCancellation()
+                        let state = value.extent.map { jointWindowMatch(extent, $0, assertion: value.assertion, within: window) } ?? .unknown
+                        if state != .outside { participations.append(value); states.append(state) }
+                    }
+                    for value in presence {
+                        try Task.checkCancellation()
+                        let state = jointWindowMatch(extent, value.extent, assertion: value.assertion, within: window)
+                        if state != .outside { presences.append(value); states.append(state) }
+                    }
+                    guard !states.isEmpty else { continue }
+                    participantMatch = states.contains(.matches) ? .matches : (states.contains(.possible) ? .possible : .unknown)
+                } else {
+                    guard event.participantIDs.contains(entityID) else { continue }
+                    participantMatch = .unknown
+                }
+            }
+            if participantMatch == .unknown { state = .unknown }
+            else if participantMatch == .possible, state == .matches { state = .possible }
+            let object = try adapt(event, metadata: visible, anchors: index.anchors, boundary: boundary, referenceIDs: index.referenceIDs)
+            result.append(TemporalEventSnapshot(object: object, metadata: visible, extent: extent, match: state,
+                participations: participations, presences: presences, participantMatch: participantMatch))
+        }
+        try Task.checkCancellation()
+        return result
+    }
+
+    public static func relations(in project: BookProject, within window: TemporalQueryWindow, boundary: KnowledgeReadBoundary) throws -> [TemporalRelationSnapshot] {
+        try relationSnapshots(objectID: nil, in: project, within: window, boundary: boundary)
+    }
+    public static func relations(objectID: String, in project: BookProject, within window: TemporalQueryWindow, boundary: KnowledgeReadBoundary) throws -> [TemporalRelationSnapshot] {
+        try relationSnapshots(objectID: objectID, in: project, within: window, boundary: boundary)
+    }
+    private static func relationSnapshots(objectID: String?, in project: BookProject, within window: TemporalQueryWindow, boundary: KnowledgeReadBoundary) throws -> [TemporalRelationSnapshot] {
+        try validate(window: window)
+        let index = try windowReadIndex(in: project, boundary: boundary)
+        var metadata: [String: [RelationTemporalMetadata]] = [:], result: [TemporalRelationSnapshot] = []
+        for value in project.temporalKnowledge?.relationMetadata ?? [] { try Task.checkCancellation(); metadata[value.relationID, default: []].append(value) }
+        for relation in project.relations {
+            try Task.checkCancellation()
+            guard objectID.map({ relation.fromID == $0 || relation.toID == $0 }) ?? true,
+                  index.visibleIDs.contains(relation.fromID), index.visibleIDs.contains(relation.toID), admits(relation.evidence, boundary: boundary) else { continue }
+            let all = metadata[relation.id] ?? []
+            var visible = false
+            for value in all {
+                try Task.checkCancellation()
+                guard admits(value.sourceAnchorIDs, anchors: index.anchors, boundary: boundary) else { continue }
+                visible = true
+                let state = assertedMatch(value.validity, assertion: value.assertion, within: window)
+                if state != .outside { result.append(TemporalRelationSnapshot(relation: relation, metadata: value, match: state)) }
+            }
+            if !visible, all.isEmpty { result.append(TemporalRelationSnapshot(relation: relation, metadata: nil, match: .unknown)) }
+        }
+        try Task.checkCancellation()
+        return result
+    }
+
+    public static func entitySnapshot(entityID: String, in project: BookProject, within window: TemporalQueryWindow,
+                                      boundary: KnowledgeReadBoundary) throws -> EntityTimeSnapshot {
+        try validate(window: window)
+        let index = try windowReadIndex(in: project, boundary: boundary)
+        var entity: TypedObject?
+        for value in project.entities {
+            try Task.checkCancellation()
+            guard value.id == entityID else { continue }
+            if admits(value.evidence, boundary: boundary) { entity = try adapt(value) }
+            break
+        }
+        guard entity != nil else { return EntityTimeSnapshot(object: nil, presences: [], uncertainPresences: [], footprints: [], participations: [], uncertainParticipations: [], events: [], relations: []) }
+        var exact: [EntityPresence] = [], uncertain: [EntityPresence] = [], participants: [Participation] = [], uncertainParticipants: [Participation] = []
+        for value in project.temporalKnowledge?.presences ?? [] {
+            try Task.checkCancellation()
+            guard value.entityID == entityID, value.placeID.map(index.visibleIDs.contains) ?? true, value.eventID.map(index.visibleIDs.contains) ?? true,
+                  admits(value.sourceAnchorIDs, anchors: index.anchors, boundary: boundary) else { continue }
+            let state = assertedMatch(value.extent, assertion: value.assertion, within: window)
+            if state == .matches, value.assertion == .explicit { exact.append(value) }
+            else if state != .outside { uncertain.append(value) }
+        }
+        for value in project.temporalKnowledge?.participations ?? [] {
+            try Task.checkCancellation()
+            guard value.entityID == entityID, index.visibleIDs.contains(value.eventID), admits(value.sourceAnchorIDs, anchors: index.anchors, boundary: boundary) else { continue }
+            let state = value.extent.map { assertedMatch($0, assertion: value.assertion, within: window) } ?? .unknown
+            if state == .matches, value.assertion == .explicit { participants.append(value) }
+            else if state != .outside { uncertainParticipants.append(value) }
+        }
+        return EntityTimeSnapshot(object: entity, presences: exact, uncertainPresences: uncertain,
+            footprints: exact.filter { $0.placeID != nil }, participations: participants, uncertainParticipations: uncertainParticipants,
+            events: try events(in: project, entityID: entityID, within: window, boundary: boundary),
+            relations: try relations(objectID: entityID, in: project, within: window, boundary: boundary))
+    }
 }

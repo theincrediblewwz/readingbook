@@ -95,6 +95,55 @@ final class ReadingKnowledgeTests: XCTestCase {
         XCTAssertTrue(ReadingKnowledgeRuntime.readableBackgrounds(in: changed).isEmpty)
     }
 
+    func testRepeatedSourceEvidenceSkipsStaleCandidatesAndRefreshesAfterOCR() throws {
+        var book = try self.book()
+        book.entities[0].evidence.append(Evidence(unitID: "u1", quote: "贾诩"))
+        let request = try TeacherBackgroundRequest.freeze(objectID: "jia", in: book, currentUnitID: "u1", avoidsSpoilers: true)
+        XCTAssertEqual(request.evidence.count, 2)
+        XCTAssertEqual(request.unitHashes.count, 1)
+        let current = record(request)
+        var stale = current; stale.id = "stale-background"; stale.unitHashes["u1"] = String(repeating: "0", count: 64)
+        book.readingKnowledge = ReadingKnowledgeState()
+        book.readingKnowledge?.backgrounds = [current, stale]
+        let later = try TeacherBackgroundRequest.freeze(objectID: "jia", in: book, currentUnitID: "u2", avoidsSpoilers: true)
+        XCTAssertEqual(later.priorBackgroundMarkdown, current.markdown)
+        XCTAssertEqual(ReadingKnowledgeRuntime.background(for: later, in: book), current)
+        XCTAssertEqual(ReadingKnowledgeRuntime.readableBackgrounds(in: book), [current])
+
+        var changed = book; changed.units[0].text += "OCR修订。"
+        let refreshed = try TeacherBackgroundRequest.freeze(objectID: "jia", in: changed, currentUnitID: "u2", avoidsSpoilers: true)
+        XCTAssertNotEqual(refreshed.unitHashes, request.unitHashes)
+        XCTAssertNil(refreshed.priorBackgroundMarkdown)
+        XCTAssertNil(ReadingKnowledgeRuntime.background(for: refreshed, in: changed))
+        XCTAssertEqual(changed.readingKnowledge?.backgrounds, book.readingKnowledge?.backgrounds, "来源检查只能拒绝复用，不能删除旧缓存。")
+        XCTAssertEqual(changed.readingKnowledge?.versions, book.readingKnowledge?.versions)
+    }
+
+    func testCancelledBackgroundReadsStopWithoutChangingCanonicalReuseOrReadableExport() async throws {
+        var book = try self.book()
+        let request = try TeacherBackgroundRequest.freeze(objectID: "jia", in: book, currentUnitID: "u1", avoidsSpoilers: true)
+        let current = record(request)
+        book.readingKnowledge = ReadingKnowledgeState(); book.readingKnowledge?.backgrounds = [current]
+        let frozen = book
+        let task = Task.detached { () -> (Bool, Bool, Bool, Int) in
+            withUnsafeCurrentTask { $0?.cancel() }
+            let cancelled: Bool
+            do {
+                _ = try TeacherBackgroundRequest.freeze(objectID: "jia", in: frozen, currentUnitID: "u1", avoidsSpoilers: true)
+                cancelled = false
+            } catch is CancellationError { cancelled = true }
+            catch { cancelled = false }
+            return (cancelled, ReadingKnowledgeRuntime.background(for: request, in: frozen) == nil,
+                ReadingKnowledgeRuntime.background(for: request, in: frozen, isCancelled: { false }) == current,
+                ReadingKnowledgeRuntime.readableBackgrounds(in: frozen).count)
+        }
+        let result = await task.value
+        XCTAssertTrue(result.0); XCTAssertTrue(result.1)
+        XCTAssertTrue(result.2, "canonical 查重不能把取消误当缓存不存在。")
+        XCTAssertEqual(result.3, 1, "取消只影响交互读取，不能让导出写出空的派生资料。")
+        XCTAssertEqual(book.readingKnowledge?.backgrounds, [current])
+    }
+
     func testFutureCacheCannotLeakBackAndSourceSlicesAreRespected() throws {
         var book = try self.book(), later = try self.book()
         later.entities[0].summary = "后来献策。"; later.entities[0].evidence = [Evidence(unitID: "u2", quote: later.units[1].text)]

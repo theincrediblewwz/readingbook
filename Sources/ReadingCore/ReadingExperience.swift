@@ -215,8 +215,24 @@ public enum ReadingExperienceRuntime {
     public static func resolve(_ anchor: SourceAnchor, in project: BookProject) throws -> ResolvedSourceAnchor {
         guard !anchor.sourceHash.isEmpty, anchor.sourceHash == project.sourceHash else { throw invalid("锚点属于其他原文版本。") }
         let unit = try sourceUnit(anchor.unitID, in: project)
-        try checkQuote(anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix)
+        return try resolve(anchor, unit: unit)
+    }
+
+    /// Prepared only for one immutable source unit. It shares the source hash,
+    /// while each stored anchor still proves its identity and unique quote.
+    public static func anchorResolver(sourceHash: String, unitID: String, in project: BookProject) throws -> (SourceAnchor) throws -> ResolvedSourceAnchor {
+        guard !sourceHash.isEmpty, sourceHash == project.sourceHash else { throw invalid("锚点属于其他原文版本。") }
+        let unit = try sourceUnit(unitID, in: project)
         let unitHash = try BookImporter.sha256(Data(unit.text.utf8))
+        return { anchor in
+            guard anchor.sourceHash == sourceHash, anchor.unitID == unit.id else { throw invalid("锚点属于其他原文版本或单元。") }
+            return try resolve(anchor, unit: unit, preparedUnitHash: unitHash)
+        }
+    }
+
+    private static func resolve(_ anchor: SourceAnchor, unit: SourceUnit, preparedUnitHash: String? = nil) throws -> ResolvedSourceAnchor {
+        try checkQuote(anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix)
+        let unitHash = try preparedUnitHash ?? BookImporter.sha256(Data(unit.text.utf8))
         guard !anchor.unitTextHash.isEmpty, anchor.unitTextHash == unitHash else { throw invalid("该页或片段文本已变化，旧锚点需要重新核对。") }
         let range = try uniqueRange(quote: anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix, text: unit.text)
         guard (anchor.utf16Location == nil) == (anchor.utf16Length == nil) else { throw invalid("锚点范围不完整。") }
@@ -284,10 +300,12 @@ public enum ReadingExperienceRuntime {
         for (targetID, names, evidence) in entries {
             if Task.isCancelled { return result }
             for source in evidence where unitIDs?.contains(source.unitID) ?? true {
+                if Task.isCancelled { return result }
                 guard let evidenceAnchor = try? createAnchor(sourceHash: project.sourceHash, unitID: source.unitID, quote: source.quote, in: project),
                       let unit = project.units.first(where: { $0.id == source.unitID }),
                       let evidenceRange = try? resolve(evidenceAnchor, in: project) else { continue }
                 for name in Set(names) where !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if Task.isCancelled { return result }
                     guard let nameRange = try? uniqueRange(quote: name, prefix: "", suffix: "", text: source.quote),
                           let swiftRange = Range(NSRange(location: evidenceRange.utf16Location + nameRange.location, length: nameRange.length), in: unit.text) else { continue }
                     let location = evidenceRange.utf16Location + nameRange.location

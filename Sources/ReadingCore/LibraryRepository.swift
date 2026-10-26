@@ -143,8 +143,9 @@ public actor LibraryRepository {
         updated.readerAnnotations = existing.readerAnnotations
         // Only the explicit trash/restore API changes this canonical status. A stale reader
         // or editor window cannot silently revive a document through a routine save.
+        let documentIndices = Dictionary(updated.documents.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
         for saved in existing.documents {
-            if let index = updated.documents.firstIndex(where: { $0.id == saved.id }) { updated.documents[index].trashedAt = saved.trashedAt }
+            if let index = documentIndices[saved.id] { updated.documents[index].trashedAt = saved.trashedAt }
         }
         try ReadingKnowledgeRuntime.captureVersions(before: existing, in: &updated)
         try validate(updated)
@@ -184,9 +185,12 @@ public actor LibraryRepository {
         updated.aiRequestHistory = try AIRequestHistoryMerge.merge(proposed: project.aiRequestHistory, canonical: existing.aiRequestHistory)
         updated.readerAnnotations = existing.readerAnnotations
         // Retain references written by another window before this editor was opened.
-        for saved in existing.documents where !updated.documents.contains(where: { $0.id == saved.id }) { updated.documents.append(saved) }
+        // Index positions only: leave the original array intact so validation
+        // still rejects duplicate proposed IDs instead of silently deduplicating.
+        var documentIndices = Dictionary(updated.documents.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
         for saved in existing.documents {
-            if let index = updated.documents.firstIndex(where: { $0.id == saved.id }) { updated.documents[index].trashedAt = saved.trashedAt }
+            if let index = documentIndices[saved.id] { updated.documents[index].trashedAt = saved.trashedAt }
+            else { documentIndices[saved.id] = updated.documents.count; updated.documents.append(saved) }
         }
         var record = document
         var previousMarkdownHash: String?
@@ -208,7 +212,7 @@ public actor LibraryRepository {
             }
         }
         record.updatedAt = Date()
-        if let index = updated.documents.firstIndex(where: { $0.id == record.id }) { updated.documents[index] = record }
+        if let index = documentIndices[record.id] { updated.documents[index] = record }
         else { updated.documents.append(record) }
         try ReadingKnowledgeRuntime.captureVersions(before: existing, in: &updated)
         try validate(updated)

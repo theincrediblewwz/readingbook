@@ -89,6 +89,117 @@ final class TemporalKnowledgeTests: XCTestCase {
         XCTAssertThrowsError(try TemporalKnowledgeRuntime.validateExtent(invalid))
     }
 
+    func testWindowIntersectionUsesMonthDayPrecisionAndInclusiveEndpoints() throws {
+        let day = TemporalExtent(sourceText: "208年6月15日", calendar: "gregorian", start: TemporalDate(year: 208, month: 6, day: 15), precision: .day, uncertainty: .exact)
+        let june = TemporalQueryWindow.date(from: TemporalDate(year: 208, month: 6), to: TemporalDate(year: 208, month: 6), calendar: "gregorian")
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(day, within: june), .matches)
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(year(208), within: june), .possible, "只有年份不能冒充月份定位。")
+        let endingOnDay = TemporalQueryWindow.date(from: TemporalDate(year: 208, month: 6, day: 1), to: TemporalDate(year: 208, month: 6, day: 15), calendar: "gregorian")
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(day, within: endingOnDay), .matches)
+        let after = TemporalQueryWindow.date(from: TemporalDate(year: 208, month: 6, day: 16), to: TemporalDate(year: 208, month: 7), calendar: "gregorian")
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(day, within: after), .outside)
+        let interval = TemporalExtent(sourceText: "208年1月至12月", calendar: "gregorian", start: TemporalDate(year: 208, month: 1), end: TemporalDate(year: 208, month: 12), precision: .month, uncertainty: .exact, kind: .interval)
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(interval, within: june), .matches, "窗口在区间内部也须命中，不能只测端点。")
+        let fine = TemporalQueryWindow.date(from: TemporalDate(year: 208, month: 6, day: 10), to: TemporalDate(year: 208, month: 6, day: 20), calendar: "gregorian")
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(interval, within: fine), .possible)
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(day, within: .date(from: TemporalDate(year: 208), to: TemporalDate(year: 208), calendar: "reign-era")), .unknown)
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(TemporalExtent(), within: june), .unknown)
+    }
+
+    func testWindowOpenBoundsNarrativeUncertaintyAndInvalidQueriesStayDistinct() throws {
+        let after = TemporalQueryWindow.date(from: TemporalDate(year: 209), to: nil, calendar: "gregorian")
+        let before = TemporalQueryWindow.date(from: nil, to: TemporalDate(year: 208), calendar: "gregorian")
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(year(208), within: after), .outside)
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(year(208), within: before), .matches)
+        let since = TemporalExtent(sourceText: "208年起", calendar: "gregorian", start: TemporalDate(year: 208), precision: .year, uncertainty: .exact, kind: .interval)
+        let until = TemporalExtent(sourceText: "至208年", calendar: "gregorian", end: TemporalDate(year: 208), precision: .year, uncertainty: .exact, kind: .interval)
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(since, within: after), .matches)
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(until, within: after), .outside)
+        var approximate = since; approximate.uncertainty = .approximate
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(approximate, within: after), .possible)
+        let narrative = TemporalExtent(sourceText: "第三至五回", precision: .narrative, uncertainty: .approximate, kind: .uncertainRange, narrativeStart: 3, narrativeEnd: 5)
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(narrative, within: .narrative(from: 4, to: 6)), .possible)
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(narrative, within: .narrative(from: nil, to: 2)), .outside)
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(narrative, within: after), .unknown)
+        XCTAssertThrowsError(try TemporalKnowledgeRuntime.validate(window: .date(from: nil, to: nil, calendar: "gregorian")))
+        XCTAssertThrowsError(try TemporalKnowledgeRuntime.validate(window: .date(from: TemporalDate(year: 210), to: TemporalDate(year: 209), calendar: "gregorian")))
+        XCTAssertThrowsError(try TemporalKnowledgeRuntime.validate(window: .date(from: TemporalDate(year: 209, month: 2, day: 29), to: nil, calendar: "gregorian")))
+        XCTAssertThrowsError(try TemporalKnowledgeRuntime.validate(window: .date(from: TemporalDate(year: 208), to: nil, calendar: "")))
+        XCTAssertThrowsError(try TemporalKnowledgeRuntime.validate(window: .narrative(from: 5, to: 3)))
+        XCTAssertThrowsError(try TemporalKnowledgeRuntime.validate(window: .narrative(from: -1, to: nil)))
+    }
+
+    func testWindowSnapshotsKeepIndependentFootprintsAndSourceBoundaryWithoutChangingPointAPI() throws {
+        let book = try fixture(), original = try encoded(book)
+        let window = TemporalQueryWindow.date(from: TemporalDate(year: 208), to: TemporalDate(year: 209), calendar: "gregorian")
+        XCTAssertEqual(try TemporalKnowledgeRuntime.entitySnapshot(entityID: "cao", in: book, within: window, boundary: .all).footprints.map(\.id), ["p208", "p209"])
+        XCTAssertEqual(try TemporalKnowledgeRuntime.entitySnapshot(entityID: "cao", in: book, at: .date(TemporalDate(year: 209), calendar: "gregorian"), boundary: .all).footprints.map(\.id), ["p209"])
+        let participant = try TemporalKnowledgeRuntime.entitySnapshot(entityID: "liu", in: book, within: window, boundary: .all)
+        XCTAssertEqual(participant.participations.map(\.id), ["part"])
+        XCTAssertTrue(participant.footprints.isEmpty, "事件参与者不能与事件地点相乘造出人物位置。")
+        let early = try KnowledgeReadBoundary.throughSourceUnit("u1", in: book)
+        XCTAssertEqual(try TemporalKnowledgeRuntime.entitySnapshot(entityID: "cao", in: book, within: window, boundary: early).footprints.map(\.id), ["p208"])
+        XCTAssertTrue(try TemporalKnowledgeRuntime.relations(in: book, within: .narrative(from: 2, to: 4), boundary: early).isEmpty)
+        XCTAssertEqual(try TemporalKnowledgeRuntime.relations(objectID: "cao", in: book, within: .narrative(from: 2, to: 4), boundary: .all).first?.match, .matches)
+        XCTAssertTrue(try TemporalKnowledgeRuntime.relations(in: book, within: .narrative(from: 4, to: 5), boundary: .all).isEmpty)
+        XCTAssertEqual(try encoded(book), original, "时间窗口是只读查询，不迁移或回填原档。")
+    }
+
+    func testWindowDoesNotExtendNarrowParticipationOrDrawUncertainPresenceAsKnown() throws {
+        var book = try fixture()
+        book.temporalKnowledge?.eventMetadata[0].extent = TemporalExtent(sourceText: "208年", calendar: "gregorian", start: TemporalDate(year: 208), end: TemporalDate(year: 210), precision: .year, uncertainty: .exact, kind: .interval)
+        let later = TemporalQueryWindow.date(from: TemporalDate(year: 209), to: TemporalDate(year: 210), calendar: "gregorian")
+        XCTAssertFalse(try TemporalKnowledgeRuntime.events(in: book, within: later, boundary: .all).isEmpty)
+        XCTAssertTrue(try TemporalKnowledgeRuntime.events(in: book, entityID: "liu", within: later, boundary: .all).isEmpty, "宽事件不能把208年的参与扩展到209–210年。")
+        book.temporalKnowledge?.presences[0].assertion = .inferred
+        book.temporalKnowledge?.presences[0].explanation = "仅推测在场。"
+        book.temporalKnowledge?.presences[1].extent.uncertainty = .approximate
+        let window = TemporalQueryWindow.date(from: TemporalDate(year: 208), to: TemporalDate(year: 209), calendar: "gregorian")
+        let uncertain = try TemporalKnowledgeRuntime.entitySnapshot(entityID: "cao", in: book, within: window, boundary: .all)
+        XCTAssertTrue(uncertain.footprints.isEmpty)
+        XCTAssertEqual(uncertain.uncertainPresences.map(\.id), ["p208", "p209"])
+        XCTAssertEqual(TemporalKnowledgeRuntime.match(book.temporalKnowledge!.presences[0], within: window), .possible)
+    }
+
+    func testWideWindowRequiresEventAndParticipantToShareOneComparableTime() throws {
+        var book = try fixture()
+        let window = TemporalQueryWindow.date(from: TemporalDate(year: 208), to: TemporalDate(year: 209), calendar: "gregorian")
+        // Both individually intersect the window, but there is no simultaneous
+        // point. Retain the contradictory source records without joining them.
+        book.temporalKnowledge?.participations[0].extent = year(209)
+        book.temporalKnowledge?.participations[0].sourceAnchorIDs = [book.temporalKnowledge!.anchors[1].id]
+        try TemporalKnowledgeRuntime.validateStoredState(in: book)
+        XCTAssertFalse(try TemporalKnowledgeRuntime.events(in: book, within: window, boundary: .all).isEmpty)
+        XCTAssertTrue(try TemporalKnowledgeRuntime.events(in: book, entityID: "liu", within: window, boundary: .all).isEmpty)
+        book.temporalKnowledge?.presences[0].extent = year(209)
+        book.temporalKnowledge?.presences[0].sourceAnchorIDs = [book.temporalKnowledge!.anchors[1].id]
+        XCTAssertFalse(try TemporalKnowledgeRuntime.events(in: book, entityID: "cao", within: window, boundary: .all).contains { $0.object.id == "phase" })
+
+        book.temporalKnowledge?.participations[0].extent?.calendar = "reign-era"
+        let incomparable = try TemporalKnowledgeRuntime.events(in: book, entityID: "liu", within: window, boundary: .all)
+        XCTAssertEqual(incomparable.first?.participantMatch, .unknown)
+        XCTAssertEqual(incomparable.first?.match, .unknown, "不同历法不能宣称同一时段明确参与。")
+
+        let narrative = TemporalQueryWindow.narrative(from: 2, to: 4)
+        book.temporalKnowledge?.eventMetadata[0].extent = TemporalExtent(sourceText: "第三回", precision: .narrative, uncertainty: .exact, narrativeStart: 3)
+        book.temporalKnowledge?.participations[0].extent = TemporalExtent(sourceText: "第二回", precision: .narrative, uncertainty: .exact, narrativeStart: 2)
+        XCTAssertTrue(try TemporalKnowledgeRuntime.events(in: book, entityID: "liu", within: narrative, boundary: .all).isEmpty)
+    }
+
+    func testWindowQueryCancellationDoesNotCancelCanonicalValidation() async throws {
+        let book = try fixture()
+        let task = Task.detached { () -> (Bool, Bool) in
+            withUnsafeCurrentTask { $0?.cancel() }
+            let cancelled: Bool
+            do { _ = try TemporalKnowledgeRuntime.events(in: book, within: .narrative(from: 1, to: 5), boundary: .all); cancelled = false }
+            catch is CancellationError { cancelled = true }
+            catch { cancelled = false }
+            return (cancelled, (try? TemporalKnowledgeRuntime.validateStoredState(in: book)) != nil)
+        }
+        let result = await task.value
+        XCTAssertTrue(result.0); XCTAssertTrue(result.1)
+    }
+
     func testSpoilerWhitelistHidesFutureSourcesAndMixedSourceSummaries() throws {
         var book = try fixture()
         let boundary = try KnowledgeReadBoundary.throughSourceUnit("u1", in: book)

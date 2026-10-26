@@ -15,6 +15,8 @@
   let decorationsDeferred = false;
   let sourcePress = null;
   let decorationBatchEpoch = 0;
+  let sourceDOMIndexes = null;
+  const mathClosingFailures = new WeakMap();
 
   function escapedAt(source, position) {
     let backslashes = 0;
@@ -31,12 +33,23 @@
     if (rest[0] === '$' && rest[1] && !/\s/.test(rest[1])) return { left: '$', right: '$', display: false };
     return null;
   }
-  function closing(source, start, delimiter, limit) {
+  function closing(source, start, delimiter, limit, state) {
+    // Repeated unclosed math openers must not each search the same suffix.
+    // $$ can overlap itself; keep its original search without a suffix memo.
+    const memoizable = delimiter.right !== '$$';
+    let failures, failure;
+    if (memoizable) {
+      failures = mathClosingFailures.get(state);
+      if (!failures) { failures = new Map(); mathClosingFailures.set(state, failures); }
+      failure = failures.get(delimiter.right);
+      if (failure && start >= failure.start && limit <= failure.limit) return -1;
+    }
     let position = start;
     while ((position = source.indexOf(delimiter.right, position)) !== -1 && position < limit) {
       if (!escapedAt(source, position) && !(delimiter.right === '$' && (/\s/.test(source[position - 1] || '') || /\d/.test(source[position + 1] || '')))) return position;
       position += delimiter.right.length;
     }
+    if (memoizable) failures.set(delimiter.right, { start, limit });
     return -1;
   }
   function mathHTML(source, display, original) {
@@ -57,7 +70,7 @@
     const start = state.pos;
     const delimiter = opening(state.src, start);
     if (!delimiter) return false;
-    const end = closing(state.src, start + delimiter.left.length, delimiter, state.posMax);
+    const end = closing(state.src, start + delimiter.left.length, delimiter, state.posMax, state);
     if (end < 0) return false;
     if (!silent) {
       const token = state.push('readingbook_math', '', 0);
@@ -76,10 +89,16 @@
     if (state.sCount[startLine] - state.blkIndent >= 4) return false;
     const delimiter = opening(state.src, start);
     if (!delimiter || !delimiter.display) return false;
-    const end = closing(state.src, start + delimiter.left.length, delimiter, state.eMarks[endLine - 1]);
+    const end = closing(state.src, start + delimiter.left.length, delimiter, state.eMarks[endLine - 1], state);
     if (end < 0) return false;
     let finalLine = startLine;
-    while (finalLine + 1 < endLine && state.bMarks[finalLine + 1] <= end) finalLine++;
+    while (finalLine + 1 < endLine && state.bMarks[finalLine + 1] <= end) {
+      finalLine++;
+      // A list/quote parser may pass the rest of the document as endLine.
+      // Like a fenced code block, math cannot consume a nonempty line that
+      // has already left its containing item/quote (including lazy lines).
+      if (state.sCount[finalLine] < state.blkIndent && state.bMarks[finalLine] < state.eMarks[finalLine]) return false;
+    }
     if (state.src.slice(end + delimiter.right.length, state.eMarks[finalLine]).trim()) return false;
     if (silent) return true;
     const token = state.push('readingbook_math', '', 0);
@@ -255,8 +274,18 @@
   function addSourceDecorations(root, additions) {
     const incoming = additions || sourceDecorations;
     if (!incoming.length) return;
-    const findHost = sourceIntervalIndex(root.querySelectorAll('[data-source-start]'), 'sourceStart', 'sourceEnd', false);
-    const findBlock = sourceIntervalIndex(root.querySelectorAll('[data-source-block-start]'), 'sourceBlockStart', 'sourceBlockEnd', true);
+    // Decoration spans only wrap text inside the original source hosts. They
+    // never add, replace or remove those hosts/blocks, so every progressive
+    // batch can share the same immutable indexes for this rendered document.
+    if (sourceDOMIndexes?.root !== root) {
+      sourceDOMIndexes = {
+        root,
+        findHost: sourceIntervalIndex(root.querySelectorAll('[data-source-start]'), 'sourceStart', 'sourceEnd', false),
+        findBlock: sourceIntervalIndex(root.querySelectorAll('[data-source-block-start]'), 'sourceBlockStart', 'sourceBlockEnd', true),
+        hostStates: new WeakMap()
+      };
+    }
+    const { findHost, findBlock } = sourceDOMIndexes;
     const quoteRanges = new Map();
     let approximateCount = 0;
     for (const item of incoming) {
@@ -265,9 +294,28 @@
       const host = findHost(range[0], range[1]);
       // One literal source span is sufficient. Never cross a math/link/code node.
       if (host) {
+        let state = sourceDOMIndexes.hostStates.get(host);
+        if (!state) {
+          state = { min: Infinity, max: -Infinity, cursor: null };
+          for (const marker of host.querySelectorAll('.source-mention')) {
+            state.min = Math.min(state.min, Number(marker.dataset.decorationStart));
+            state.max = Math.max(state.max, Number(marker.dataset.decorationEnd));
+          }
+          sourceDOMIndexes.hostStates.set(host, state);
+        }
         const from = range[0] - Number(host.dataset.sourceStart), to = range[1] - Number(host.dataset.sourceStart);
         const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
         let textNode, passed = 0, begin = null, finish = null;
+        // Monotone, disjoint marks are the common dense-page case. Resume at
+        // the last inserted wrapper instead of revisiting the whole prefix.
+        // Start at its original offset: nextNode visits its text once, then
+        // advances to the remaining source. Arbitrary/nested order uses the
+        // unchanged full walker. No selection or source node is pre-split.
+        const cursor = state.cursor;
+        if (cursor && range[0] >= cursor.to && cursor.node.isConnected && host.contains(cursor.node)) {
+          walker.currentNode = cursor.node;
+          passed = cursor.from - Number(host.dataset.sourceStart);
+        }
         while ((textNode = walker.nextNode())) {
           const next = passed + textNode.length;
           if (!begin && from >= passed && from < next) begin = [textNode, from - passed];
@@ -279,7 +327,8 @@
           // Containment can be represented without changing source bytes or
           // cloning an existing mark: a sentence may contain clickable terms.
           // Crossing intervals have no honest nested DOM representation.
-          const crosses = Array.from(host.querySelectorAll('.source-mention')).some(marker => {
+          const disjointExtent = range[0] >= state.max || range[1] <= state.min;
+          const crosses = !disjointExtent && Array.from(host.querySelectorAll('.source-mention')).some(marker => {
             const start = Number(marker.dataset.decorationStart), end = Number(marker.dataset.decorationEnd);
             return (range[0] < start && start < range[1] && range[1] < end) ||
               (start < range[0] && range[0] < end && end < range[1]);
@@ -303,6 +352,8 @@
             marker.tabIndex = 0; marker.setAttribute('role', 'button'); marker.setAttribute('aria-label', '查看“' + item.quote + '”的关联内容');
             marker.title = '查看关联内容';
             marker.appendChild(domRange.extractContents()); domRange.insertNode(marker);
+            state.min = Math.min(state.min, range[0]); state.max = Math.max(state.max, range[1]);
+            state.cursor = { node: marker, from: range[0], to: range[1] };
             unmappedPassiveDecorations.delete(item.id);
             if (sourceFocusRequest?.id === item.id) focusSourceNode(marker, sourceFocusRequest);
             continue;
@@ -361,6 +412,10 @@
     // Do not detach a reader's live text selection or an in-progress click.
     if (sourcePress || global.getSelection?.()?.isCollapsed === false) { decorationsDeferred = true; return false; }
     decorationsDeferred = false;
+    // Removal/changed nesting may detach the old cursor or alter its extent.
+    // Rebuild these small traversal hints lazily once per update, while all
+    // progressive batches still share the immutable base source indexes.
+    if (sourceDOMIndexes?.root === root) sourceDOMIndexes.hostStates = new WeakMap();
     const next = new Map(sourceDecorations.filter(item => item && typeof item.id === 'string').map(item => [item.id, decorationIdentity(item)]));
     const changedRanges = [];
     root.querySelectorAll('[data-source-decoration]').forEach(node => {
@@ -472,6 +527,9 @@
     document.documentElement.dataset.readingStyle = settings.readingStyle === 'companion' ? 'companion' : 'body';
     updatePresentation(settings);
     const root = document.getElementById('content');
+    // render() may be called again with the same external revision. Its new
+    // DOM must never reuse indexes pointing into the detached previous body.
+    sourceDOMIndexes = null;
     root.innerHTML = renderHTML(markdown, settings);
     appliedDecorations = new Map(); unmappedPassiveDecorations = new Map(); sourceFocusRequest = null; decorationsDeferred = false; sourcePress = null;
     applyDecorations();

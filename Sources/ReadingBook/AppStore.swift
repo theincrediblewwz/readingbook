@@ -416,17 +416,13 @@ import ReadingCore
                 }
             }
             do {
-                let worker = Task.detached(priority: .userInitiated) { () throws -> (ReadingQuerySnapshot, ReadingChatContext, [ChatMessage]) in
-                    try Task.checkCancellation()
-                    let snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: current, context: context,
-                        documentIDs: documentIDs, appendedDocumentIDs: attachedDocumentIDs, authorizedNodeIDs: authorizedNodeIDs)
-                        .withContextIdentity(preferences.contextIdentity)
-                    let chatContext = try ReadingChatContext(snapshot: snapshot, avoidsSpoilers: preferences.avoidsSpoilers)
-                    let history = ReadingChatHistory.automaticHistory(in: current, preferences: preferences, snapshot: snapshot)
-                    try Task.checkCancellation()
-                    return (snapshot, chatContext, history)
+                let worker = Task.detached(priority: .userInitiated) {
+                    try ReadingPreparedAnswer.freeze(project: current, scope: scope, context: context,
+                        documentIDs: documentIDs, appendedDocumentIDs: attachedDocumentIDs,
+                        authorizedNodeIDs: authorizedNodeIDs, preferences: preferences)
                 }
-                let (snapshot, chatContext, history) = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                let prepared = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                let snapshot = prepared.snapshot, chatContext = prepared.chatContext, history = prepared.history
                 try Task.checkCancellation()
                 guard bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
                 let memory = memoryEnabled ? await loadPreparedQueryMemory(snapshot: snapshot, history: history, root: requestRoot) : nil
@@ -447,14 +443,11 @@ import ReadingCore
                 }
                 let proposalTools = writeGrant.map { readingProposalAccess(grant: $0, snapshot: snapshot) }
                 await queryReader.resetBudget()
-                var answer = try await queryReader.answerDetailed(question: question, project: current, settings: requestSettings, apiKey: requestKey,
-                    readingContext: context, queryScope: scope, history: history, memory: memory, memoryEnabled: memoryEnabled,
-                    documentIDs: documentIDs, documentLoader: { document in
+                var answer = try await queryReader.answerDetailed(question: question, prepared: prepared, settings: requestSettings, apiKey: requestKey,
+                    memory: memory, memoryEnabled: memoryEnabled, documentLoader: { document in
                         try Task.checkCancellation()
                         return try await repository.readDocument(bookID: current.id, document: document)
-                    }, appendedDocumentIDs: attachedDocumentIDs, authorizedNodeIDs: authorizedNodeIDs,
-                    hostOperationContext: hostOperationContext, workspace: workspaceSnapshot, hostTools: viewTools, proposalAccess: proposalTools,
-                    preferences: preferences)
+                    }, hostOperationContext: hostOperationContext, workspace: workspaceSnapshot, hostTools: viewTools, proposalAccess: proposalTools)
                 try Task.checkCancellation()
                 answer.message.conversationMode = preferences.interaction; answer.message.answerStyle = preferences.style
                 answer.message.readingContext = chatContext

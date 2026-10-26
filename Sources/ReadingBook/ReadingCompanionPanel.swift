@@ -68,6 +68,8 @@ private struct CompanionProjection: Sendable {
             let anchorsByID = Dictionary(grouping: items.anchors, by: \.id)
             var boundaries: [String: ReadingPassageBoundaryIndex] = [:]
             var validity: [String: Bool] = [:]
+            var resolvers: [String: (SourceAnchor) throws -> ResolvedSourceAnchor] = [:]
+            var unavailableUnits = Set<String>()
             func validSentenceAnchor(_ id: String) -> Bool {
                 if let saved = validity[id] { return saved }
                 guard !Task.isCancelled, let anchors = anchorsByID[id], anchors.count == 1, let anchor = anchors.first,
@@ -75,14 +77,21 @@ private struct CompanionProjection: Sendable {
                       let matches = unitsByID[anchor.unitID], matches.count == 1, let unit = matches.first else {
                     validity[id] = false; return false
                 }
-                var compact = book; compact.units = [unit]
-                guard let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: compact) else {
+                guard !unavailableUnits.contains(unit.id) else { validity[id] = false; return false }
+                if resolvers[unit.id] == nil {
+                    guard let resolver = try? ReadingExperienceRuntime.anchorResolver(sourceHash: book.sourceHash, unitID: unit.id, in: book) else {
+                        unavailableUnits.insert(unit.id); validity[id] = false; return false
+                    }
+                    resolvers[unit.id] = resolver
+                }
+                guard let resolver = resolvers[unit.id], let resolved = try? resolver(anchor) else {
                     validity[id] = false; return false
                 }
                 let boundary: ReadingPassageBoundaryIndex
                 if let saved = boundaries[unit.id] { boundary = saved }
                 else {
-                    boundary = ReadingSentenceAnchors.boundaryIndex(in: unit.text, chapterTitle: unit.chapter)
+                    boundary = ReadingSentenceAnchors.boundaryIndex(in: unit.text, chapterTitle: unit.chapter,
+                        syntax: ReadingSentenceAnchors.syntax(for: unit, in: book))
                     boundaries[unit.id] = boundary
                 }
                 let valid = !boundary.crossesStructuralBoundary(resolved.range)
@@ -544,21 +553,24 @@ struct ReadingCompanionPanel: View {
         let relations = (store.book?.relations ?? []).filter {
             ($0.fromID == id || $0.toID == id) && (!avoidsSpoilers || (!$0.evidence.isEmpty && $0.evidence.allSatisfy { allowed.contains($0.unitID) }))
         }
+        let book = store.book
+        let boundary = avoidsSpoilers && !relations.isEmpty ? store.temporalBoundary.allowedUnitIDs : nil
+        let projection = relations.isEmpty ? nil : book.map { ReadingSpoilerProjection.Context(project: $0, allowedUnitIDs: boundary) }
+        let entities = relations.isEmpty ? [:] : Dictionary((book?.entities ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let events = relations.isEmpty ? [:] : Dictionary((book?.events ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func visibleTitle(_ other: String) -> String? {
+            if let entity = entities[other] { return projection?.entity(entity)?.name }
+            if let event = events[other] { return projection?.event(event)?.name }
+            return nil
+        }
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(relations.prefix(16)) { relation in
                 let other = relation.fromID == id ? relation.toID : relation.fromID
-                if let title = visibleObjectTitle(other) {
+                if let title = visibleTitle(other) {
                     Button { store.showReadingObject(other) } label: { Label("\(relation.label) · \(title)", systemImage: "point.3.connected.trianglepath.dotted").font(.system(size: 13)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain)
                 }
             }
         }
-    }
-    private func visibleObjectTitle(_ id: String) -> String? {
-        guard let book = store.book else { return nil }
-        let allowed = avoidsSpoilers ? store.temporalBoundary.allowedUnitIDs : nil
-        if let entity = book.entities.first(where: { $0.id == id }) { return ReadingSpoilerProjection.entity(entity, in: book, allowedUnitIDs: allowed)?.name }
-        if let event = book.events.first(where: { $0.id == id }) { return ReadingSpoilerProjection.event(event, in: book, allowedUnitIDs: allowed)?.name }
-        return nil
     }
 }
 

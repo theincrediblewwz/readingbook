@@ -11,8 +11,14 @@ struct CompositionWorkspaceView: View {
     var definition: ViewDefinition?
     var embedded = false
     var contextOverride: ReadingContext? = nil
+    var currentScope: CompositionCurrentScope = .automatic
     @State private var projections: [String: CompositionProjection] = [:]
     @State private var baseline: [String: CompositionProjection] = [:]
+    @State private var baselineSelection: [String: Set<String>]?
+    @State private var baselineOwner: RefreshOwner?
+    @State private var preparedInput: CompositionRuntime.PreparedCompositionInput?
+    @State private var preparedOwner: RefreshOwner?
+    @State private var displayedOwner: RefreshOwner?
     @State private var selections: [String: Set<String>] = [:]
     @State private var clocks: [String: CompositionClock] = [:]
     @State private var collapsed = Set<String>()
@@ -20,9 +26,33 @@ struct CompositionWorkspaceView: View {
     @State private var issue: String?
     @State private var validatedComposition: CompositionDefinition?
     @State private var validatedBookID: String?
+    @State private var refreshTask: Task<Void, Never>?
+    @State private var refreshGeneration: UInt64 = 0
+    @State private var isActive = false
+
+    private struct RefreshOwner: Equatable, Sendable {
+        let libraryRoot: String
+        let bookID: String
+        let sourceHash: String
+        let publicationStamp: LibraryPublicationStamp?
+        let revision: Int
+        let definition: CompositionDefinition
+        let context: ReadingContext
+        let boundary: KnowledgeReadBoundary
+        let currentScope: CompositionCurrentScope
+        let boundaryUnitID: String?
+        let avoidsSpoilers: Bool
+    }
+    private struct ProjectionResult: Sendable {
+        let prepared: CompositionRuntime.PreparedCompositionInput
+        let baseline: [String: CompositionProjection]
+        let projections: [String: CompositionProjection]
+    }
 
     private var composition: CompositionDefinition? { definition?.composition }
     private var points: [String: TemporalQueryPoint] { clocks.compactMapValues(\.point) }
+    private var windows: [String: TemporalQueryWindow] { clocks.compactMapValues(\.window) }
+    private var mapModes: [String: CompositionMapTimeMode] { clocks.mapValues(\.mapMode) }
     private var readingContext: ReadingContext { contextOverride ?? store.currentReadingContext }
 
     var body: some View {
@@ -30,7 +60,8 @@ struct CompositionWorkspaceView: View {
             Group {
                 if let issue { fallback(issue) }
                 else if store.book == nil { fallback("请先从书库打开一本书，再查看这个组合。") }
-                else if let composition, validatedComposition == composition, validatedBookID == store.bookID {
+                else if let composition, validatedComposition == composition, validatedBookID == store.bookID,
+                        let displayedOwner, matches(displayedOwner, store: store) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 18) {
                             if !embedded { workspaceHeader }
@@ -41,14 +72,20 @@ struct CompositionWorkspaceView: View {
                 else { fallback("这个组件尚未提供可显示的布局。原书、笔记和已保存配置都保留。") }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }.background(embedded ? Color.clear : Palette.canvas).readingTextContext(.knowledge)
-            .task { refresh() }
+            .task { isActive = true; refresh() }
+            .onDisappear { isActive = false; cancelRefresh(); clearPrepared() }
             .onChange(of: store.projectRevision) { _, _ in refresh() }
+            .onChange(of: store.book?.publicationStamp) { _, _ in refresh() }
+            .onChange(of: store.book?.sourceHash) { _, _ in refresh() }
+            .onChange(of: store.selectedUnitID) { _, _ in refresh() }
+            .onChange(of: store.book?.temporalKnowledge?.profile?.avoidsSpoilers) { _, _ in refresh() }
             .onChange(of: store.currentReadingContext) { _, _ in refresh() }
             .onChange(of: contextOverride) { _, _ in reset() }
+            .onChange(of: currentScope) { _, _ in reset() }
             .onChange(of: store.bookID) { _, _ in reset() }
             .onChange(of: definition) { _, _ in reset() }
-            .onChange(of: selections) { _, _ in refresh() }
-            .onChange(of: clocks) { _, _ in refresh(includeBaseline: false) }
+            .onChange(of: selections) { _, _ in refresh(retainingContent: true) }
+            .onChange(of: clocks) { _, _ in refresh(includeBaseline: false, retainingContent: true) }
     }
 
     private var workspaceHeader: some View {
@@ -76,29 +113,88 @@ struct CompositionWorkspaceView: View {
     }
 
     private func reset() {
-        selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; refresh()
+        clearPrepared(); selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; refresh()
     }
-    private func refresh(includeBaseline: Bool = true) {
+    private func clearPrepared() { preparedInput = nil; preparedOwner = nil }
+    private func cancelRefresh() {
+        refreshTask?.cancel(); refreshTask = nil; refreshGeneration &+= 1
+    }
+    private func matches(_ owner: RefreshOwner, store: AppStore) -> Bool {
+        guard let book = store.book, store.libraryRootURL.path == owner.libraryRoot,
+              book.id == owner.bookID, book.sourceHash == owner.sourceHash,
+              store.projectRevision == owner.revision, composition == owner.definition,
+              (contextOverride ?? store.currentReadingContext) == owner.context,
+              store.selectedUnitID == owner.boundaryUnitID,
+              (book.temporalKnowledge?.profile?.avoidsSpoilers ?? true) == owner.avoidsSpoilers,
+              currentScope == owner.currentScope else { return false }
+        // temporalBoundary is a function of this publication, selected unit and
+        // spoiler policy. Compare those inputs without rebuilding its full-book
+        // unit whitelist for every body evaluation or cursor frame. The exact
+        // frozen boundary remains part of owner/prepared input.
+        // A non-nil stamp identifies the captured publication. Nil never proves
+        // snapshot equality: the caller also requires the active generation and
+        // revision/context/boundary event gates above before publishing.
+        if let stamp = owner.publicationStamp { return book.publicationStamp == stamp }
+        return book.publicationStamp == nil
+    }
+    private func refresh(includeBaseline: Bool = true, retainingContent: Bool = false) {
+        cancelRefresh()
+        guard isActive else { return }
         guard let book = store.book, let composition else {
-            projections = [:]; baseline = [:]; validatedComposition = nil; validatedBookID = nil; issue = nil; return
+            clearPrepared(); displayedOwner = nil
+            projections = [:]; baseline = [:]; baselineSelection = nil; baselineOwner = nil; validatedComposition = nil; validatedBookID = nil; issue = nil; return
         }
         if embedded, selections.isEmpty, let id = readingContext.objectID {
             for source in composition.sources { selections[source.selectionGroup] = [id] }
         }
-        do {
-            try CompositionRuntime.validate(composition, in: book)
-            if includeBaseline {
-                baseline = try CompositionRuntime.project(composition, in: book, context: readingContext,
-                    selections: selections, boundary: store.temporalBoundary)
+        let owner: RefreshOwner
+        let retainedPrepared: CompositionRuntime.PreparedCompositionInput?
+        if let prior = preparedOwner, matches(prior, store: store) { owner = prior; retainedPrepared = preparedInput }
+        else {
+            clearPrepared()
+            retainedPrepared = nil
+            owner = RefreshOwner(libraryRoot: store.libraryRootURL.path, bookID: book.id, sourceHash: book.sourceHash,
+                publicationStamp: book.publicationStamp, revision: store.projectRevision, definition: composition,
+                context: readingContext, boundary: store.temporalBoundary, currentScope: currentScope,
+                boundaryUnitID: store.selectedUnitID, avoidsSpoilers: book.temporalKnowledge?.profile?.avoidsSpoilers ?? true)
+        }
+        let generation = refreshGeneration, selection = selections, times = points, ranges = windows, modes = mapModes
+        let baselineMatches = baselineOwner.map { matches($0, store: store) } ?? false
+        let retainedBaseline = !includeBaseline && baselineSelection == selection && baselineMatches ? baseline : nil
+        if !retainingContent {
+            displayedOwner = nil
+            projections = [:]; baseline = [:]; baselineSelection = nil; baselineOwner = nil; validatedComposition = nil; validatedBookID = nil
+        }
+        issue = nil
+        refreshTask = Task { [weak store] in
+            let worker = Task.detached(priority: .userInitiated) {
+                let prepared = try retainedPrepared ?? CompositionRuntime.prepare(composition, in: book, context: owner.context,
+                    currentScope: owner.currentScope, boundary: owner.boundary)
+                let baseline = try retainedBaseline ?? CompositionRuntime.project(prepared, selections: selection)
+                try Task.checkCancellation()
+                let projections: [String: CompositionProjection]
+                if times.isEmpty && ranges.isEmpty { projections = baseline }
+                else { projections = try CompositionRuntime.project(prepared, selections: selection, times: times, windows: ranges, mapModes: modes) }
+                try Task.checkCancellation()
+                return ProjectionResult(prepared: prepared, baseline: baseline, projections: projections)
             }
-            if points.isEmpty { projections = baseline }
-            else {
-                projections = try CompositionRuntime.project(composition, in: book, context: readingContext,
-                    selections: selections, times: points, boundary: store.temporalBoundary)
+            do {
+                let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                guard !Task.isCancelled, isActive, refreshGeneration == generation, selections == selection, points == times, windows == ranges, mapModes == modes,
+                      let store, matches(owner, store: store) else { return }
+                preparedInput = result.prepared; preparedOwner = owner; displayedOwner = owner
+                baseline = result.baseline; baselineSelection = selection; baselineOwner = owner; projections = result.projections
+                validatedComposition = composition; validatedBookID = book.id; issue = nil; refreshTask = nil
+            } catch is CancellationError {
+                if refreshGeneration == generation { refreshTask = nil }
+            } catch {
+                guard !Task.isCancelled, isActive, refreshGeneration == generation, selections == selection, points == times, windows == ranges, mapModes == modes,
+                      let store, matches(owner, store: store) else { return }
+                displayedOwner = nil
+                projections = [:]; baseline = [:]; baselineSelection = nil; baselineOwner = nil; validatedComposition = nil; validatedBookID = nil
+                issue = error.localizedDescription; refreshTask = nil
             }
-            validatedComposition = composition; validatedBookID = book.id
-            issue = nil
-        } catch { projections = [:]; baseline = [:]; validatedComposition = nil; validatedBookID = nil; issue = error.localizedDescription }
+        }
     }
     private func select(_ id: String, group: String) {
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) {
@@ -251,7 +347,23 @@ struct CompositionWorkspaceView: View {
         case .markdown:
             CompositionMarkdown(items: projection.items, selected: selected)
         case .map:
-            CompositionMap(points: projection.mapPoints, selected: selected, height: embedded ? 220 : 420) { select($0, group: part.selectionGroup) }
+            VStack(alignment: .leading, spacing: 8) {
+                if clocks[part.timeGroup]?.window != nil {
+                    Picker("人物位置", selection: Binding(get: { clocks[part.timeGroup]?.mapMode ?? .instant }, set: { mode in
+                        var clock = clocks[part.timeGroup] ?? CompositionClock(); clock.mapMode = mode; clocks[part.timeGroup] = clock
+                    })) {
+                        Text("此刻位置").tag(CompositionMapTimeMode.instant)
+                        Text("这段时间的已知足迹").tag(CompositionMapTimeMode.windowFootprints)
+                    }.pickerStyle(.menu).padding(.horizontal, 16).frame(minHeight: 48)
+                }
+                CompositionMap(points: projection.mapPoints, selected: selected, height: embedded ? 220 : 420) { select($0, group: part.selectionGroup) }
+                Text(clocks[part.timeGroup]?.mapMode == .windowFootprints && clocks[part.timeGroup]?.window != nil
+                     ? "人物仅显示所选区间内时间明确、有独立原文出处的足迹；时间待考的记录不作确定位置。"
+                     : clocks[part.timeGroup]?.point != nil
+                         ? "人物仅显示光标时刻有独立出处的位置；固定地点的坐标不代表人物曾经到访。"
+                         : "全时段显示有独立出处的人物出现记录；固定地点的坐标不代表人物曾经到访。")
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.bottom, 12)
+            }
         case .timeline:
             CompositionTimeline(items: baseline.items, selected: selected,
                 clock: Binding(get: { clocks[part.timeGroup] ?? CompositionClock() }, set: { clocks[part.timeGroup] = $0 }),
@@ -473,10 +585,21 @@ private struct CompositionClock: Equatable {
     var lower: Double?
     var upper: Double?
     var cursor: Double?
+    var mapMode: CompositionMapTimeMode = .instant
     var point: TemporalQueryPoint? {
         guard let axis, let cursor, cursor.isFinite else { return nil }
         if axis == "narrative", (0...1_000_000_000).contains(cursor) { return .narrative(Int(cursor)) }
         if axis.hasPrefix("calendar:"), abs(cursor) <= 1_000_000_000_000 { return .date(TemporalDate(year: Int(cursor)), calendar: String(axis.dropFirst(9))) }
+        return nil
+    }
+    var window: TemporalQueryWindow? {
+        guard let axis, let lower, let upper, lower.isFinite, upper.isFinite, lower <= upper else { return nil }
+        if axis == "narrative", lower >= 0, upper <= 1_000_000_000 {
+            return .narrative(from: Int(lower), to: Int(upper))
+        }
+        if axis.hasPrefix("calendar:"), abs(lower) <= 1_000_000_000_000, abs(upper) <= 1_000_000_000_000 {
+            return .date(from: TemporalDate(year: Int(lower)), to: TemporalDate(year: Int(upper)), calendar: String(axis.dropFirst(9)))
+        }
         return nil
     }
 }
@@ -520,7 +643,7 @@ private struct CompositionTimeline: View {
         else {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Picker("时间轴", selection: Binding(get: { axis }, set: { clock = CompositionClock(axis: $0) })) {
+                    Picker("时间轴", selection: Binding(get: { axis }, set: { clock = CompositionClock(axis: $0, mapMode: clock.mapMode) })) {
                         ForEach(axes, id: \.self) { Text($0 == "narrative" ? "叙事顺序" : String($0.dropFirst(9))).tag($0) }
                     }.labelsHidden().pickerStyle(.menu).frame(minHeight: 48)
                     Spacer()
@@ -532,6 +655,7 @@ private struct CompositionTimeline: View {
                     upper: Binding(get: { upper }, set: { update(upper: $0) }), bounds: bounds,
                     events: events, selectedID: selected.sorted().first, select: select,
                     cursor: Binding(get: { cursor }, set: { update(cursor: $0) }), label: label)
+                Text("两端筛选事件与关系；光标控制人物的此时行动，地图可切换此刻位置或区间足迹。").font(.caption).foregroundStyle(.secondary)
                 if let item = items.first(where: { selected.contains($0.objectID ?? $0.id) }) {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(item.title).font(.system(size: 17, weight: .medium))
@@ -547,7 +671,7 @@ private struct CompositionTimeline: View {
     private func update(lower nextLower: Double? = nil, upper nextUpper: Double? = nil, cursor nextCursor: Double? = nil) {
         let lo = min(upper, max(bounds.lowerBound, nextLower ?? lower))
         let hi = max(lo, min(bounds.upperBound, nextUpper ?? upper))
-        clock = CompositionClock(axis: axis, lower: lo, upper: hi, cursor: min(hi, max(lo, nextCursor ?? cursor)))
+        clock = CompositionClock(axis: axis, lower: lo, upper: hi, cursor: min(hi, max(lo, nextCursor ?? cursor)), mapMode: clock.mapMode)
     }
 }
 
@@ -590,7 +714,10 @@ private struct CompositionGraph: View {
     }
     private var lines: [GraphLine] {
         let ids = Set(items.map(\.id))
-        return projection.edges.filter { ids.contains($0.fromID) && ids.contains($0.toID) }.map { GraphLine(id: $0.id, from: $0.fromID, to: $0.toID, label: $0.label) }
+        return projection.edges.filter { ids.contains($0.fromID) && ids.contains($0.toID) }.map { edge in
+            let uncertainty = edge.temporalMatch == .possible ? " · 时间待考" : edge.temporalMatch == .unknown ? " · 时间未明" : ""
+            return GraphLine(id: edge.id, from: edge.fromID, to: edge.toID, label: edge.label + uncertainty)
+        }
     }
     var body: some View {
         if items.isEmpty { CompositionEmptyState(text: documents ? "当前范围没有已保存的文档节点。" : "当前选择和时间没有可显示的关系。", icon: "point.3.connected.trianglepath.dotted") }

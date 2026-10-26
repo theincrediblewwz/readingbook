@@ -8,6 +8,28 @@ final class ReadingAnswerPreferencesTests: XCTestCase {
             units: [SourceUnit(id: "u1", order: 0, chapter: "开篇", page: 1, text: "贾诩在此。"),
                     SourceUnit(id: "u2", order: 1, chapter: "后文", page: 2, text: "后来的变化。")])
     }
+    func testPreparedAnswerKeepsSourceHistoryAndModeInOneFrozenInput() throws {
+        var project = book()
+        let context = ReadingContext(unitID: "u1", page: 1)
+        let scope = try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: context)
+        let chatContext = try ReadingChatContext(snapshot: scope, avoidsSpoilers: true)
+        var question = ChatMessage(id: "old-user", role: "user", content: "他是谁？")
+        question.conversationMode = .reading; question.answerStyle = .mentor; question.readingContext = chatContext
+        var answer = question; answer.id = "old-answer"; answer.role = "assistant"; answer.content = "先看这一页。"
+        project.chats = [question, answer]
+        let prepared = try ReadingPreparedAnswer.freeze(project: project, scope: .page, context: context,
+            authorizedNodeIDs: ["not-shared-by-pure-reading"])
+        XCTAssertEqual(prepared.snapshot.unitIDs, ["u1"])
+        XCTAssertTrue(prepared.snapshot.authorizedNodeIDs.isEmpty)
+        XCTAssertEqual(prepared.history.map(\.id), ["old-user", "old-answer"])
+        project.units[0].text = "OCR 后的新正文。"; project.chats.removeAll()
+        XCTAssertTrue(prepared.snapshot.admits(Evidence(unitID: "u1", quote: "贾诩在此。")))
+        XCTAssertFalse(prepared.snapshot.admits(Evidence(unitID: "u1", quote: "OCR 后的新正文。")))
+        XCTAssertEqual(prepared.project.units[0].text, "贾诩在此。")
+        XCTAssertEqual(prepared.history.count, 2)
+        XCTAssertThrowsError(try ReadingPreparedAnswer.freeze(project: project, scope: .page, context: context,
+            authorizedNodeIDs: ["unknown-node"], preferences: .init(interaction: .functional)), "prepared 不能跳过功能模式的宿主节点权限校验。")
+    }
     func testPureReadingRejectsAccidentallyProvidedHostToolsAndContext() async throws {
         let project = book()
         let host = ReadingHostToolAccess(viewActions: ["panel_present"], performViewAction: { _, _ in

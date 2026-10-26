@@ -516,36 +516,167 @@ private final class MarkdownSelectionMenuAction: NSObject, NSMenuItemValidation 
 
 /// No file:// read grant is ever given to WebKit. Both bundled assets and explicitly
 /// authorized local images pass through these exact path/type/size checks instead.
-private final class MarkdownSchemeHandler: NSObject, WKURLSchemeHandler {
+private struct MarkdownResourceRequest: Sendable {
+    let url: URL
+    let resources: URL
+    let imageDirectory: URL?
+    let imageRevision: Int
+}
+private struct MarkdownResourceContent: Sendable {
+    let url: URL
+    let data: Data
+    let mime: String
+}
+private struct MarkdownResourceFailure: Error, Sendable {
+    let domain: String
+    let code: Int
+    let message: String
+    init(_ error: Error) {
+        let value = error as NSError
+        domain = value.domain; code = value.code; message = value.localizedDescription
+    }
+    var nativeError: NSError { NSError(domain: domain, code: code, userInfo: [NSLocalizedDescriptionKey: message]) }
+    static var cancelled: Self { Self(URLError(.cancelled)) }
+}
+
+/// The two slots include delivery on MainActor: a blocked UI cannot accumulate
+/// an unbounded queue of completed 16 MiB reads. Waiting jobs hold no file data.
+@MainActor private final class MarkdownResourceBroker {
+    static let shared = MarkdownResourceBroker()
+    private struct Job {
+        let id: UUID
+        let request: MarkdownResourceRequest
+        let isCurrent: () -> Bool
+        let completion: (Result<MarkdownResourceContent, MarkdownResourceFailure>) -> Void
+    }
+    private var waiting: [UUID: Job] = [:]
+    private var order: [UUID] = []
+    private var head = 0
+    private var running: [UUID: Task<Void, Never>] = [:]
+
+    func enqueue(id: UUID, request: MarkdownResourceRequest, isCurrent: @escaping () -> Bool,
+                 completion: @escaping (Result<MarkdownResourceContent, MarkdownResourceFailure>) -> Void) {
+        waiting[id] = Job(id: id, request: request, isCurrent: isCurrent, completion: completion)
+        order.append(id); startWaiting()
+    }
+    func cancel(_ id: UUID) {
+        waiting.removeValue(forKey: id)
+        // A canceled running read still owns its slot until it exits.
+        running[id]?.cancel()
+    }
+    private func startWaiting() {
+        while running.count < 2, head < order.count {
+            let id = order[head]; head += 1
+            guard let job = waiting.removeValue(forKey: id), job.isCurrent() else { continue }
+            running[id] = Task { [weak self] in
+                var result: Result<MarkdownResourceContent, MarkdownResourceFailure>? = await Self.read(job.request)
+                guard let self else { return }
+                if !Task.isCancelled, job.isCurrent(), let result { job.completion(result) }
+                result = nil
+                self.running.removeValue(forKey: id)
+                self.startWaiting()
+            }
+        }
+        if head == order.count { order.removeAll(keepingCapacity: true); head = 0 }
+        else if head >= 64, head >= order.count / 2 { order.removeFirst(head); head = 0 }
+    }
+    nonisolated private static func read(_ request: MarkdownResourceRequest) async -> Result<MarkdownResourceContent, MarkdownResourceFailure> {
+        let worker = Task.detached(priority: .utility) { MarkdownResourceLoader.load(request) }
+        return await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+    }
+}
+
+@MainActor private final class MarkdownSchemeHandler: NSObject, WKURLSchemeHandler {
     static let scheme = "readingbook-renderer"
     private let resources: URL
-    private let lock = NSLock()
     private var imageDirectory: URL?
     private var imageRevision = 0
+    private struct ActiveTask {
+        let token: UUID
+        let task: WKURLSchemeTask
+        let isImage: Bool
+        let imageDirectory: URL?
+        let imageRevision: Int
+    }
+    private var active: [ObjectIdentifier: ActiveTask] = [:]
 
     init(resources: URL) { self.resources = resources.standardizedFileURL.resolvingSymlinksInPath() }
 
     func authorize(_ directory: URL?, revision: Int) {
-        lock.lock(); defer { lock.unlock() }
-        imageDirectory = directory?.standardizedFileURL.resolvingSymlinksInPath()
+        let next = directory?.standardizedFileURL.resolvingSymlinksInPath()
+        guard imageDirectory != next || imageRevision != revision else { return }
+        imageDirectory = next
         imageRevision = revision
+        // A replaced document must not receive an old book's queued image.
+        for (id, value) in Array(active) where value.isImage {
+            fail(id, token: value.token, error: MarkdownResourceFailure.cancelled.nativeError)
+            MarkdownResourceBroker.shared.cancel(value.token)
+        }
     }
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
+        guard let url = task.request.url else {
+            task.didFailWithError(NSError(domain: "ReadingBook.Markdown", code: 1, userInfo: [NSLocalizedDescriptionKey: "无效资源地址"])); return
+        }
+        let id = ObjectIdentifier(task as AnyObject), token = UUID()
+        if let previous = active.removeValue(forKey: id) { MarkdownResourceBroker.shared.cancel(previous.token) }
+        active[id] = ActiveTask(token: token, task: task, isImage: url.host == "image", imageDirectory: imageDirectory, imageRevision: imageRevision)
+        let request = MarkdownResourceRequest(url: url, resources: resources, imageDirectory: imageDirectory, imageRevision: imageRevision)
+        MarkdownResourceBroker.shared.enqueue(id: token, request: request, isCurrent: { [weak self] in
+            self?.active[id]?.token == token
+        }, completion: { [weak self] result in self?.receive(result, id: id, token: token) })
+    }
+
+    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
+        if let previous = active.removeValue(forKey: ObjectIdentifier(task as AnyObject)) { MarkdownResourceBroker.shared.cancel(previous.token) }
+    }
+    private func receive(_ result: Result<MarkdownResourceContent, MarkdownResourceFailure>, id: ObjectIdentifier, token: UUID) {
+        guard let value = active[id], value.token == token else { return }
+        if value.isImage, value.imageDirectory != imageDirectory || value.imageRevision != imageRevision {
+            fail(id, token: token, error: MarkdownResourceFailure.cancelled.nativeError); return
+        }
+        switch result {
+        case .failure(let error): fail(id, token: token, error: error.nativeError)
+        case .success(let content):
+            guard let response = HTTPURLResponse(url: content.url, statusCode: 200, httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": content.mime, "Content-Length": String(content.data.count),
+                               "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"]) else {
+                fail(id, token: token, error: NSError(domain: "ReadingBook.Markdown", code: 1, userInfo: [NSLocalizedDescriptionKey: "资源响应无效"])); return
+            }
+            // WebKit may stop a task reentrantly while consuming a callback.
+            // Check ownership before every subsequent callback, including finish.
+            guard active[id]?.token == token else { return }; value.task.didReceive(response)
+            guard active[id]?.token == token else { return }; value.task.didReceive(content.data)
+            guard active[id]?.token == token else { return }; value.task.didFinish()
+            if active[id]?.token == token { active.removeValue(forKey: id) }
+        }
+    }
+    private func fail(_ id: ObjectIdentifier, token: UUID, error: Error) {
+        guard let value = active[id], value.token == token else { return }
+        active.removeValue(forKey: id)
+        value.task.didFailWithError(error)
+    }
+}
+
+/// All filesystem and image inspection work runs on the shared bounded worker.
+/// Only pure request/result values cross that boundary, never WKWebView/tasks.
+private enum MarkdownResourceLoader {
+    static func load(_ request: MarkdownResourceRequest) -> Result<MarkdownResourceContent, MarkdownResourceFailure> {
         do {
-            guard let url = task.request.url, url.scheme == Self.scheme, url.user == nil, url.password == nil, url.port == nil else { throw failure("无效资源地址") }
+            try Task.checkCancellation()
+            let url = request.url
+            guard url.scheme == "readingbook-renderer", url.user == nil, url.password == nil, url.port == nil else { throw failure("无效资源地址") }
             let data: Data, mime: String
             if url.host == "bundle" {
-                let path = try checkedPath(url, root: resources)
+                let path = try checkedPath(url, root: request.resources)
                 let ext = path.pathExtension.lowercased()
                 guard ["html", "css", "js", "woff2"].contains(ext), url.query == nil else { throw failure("非渲染资源") }
                 data = try read(path, maximum: 4 * 1_024 * 1_024)
                 mime = ["html": "text/html", "css": "text/css", "js": "application/javascript", "woff2": "font/woff2"][ext]!
             } else if url.host == "image" {
-                lock.lock(); let root = imageDirectory; let version = imageRevision; lock.unlock()
                 let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-                guard let root, root.isFileURL, query.count == 1,
-                      query[0].name == "v", query[0].value == String(version) else { throw failure("图片目录未授权") }
+                guard let root = request.imageDirectory, root.isFileURL, query.count == 1,
+                      query[0].name == "v", query[0].value == String(request.imageRevision) else { throw failure("图片目录未授权") }
                 let path = try checkedPath(url, root: root)
                 let ext = path.pathExtension.lowercased()
                 guard ["png", "jpg", "jpeg", "gif", "webp", "heic", "avif"].contains(ext) else { throw failure("仅允许本地栅格图片") }
@@ -558,17 +689,14 @@ private final class MarkdownSchemeHandler: NSObject, WKURLSchemeHandler {
                       width.doubleValue * height.doubleValue <= 40_000_000 else { throw failure("图片尺寸过大或格式无效") }
                 mime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
             } else { throw failure("未知资源域") }
-            guard let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
-                                                 headerFields: ["Content-Type": mime, "Content-Length": String(data.count),
-                                                                "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store",
-                                                                "Access-Control-Allow-Origin": "*"]) else { throw failure("资源响应无效") }
-            task.didReceive(response); task.didReceive(data); task.didFinish()
-        } catch { task.didFailWithError(error) }
+            try Task.checkCancellation()
+            return .success(MarkdownResourceContent(url: url, data: data, mime: mime))
+        } catch is CancellationError { return .failure(.cancelled) }
+        catch { return .failure(MarkdownResourceFailure(error)) }
     }
 
-    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) { }
-
-    private func checkedPath(_ request: URL, root: URL) throws -> URL {
+    private static func checkedPath(_ request: URL, root: URL) throws -> URL {
+        try Task.checkCancellation()
         let components = request.path.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
         guard !components.isEmpty, components.count <= 32, request.path.utf8.count <= 2_048,
               components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\") && !$0.contains(":") && !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }) else { throw failure("资源路径越界") }
@@ -576,6 +704,7 @@ private final class MarkdownSchemeHandler: NSObject, WKURLSchemeHandler {
         guard rootValues.isDirectory == true else { throw failure("资源根不是文件夹") }
         var path = root
         for component in components {
+            try Task.checkCancellation()
             path.appendPathComponent(String(component))
             let values = try path.resourceValues(forKeys: [.isSymbolicLinkKey])
             guard values.isSymbolicLink != true else { throw failure("不读取符号链接图片") }
@@ -584,13 +713,23 @@ private final class MarkdownSchemeHandler: NSObject, WKURLSchemeHandler {
         return path
     }
 
-    private func read(_ url: URL, maximum: Int) throws -> Data {
+    private static func read(_ url: URL, maximum: Int) throws -> Data {
+        try Task.checkCancellation()
         let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
-        guard values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize, size <= maximum else { throw failure("资源过大或不是普通文件") }
-        let data = try Data(contentsOf: url)
+        guard values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize, size >= 0, size <= maximum else { throw failure("资源过大或不是普通文件") }
+        let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
+        var data = Data(); data.reserveCapacity(size)
+        while true {
+            try Task.checkCancellation()
+            let chunk = try handle.read(upToCount: min(262_144, maximum + 1 - data.count)) ?? Data()
+            guard !chunk.isEmpty else { break }
+            data.append(chunk)
+            guard data.count <= size, data.count <= maximum else { throw failure("资源读取期间发生变化") }
+        }
+        try Task.checkCancellation()
         guard data.count == size, data.count <= maximum else { throw failure("资源读取期间发生变化") }
         return data
     }
 
-    private func failure(_ message: String) -> NSError { NSError(domain: "ReadingBook.Markdown", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+    private static func failure(_ message: String) -> NSError { NSError(domain: "ReadingBook.Markdown", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
 }

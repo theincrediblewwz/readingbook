@@ -3,6 +3,28 @@ import Foundation
 /// A finite, read-only query language over canonical book records. A declaration
 /// cannot change the caller's source boundary or run scripts, requests or writers.
 public enum CompositionRuntime {
+    /// A validated, immutable input for one publication. Callers cannot pair an
+    /// already validated declaration with a different book or source boundary.
+    public struct PreparedCompositionInput: Sendable {
+        fileprivate let definition: CompositionDefinition
+        fileprivate let bases: [CompositionScope: ScopeBase]
+        fileprivate let mapSourceIDs: Set<String>
+    }
+
+    public static func prepare(_ definition: CompositionDefinition, in project: BookProject, context: ReadingContext? = nil,
+                               currentScope: CompositionCurrentScope = .automatic,
+                               boundary: KnowledgeReadBoundary = .all) throws -> PreparedCompositionInput {
+        try Task.checkCancellation()
+        try validate(definition, in: project)
+        var bases: [CompositionScope: ScopeBase] = [:]
+        for source in definition.sources where bases[source.scope] == nil {
+            try Task.checkCancellation()
+            bases[source.scope] = try scoped(source.scope, project: project, context: context, currentScope: currentScope, boundary: boundary)
+        }
+        return PreparedCompositionInput(definition: definition, bases: bases,
+            mapSourceIDs: Set(definition.parts.filter { $0.primitive == .map }.map(\.sourceID)))
+    }
+
     public static func validate(_ definition: CompositionDefinition, in project: BookProject) throws {
         guard definition.version == 1 else { throw invalid("尚不支持这个组合组件版本。") }
         guard (1...12).contains(definition.sources.count), (1...24).contains(definition.parts.count), (1...48).contains(definition.layout.count),
@@ -74,22 +96,35 @@ public enum CompositionRuntime {
 
     public static func project(_ definition: CompositionDefinition, in project: BookProject, context: ReadingContext? = nil,
                                selections: [String: Set<String>] = [:], times: [String: TemporalQueryPoint] = [:],
-                               boundary: KnowledgeReadBoundary = .all) throws -> [String: CompositionProjection] {
-        try validate(definition, in: project)
-        var bases: [CompositionScope: ScopeBase] = [:]
+                               boundary: KnowledgeReadBoundary = .all,
+                               currentScope: CompositionCurrentScope = .automatic,
+                               windows: [String: TemporalQueryWindow] = [:],
+                               mapModes: [String: CompositionMapTimeMode] = [:]) throws -> [String: CompositionProjection] {
+        try self.project(prepare(definition, in: project, context: context, currentScope: currentScope, boundary: boundary),
+                         selections: selections, times: times, windows: windows, mapModes: mapModes)
+    }
+
+    public static func project(_ prepared: PreparedCompositionInput, selections: [String: Set<String>] = [:],
+                               times: [String: TemporalQueryPoint] = [:], windows: [String: TemporalQueryWindow] = [:],
+                               mapModes: [String: CompositionMapTimeMode] = [:]) throws -> [String: CompositionProjection] {
         var result: [String: CompositionProjection] = [:]
-        for source in definition.sources {
+        for source in prepared.definition.sources {
             try Task.checkCancellation()
-            let base: ScopeBase
-            if let cached = bases[source.scope] { base = cached }
-            else { base = try scoped(source.scope, project: project, context: context, boundary: boundary); bases[source.scope] = base }
+            guard let base = prepared.bases[source.scope] else { throw invalid("组合输入缺少已校验的数据范围。") }
             let point = times[source.timeGroup]
-            let events = try TemporalKnowledgeRuntime.events(in: base.project, at: point, boundary: .all).filter { $0.match != .outside }
-            let relations = try TemporalKnowledgeRuntime.relations(in: base.project, at: point, boundary: .all).filter { $0.match != .outside }
+            let window = windows[source.timeGroup]
+            let events: [TemporalEventSnapshot], relations: [TemporalRelationSnapshot]
+            if let window {
+                events = try TemporalKnowledgeRuntime.events(in: base.project, within: window, boundary: .all)
+                relations = try TemporalKnowledgeRuntime.relations(in: base.project, within: window, boundary: .all)
+            } else {
+                events = try TemporalKnowledgeRuntime.events(in: base.project, at: point, boundary: .all)
+                relations = try TemporalKnowledgeRuntime.relations(in: base.project, at: point, boundary: .all)
+            }
             let visibleIDs = Set(base.objects.map(\.id))
             // Host selection is a hint, never authority to cross a source boundary.
             let selected = (selections[source.selectionGroup] ?? []).intersection(visibleIDs)
-            let related = try relatedIDs(source.relation, selected: selected, base: base, events: events, relations: relations, point: point)
+            let related = try relatedIDs(source.relation, selected: selected, base: base, events: events, relations: relations, point: point, window: window)
             let eventIndex = Dictionary(events.map { ($0.object.id, $0) }, uniquingKeysWith: { first, _ in first })
             var items: [CompositionItem]
             var edges: [CompositionEdge] = []
@@ -111,25 +146,34 @@ public enum CompositionRuntime {
                 let endpointIDs = Set(relations.flatMap { [$0.relation.fromID, $0.relation.toID] })
                 items = base.objects.filter { endpointIDs.contains($0.id) }.map { item($0, order: base.order) }
                 var seen = Set<String>()
-                edges = relations.compactMap { value in
+                edges = try relations.compactMap { value in
+                    try Task.checkCancellation()
                     let relation = value.relation
                     guard seen.insert(relation.id).inserted else { return nil }
                     if source.relation != .none, !selected.isEmpty, !selected.contains(relation.fromID), !selected.contains(relation.toID) { return nil }
                     if source.filters.contains(where: { $0.field == "label" && !matches(relation.label, filter: $0) }) { return nil }
-                    return CompositionEdge(id: relation.id, fromID: relation.fromID, toID: relation.toID, label: relation.label, kind: "knowledge")
+                    return CompositionEdge(id: relation.id, fromID: relation.fromID, toID: relation.toID, label: relation.label, kind: "knowledge", temporalMatch: value.match)
                 }
                 let linked = Set(edges.flatMap { [$0.fromID, $0.toID] }), edgeIDs = Set(edges.map(\.id))
-                items = items.filter { linked.contains($0.id) }.map { original in
+                items = try items.filter { linked.contains($0.id) }.map { original in
+                    try Task.checkCancellation()
                     var row = original, seen = Set(original.evidence)
-                    let proofs = relations.filter { edgeIDs.contains($0.relation.id) && ($0.relation.fromID == row.id || $0.relation.toID == row.id) }.flatMap { $0.relation.evidence }
+                    let proofs = try relations.filter {
+                        try Task.checkCancellation()
+                        return edgeIDs.contains($0.relation.id) && ($0.relation.fromID == row.id || $0.relation.toID == row.id)
+                    }.flatMap { $0.relation.evidence }
                     row.evidence += proofs.filter { seen.insert($0).inserted }
                     return row
                 }
             }
             if source.relation != .none { items = items.filter { related.contains($0.objectID ?? $0.documentID ?? $0.id) } }
             if !source.typeIDs.isEmpty { items = items.filter { $0.typeID.map(source.typeIDs.contains) ?? false } }
-            items = items.filter { row in source.filters.filter { $0.field != "label" }.allSatisfy { matches(field($0.field, in: row), filter: $0) } }
-            items.sort { lhs, rhs in
+            items = try items.filter { row in
+                try Task.checkCancellation()
+                return source.filters.filter { $0.field != "label" }.allSatisfy { matches(field($0.field, in: row), filter: $0) }
+            }
+            try items.sort { lhs, rhs in
+                try Task.checkCancellation()
                 switch source.sort {
                 case .name: return lhs.title == rhs.title ? lhs.id < rhs.id : lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
                 case .sourceOrder: return (lhs.sourceOrder ?? Int.max, lhs.id) < (rhs.sourceOrder ?? Int.max, rhs.id)
@@ -144,32 +188,46 @@ public enum CompositionRuntime {
             let itemIDs = Set(items.map(\.id))
             var diagnostics = base.diagnostics
             if source.collection == .documents {
-                let layout = documentEdges(in: base.project, documentIDs: itemIDs)
+                let layout = try documentEdges(in: base.project, documentIDs: itemIDs)
                 edges = layout.edges
                 if layout.usesMounts { diagnostics.append("这里的连线沿用原画布节点关联；同节点挂载的文档共享该布局关系，不代表额外的书中事实。") }
             }
             edges = edges.filter { itemIDs.contains($0.fromID) && itemIDs.contains($0.toID) }
             let edgeTruncated = edges.count > 800
             edges = Array(edges.prefix(800))
-            let allPoints = try points(for: items, base: base, events: events, at: point)
+            let allPoints: [CompositionMapPoint]
+            if prepared.mapSourceIDs.contains(source.id) {
+                let footprintWindow = mapModes[source.timeGroup] == .windowFootprints ? window : nil
+                let mapEvents: [TemporalEventSnapshot]
+                if window != nil, footprintWindow == nil {
+                    mapEvents = try TemporalKnowledgeRuntime.events(in: base.project, at: point, boundary: .all)
+                } else { mapEvents = events }
+                allPoints = try points(for: items, base: base, events: mapEvents, at: point, within: footprintWindow)
+            }
+            else { allPoints = [] }
             let pointTruncated = allPoints.count > 400
             let mapPoints = Array(allPoints.prefix(400))
             if pointTruncated { diagnostics.append("地图先显示400个有依据的地点；请缩小类型、时间或当前阅读范围。") }
             if edgeTruncated { diagnostics.append("关系先显示800条连线；请缩小类型或当前选择。") }
+            if window != nil && (items.contains(where: { $0.fields["temporalMatch"] == "unknown" || $0.fields["temporalMatch"] == "possible" }) ||
+                edges.contains(where: { $0.temporalMatch == .unknown || $0.temporalMatch == .possible })) {
+                diagnostics.append("标为时间待考的记录仍保留供核对；时间未明、推测或历法不同不代表已确认落在这个区间。")
+            }
             result[source.id] = CompositionProjection(items: items, edges: edges, mapPoints: mapPoints, total: total,
                 partial: total > source.limit || edgeTruncated || pointTruncated, diagnostics: diagnostics)
         }
         return result
     }
 
-    private struct ScopeBase {
+    fileprivate struct ScopeBase: Sendable {
         var project: BookProject
         var snapshot: ReadingQuerySnapshot
         var objects: [TypedObject]
         var order: [String: Int]
         var diagnostics: [String]
     }
-    private static func scoped(_ scope: CompositionScope, project original: BookProject, context: ReadingContext?, boundary: KnowledgeReadBoundary) throws -> ScopeBase {
+    private static func scoped(_ scope: CompositionScope, project original: BookProject, context: ReadingContext?,
+                               currentScope: CompositionCurrentScope, boundary: KnowledgeReadBoundary) throws -> ScopeBase {
         var project = original
         if let allowed = boundary.allowedUnitIDs { project.units = project.units.filter { allowed.contains($0.id) } }
         var diagnostics: [String] = []
@@ -181,7 +239,15 @@ public enum CompositionRuntime {
             project.units = []; diagnostics.append("当前原文不在读者允许的阅读范围中。")
             snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: project)
         } else {
-            let queryScope: ReadingQueryScope = scope == .book ? .book : ((context?.selectedText?.isEmpty == false) ? .selection : .page)
+            let queryScope: ReadingQueryScope
+            if scope == .book { queryScope = .book }
+            else {
+                switch currentScope {
+                case .automatic: queryScope = context?.selectedText?.isEmpty == false ? .selection : .page
+                case .page: queryScope = .page
+                case .selection: queryScope = .selection
+                }
+            }
             snapshot = try ReadingQuerySnapshot.freeze(scope: queryScope, in: project, context: scope == .current ? context : nil)
         }
         // Only admit complete local provenance. Merely linking a note to an
@@ -217,6 +283,7 @@ public enum CompositionRuntime {
             sourceOrder: object.evidence.compactMap { order[$0.unitID] }.min())
     }
     private static func timedItem(_ original: CompositionItem, base: ScopeBase, at point: TemporalQueryPoint) throws -> CompositionItem {
+        try Task.checkCancellation()
         guard original.kind == TypedObjectKind.entity.rawValue, let id = original.objectID else { return original }
         let snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, at: point, boundary: .all)
         var row = original
@@ -239,7 +306,8 @@ public enum CompositionRuntime {
         return row
     }
     private static func relatedIDs(_ relation: CompositionSelectionRelation, selected: Set<String>, base: ScopeBase,
-                                   events: [TemporalEventSnapshot], relations: [TemporalRelationSnapshot], point: TemporalQueryPoint?) throws -> Set<String> {
+                                   events: [TemporalEventSnapshot], relations: [TemporalRelationSnapshot], point: TemporalQueryPoint?,
+                                   window: TemporalQueryWindow?) throws -> Set<String> {
         if relation == .none { return Set(base.objects.map(\.id)) }
         guard !selected.isEmpty else { return [] }
         var result = Set<String>()
@@ -248,26 +316,38 @@ public enum CompositionRuntime {
         case .selected: result = selected
         case .neighbors:
             result = selected
-            for value in relations where selected.contains(value.relation.fromID) || selected.contains(value.relation.toID) { result.formUnion([value.relation.fromID, value.relation.toID]) }
+            for value in relations where selected.contains(value.relation.fromID) || selected.contains(value.relation.toID) {
+                try Task.checkCancellation(); result.formUnion([value.relation.fromID, value.relation.toID])
+            }
         case .participants:
             for event in events where selected.contains(event.object.id) { result.formUnion(event.object.references["participants"] ?? []) }
         case .places:
             for event in events where selected.contains(event.object.id) { result.formUnion(event.object.references["places"] ?? []) }
             for id in selected where base.project.entities.contains(where: { $0.id == id }) {
-                let snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, at: point, boundary: .all)
+                try Task.checkCancellation()
+                let snapshot: EntityTimeSnapshot
+                if let window { snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, within: window, boundary: .all) }
+                else { snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, at: point, boundary: .all) }
                 result.formUnion(snapshot.footprints.compactMap(\.placeID))
             }
         case .events:
             for id in selected {
-                result.formUnion(try TemporalKnowledgeRuntime.events(in: base.project, entityID: id, at: point, boundary: .all).filter { $0.match != .outside }.map { $0.object.id })
-                result.formUnion(try TemporalKnowledgeRuntime.events(in: base.project, placeID: id, at: point, boundary: .all).filter { $0.match != .outside }.map { $0.object.id })
+                try Task.checkCancellation()
+                if let window {
+                    result.formUnion(try TemporalKnowledgeRuntime.events(in: base.project, entityID: id, within: window, boundary: .all).map { $0.object.id })
+                    result.formUnion(try TemporalKnowledgeRuntime.events(in: base.project, placeID: id, within: window, boundary: .all).map { $0.object.id })
+                } else {
+                    result.formUnion(try TemporalKnowledgeRuntime.events(in: base.project, entityID: id, at: point, boundary: .all).map { $0.object.id })
+                    result.formUnion(try TemporalKnowledgeRuntime.events(in: base.project, placeID: id, at: point, boundary: .all).map { $0.object.id })
+                }
             }
         case .documents:
             for document in base.project.activeDocuments where !Set(document.linkedIDs).isDisjoint(with: selected) { result.insert(document.id) }
         }
         return result.intersection(Set(base.objects.map(\.id)))
     }
-    private static func points(for items: [CompositionItem], base: ScopeBase, events: [TemporalEventSnapshot], at point: TemporalQueryPoint?) throws -> [CompositionMapPoint] {
+    private static func points(for items: [CompositionItem], base: ScopeBase, events: [TemporalEventSnapshot], at point: TemporalQueryPoint?,
+                               within window: TemporalQueryWindow?) throws -> [CompositionMapPoint] {
         let objects = Dictionary(base.objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var result: [CompositionMapPoint] = []
         var seen = Set<String>()
@@ -278,16 +358,20 @@ public enum CompositionRuntime {
                 latitude: latitude, longitude: longitude, evidence: evidence, kind: kind))
         }
         for row in items {
+            try Task.checkCancellation()
             guard let id = row.objectID, let object = objects[id] else { continue }
             if object.kind == .entity {
                 let locations = Set(base.project.temporalKnowledge?.profile?.locationTypeIDs ?? []).union(["place", "location"])
                 // A person's unqualified stored coordinate is not a dated
                 // presence. Fixed geographic objects may remain on the map.
-                if point == nil || locations.contains(object.typeID) {
+                if locations.contains(object.typeID) {
                     append(id: "entity." + id, target: id, place: object, title: object.name, subtitle: object.locationNote ?? "", evidence: object.evidence, kind: "entityLocation")
                 }
-                let snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, at: point, boundary: .all)
+                let snapshot: EntityTimeSnapshot
+                if let window { snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, within: window, boundary: .all) }
+                else { snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, at: point, boundary: .all) }
                 for presence in snapshot.footprints {
+                    try Task.checkCancellation()
                     guard let placeID = presence.placeID, let place = objects[placeID] else { continue }
                     let anchors = (base.project.temporalKnowledge?.anchors ?? []) + (base.project.readingExperience?.anchors ?? [])
                     let evidence = anchors.filter { presence.sourceAnchorIDs.contains($0.id) }.map { Evidence(unitID: $0.unitID, quote: $0.quote) }
@@ -305,7 +389,7 @@ public enum CompositionRuntime {
         }
         return result
     }
-    private static func documentEdges(in project: BookProject, documentIDs: Set<String>) -> (edges: [CompositionEdge], usesMounts: Bool) {
+    private static func documentEdges(in project: BookProject, documentIDs: Set<String>) throws -> (edges: [CompositionEdge], usesMounts: Bool) {
         var mounted = Set<String>()
         let nodeTargets = Dictionary(project.nodes.compactMap { node -> (String, [String])? in
             let ids = Set([node.targetID] + (node.documentIDs ?? [])).intersection(documentIDs).sorted()
@@ -315,10 +399,12 @@ public enum CompositionRuntime {
         }, uniquingKeysWith: { first, _ in first })
         var result: [CompositionEdge] = [], seen = Set<String>(), usesMounts = false
         for edge in project.edges {
+            try Task.checkCancellation()
             guard let fromIDs = nodeTargets[edge.fromID], let toIDs = nodeTargets[edge.toID] else { continue }
             let expanded = mounted.contains(edge.fromID) || mounted.contains(edge.toID)
             for from in fromIDs {
                 for to in toIDs where from != to {
+                    try Task.checkCancellation()
                     let id = expanded ? edge.id + "." + from + "." + to : edge.id
                     guard seen.insert(id).inserted else { continue }
                     if expanded { usesMounts = true }

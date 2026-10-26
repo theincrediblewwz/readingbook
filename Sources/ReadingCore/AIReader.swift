@@ -512,6 +512,27 @@ public actor AIReader {
             }
     }
 
+    /// The project and source scope come from the same immutable preparation.
+    /// Callers cannot pair a prepared permission snapshot with another book.
+    public func answerDetailed(question: String, prepared: ReadingPreparedAnswer, settings: ProviderSettings, apiKey: String,
+                               documents: [String: String] = [:], memory: ConversationMemory? = nil,
+                               memoryEnabled: Bool = true, documentLoader: ReadingDocumentLoader? = nil,
+                               hostOperationContext: String? = nil, workspace: ReadingWorkspaceSnapshot? = nil,
+                               hostTools: ReadingHostToolAccess? = nil, proposalAccess: ReadingProposalToolAccess? = nil) async throws -> ReadingAnswerResult {
+        try beginOperation(settings: settings)
+        defer { operationActive = false }
+        return try await ReadingAnswerEngine.run(question: question, project: prepared.project, settings: settings, documents: documents,
+            context: prepared.context, scope: prepared.scope, history: prepared.history, memory: memory, memoryEnabled: memoryEnabled,
+            documentIDs: prepared.snapshot.documentIDs, loader: documentLoader, operationLimit: operationTokenLimit,
+            remainingRequests: max(0, settings.maxRequestsPerRun - requestCount),
+            authorizedNodeIDs: prepared.snapshot.authorizedNodeIDs, hostOperationContext: hostOperationContext, workspace: workspace,
+            hostTools: hostTools, proposalAccess: proposalAccess, progress: progressHandler,
+            preferences: prepared.preferences, prepared: prepared) { messages, tools, remaining, finalOnly in
+                try await self.queryRequest(messages: messages, tools: tools, settings: settings, apiKey: apiKey,
+                                            remainingTokens: remaining, finalOnly: finalOnly)
+            }
+    }
+
     /// Keep schemas stable in the final request, while disabling further calls.
     /// This helper is query-only; plan/read/workflow transport remains unchanged.
     private func queryRequest(messages: [[String: Any]], tools: [[String: Any]], settings: ProviderSettings,

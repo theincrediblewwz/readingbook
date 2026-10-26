@@ -154,9 +154,12 @@ struct SpatialTimelineView: View {
         // The visible axis is year/narrative precision. Tied or uncertain times
         // do not establish an order, so never invent a segment between them.
         let grouped = Dictionary(grouping: candidates, by: { axisValue($0.extent) ?? 0 })
-        return candidates.filter { grouped[axisValue($0.extent) ?? 0]?.count == 1 }
-            .sorted { (axisValue($0.extent) ?? 0) < (axisValue($1.extent) ?? 0) }.compactMap { item in
-            guard let place = book.entities.first(where: { $0.id == item.placeID }), let lat = place.latitude, let lon = place.longitude else { return nil }
+        let ordered = candidates.filter { grouped[axisValue($0.extent) ?? 0]?.count == 1 }
+            .sorted { (axisValue($0.extent) ?? 0) < (axisValue($1.extent) ?? 0) }
+        guard !ordered.isEmpty else { return [] }
+        let entitiesByID = Dictionary(book.entities.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ordered.compactMap { item in
+            guard let id = item.placeID, let place = entitiesByID[id], let lat = place.latitude, let lon = place.longitude else { return nil }
             return CLLocationCoordinate2D(latitude: lat, longitude: lon)
         }
     }
@@ -324,9 +327,10 @@ struct SpatialTimelineView: View {
 
     private var bookMap: some View {
         let expectedKey = store.workspaceMemoryKey
+        let sequence = footprintSequence
         return Map(position: $camera) {
-            if footprintSequence.count > 1 {
-                MapPolyline(coordinates: footprintSequence).stroke(Palette.copper.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
+            if sequence.count > 1 {
+                MapPolyline(coordinates: sequence).stroke(Palette.copper.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
             }
             ForEach(points) { point in
                 Annotation("", coordinate: point.coordinate) { mapMarker(point) }

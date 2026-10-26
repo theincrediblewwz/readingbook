@@ -57,7 +57,9 @@ public struct ReadingQuerySnapshot: Sendable {
         let context: ReadingContext?
         if scope == .selection { context = suppliedContext }
         else { context = try suppliedContext.map { try ReadingExperienceRuntime.validatedContext($0, in: project) } }
-        let ordered = project.units.sorted { $0.order == $1.order ? $0.id < $1.id : $0.order < $1.order }
+        // A notes-only question does not use source ordering. In particular,
+        // opening a short note must not sort a very large book first.
+        let ordered = scope == .notes ? [] : project.units.sorted { $0.order == $1.order ? $0.id < $1.id : $0.order < $1.order }
         let current = context.flatMap { value in value.unitID.flatMap { id in ordered.first { $0.id == id } } }
         var units: [SourceUnit] = [], documents: [DocumentRecord] = []
         var selectedSlices: [QuerySourceSlice]?
@@ -102,18 +104,21 @@ public struct ReadingQuerySnapshot: Sendable {
             return QuerySourceSlice(unitID: unit.id, locator: unit.locator, chapter: unit.chapter, text: text,
                                     textHash: try BookImporter.sha256(Data(text.utf8)))
         }
+        try Task.checkCancellation()
         guard Set(sources.map(\.unitID)).count == sources.count else { throw ReadingError.invalid("原文单元身份重复，不能建立可靠查询范围。") }
         let payload: [String: Any] = ["scope": scope.rawValue, "bookID": project.id, "sourceHash": project.sourceHash,
             "sources": sources.map { ["id": $0.unitID, "hash": $0.textHash] },
             "documents": documents.map { ["id": $0.id, "updatedAt": String($0.updatedAt.timeIntervalSince1970), "path": $0.relativePath] },
             "authorizedNodeIDs": sortedLayoutIDs]
         let fingerprint = try BookImporter.sha256(JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]))
+        try Task.checkCancellation()
         return ReadingQuerySnapshot(scope: scope, bookID: project.id, sourceHash: project.sourceHash,
             scopeFingerprint: fingerprint, displayTitle: title, authorizedNodeIDs: sortedLayoutIDs, sources: sources, documents: documents,
             sourceByID: Dictionary(uniqueKeysWithValues: sources.map { ($0.unitID, $0) }))
     }
 
     private static func selectionSlices(quote: String, context: ReadingContext, project: BookProject, ordered: [SourceUnit]) throws -> [QuerySourceSlice] {
+        try Task.checkCancellation()
         guard quote.utf8.count <= 400_000 else { throw ReadingError.invalid("选段过长，请缩小选择或改用章节范围。") }
         guard (context.selectedPrefix?.utf8.count ?? 0) <= 1000, (context.selectedSuffix?.utf8.count ?? 0) <= 1000 else { throw ReadingError.invalid("选段定位前后文过长，请重新选择。") }
         if context.selectedAnchorID != nil {
@@ -129,11 +134,15 @@ public struct ReadingQuerySnapshot: Sendable {
         else { throw ReadingError.invalid("选段缺少可靠的原文位置；请改用当前页或章节范围。") }
         guard candidates.count <= 256, candidates.reduce(0, { $0 + $1.text.utf8.count }) <= 2_097_152 else { throw ReadingError.invalid("选段定位范围过大，请改用章节范围。") }
         var matches: [String: [QuerySourceSlice]] = [:]
+        let prefix = context.selectedPrefix ?? "", suffix = context.selectedSuffix ?? ""
+        let prefixLength = (prefix as NSString).length, suffixLength = (suffix as NSString).length
         // The importer separates units/pages. Only these explicit boundaries may
         // be rejoined; never normalize whitespace or substitute OCR characters.
         for separator in ["\n", ""] {
+            try Task.checkCancellation()
             var joined = "", ranges: [(SourceUnit, NSRange)] = []
             for (index, unit) in candidates.enumerated() {
+                try Task.checkCancellation()
                 if index > 0 { joined += separator }
                 let start = (joined as NSString).length
                 joined += unit.text; ranges.append((unit, NSRange(location: start, length: (unit.text as NSString).length)))
@@ -141,15 +150,15 @@ public struct ReadingQuerySnapshot: Sendable {
             let source = joined as NSString
             var search = NSRange(location: 0, length: source.length)
             while search.length > 0 {
+                try Task.checkCancellation()
                 let found = source.range(of: quote, options: [.literal], range: search)
                 if found.location == NSNotFound { break }
-                let prefix = context.selectedPrefix ?? "", suffix = context.selectedSuffix ?? ""
-                let prefixLength = (prefix as NSString).length, suffixLength = (suffix as NSString).length
                 let prefixMatches = found.location >= prefixLength && source.substring(with: NSRange(location: found.location - prefixLength, length: prefixLength)).utf8.elementsEqual(prefix.utf8)
                 let suffixMatches = source.length - NSMaxRange(found) >= suffixLength && source.substring(with: NSRange(location: NSMaxRange(found), length: suffixLength)).utf8.elementsEqual(suffix.utf8)
                 if prefixMatches && suffixMatches {
                     var slices: [QuerySourceSlice] = [], identities: [String] = []
                     for (unit, range) in ranges {
+                        try Task.checkCancellation()
                         let intersection = NSIntersectionRange(found, range)
                         if intersection.length > 0 {
                             let text = source.substring(with: intersection)
@@ -164,6 +173,7 @@ public struct ReadingQuerySnapshot: Sendable {
                 search = NSRange(location: next, length: max(0, source.length - next))
             }
         }
+        try Task.checkCancellation()
         guard matches.count == 1, let slices = matches.values.first else { throw ReadingError.invalid("无法在原文中唯一、精确定位这段选区（可能跨页、重复或OCR文字不同）；请改用当前页/章节范围，未扩大到其他内容。") }
         return slices
     }

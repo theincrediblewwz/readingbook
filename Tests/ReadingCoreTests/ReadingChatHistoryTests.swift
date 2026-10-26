@@ -33,7 +33,9 @@ final class ReadingChatHistoryTests: XCTestCase {
         XCTAssertEqual(safe.map(\.id), ["past-user", "past-assistant", "here-user", "here-assistant"])
         XCTAssertEqual(book.chats.map(\.id), original.map(\.id)); XCTAssertNil(book.chats.first(where: { $0.id == "legacy-user" })?.readingContext)
         let open = ReadingChatHistory.automaticHistory(in: book, preferences: .init(avoidsSpoilers: false), snapshot: current)
-        XCTAssertEqual(open.count, 10, "明确关闭防剧透后仍可使用本模式完整历史，旧数据没有删除。")
+        XCTAssertEqual(open.map(\.id), ["past-user", "past-assistant", "here-user", "here-assistant", "future-user", "future-assistant", "open-user", "open-assistant"],
+            "关闭防剧透允许有来源的后文和开放模式历史，不把旧无范围记录自动发送。")
+        XCTAssertEqual(book.chats.map(\.id), original.map(\.id), "未自动发送的旧记录仍保留在历史中。")
         let raw = #"{"requirements":[],"conclusions":[{"text":"后文结局","sources":["future-assistant"]}],"unresolved":[]}"#
         let memory = try ConversationMemoryRuntime.parse(raw, previous: nil, next: .init(index: original.count), snapshot: current,
             history: original, model: "fixture", suppliedIDs: Set(original.map(\.id)))
@@ -54,5 +56,52 @@ final class ReadingChatHistoryTests: XCTestCase {
         book.chats = try pair("attachment", context: ReadingChatContext(snapshot: shared, avoidsSpoilers: true))
         XCTAssertTrue(ReadingChatHistory.automaticHistory(in: book, preferences: .init(), snapshot: current).isEmpty)
         XCTAssertEqual(ReadingChatHistory.automaticHistory(in: book, preferences: .init(), snapshot: shared).count, 2)
+    }
+
+    func testDisablingSpoilersDoesNotReauthorizeNotesOrOtherSelectionSlices() throws {
+        var book = book()
+        book.documents = [DocumentRecord(id: "private-note", title: "曾经附加的笔记")]
+        let shared = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u1", page: 1), appendedDocumentIDs: ["private-note"])
+        let current = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u1", page: 1))
+        let selected = try ReadingQuerySnapshot.freeze(scope: .selection, in: book, context: ReadingContext(unitID: "u1", selectedText: "开篇。", page: 1))
+        let other = try ReadingQuerySnapshot.freeze(scope: .selection, in: book, context: ReadingContext(unitID: "u1", selectedText: "另一句。", page: 1))
+        book.chats = try pair("private", context: ReadingChatContext(snapshot: shared, avoidsSpoilers: false))
+            + pair("selected", context: ReadingChatContext(snapshot: selected, avoidsSpoilers: false))
+            + pair("other", context: ReadingChatContext(snapshot: other, avoidsSpoilers: false))
+        let open = ReadingAnswerPreferences(avoidsSpoilers: false)
+        XCTAssertFalse(ReadingChatHistory.automaticHistory(in: book, preferences: open, snapshot: current).contains { $0.id.hasPrefix("private-") })
+        XCTAssertEqual(ReadingChatHistory.automaticHistory(in: book, preferences: open, snapshot: selected).map(\.id), ["selected-user", "selected-assistant"])
+        XCTAssertTrue(ReadingChatHistory.automaticHistory(in: book, preferences: open, snapshot: shared).contains { $0.id == "private-assistant" }, "明确附加后仍可复用对应历史。")
+        XCTAssertEqual(book.chats.count, 6)
+    }
+
+    func testAutomaticHistoryRechecksOCRAndAttachedNoteVersionsWithoutChangingArchives() throws {
+        var book = book()
+        book.documents = [DocumentRecord(id: "note", title: "附加笔记")]
+        let first = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u1", page: 1))
+        let attached = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u1", page: 1), appendedDocumentIDs: ["note"])
+        book.chats = try pair("first", context: ReadingChatContext(snapshot: first, avoidsSpoilers: true))
+            + pair("attached", context: ReadingChatContext(snapshot: attached, avoidsSpoilers: true))
+        let originalIDs = book.chats.map(\.id)
+        let same = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u2", page: 2), appendedDocumentIDs: ["note"])
+        XCTAssertEqual(ReadingChatHistory.automaticHistory(in: book, preferences: .init(), snapshot: same).count, 4)
+        book.documents[0].updatedAt += 1
+        let updatedNote = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u2", page: 2), appendedDocumentIDs: ["note"])
+        XCTAssertEqual(ReadingChatHistory.automaticHistory(in: book, preferences: .init(), snapshot: updatedNote).map(\.id), ["first-user", "first-assistant"])
+        book.units[0].text += "OCR修订。"
+        let updatedSource = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u2", page: 2), appendedDocumentIDs: ["note"])
+        XCTAssertTrue(ReadingChatHistory.automaticHistory(in: book, preferences: .init(), snapshot: updatedSource).isEmpty)
+        XCTAssertTrue(ReadingChatHistory.automaticHistory(in: book, preferences: .init(avoidsSpoilers: false), snapshot: updatedSource).isEmpty)
+        XCTAssertEqual(book.chats.map(\.id), originalIDs)
+    }
+
+    func testHistoricSelectionIsOnlyAutomaticWhenItsExactSliceCanBeProved() throws {
+        var book = book()
+        let selected = try ReadingQuerySnapshot.freeze(scope: .selection, in: book, context: ReadingContext(unitID: "u1", selectedText: "开篇。", page: 1))
+        book.chats = try pair("slice", context: ReadingChatContext(snapshot: selected, avoidsSpoilers: true))
+        let page = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: ReadingContext(unitID: "u2", page: 2))
+        XCTAssertTrue(ReadingChatHistory.automaticHistory(in: book, preferences: .init(), snapshot: page).isEmpty)
+        XCTAssertEqual(ReadingChatHistory.automaticHistory(in: book, preferences: .init(), snapshot: selected).count, 2)
+        XCTAssertEqual(book.chats.count, 2, "无法重建的旧slice没有删除，仍能在历史查看。")
     }
 }

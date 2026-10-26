@@ -2,7 +2,7 @@ import Foundation
 
 /// Shared only by a frozen read/capture context. Repeated evidence from the
 /// same unit must not re-hash a whole imported chapter for every old version.
-private final class KnowledgeSourceHashes: @unchecked Sendable {
+final class KnowledgeSourceHashes: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: String] = [:]
     func hash(_ unit: SourceUnit) throws -> String {
@@ -173,24 +173,31 @@ public enum ReadingKnowledgeRuntime {
         }
     }
 
-    public static func background(for request: TeacherBackgroundRequest, in project: BookProject) -> TeacherBackgroundRecord? {
-        guard request.bookID == project.id, request.sourceHash == project.sourceHash,
+    public static func background(for request: TeacherBackgroundRequest, in project: BookProject,
+                                  isCancelled: () -> Bool = { Task.isCancelled }) -> TeacherBackgroundRecord? {
+        guard !isCancelled(), request.bookID == project.id, request.sourceHash == project.sourceHash,
               active(request.objectID, in: project) else { return nil }
         let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return project.readingKnowledge?.backgrounds.reversed().first { value in
-            value.objectID == request.objectID && value.sourceHash == request.sourceHash &&
+        let hashes = KnowledgeSourceHashes()
+        for value in (project.readingKnowledge?.backgrounds ?? []).reversed() {
+            guard !isCancelled() else { return nil }
+            if value.objectID == request.objectID && value.sourceHash == request.sourceHash &&
                 value.contextFingerprint == request.contextFingerprint && value.avoidsSpoilers == request.avoidsSpoilers &&
                 (!request.avoidsSpoilers || value.cursorOrder <= request.cursorOrder) &&
-                sourcesCurrent(value, units: units, allowed: request.allowedUnitIDs)
+                sourcesCurrent(value, units: units, allowed: request.allowedUnitIDs, hashes: hashes, isCancelled: isCancelled) {
+                return isCancelled() ? nil : value
+            }
         }
+        return nil
     }
 
     /// Full-library human-readable export, still separate from source facts.
     /// Stale or removed-object entries remain in project.json for recovery.
     public static func readableBackgrounds(in project: BookProject) -> [TeacherBackgroundRecord] {
         let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let hashes = KnowledgeSourceHashes()
         return (project.readingKnowledge?.backgrounds ?? []).filter {
-            $0.sourceHash == project.sourceHash && active($0.objectID, in: project) && sourcesCurrent($0, units: units, allowed: nil)
+            $0.sourceHash == project.sourceHash && active($0.objectID, in: project) && sourcesCurrent($0, units: units, allowed: nil, hashes: hashes)
         }
     }
 
@@ -227,12 +234,14 @@ public enum ReadingKnowledgeRuntime {
               !value.evidence.isEmpty, value.evidence.count <= 16,
               validSources(value.evidence, hashes: value.unitHashes) else { throw invalid("老师背景记录无效。") }
     }
-    static func sourcesCurrent(_ value: TeacherBackgroundRecord, units: [String: SourceUnit], allowed: Set<String>?) -> Bool {
-        value.evidence.allSatisfy { item in
-            guard allowed?.contains(item.unitID) != false, let unit = units[item.unitID], exact(item.quote, in: unit.text),
-                  value.unitHashes[item.unitID] == (try? BookImporter.sha256(Data(unit.text.utf8))) else { return false }
-            return !value.avoidsSpoilers || unit.order <= value.cursorOrder
+    static func sourcesCurrent(_ value: TeacherBackgroundRecord, units: [String: SourceUnit], allowed: Set<String>?,
+                               hashes: KnowledgeSourceHashes = KnowledgeSourceHashes(), isCancelled: () -> Bool = { false }) -> Bool {
+        for item in value.evidence {
+            guard !isCancelled(), allowed?.contains(item.unitID) != false, let unit = units[item.unitID], exact(item.quote, in: unit.text),
+                  value.unitHashes[item.unitID] == (try? hashes.hash(unit)),
+                  !value.avoidsSpoilers || unit.order <= value.cursorOrder else { return false }
         }
+        return !isCancelled()
     }
     static func active(_ id: String, in project: BookProject) -> Bool {
         project.entities.contains { $0.id == id } || project.events.contains { $0.id == id }

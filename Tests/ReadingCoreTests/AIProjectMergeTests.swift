@@ -17,6 +17,48 @@ final class AIProjectMergeTests: XCTestCase {
         XCTAssertEqual(savedBody, "用户新正文")
     }
 
+    func testIndexedDocumentMergeRetainsMissingSiblingsAndCanonicalTrashWithoutChangingBytes() async throws {
+        let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.directory) }
+        let sibling = DocumentRecord(id: "sibling", title: "另一窗口的笔记"), siblingBody = "# Cafe\u{301}🙂\n\n另一窗口保存的正文。\n"
+        let withSibling = try await f.repository.saveDocument(project: f.book, document: sibling, markdown: siblingBody)
+        let trashed = try await f.repository.setDocumentTrashed(project: withSibling, documentID: sibling.id, trashed: true)
+        let saved = try await f.repository.save(withSibling)
+        XCTAssertEqual(saved.documents.map(\.id), [f.document.id, sibling.id])
+        XCTAssertEqual(saved.documents.first { $0.id == sibling.id }?.trashedAt, trashed.documents.first { $0.id == sibling.id }?.trashedAt)
+        let opened = try await f.repository.readDocumentSnapshot(bookID: f.book.id, document: f.document)
+        let body = "# 用户本次修改\n\n保留 e\u{301}、🙂 和 $x^2$。\n"
+        let edited = try await f.repository.saveDocument(project: f.book, document: f.document, markdown: body, expectedContentHash: opened.contentHash)
+        XCTAssertEqual(edited.documents.map(\.id), [f.document.id, sibling.id], "旧编辑窗口缺少的其他笔记引用仍按原顺序补回。")
+        XCTAssertEqual(edited.documents.first { $0.id == sibling.id }?.trashedAt, trashed.documents.first { $0.id == sibling.id }?.trashedAt)
+        let actualBody = try await f.repository.readDocument(bookID: f.book.id, document: f.document)
+        let actualSibling = try await f.repository.readDocument(bookID: f.book.id, document: sibling)
+        XCTAssertEqual(Data(actualBody.utf8), Data(body.utf8)); XCTAssertEqual(Data(actualSibling.utf8), Data(siblingBody.utf8))
+        XCTAssertEqual(try Data(contentsOf: f.source), Data("贾诩善于谋划。".utf8))
+    }
+
+    func testDocumentPositionIndexCannotHideDuplicateExistingOrNewIDs() async throws {
+        let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.directory) }
+        let metadataURL = f.directory.appendingPathComponent("library/books/\(f.book.id)/project.json")
+        let metadata = try Data(contentsOf: metadataURL)
+        let opened = try await f.repository.readDocumentSnapshot(bookID: f.book.id, document: f.document)
+        var duplicate = f.book; duplicate.documents.append(duplicate.documents[0])
+        do { _ = try await f.repository.save(duplicate); XCTFail("普通保存不能用索引掩盖重复 ID。") } catch {}
+        do {
+            _ = try await f.repository.saveDocument(project: duplicate, document: f.document, markdown: "不应写入", expectedContentHash: opened.contentHash)
+            XCTFail("正文保存仍须拒绝重复的已有 ID。")
+        } catch {}
+        let fresh = DocumentRecord(id: "new-note", title: "未登记的新笔记")
+        var duplicateNew = f.book; duplicateNew.documents.append(contentsOf: [fresh, fresh])
+        do {
+            _ = try await f.repository.saveDocument(project: duplicateNew, document: fresh, markdown: "不能留下新文件")
+            XCTFail("替换首个新 ID 后，另一个重复项仍须由原验证拒绝。")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: metadataURL), metadata)
+        let unchanged = try await f.repository.readDocumentSnapshot(bookID: f.book.id, document: f.document)
+        XCTAssertEqual(unchanged.contentHash, opened.contentHash)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.directory.appendingPathComponent("library/books/\(f.book.id)/" + fresh.relativePath).path))
+    }
+
     func testPublicationOrderRejectsDelayedSnapshotsWithoutChangingStoredFormatOrAuthority() async throws {
         let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.directory) }
         var first = f.book; first.chats.append(ChatMessage(id: "first", role: "user", content: "一"))

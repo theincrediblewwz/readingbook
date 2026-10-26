@@ -205,8 +205,7 @@ extension SmartReadingRuntime {
         }
         let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         func literal(_ quote: String, unitID: String) -> Bool {
-            guard !quote.isEmpty, let text = units[unitID]?.text, let range = text.range(of: quote, options: .literal) else { return false }
-            return text[range].utf8.elementsEqual(quote.utf8)
+            units[unitID].map { SourceTextLiteral.contains(quote, in: $0.text) } ?? false
         }
         func exact(_ values: [Evidence]) -> Bool {
             let local = values.filter { allowed.contains($0.unitID) }
@@ -285,7 +284,7 @@ extension SmartReadingRuntime {
               Set(value.completedStepIDs) == Set(grant.chunk.stepIDs), value.completedStepIDs.count == grant.chunk.stepIDs.count,
               !value.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.markdown.count <= 16_000,
               (1...128).contains(value.evidence.count), Set(value.evidence.map(\.unitID)) == allowedUnitIDs,
-              value.evidence.allSatisfy({ evidence in allowedUnitIDs.contains(evidence.unitID) && !evidence.quote.isEmpty && evidence.quote.count <= 32_768 && project.units.first(where: { $0.id == evidence.unitID })?.text.contains(evidence.quote) == true }) else {
+              value.evidence.allSatisfy({ evidence in allowedUnitIDs.contains(evidence.unitID) && !evidence.quote.isEmpty && evidence.quote.count <= 32_768 && project.units.first(where: { $0.id == evidence.unitID }).map({ SourceTextLiteral.contains(evidence.quote, in: $0.text) }) == true }) else {
             throw ReadingError.invalid("分析范围、步骤或原文引用未通过核验；未增加已分析覆盖。")
         }
         let reasons = value.noChangesReasons ?? [:]
@@ -395,7 +394,7 @@ enum ReadingAnalysisReviewTools {
                 else { actual = try BookImporter.sha256(Data(unit.text.utf8)); hashes[unit.id] = actual }
                 if checkpoint.unitHashes[unit.id] != actual { unchanged = false; break }
             }
-            guard unchanged, checkpoint.evidence.allSatisfy({ !$0.quote.isEmpty && units[$0.unitID]?.text.contains($0.quote) == true }) else { continue }
+            guard unchanged, checkpoint.evidence.allSatisfy({ evidence in units[evidence.unitID].map { SourceTextLiteral.contains(evidence.quote, in: $0.text) } == true }) else { continue }
             let pages = Array(Set(sources.compactMap(\.page))).sorted()
             let title = pages.first.map { page in pages.last == page ? "第 \(page) 页" : "第 \(page)–\(pages.last ?? page) 页" } ?? String(start.chapter.prefix(100))
             let metadata = Metadata(id: checkpoint.id, title: title, unitCount: sources.count, firstOrder: start.order, lastOrder: end.order,

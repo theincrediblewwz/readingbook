@@ -128,6 +128,40 @@ private struct GraphNodeBrowserRow: View {
     }
 }
 
+/// One immutable view of a node and its related labels at the same read boundary.
+/// The canonical graph objects and explicitly opened notes remain unchanged.
+private struct GraphNodeDetailProjection: Sendable {
+    enum Kind: Sendable { case entity, event, source, other }
+    let request: String
+    let kind: Kind
+    let entity: KnowledgeEntity?
+    let event: KnowledgeEvent?
+    let unit: SourceUnit?
+    let names: [String: String]
+
+    static func build(request: String, targetID: String, book: BookProject, allowed: Set<String>?) -> Self? {
+        guard !Task.isCancelled else { return nil }
+        let context = ReadingSpoilerProjection.Context(project: book, allowedUnitIDs: allowed)
+        guard !Task.isCancelled else { return nil }
+        let originalEntity = book.entities.first { $0.id == targetID }
+        let originalEvent = book.events.first { $0.id == targetID }
+        let entity = originalEntity.flatMap { context.entity($0) }
+        let event = originalEvent.flatMap { context.event($0) }
+        let related = Set((event?.placeIDs ?? []) + (event?.participantIDs ?? []))
+        var names: [String: String] = [:]
+        for value in book.entities {
+            guard !Task.isCancelled else { return nil }
+            if related.contains(value.id), let visible = context.entity(value) { names[value.id] = visible.name }
+        }
+        let originalUnit = book.units.first { $0.id == targetID }
+        let unit = originalEntity == nil && originalEvent == nil
+            ? originalUnit.flatMap { allowed?.contains($0.id) != false ? $0 : nil } : nil
+        guard !Task.isCancelled else { return nil }
+        let kind: Kind = originalEntity != nil ? .entity : originalEvent != nil ? .event : originalUnit != nil ? .source : .other
+        return Self(request: request, kind: kind, entity: entity, event: event, unit: unit, names: names)
+    }
+}
+
 private struct GraphNodeDetails: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject private var typography: ReadingTypographySettings
@@ -135,17 +169,37 @@ private struct GraphNodeDetails: View {
     @State private var markdown: String?
     @State private var loadError: String?
     @State private var previewDocumentID: String?
+    @State private var projection: GraphNodeDetailProjection?
+    @State private var loadedDocumentRevision: String?
     private var documents: [DocumentRecord] {
         let ids = Set(item.documentIDs + [item.targetID])
         return store.book?.activeDocuments.filter { ids.contains($0.id) } ?? []
     }
     private var document: DocumentRecord? { documents.first { $0.id == previewDocumentID } ?? documents.first }
-    private var revision: String { "\(store.bookID ?? "")|\(item.targetID)|\(document?.id ?? "")|\(document?.updatedAt.timeIntervalSince1970 ?? 0)" }
+    private var revision: String {
+        store.libraryRootURL.path + "|" + (store.bookID ?? "") + "|" + (store.book?.sourceHash ?? "") + "|" + item.targetID + "|" +
+            (document?.id ?? "") + "|" + (document?.relativePath ?? "") + "|" + String(document?.updatedAt.timeIntervalSince1970 ?? 0)
+    }
+    private var projectionRequest: String {
+        store.libraryRootURL.path + "|" + (store.bookID ?? "") + "|" + (store.book?.sourceHash ?? "") + "|" + item.targetID + "|" +
+            (store.selectedUnitID ?? "") + "|" + (store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false ? "safe" : "open") + "|" + String(store.projectRevision)
+    }
+    private var visibleProjection: GraphNodeDetailProjection? { projection?.request == projectionRequest ? projection : nil }
+    private var title: String {
+        if document != nil { return item.title }
+        guard let value = visibleProjection else { return "正在读取内容" }
+        switch value.kind {
+        case .entity: return value.entity?.name ?? "本段尚无可显示的对象"
+        case .event: return value.event?.name ?? "本段尚无可显示的事件"
+        case .source: return value.unit == nil ? "尚未读到这里" : item.title
+        case .other: return item.title
+        }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text(item.title).font(.system(size: 16, weight: .semibold)).textSelection(.enabled)
+                Text(title).font(.system(size: 16, weight: .semibold)).textSelection(.enabled)
                 if documents.count > 1 {
                     Menu {
                         ForEach(documents) { document in Button(document.title) { previewDocumentID = document.id } }
@@ -154,36 +208,52 @@ private struct GraphNodeDetails: View {
                 }
                 if let document {
                     Text(document.origin == "user" ? "我的笔记 · 已保存内容" : "主动保存的 AI 摘记").font(.caption).foregroundStyle(.secondary)
-                    if let loadError { Text(loadError).font(.caption).foregroundStyle(.red) }
-                    else if let markdown { MarkdownText(markdown: markdown).readingTextContext(.notes) }
+                    if loadedDocumentRevision == revision, let loadError { Text(loadError).font(.caption).foregroundStyle(.red) }
+                    else if loadedDocumentRevision == revision, let markdown { MarkdownText(markdown: markdown).readingTextContext(.notes) }
                     else { ProgressView().controlSize(.small).frame(maxWidth: .infinity) }
                     if !document.evidence.isEmpty { EvidenceDisclosure(evidence: document.evidence).id(document.id) }
-                } else if let entity = store.book?.entities.first(where: { $0.id == item.targetID }) {
+                } else if let entity = visibleProjection?.entity {
                     Text(entity.summary).font(typography.font(for: .knowledge)).textSelection(.enabled)
                     ForEach(entity.properties.sorted(by: { $0.key < $1.key }), id: \.key) { field in
                         VStack(alignment: .leading, spacing: 3) { Text(field.key).font(.system(size: 13)).foregroundStyle(.secondary); Text(field.value).font(typography.font(for: .knowledge)).textSelection(.enabled) }
                     }
                     if !entity.evidence.isEmpty { EvidenceDisclosure(evidence: entity.evidence).id(entity.id) }
-                } else if let event = store.book?.events.first(where: { $0.id == item.targetID }) {
+                } else if let event = visibleProjection?.event {
                     Text(event.dateText).font(.caption).foregroundStyle(Palette.accent)
                     Text(event.summary).font(typography.font(for: .knowledge)).textSelection(.enabled)
-                    if !event.placeIDs.isEmpty { Text("地点：" + event.placeIDs.map(store.objectTitle).joined(separator: "、")).font(typography.font(for: .knowledge)) }
-                    if !event.participantIDs.isEmpty { Text("参与者：" + event.participantIDs.map(store.objectTitle).joined(separator: "、")).font(typography.font(for: .knowledge)) }
+                    let places = event.placeIDs.compactMap { visibleProjection?.names[$0] }
+                    let participants = event.participantIDs.compactMap { visibleProjection?.names[$0] }
+                    if !places.isEmpty { Text("地点：" + places.joined(separator: "、")).font(typography.font(for: .knowledge)) }
+                    if !participants.isEmpty { Text("参与者：" + participants.joined(separator: "、")).font(typography.font(for: .knowledge)) }
                     if !event.evidence.isEmpty { EvidenceDisclosure(evidence: event.evidence).id(event.id) }
-                } else if let unit = store.book?.units.first(where: { $0.id == item.targetID }) {
+                } else if let unit = visibleProjection?.unit {
                     Text(unit.locator).font(.caption).foregroundStyle(.secondary)
                     Text(unit.text).font(typography.font(for: .source)).textSelection(.enabled)
+                } else if visibleProjection == nil, document == nil {
+                    ProgressView().controlSize(.small).frame(maxWidth: .infinity)
                 } else { Text("这个节点暂时没有可预览的内容。").font(.system(size: 15)).foregroundStyle(.secondary) }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        }.task(id: projectionRequest) {
+            guard document == nil, let book = store.book else { projection = nil; return }
+            let request = projectionRequest, target = item.targetID, allowed = store.temporalBoundary.allowedUnitIDs
+            let worker = Task.detached(priority: .userInitiated) { GraphNodeDetailProjection.build(request: request, targetID: target, book: book, allowed: allowed) }
+            let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+            guard !Task.isCancelled, projectionRequest == request else { return }
+            projection = result
         }.task(id: revision) {
             markdown = nil; loadError = nil
             guard let bookID = store.bookID, let document else { return }
+            let request = revision, root = store.libraryRootURL, repository = store.repository
             do {
-                let value = try await store.repository.readDocument(bookID: bookID, document: document)
-                guard !Task.isCancelled, store.bookID == bookID else { return }
-                markdown = value
+                let value = try await repository.readDocument(bookID: bookID, document: document)
+                guard !Task.isCancelled, store.bookID == bookID, store.libraryRootURL == root, revision == request else { return }
+                markdown = value; loadedDocumentRevision = request
             } catch is CancellationError { }
-            catch { if !Task.isCancelled { loadError = error.localizedDescription } }
+            catch {
+                if !Task.isCancelled, store.bookID == bookID, store.libraryRootURL == root, revision == request {
+                    loadError = error.localizedDescription; loadedDocumentRevision = request
+                }
+            }
         }
     }
 }

@@ -37,6 +37,9 @@ final class PDFSourceRangeTests: XCTestCase {
         let range = NSRange(swiftRange, in: text)
         XCTAssertGreaterThan(range.location, text.distance(from: text.startIndex, to: swiftRange.lowerBound), "An emoji before the sentence distinguishes UTF16 offsets from Swift Character counts.")
         XCTAssertEqual(page.selection(for: range)?.string, sentence)
+        let source = try PDFPageSourceText(page: 1, text: text)
+        let proof = try XCTUnwrap(NativePageTextProof.prove(page: 1, nativeText: text, source: source))
+        XCTAssertEqual(proof.range(of: sentence, location: range.location, length: range.length), range)
 
         let character = page.characterBounds(at: range.location)
         XCTAssertFalse(character.isEmpty)
@@ -66,6 +69,30 @@ final class PDFSourceRangeTests: XCTestCase {
         XCTAssertEqual(offset, secondRange.location)
         let secondPageIndex = ReadingRangeIndex<String>([.init(id: "second-page", range: secondRange)])
         XCTAssertEqual(secondPageIndex.ids(containing: offset), ["second-page"])
+    }
+
+    func testNativeAnnotationHitTestingPreservesLinksHighlightsRegionsAndMutation() throws {
+        let document = try document(pages: ["原生批注命中检查。"])
+        let page = try XCTUnwrap(document.page(at: 0))
+        let link = PDFAnnotation(bounds: CGRect(x: 20, y: 40, width: 80, height: 30), forType: .link, withProperties: nil)
+        link.url = URL(string: "https://example.com/reading-test")
+        let highlight = PDFAnnotation(bounds: CGRect(x: 70, y: 45, width: 70, height: 20), forType: .highlight, withProperties: nil)
+        let region = PDFAnnotation(bounds: CGRect(x: 150, y: 100, width: 80, height: 60), forType: .square, withProperties: nil)
+        for annotation in [link, highlight, region] { page.addAnnotation(annotation) }
+        let points = [CGPoint(x: 22, y: 42), CGPoint(x: 80, y: 50), CGPoint(x: 130, y: 55),
+                      CGPoint(x: 180, y: 120), CGPoint(x: 5, y: 5), CGPoint(x: 250, y: 180)]
+        for point in points {
+            XCTAssertEqual(page.annotation(at: point) != nil, page.annotations.contains { $0.bounds.contains(point) }, "原生注释继续优先于原文卡片：\(point)")
+        }
+        let overlap = CGPoint(x: 80, y: 50)
+        XCTAssertTrue(page.annotation(at: overlap) === page.annotations.last(where: { $0.bounds.contains(overlap) }))
+        page.removeAnnotation(highlight)
+        XCTAssertTrue(page.annotation(at: overlap) === link)
+        page.removeAnnotation(link)
+        XCTAssertNil(page.annotation(at: overlap), "不能保留已删除注释的命中缓存。")
+        page.rotation = 90
+        page.setBounds(CGRect(x: 10, y: 20, width: 400, height: 240), for: .cropBox)
+        XCTAssertTrue(page.annotation(at: CGPoint(x: 180, y: 120)) === region, "旋转、裁切后仍使用page space。")
     }
 }
 #endif

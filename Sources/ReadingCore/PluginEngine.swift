@@ -851,7 +851,7 @@ public enum PluginEngine {
             try keys(value, allowed: ["unitID", "quote"])
             let id = try identifier(value, key: "unitID"), quote = try string(value, key: "quote", maximum: 32_768)
             guard allowed.contains(id), let unit = project.units.first(where: { $0.id == id }) else { throw invalid("证据超出本次获准源单元或源单元不存在：\(id)") }
-            guard unit.text.contains(quote) else { throw invalid("证据摘录不是源单元中的原文：\(id)") }
+            guard SourceTextLiteral.contains(quote, in: unit.text) else { throw invalid("证据摘录不是源单元中的原文：\(id)") }
             return Evidence(unitID: id, quote: quote)
         }
         return union([], result)

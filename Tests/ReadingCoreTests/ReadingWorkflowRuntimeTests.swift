@@ -54,6 +54,36 @@ final class ReadingWorkflowRuntimeTests: XCTestCase {
         XCTAssertThrowsError(try ReadingWorkflowRuntime.validate(method: unknown))
     }
 
+    func testNewWorkflowOutputRequiresLiteralBytesAndKeepsLegacyArchiveReadable() async throws {
+        for (literal, substituted) in [("e\u{301}", "é"), ("é", "e\u{301}")] {
+            var value = try project(withReceipts: false, executions: [ReadingStepExecution(stepIndex: 0, actionID: "ai.analyze")], steps: ["说明写法"])
+            value.units[0].text = "中文\(literal)。中文\(literal)。"
+            value.paragraphReceipts = try ReadingLedger.paragraphs(for: value.units[0], in: value).map {
+                ParagraphReceipt(paragraphID: $0.id, unitID: $0.unitID, unitHash: $0.unitHash, textHash: $0.textHash,
+                    utf8Start: $0.utf8Start, utf8End: $0.utf8End, summary: "保存原文中的写法。",
+                    startQuote: $0.startQuote, endQuote: $0.endQuote, issues: [], createdAt: Date())
+            }
+            let task = try XCTUnwrap(ReadingWorkflowRuntime.nextTask(for: value.units[0], in: value))
+            func service(_ quote: String) -> ReadingWorkflowServices {
+                ReadingWorkflowServices { task, original in
+                    var candidate = original
+                    try ReadingWorkflowRuntime.complete(stepID: task.requirement.stepID,
+                        output: ReadingWorkflowOutput(result: "说明原文中的写法。", paragraphIDs: task.input.paragraphIDs,
+                            evidence: [Evidence(unitID: "u1", quote: quote)]), to: &candidate, allowedUnitIDs: ["u1"])
+                    return candidate
+                }
+            }
+            let rejected = try await ReadingWorkflowRuntime.perform(task, in: value, services: service(substituted))
+            XCTAssertEqual(rejected.workflowRuns?.first?.status, .failed)
+            XCTAssertNil(rejected.readingStepResults)
+            var accepted = try await ReadingWorkflowRuntime.perform(task, in: value, services: service("中文" + literal + "。"))
+            XCTAssertEqual(accepted.workflowRuns?.first?.status, .completed)
+            XCTAssertNoThrow(try ReadingLedger.validateStoredRecords(in: accepted))
+            accepted.workflowRuns?[0].output?.evidence[0].quote = substituted
+            XCTAssertNoThrow(try ReadingLedger.validateStoredRecords(in: accepted), "新提交校验不能使旧规范等价档案整本隐藏。")
+        }
+    }
+
     func testOneActionCheckpointRoundTripsAndResumeDoesNotReplayIt() async throws {
         var value = try project(executions: [ReadingStepExecution(stepIndex: 0, actionID: "facts.extract"), ReadingStepExecution(stepIndex: 1, actionID: "citations.verify")])
         let first = try XCTUnwrap(ReadingWorkflowRuntime.nextTask(for: value.units[0], in: value))

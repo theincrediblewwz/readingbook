@@ -16,10 +16,16 @@ public struct ReadingChatContext: Codable, Hashable, Sendable {
         self.avoidsSpoilers = avoidsSpoilers
         // Only source/slice identity and explicit document membership enter this
         // fingerprint. A new question/request never invalidates its own history.
-        let value: [String: Any] = ["scope": snapshot.scope.rawValue, "sourceHash": snapshot.sourceHash,
-            "sources": snapshot.sources.map { ["id": $0.unitID, "hash": $0.textHash] },
-            "documents": snapshot.documents.map { ["id": $0.id, "updatedAt": $0.updatedAt.timeIntervalSince1970] as [String: Any] }]
-        scopeFingerprint = try BookImporter.sha256(JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]))
+        scopeFingerprint = try Self.fingerprint(scope: snapshot.scope, sourceHash: snapshot.sourceHash,
+            sources: snapshot.sources.map { ($0.unitID, $0.textHash) }, documents: snapshot.documents)
+    }
+
+    fileprivate static func fingerprint(scope: ReadingQueryScope, sourceHash: String,
+                                        sources: [(String, String)], documents: [DocumentRecord]) throws -> String {
+        let value: [String: Any] = ["scope": scope.rawValue, "sourceHash": sourceHash,
+            "sources": sources.map { ["id": $0.0, "hash": $0.1] },
+            "documents": documents.map { ["id": $0.id, "updatedAt": $0.updatedAt.timeIntervalSince1970] as [String: Any] }]
+        return try BookImporter.sha256(JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]))
     }
 }
 
@@ -29,13 +35,37 @@ public enum ReadingChatHistory {
         let matching = project.chats.filter {
             ($0.conversationMode ?? .functional) == preferences.interaction && ($0.answerStyle ?? .research) == preferences.style
         }
-        guard preferences.avoidsSpoilers else { return matching }
-        guard let current = try? ReadingChatContext(snapshot: snapshot, avoidsSpoilers: true) else { return [] }
+        guard let current = try? ReadingChatContext(snapshot: snapshot, avoidsSpoilers: preferences.avoidsSpoilers) else { return [] }
         let orders = Dictionary(project.units.map { ($0.id, $0.order) }, uniquingKeysWith: { first, _ in first })
         let cursor = current.unitIDs.compactMap { orders[$0] }.max()
         let documents = Set(current.documentIDs)
+        let unitsByID = Dictionary(grouping: project.units, by: \.id)
+        let documentsByID = Dictionary(project.activeDocuments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var sourceHashes: [String: String] = [:], currentVersions: [ReadingChatContext: Bool] = [:]
+        func sameVersion(_ context: ReadingChatContext) -> Bool {
+            if let saved = currentVersions[context] { return saved }
+            // A historic slice cannot be reconstructed from unit IDs alone.
+            // Exact same-slice context is checked separately below.
+            guard context.scope != .selection else { currentVersions[context] = false; return false }
+            var sources: [(String, String)] = []
+            for id in context.unitIDs {
+                guard !Task.isCancelled, let matches = unitsByID[id], matches.count == 1, let unit = matches.first else { return false }
+                let hash: String
+                if let saved = sourceHashes[id] { hash = saved }
+                else {
+                    guard let value = try? BookImporter.sha256(Data(unit.text.utf8)) else { return false }
+                    sourceHashes[id] = value; hash = value
+                }
+                sources.append((id, hash))
+            }
+            let notes = context.documentIDs.compactMap { documentsByID[$0] }
+            let valid = notes.count == context.documentIDs.count &&
+                (try? ReadingChatContext.fingerprint(scope: context.scope, sourceHash: project.sourceHash,
+                    sources: sources, documents: notes)) == context.scopeFingerprint
+            currentVersions[context] = valid; return valid
+        }
         func admitted(_ message: ChatMessage) -> Bool {
-            guard let context = message.readingContext, context.avoidsSpoilers, context.sourceHash == project.sourceHash,
+            guard let context = message.readingContext, (!preferences.avoidsSpoilers || context.avoidsSpoilers), context.sourceHash == project.sourceHash,
                   context.scopeFingerprint.count == 64, context.unitIDs.count <= BookImporter.maximumUnits,
                   Set(context.unitIDs).count == context.unitIDs.count, context.documentIDs.count <= 1024,
                   Set(context.documentIDs).count == context.documentIDs.count,
@@ -43,7 +73,10 @@ public enum ReadingChatHistory {
             if current.scope == .selection || current.scope == .notes {
                 return context.scopeFingerprint == current.scopeFingerprint
             }
-            guard let cursor, !context.unitIDs.isEmpty else { return false }
+            guard sameVersion(context) else { return false }
+            guard !context.unitIDs.isEmpty else { return false }
+            if !preferences.avoidsSpoilers { return context.unitIDs.allSatisfy { orders[$0] != nil } }
+            guard let cursor else { return false }
             return context.unitIDs.allSatisfy { orders[$0].map { $0 <= cursor } == true }
         }
         // Keep question/answer groups together; a safe-looking answer cannot

@@ -6,6 +6,7 @@ public enum MarkdownReferenceLinks {
     public static func render(_ source: String, bookID: String, labelForReference: ((String, String) -> String?)? = nil) -> String {
         guard !bookID.isEmpty else { return source }
         let bytes = Array(source.utf8)
+        let mathClosers = MathCloserIndex(bytes)
         var output: [UInt8] = []; output.reserveCapacity(bytes.count)
         var bracketEnds: [Int: Int] = [:], brackets: [Int] = []
         var parenthesisEnds: [Int: Int] = [:], parentheses: [Int] = []
@@ -38,7 +39,7 @@ public enum MarkdownReferenceLinks {
                 offset += length; continue
             }
             if bytes[offset] == 92, offset + 1 < bytes.count, bytes[offset + 1] == 40 || bytes[offset + 1] == 91,
-               let end = closing(bytes, from: offset + 2, delimiter: [92, bytes[offset + 1] == 40 ? 41 : 93]) { offset = end; continue }
+               let end = mathClosers.end(from: offset + 2, opener: bytes[offset + 1]) { offset = end; continue }
             if bytes[offset] == 92 { offset += 2; continue }
             if bytes[offset] == 91 { brackets.append(offset) }
             else if bytes[offset] == 93, let start = brackets.popLast() { bracketEnds[start] = offset }
@@ -68,7 +69,7 @@ public enum MarkdownReferenceLinks {
             let value = bytes[offset]
             if value == 92 {
                 if offset + 1 < bytes.count, bytes[offset + 1] == 40 || bytes[offset + 1] == 91,
-                   let end = closing(bytes, from: offset + 2, delimiter: [92, bytes[offset + 1] == 40 ? 41 : 93]) {
+                   let end = mathClosers.end(from: offset + 2, opener: bytes[offset + 1]) {
                     output.append(contentsOf: bytes[offset..<end]); offset = end; continue
                 }
                 let end = min(bytes.count, offset + 2); output.append(contentsOf: bytes[offset..<end]); offset = end; continue
@@ -128,14 +129,31 @@ public enum MarkdownReferenceLinks {
     }
 
     public static func render(_ source: String, bookID: String, project: BookProject?) -> String {
-        render(source, bookID: bookID, labelForReference: { kind, id in
-            if kind == "unit", let unit = project?.units.first(where: { $0.id == id }) {
-                return unit.page.map { "第 \($0) 页" } ?? (unit.chapter.isEmpty ? "原文" : unit.chapter)
+        // Build only an index that this answer actually needs. Repeated source
+        // citations no longer linearly search the whole book for every label.
+        var unitLabels: [String: String]?, messageLabels: [String: String]?, documentLabels: [String: String]?
+        return render(source, bookID: bookID, labelForReference: { kind, id in
+            if kind == "unit" {
+                if unitLabels == nil {
+                    unitLabels = Dictionary((project?.units ?? []).map { unit in
+                        (unit.id, unit.page.map { "第 \($0) 页" } ?? (unit.chapter.isEmpty ? "原文" : unit.chapter))
+                    }, uniquingKeysWith: { first, _ in first })
+                }
+                return unitLabels?[id]
             }
-            if kind == "message", let message = project?.chats.first(where: { $0.id == id }) {
-                return message.role == "user" ? "先前的问题" : "先前的回答"
+            if kind == "message" {
+                if messageLabels == nil {
+                    messageLabels = Dictionary((project?.chats ?? []).map { ($0.id, $0.role == "user" ? "先前的问题" : "先前的回答") }, uniquingKeysWith: { first, _ in first })
+                }
+                return messageLabels?[id]
             }
-            return kind == "document" ? project?.documents.first(where: { $0.id == id })?.title : nil
+            if kind == "document" {
+                if documentLabels == nil {
+                    documentLabels = Dictionary((project?.documents ?? []).map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+                }
+                return documentLabels?[id]
+            }
+            return nil
         })
     }
 
@@ -164,13 +182,33 @@ public enum MarkdownReferenceLinks {
         }
         return nil
     }
-    private static func closing(_ bytes: [UInt8], from start: Int, delimiter: [UInt8]) -> Int? {
-        var index = start
-        while index + delimiter.count <= bytes.count {
-            if bytes[index..<(index + delimiter.count)].elementsEqual(delimiter) { return index + delimiter.count }
-            index += bytes[index] == 92 ? 2 : 1
+    private struct MathCloserIndex {
+        private let round: [Int]
+        private let square: [Int]
+        init(_ bytes: [UInt8]) {
+            var round: [Int] = [], square: [Int] = [], index = 0
+            while index + 1 < bytes.count {
+                if bytes[index] == 92 {
+                    if bytes[index + 1] == 41 { round.append(index) }
+                    else if bytes[index + 1] == 93 { square.append(index) }
+                    index += 2
+                } else { index += 1 }
+            }
+            self.round = round; self.square = square
         }
-        return nil
+        func end(from start: Int, opener: UInt8) -> Int? {
+            // Each search starts after '(' or '[', never inside a backslash
+            // run, so escape-pair alignment matches the old suffix scan.
+            // Index once in O(N); malformed repeated openers now query in
+            // O(log N) rather than scanning the same missing suffix O(N²).
+            let positions = opener == 40 ? round : square
+            var lower = 0, upper = positions.count
+            while lower < upper {
+                let middle = lower + (upper - lower) / 2
+                if positions[middle] < start { lower = middle + 1 } else { upper = middle }
+            }
+            return lower < positions.count ? positions[lower] + 2 : nil
+        }
     }
     private static func blockPrefix(_ line: [UInt8]) -> Int {
         var index = 0, spaces = 0

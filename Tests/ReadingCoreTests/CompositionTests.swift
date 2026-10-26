@@ -101,6 +101,81 @@ final class CompositionTests: XCTestCase {
             "仅宿主明确授予完整原书身份可读时保留原身份，不能从组件book字样推断授权。")
     }
 
+    func testInlinePagePolicyKeepsLocatorAndExplicitSelectionBoundarySeparate() throws {
+        var book = try fixture()
+        book.units[1].page = 1 // A source whitelist still wins over page membership.
+        let value = definition([CompositionDataSource(id: "objects", collection: .objects)])
+        let context = ReadingContext(sourceHash: book.sourceHash, unitID: "u1", selectedText: "刘备", objectID: "liu", page: 1)
+        let boundary = KnowledgeReadBoundary(allowedUnitIDs: ["u1"])
+        let automatic = try CompositionRuntime.project(value, in: book, context: context, boundary: boundary)
+        XCTAssertTrue(automatic["objects"]!.items.isEmpty)
+        let page = try CompositionRuntime.project(value, in: book, context: context, boundary: boundary, currentScope: .page)
+        XCTAssertTrue(page["objects"]!.items.contains { $0.id == "liu" })
+        XCTAssertFalse(page["objects"]!.items.contains { $0.id == "xudu" })
+        XCTAssertEqual(page["objects"]!.items.first { $0.id == "cao" }?.title, "神秘人")
+        let selected = try CompositionRuntime.project(value, in: book, context: context, boundary: boundary, currentScope: .selection)
+        XCTAssertTrue(selected["objects"]!.items.isEmpty)
+    }
+
+    func testPreparedInputIsBoundToCapturedProjectAndOnlyMapSourcesComputePoints() throws {
+        var book = try fixture()
+        let value = definition([CompositionDataSource(id: "objects", collection: .objects, scope: .book)])
+        let prepared = try CompositionRuntime.prepare(value, in: book)
+        book.entities.removeAll(); book.events.removeAll()
+        let result = try CompositionRuntime.project(prepared)["objects"]!
+        XCTAssertTrue(result.items.contains { $0.id == "jiangling" })
+        XCTAssertTrue(result.mapPoints.isEmpty)
+        XCTAssertFalse(result.partial)
+        let map = definition([CompositionDataSource(id: "objects", collection: .objects, scope: .book)], primitives: [.map])
+        let mapped = try CompositionRuntime.project(map, in: fixture())["objects"]!
+        XCTAssertFalse(mapped.mapPoints.isEmpty)
+    }
+
+    func testWindowFiltersEventsAndRelationsWhileCursorAndMapModeStayDistinct() throws {
+        var book = try fixture()
+        let first = book.entities[1].evidence[0], second = book.entities[3].evidence[0]
+        let anchors = book.temporalKnowledge!.anchors
+        func year(_ year: Int) -> TemporalExtent {
+            TemporalExtent(sourceText: "\(year)年", calendar: "gregorian", start: TemporalDate(year: year), precision: .year, uncertainty: .exact)
+        }
+        book.events.append(KnowledgeEvent(id: "return", name: "返回许都", dateText: "209年", startYear: 209,
+            placeIDs: ["xudu"], participantIDs: ["cao"], evidence: [second]))
+        book.events.append(KnowledgeEvent(id: "undated", name: "另一次行动", participantIDs: ["cao"], evidence: [first]))
+        book.temporalKnowledge!.eventMetadata.append(EventTemporalMetadata(eventID: "return", extent: year(209),
+            sourceAnchorIDs: [anchors[1].id], assertion: .explicit))
+        book.temporalKnowledge!.relationMetadata = [RelationTemporalMetadata(id: "early-relation", relationID: "relation", validity: year(208),
+            sourceAnchorIDs: [anchors[0].id], assertion: .explicit)]
+        book.temporalKnowledge!.presences.append(EntityPresence(id: "inferred-location", entityID: "cao", placeID: "jiangling", extent: year(209),
+            action: "推测到访", sourceAnchorIDs: [anchors[0].id], assertion: .inferred, explanation: "仅为推测"))
+        let value = definition([
+            CompositionDataSource(id: "people", collection: .objects, scope: .book, typeIDs: ["person"], relation: .selected),
+            CompositionDataSource(id: "events", collection: .events, scope: .book, relation: .events),
+            CompositionDataSource(id: "graph", collection: .relations, scope: .book, relation: .neighbors)], primitives: [.map, .timeline, .relations])
+        let selection: [String: Set<String>] = ["main": ["cao"]]
+        let cursor: [String: TemporalQueryPoint] = ["main": .date(TemporalDate(year: 209), calendar: "gregorian")]
+        let window: [String: TemporalQueryWindow] = ["main": .date(from: TemporalDate(year: 208), to: TemporalDate(year: 209), calendar: "gregorian")]
+        let prepared = try CompositionRuntime.prepare(value, in: book)
+        let baseline = try CompositionRuntime.project(prepared, selections: selection)
+        let instant = try CompositionRuntime.project(prepared, selections: selection, times: cursor, windows: window)
+        XCTAssertEqual(Set(instant["events"]!.items.map(\.id)), ["campaign", "return", "undated"])
+        XCTAssertEqual(instant["events"]!.items.first { $0.id == "undated" }?.fields["temporalMatch"], "unknown")
+        XCTAssertFalse(instant["events"]!.diagnostics.isEmpty)
+        XCTAssertEqual(instant["graph"]!.edges.map(\.id), ["relation"], "An in-window relation must not disappear solely because the cursor is later.")
+        XCTAssertTrue(instant["people"]!.items.first!.fields["此时行动"]!.contains("返回"))
+        XCTAssertEqual(instant["people"]!.mapPoints.filter { $0.kind == "presence" }.map(\.latitude), [34])
+        let footprints = try CompositionRuntime.project(prepared, selections: selection, times: cursor, windows: window, mapModes: ["main": .windowFootprints])
+        XCTAssertEqual(Set(footprints["people"]!.mapPoints.map(\.id)), ["presence.p208", "presence.p209"])
+        let late = try CompositionRuntime.project(prepared, selections: selection, times: cursor,
+            windows: ["main": .date(from: TemporalDate(year: 209), to: TemporalDate(year: 209), calendar: "gregorian")])
+        XCTAssertFalse(late["events"]!.items.contains { $0.id == "campaign" })
+        XCTAssertTrue(late["graph"]!.edges.isEmpty)
+        XCTAssertEqual(baseline["events"]!.items.count, 3, "Filtering must leave the prepared full-period baseline intact.")
+        let bounded = try CompositionRuntime.project(value, in: book, selections: selection, times: cursor,
+            boundary: KnowledgeReadBoundary(allowedUnitIDs: ["u1"]), windows: window, mapModes: ["main": .windowFootprints])
+        XCTAssertFalse(bounded["events"]!.items.contains { $0.id == "return" })
+        XCTAssertEqual(bounded["people"]!.mapPoints.map(\.id), ["presence.p208"])
+    }
+
     func testSharedSelectionTimeAndNoInventedParticipantLocations() throws {
         let book = try fixture()
         let value = definition([

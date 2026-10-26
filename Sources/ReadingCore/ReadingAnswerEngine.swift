@@ -9,13 +9,14 @@ enum ReadingAnswerEngine {
                     remainingRequests: Int, appendedDocumentIDs: [String] = [], authorizedNodeIDs: [String] = [],
                     hostOperationContext: String? = nil, workspace: ReadingWorkspaceSnapshot? = nil, hostTools: ReadingHostToolAccess? = nil,
                     proposalAccess: ReadingProposalToolAccess? = nil, progress: AIProgressHandler? = nil,
-                    preferences: ReadingAnswerPreferences = .init(), request: Request) async throws -> ReadingAnswerResult {
+                    preferences: ReadingAnswerPreferences = .init(), prepared: ReadingPreparedAnswer? = nil,
+                    request: Request) async throws -> ReadingAnswerResult {
         guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, question.count <= 4000 else { throw ReadingError.invalid("问题不能为空，且最多4000字；未截断或发送原问题。") }
         guard history.count <= 10_000, Set(history.map(\.id)).count == history.count,
               history.allSatisfy({ ["user", "assistant"].contains($0.role) && !$0.id.isEmpty }) else { throw ReadingError.invalid("当前会话消息ID、角色或数量无效。") }
         guard preferences.interaction != .functional || (hostOperationContext?.utf8.count ?? 0) <= 4000 else { throw ReadingError.invalid("宿主操作状态超过本次有界上下文上限。") }
         let functional = preferences.interaction == .functional
-        let snapshot = try ReadingQuerySnapshot.freeze(scope: scope ?? (context?.documentID == nil ? .book : .notes), in: project, context: context,
+        let snapshot = try prepared?.snapshot ?? ReadingQuerySnapshot.freeze(scope: scope ?? (context?.documentID == nil ? .book : .notes), in: project, context: context,
             documentIDs: documentIDs, appendedDocumentIDs: appendedDocumentIDs, authorizedNodeIDs: functional ? authorizedNodeIDs : [])
             .withContextIdentity(preferences.contextIdentity)
         guard remainingRequests > 0 else { throw ReadingError.invalid("本轮问答请求预算已用完。") }

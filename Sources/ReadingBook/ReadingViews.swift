@@ -46,6 +46,7 @@ struct ReaderWorkspaceView: View {
                                 return await store.setReaderAnnotationTrashed(id, trashed: trashed)
                             }, sourceDecorations: store.pdfSourceReadingDecorations,
                                sourceDecorationRevision: store.pdfSourceReadingDecorationRevision,
+                               sourcePageTexts: store.pdfSourcePageTexts,
                                focusedDecorationID: store.focusedReadingAnchorID,
                                onSourceDecorationTap: sourceTapped,
                                onSourceSelection: { selection in store.sourceReadingSelection = selection; if selection != nil { store.focusedReadingAnchorID = nil } },

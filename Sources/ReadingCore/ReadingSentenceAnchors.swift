@@ -1,14 +1,29 @@
 import Foundation
 
+public enum ReadingSentenceSyntax: Equatable, Sendable {
+    case plainText, markdown
+}
+
 /// Precompute once per source unit, then check old passage anchors without
 /// rescanning the page for each saved translation or decoration.
 public struct ReadingPassageBoundaryIndex: Sendable {
     private let length: Int
     private let boundaries: [Int]
-    fileprivate init(length: Int, boundaries: [Int]) { self.length = length; self.boundaries = boundaries }
+    private let regions: [NSRange]?
+    fileprivate init(length: Int, boundaries: [Int], regions: [NSRange]? = nil) {
+        self.length = length; self.boundaries = boundaries; self.regions = regions
+    }
     public func crossesStructuralBoundary(_ range: NSRange) -> Bool {
         guard range.location >= 0, range.length > 0, range.location <= length, range.length <= length - range.location else { return true }
         let end = range.location + range.length
+        if let regions {
+            var low = 0, high = regions.count
+            while low < high {
+                let middle = low + (high - low) / 2
+                if regions[middle].location <= range.location { low = middle + 1 } else { high = middle }
+            }
+            guard low > 0, end <= NSMaxRange(regions[low - 1]) else { return true }
+        }
         var low = 0, high = boundaries.count
         while low < high {
             let middle = low + (high - low) / 2
@@ -21,23 +36,91 @@ public struct ReadingPassageBoundaryIndex: Sendable {
 /// Disposable reading affordances. A sentence becomes saved analysis only
 /// after the reader explicitly asks for a translation and the host commits it.
 public enum ReadingSentenceAnchors {
-    public static func ranges(in text: String, maximumUTF16Length: Int = 1600, chapterTitle: String? = nil) -> [NSRange] {
-        scan(text, maximumUTF16Length: maximumUTF16Length, chapterTitle: chapterTitle).ranges
+    public static func syntax(for unit: SourceUnit, in project: BookProject) -> ReadingSentenceSyntax {
+        let ext = URL(fileURLWithPath: project.originalName).pathExtension.lowercased()
+        if ext == "md" || ext == "markdown" { return .markdown }
+        if let page = unit.page, project.ocrPages?.contains(where: { $0.page == page }) == true { return .markdown }
+        return .plainText
     }
 
-    public static func boundaryIndex(in text: String, chapterTitle: String? = nil) -> ReadingPassageBoundaryIndex {
+    public static func ranges(in text: String, maximumUTF16Length: Int = 1600, chapterTitle: String? = nil,
+                              syntax: ReadingSentenceSyntax = .plainText) -> [NSRange] {
+        guard maximumUTF16Length >= 64, !Task.isCancelled else { return [] }
+        guard syntax == .markdown, ReadingMarkdownStructure.needsStructure(text) else {
+            return scan(text, maximumUTF16Length: maximumUTF16Length, chapterTitle: chapterTitle).ranges
+        }
+        guard let blocks = ReadingMarkdownStructure.blocks(in: text, displayMath: { breaks in
+            scan(text, maximumUTF16Length: maximumUTF16Length, chapterTitle: chapterTitle,
+                 collectRanges: false, displayMathOnly: true, codeSpanBreaks: breaks).displayMath
+        }), !Task.isCancelled else { return [] }
+        let source = text as NSString
+        var result: [NSRange] = []
+        for block in blocks where block.annotates {
+            guard !Task.isCancelled else { return [] }
+            let content = source.substring(with: block.range)
+            if block.atomic {
+                let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty, let local = content.range(of: trimmed, options: .literal) {
+                    let value = NSRange(local, in: content)
+                    result.append(NSRange(location: block.range.location + value.location, length: value.length))
+                }
+            } else {
+                for value in scan(content, maximumUTF16Length: maximumUTF16Length, chapterTitle: chapterTitle).ranges {
+                    result.append(NSRange(location: block.range.location + value.location, length: value.length))
+                }
+            }
+        }
+        // The block map is a disposable view over exactly this source string.
+        return result.filter { $0.location <= source.length && $0.length <= source.length - $0.location }
+    }
+
+    public static func boundaryIndex(in text: String, chapterTitle: String? = nil,
+                                     syntax: ReadingSentenceSyntax = .plainText) -> ReadingPassageBoundaryIndex {
+        guard !Task.isCancelled else { return ReadingPassageBoundaryIndex(length: -1, boundaries: []) }
+        if syntax == .markdown, ReadingMarkdownStructure.needsStructure(text) {
+            guard let blocks = ReadingMarkdownStructure.blocks(in: text, displayMath: { breaks in
+                scan(text, maximumUTF16Length: 1600, chapterTitle: chapterTitle,
+                     collectRanges: false, displayMathOnly: true, codeSpanBreaks: breaks).displayMath
+            }), !Task.isCancelled else {
+                return ReadingPassageBoundaryIndex(length: -1, boundaries: [])
+            }
+            let source = text as NSString
+            var boundaries: [Int] = []
+            for block in blocks {
+                guard !Task.isCancelled else { return ReadingPassageBoundaryIndex(length: -1, boundaries: []) }
+                if !block.atomic {
+                    boundaries += scan(source.substring(with: block.range), maximumUTF16Length: 1600, chapterTitle: chapterTitle, collectRanges: false).boundaries.map { block.range.location + $0 }
+                }
+            }
+            guard !Task.isCancelled else { return ReadingPassageBoundaryIndex(length: -1, boundaries: []) }
+            return ReadingPassageBoundaryIndex(length: text.utf16.count, boundaries: Array(Set(boundaries)).sorted(), regions: blocks.map(\.range))
+        }
         guard !Task.isCancelled else { return ReadingPassageBoundaryIndex(length: -1, boundaries: []) }
         let value = scan(text, maximumUTF16Length: 1600, chapterTitle: chapterTitle, collectRanges: false)
         guard !Task.isCancelled else { return ReadingPassageBoundaryIndex(length: -1, boundaries: []) }
         return ReadingPassageBoundaryIndex(length: text.utf16.count, boundaries: value.boundaries)
     }
 
-    private static func scan(_ text: String, maximumUTF16Length: Int, chapterTitle: String?, collectRanges: Bool = true) -> (ranges: [NSRange], boundaries: [Int]) {
-        guard !text.isEmpty, maximumUTF16Length >= 64 else { return ([], []) }
-        var result: [NSRange] = [], boundaries: [Int] = [], start = text.startIndex, cursor = start, lineStart = start
+    private static func scan(_ text: String, maximumUTF16Length: Int, chapterTitle: String?, collectRanges: Bool = true,
+                             displayMathOnly: Bool = false, codeSpanBreaks: [Int] = []) -> (ranges: [NSRange], boundaries: [Int], displayMath: [NSRange]) {
+        guard !text.isEmpty, maximumUTF16Length >= 64 else { return ([], [], []) }
+        var result: [NSRange] = [], boundaries: [Int] = [], math: [NSRange] = [], start = text.startIndex, cursor = start, lineStart = start
         var count = 0, mathWidth = 0, lineOnlyWhitespace = true
         var fenceMarker: Character?, fenceWidth = 0, escapedMathEnd: String?
-        let codeSpanEnds = text.contains("`") ? backtickSpanEnds(in: text) : [:]
+        var mathStart: String.Index?
+        // A missing closer must not rescan the remaining source for every
+        // malformed opener. There are only two escaped delimiters; remember
+        // each one's last occurrence once for this immutable scan.
+        var lastMathClosers: [String: String.Index] = [:], absentMathClosers = Set<String>()
+        func hasMathCloser(_ delimiter: String, after start: String.Index) -> Bool {
+            if let last = lastMathClosers[delimiter] { return last >= start }
+            if absentMathClosers.contains(delimiter) { return false }
+            guard let last = text.range(of: delimiter, options: [.literal, .backwards])?.lowerBound else {
+                absentMathClosers.insert(delimiter); return false
+            }
+            lastMathClosers[delimiter] = last; return last >= start
+        }
+        let codeSpanEnds = text.contains("`") ? backtickSpanEnds(in: text, structuralBreaks: codeSpanBreaks) : [:]
         let closing: Set<Character> = ["”", "’", "」", "』", "\"", "'", "）", ")", "】", "]"]
         func append(_ end: String.Index) {
             guard collectRanges else { return }
@@ -47,7 +130,7 @@ public enum ReadingSentenceAnchors {
             if left < right { result.append(NSRange(left..<right, in: text)) }
         }
         while cursor < text.endIndex {
-            if Task.isCancelled { return ([], []) }
+            if Task.isCancelled { return ([], [], []) }
             let fenced = fenceMarker != nil
             if cursor == lineStart, !fenced, mathWidth == 0, escapedMathEnd == nil,
                let end = headingEnd(in: text, at: cursor, chapterTitle: chapterTitle) {
@@ -90,11 +173,16 @@ public enum ReadingSentenceAnchors {
             }
             if value == "\\", !fenced, mathWidth == 0,
                (cursor == text.startIndex || text[text.index(before: cursor)] != "\\") {
-                if let end = escapedMathEnd, text[cursor...].hasPrefix(end) { escapedMathEnd = nil; cursor = text.index(cursor, offsetBy: 2); continue }
+                if let end = escapedMathEnd, text[cursor...].hasPrefix(end) {
+                    let after = text.index(cursor, offsetBy: 2)
+                    if end == "\\]", let begin = mathStart { math.append(NSRange(begin..<after, in: text)) }
+                    escapedMathEnd = nil; mathStart = nil; cursor = after; continue
+                }
                 if escapedMathEnd == nil {
                     for (begin, end) in [("\\[", "\\]"), ("\\(", "\\)")] where text[cursor...].hasPrefix(begin) {
-                        if text[text.index(cursor, offsetBy: 2)...].range(of: end, options: .literal) != nil {
-                            escapedMathEnd = end; cursor = text.index(cursor, offsetBy: 2); break
+                        if displayMathOnly && begin == "\\(" { continue }
+                        if hasMathCloser(end, after: text.index(cursor, offsetBy: 2)) {
+                            escapedMathEnd = end; mathStart = cursor; cursor = text.index(cursor, offsetBy: 2); break
                         }
                     }
                     if escapedMathEnd != nil { continue }
@@ -103,8 +191,16 @@ public enum ReadingSentenceAnchors {
             if value == "$", !fenced, escapedMathEnd == nil, (cursor == text.startIndex || text[text.index(before: cursor)] != "\\") {
                 let width = next < text.endIndex && text[next] == "$" ? 2 : 1
                 let after = width == 2 ? text.index(after: next) : next
-                if mathWidth == width { mathWidth = 0 }
-                else if mathWidth == 0, text[after...].range(of: width == 2 ? "$$" : "$") != nil { mathWidth = width }
+                // A currency dollar or unmatched inline opener in a previous
+                // paragraph cannot hide a later display-block opener. This
+                // prepass only discovers display atoms; normal scans retain
+                // their existing inline-math handling.
+                if displayMathOnly && width == 1 { cursor = next; continue }
+                if mathWidth == width {
+                    if width == 2, let begin = mathStart { math.append(NSRange(begin..<after, in: text)) }
+                    mathWidth = 0; mathStart = nil
+                }
+                else if mathWidth == 0, text[after...].range(of: width == 2 ? "$$" : "$") != nil { mathWidth = width; mathStart = cursor }
                 if width == 2 { cursor = after; continue }
             }
             let decimal = value == "." && cursor > start && next < text.endIndex && text[text.index(before: cursor)].isNumber && text[next].isNumber
@@ -117,7 +213,7 @@ public enum ReadingSentenceAnchors {
             } else { cursor = next }
         }
         if start < text.endIndex { append(text.endIndex) }
-        return (result, Array(Set(boundaries)).sorted())
+        return (result, Array(Set(boundaries)).sorted(), math)
     }
 
     /// Each backtick run knows the end of the next equal-width run. This makes
@@ -125,11 +221,26 @@ public enum ReadingSentenceAnchors {
     /// Blank lines, ATX headings and fenced-block boundaries cannot be crossed
     /// by an inline code span. Backslashes are checked only at an opener: inside code they
     /// are literal and may precede a closing run.
-    private static func backtickSpanEnds(in text: String) -> [String.Index: String.Index] {
+    private static func backtickSpanEnds(in text: String, structuralBreaks: [Int] = []) -> [String.Index: String.Index] {
         var result: [String.Index: String.Index] = [:], pending: [Int: [String.Index]] = [:]
+        // UTF16 source-line endpoints are already sorted. Convert them in one
+        // scalar pass, rather than seeking from the String prefix per block.
+        // A quote/list boundary resets unmatched code delimiters even when
+        // CommonMark allows code spans across soft or lazy line breaks.
+        var breaks = Set<String.Index>()
+        if !structuralBreaks.isEmpty {
+            var boundary = 0, offset = 0
+            for index in text.unicodeScalars.indices {
+                if Task.isCancelled { return [:] }
+                while boundary < structuralBreaks.count, structuralBreaks[boundary] < offset { boundary += 1 }
+                if boundary < structuralBreaks.count, structuralBreaks[boundary] == offset { breaks.insert(index) }
+                offset += text.unicodeScalars[index].value > 0xffff ? 2 : 1
+            }
+        }
         var cursor = text.startIndex, lineOnlyWhitespace = true, atLineStart = true, headingLine = false
         while cursor < text.endIndex {
             if Task.isCancelled { return [:] }
+            if breaks.contains(cursor) { pending.removeAll(keepingCapacity: true) }
             if atLineStart {
                 let sourceLine = line(in: text, at: cursor)
                 let value = text[cursor..<sourceLine.end], spaces = value.prefix(while: { $0 == " " }).count
@@ -239,7 +350,7 @@ public enum ReadingSentenceAnchors {
         guard maximum > 0, !Task.isCancelled,
               let creator = try? ReadingExperienceRuntime.anchorCreator(sourceHash: project.sourceHash, unitID: unit.id, in: project) else { return [] }
         var result: [SourceAnchor] = []
-        for value in ranges(in: unit.text, chapterTitle: unit.chapter).prefix(max(0, min(2000, maximum))) {
+        for value in ranges(in: unit.text, chapterTitle: unit.chapter, syntax: syntax(for: unit, in: project)).prefix(max(0, min(2000, maximum))) {
             guard !Task.isCancelled, let range = Range(value, in: unit.text) else { break }
             // Keep the same stable identity and literal validation as saved
             // anchors. Ambiguous excerpts are skipped instead of guessed.

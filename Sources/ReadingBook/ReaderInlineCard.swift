@@ -12,6 +12,7 @@ struct ReaderInlineContent: Sendable {
     let objectID: String?
     let context: ReadingContext
     let composition: ViewDefinition?
+    let compositionCurrentScope: CompositionCurrentScope
     static func freeze(_ id: String, book: BookProject, index: ReadingExperienceState, boundary: KnowledgeReadBoundary) -> Self? {
         guard !Task.isCancelled,
               let anchor = index.anchors.first(where: { $0.id == id }) ?? book.readingExperience?.anchors.first(where: { $0.id == id }),
@@ -27,7 +28,8 @@ struct ReaderInlineContent: Sendable {
             event = book.events.first { $0.id == target }.flatMap { projection.event($0) }
         } else { entity = nil; event = nil }
         guard !Task.isCancelled else { return nil }
-        let passageBoundaries = target == nil ? ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter) : nil
+        let syntax = ReadingSentenceAnchors.syntax(for: resolved.unit, in: book)
+        let passageBoundaries = target == nil ? ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter, syntax: syntax) : nil
         guard passageBoundaries?.crossesStructuralBoundary(resolved.range) != true else { return nil }
         let evidence = entity?.evidence ?? event?.evidence ?? []
         var units: [String: SourceUnit] = [:]
@@ -57,7 +59,7 @@ struct ReaderInlineContent: Sendable {
                 guard !Task.isCancelled else { return nil }
                 if candidate.unitID == anchor.unitID, anchors[candidate.id] == nil { anchors[candidate.id] = candidate }
             }
-            let structuralBoundaries = passageBoundaries ?? ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter)
+            let structuralBoundaries = passageBoundaries ?? ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter, syntax: syntax)
             var localProject = book; localProject.units = [resolved.unit]
             var rangesByID: [String: NSRange] = [:], invalidIDs = Set<String>()
             func precedes(_ lhs: ReadingLayer, _ rhs: ReadingLayer) -> Bool {
@@ -103,13 +105,14 @@ struct ReaderInlineContent: Sendable {
             return objects.isEmpty || objectID.map { objects.contains($0) } == true
         }
         guard !Task.isCancelled else { return nil }
-        let composition = configured ?? projection.flatMap { contextualComposition(objectID: objectID, unitID: anchor.unitID, book: book, projection: $0) }
+        let composition = configured ?? projection.flatMap { contextualComposition(objectID: objectID, unitID: anchor.unitID, book: book, projection: $0, boundary: boundary) }
         guard !Task.isCancelled else { return nil }
         return Self(anchor: anchor, title: title, kind: entity.flatMap { value in book.types.first(where: { $0.id == value.typeID })?.name } ?? (event == nil ? "译注" : "事件"),
             markdown: markdown, savedMarkdown: hasSummary || !localLayers.isEmpty ? markdown : nil, objectID: objectID, context: context,
-            composition: composition)
+            composition: composition, compositionCurrentScope: configured == nil ? .page : .automatic)
     }
-    private static func contextualComposition(objectID: String?, unitID: String, book: BookProject, projection: ReadingSpoilerProjection.Context) -> ViewDefinition? {
+    private static func contextualComposition(objectID: String?, unitID: String, book: BookProject, projection: ReadingSpoilerProjection.Context,
+                                             boundary: KnowledgeReadBoundary) -> ViewDefinition? {
         guard !Task.isCancelled, let objectID else { return nil }
         var events: [KnowledgeEvent] = []
         for event in book.events {
@@ -124,7 +127,16 @@ struct ReaderInlineContent: Sendable {
             if places.contains(entity.id), entity.evidence.contains(where: { $0.unitID == unitID }), let projected = projection.entity(entity) { visiblePlaces.append(projected) }
         }
         let hasMap = visiblePlaces.contains { $0.latitude != nil && $0.longitude != nil }
-        let hasTime = events.contains { $0.startYear != nil }
+        var hasTime = events.contains { $0.startYear != nil || $0.endYear != nil }
+        if !hasTime, !events.isEmpty {
+            // A modern event may have only dated/narrative metadata, without
+            // the legacy year fields. Use the same provenance gate as the
+            // timeline; future metadata must not create an apparent entry.
+            var scoped = book; scoped.events = events
+            hasTime = (try? TemporalKnowledgeRuntime.events(in: scoped, boundary: boundary))?.contains {
+                $0.extent.start != nil || $0.extent.end != nil || $0.extent.narrativeStart != nil
+            } == true
+        }
         var sources: [CompositionDataSource] = [], parts: [CompositionPart] = [], layout: [CompositionLayoutNode] = []
         if hasTime {
             let relation: CompositionSelectionRelation = book.events.contains(where: { $0.id == objectID }) ? .selected : .events
@@ -314,7 +326,7 @@ struct ReaderInlineCard: View {
                         }
                         if let composition = content.composition {
                             DisclosureGroup("时间与相关内容", isExpanded: $showsComposition) {
-                                if showsComposition { CompositionWorkspaceView(definition: composition, embedded: true, contextOverride: content.context).frame(height: 340) }
+                                if showsComposition { CompositionWorkspaceView(definition: composition, embedded: true, contextOverride: content.context, currentScope: content.compositionCurrentScope).frame(height: 340) }
                             }.font(.system(size: 14, weight: .medium))
                         }
                         HStack {

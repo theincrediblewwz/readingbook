@@ -70,6 +70,48 @@ final class ReadingExperienceTests: XCTestCase {
         XCTAssertThrowsError(try ReadingExperienceRuntime.anchorCreator(sourceHash: "foreign", unitID: "unicode", in: book))
     }
 
+    func testPreparedResolverMatchesOriginalRulesAndAdmitsOnlyCompleteLegacyRanges() throws {
+        let book = project()
+        let resolve = try ReadingExperienceRuntime.anchorResolver(sourceHash: book.sourceHash, unitID: "u1", in: book)
+        let first = try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: "u1", quote: "刘备", prefix: "甲地，", in: book)
+        let second = try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: "u1", quote: "刘备", prefix: "乙地，", in: book)
+        var legacy = first; legacy.utf16Location = nil; legacy.utf16Length = nil
+        XCTAssertEqual(try resolve(first), try ReadingExperienceRuntime.resolve(first, in: book))
+        XCTAssertEqual(try resolve(second), try ReadingExperienceRuntime.resolve(second, in: book))
+        XCTAssertEqual(try resolve(legacy), try ReadingExperienceRuntime.resolve(legacy, in: book))
+        XCTAssertEqual(try resolve(legacy).range, NSRange(location: 3, length: 2))
+        XCTAssertNil(legacy.utf16Location, "派生范围不得回填旧存储记录。")
+
+        var partial = first; partial.utf16Length = nil
+        var wrongRange = first; wrongRange.utf16Location = second.utf16Location
+        var wrongHash = first; wrongHash.unitTextHash = String(repeating: "0", count: 64)
+        var wrongSource = first; wrongSource.sourceHash = "other"
+        var wrongIdentity = first; wrongIdentity.id += "-forged"
+        var ambiguous = first; ambiguous.prefix = ""; ambiguous.suffix = ""
+        let foreign = try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: "u2", quote: "孙权", in: book)
+        for value in [partial, wrongRange, wrongHash, wrongSource, wrongIdentity, ambiguous, foreign] {
+            XCTAssertThrowsError(try resolve(value), "批量校验不能放宽单个锚点的来源、唯一性或身份许可。")
+        }
+    }
+
+    func testPreparedResolverIsSnapshotBoundAndRejectsDuplicateUnits() throws {
+        var book = project()
+        book.units = [SourceUnit(id: "unicode", order: 0, chapter: "Unicode", page: 1, text: "前😀e\u{301}后。")]
+        let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: "unicode", quote: "😀e\u{301}", in: book)
+        let resolve = try ReadingExperienceRuntime.anchorResolver(sourceHash: book.sourceHash, unitID: "unicode", in: book)
+        XCTAssertEqual(try resolve(anchor), try ReadingExperienceRuntime.resolve(anchor, in: book))
+        var normalized = anchor; normalized.quote = "😀é"
+        XCTAssertThrowsError(try resolve(normalized), "不能利用 String 的规范等价替代原字节。")
+        book.units[0].text += "新OCR"
+        XCTAssertEqual(try resolve(anchor).range, NSRange(location: 1, length: 4), "局部准备器捕获不可变快照，不能冒充新版本。")
+        let refreshed = try ReadingExperienceRuntime.anchorResolver(sourceHash: book.sourceHash, unitID: "unicode", in: book)
+        XCTAssertThrowsError(try refreshed(anchor), "新来源不得继承上一快照的哈希许可。")
+        var duplicate = book.units[0]; duplicate.page = 2; duplicate.order = 1
+        book.units.append(duplicate)
+        XCTAssertThrowsError(try ReadingExperienceRuntime.anchorResolver(sourceHash: book.sourceHash, unitID: "unicode", in: book), "另一页的重复 ID 也必须拒绝。")
+        XCTAssertThrowsError(try ReadingExperienceRuntime.anchorResolver(sourceHash: "foreign", unitID: "unicode", in: book))
+    }
+
     func testEmptyForeignHashChangedOCRTextAndCrossPageQuotesAreRejected() throws {
         var book = project()
         for (unit, quote) in [("u1", "  \n"), ("missing", "刘备"), ("u1", "离城。孙权")] {

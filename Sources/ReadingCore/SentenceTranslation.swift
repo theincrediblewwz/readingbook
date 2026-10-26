@@ -11,8 +11,9 @@ public struct SentenceTranslationRequest: Sendable {
 
     public static func freeze(anchor: SourceAnchor, in project: BookProject, targetLanguage: String = "简体中文") throws -> Self {
         let resolved = try ReadingExperienceRuntime.resolve(anchor, in: project)
-        guard !ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter).crossesStructuralBoundary(resolved.range) else {
-            throw ReadingError.invalid("标题与正文已分开，请重新选择标题或原句。")
+        guard !ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter,
+            syntax: ReadingSentenceAnchors.syntax(for: resolved.unit, in: project)).crossesStructuralBoundary(resolved.range) else {
+            throw ReadingError.invalid("这段原文无法可靠分句，请重新选择标题或原句。")
         }
         guard !anchor.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               anchor.quote.count <= 2_000, targetLanguage == "简体中文" else {
@@ -33,7 +34,8 @@ public struct SentenceTranslationRequest: Sendable {
 
     public func cachedLayer(in project: BookProject) -> ReadingLayer? {
         guard project.id == bookID, let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: project),
-              !ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter).crossesStructuralBoundary(resolved.range),
+              !ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter,
+                syntax: ReadingSentenceAnchors.syntax(for: resolved.unit, in: project)).crossesStructuralBoundary(resolved.range),
               let state = project.readingExperience else { return nil }
         let stored = state.anchors.filter { $0.id == anchor.id }
         guard stored.count == 1, let storedAnchor = stored.first,

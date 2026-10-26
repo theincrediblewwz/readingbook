@@ -378,7 +378,10 @@ public enum ReadingWorkflowRuntime {
                 let terminalTool = run.actionID == "citations.verify" ? "citations.verify" : "workflow_step_complete"
                 guard let output = run.output, run.error == nil, run.attempts > 0, run.toolNames.contains(terminalTool),
                       (project.readingStepResults ?? []).contains(where: { $0.stepID == run.stepID && $0.unitID == run.unitID && $0.methodID == run.methodID && $0.methodHash == run.methodHash && $0.stepIndex == run.stepIndex && $0.result == output.result && $0.paragraphIDs == output.paragraphIDs }) else { throw ReadingError.invalid("已完成流程缺少工具凭据、步骤结果或仍有错误。") }
-                try validate(output: output, unitID: run.unitID, project: project, sourceUnit: unit, availableParagraphIDs: available)
+                // Older releases accepted canonically equivalent quotes. Keep
+                // those archives readable; only new submissions prove bytes.
+                try validate(output: output, unitID: run.unitID, project: project, sourceUnit: unit,
+                    availableParagraphIDs: available, requiresLiteralEvidence: false)
                 try validateActionOutput(output, run: run, project: project, mathCache: &mathCache, sourceUnit: unit)
             } else if run.status == .failed {
                 guard run.output == nil, let error = run.error, !error.isEmpty, error.count <= 1600 else { throw ReadingError.invalid("失败流程缺少错误信息。") }
@@ -396,7 +399,7 @@ public enum ReadingWorkflowRuntime {
         }
         evidence += (project.workflowRuns ?? []).filter { $0.unitID == unit.id && $0.status == .completed }.flatMap { $0.output?.evidence ?? [] }
         let local = evidence.filter { $0.unitID == unit.id }
-        guard local.allSatisfy({ !$0.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && unit.text.contains($0.quote) }),
+        guard local.allSatisfy({ !$0.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && SourceTextLiteral.contains($0.quote, in: unit.text) }),
               project.relations.allSatisfy({ ids.contains($0.fromID) && ids.contains($0.toID) }),
               project.events.allSatisfy({ event in (event.placeIDs + event.participantIDs).allSatisfy { id in project.entities.contains { $0.id == id } } }) else {
             throw ReadingError.invalid("引用核验失败：存在不匹配引文或失效对象关联。")
@@ -407,13 +410,15 @@ public enum ReadingWorkflowRuntime {
     }
 
     private static func validate(output: ReadingWorkflowOutput, unitID: String, project: BookProject,
-                                  sourceUnit: SourceUnit? = nil, availableParagraphIDs: Set<String>? = nil) throws {
+                                  sourceUnit: SourceUnit? = nil, availableParagraphIDs: Set<String>? = nil,
+                                  requiresLiteralEvidence: Bool = true) throws {
         guard let unit = sourceUnit ?? project.units.first(where: { $0.id == unitID }),
               !output.result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, output.result.count <= 2000,
               !output.paragraphIDs.isEmpty, output.paragraphIDs.count <= 512,
               Set(output.paragraphIDs).count == output.paragraphIDs.count,
               !output.evidence.isEmpty, output.evidence.count <= 64,
-              output.evidence.allSatisfy({ $0.unitID == unitID && !$0.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && unit.text.contains($0.quote) }),
+              output.evidence.allSatisfy({ $0.unitID == unitID && !$0.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                  (requiresLiteralEvidence ? SourceTextLiteral.contains($0.quote, in: unit.text) : unit.text.contains($0.quote)) }),
               output.issues.count <= 12, output.issues.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 400 }),
               output.noChangesReason.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 400 }) ?? true else { throw ReadingError.invalid("流程输出缺少有效结果、片段或精确原文证据。") }
         let paragraphs: Set<String>

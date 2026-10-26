@@ -2,6 +2,10 @@ import Foundation
 
 public enum CompositionCollection: String, Codable, CaseIterable, Sendable { case objects, events, relations, documents, evidence }
 public enum CompositionScope: String, Codable, Hashable, Sendable { case current, book }
+/// Host query policy only. A word used to locate an inline card need not narrow
+/// its automatic component to that word; explicit selection queries stay exact.
+public enum CompositionCurrentScope: Equatable, Sendable { case automatic, page, selection }
+public enum CompositionMapTimeMode: String, CaseIterable, Hashable, Sendable { case instant, windowFootprints }
 public enum CompositionSelectionRelation: String, Codable, Sendable { case none, selected, neighbors, participants, places, events, documents }
 public enum CompositionSort: String, Codable, Sendable { case name, sourceOrder, time }
 public enum CompositionFilterOperation: String, Codable, Sendable { case equals, contains, oneOf, exists }
@@ -147,6 +151,7 @@ public struct CompositionItem: Identifiable, Hashable, Sendable {
 }
 public struct CompositionEdge: Identifiable, Hashable, Sendable {
     public var id: String; public var fromID: String; public var toID: String; public var label: String; public var kind: String
+    public var temporalMatch: TemporalMatch? = nil
 }
 public struct CompositionMapPoint: Identifiable, Hashable, Sendable {
     public var id: String; public var targetID: String; public var title: String; public var subtitle: String

@@ -24,11 +24,13 @@ public struct TeacherBackgroundRequest: Hashable, Sendable {
 
     public static func freeze(objectID: String, in project: BookProject, currentUnitID: String?,
                               avoidsSpoilers: Bool) throws -> Self {
+        try Task.checkCancellation()
         guard let selected = project.units.first(where: { $0.id == currentUnitID }) ?? project.units.first,
               ReadingKnowledgeRuntime.active(objectID, in: project) else { throw ReadingError.invalid("当前没有可讲解的书中对象。") }
         let cursor = selected.page.flatMap { page in project.units.filter { $0.page == page }.max(by: { $0.order < $1.order }) } ?? selected
         let allowed: Set<String>? = avoidsSpoilers ? Set(project.units.filter { $0.order <= cursor.order }.map(\.id)) : nil
         let projection = ReadingSpoilerProjection.Context(project: project, allowedUnitIDs: allowed)
+        try Task.checkCancellation()
         let entity = project.entities.first { $0.id == objectID }.flatMap { projection.entity($0) }
         let event = project.events.first { $0.id == objectID }.flatMap { projection.event($0) }
         guard let title = entity?.name ?? event?.name, title != "本段关联对象", title != "本段关联事件" else {
@@ -36,8 +38,10 @@ public struct TeacherBackgroundRequest: Hashable, Sendable {
         }
         let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let candidates = entity?.evidence ?? event?.evidence ?? []
-        let local = candidates.filter { item in
-            allowed?.contains(item.unitID) != false && units[item.unitID].map { ReadingKnowledgeRuntime.exact(item.quote, in: $0.text) } == true
+        var local: [Evidence] = []
+        for item in candidates {
+            try Task.checkCancellation()
+            if allowed?.contains(item.unitID) != false && units[item.unitID].map({ ReadingKnowledgeRuntime.exact(item.quote, in: $0.text) }) == true { local.append(item) }
         }
         guard !local.isEmpty else { throw ReadingError.invalid("没有可用的原文依据，未发送背景请求。") }
         // Keep all evidence behind the chosen safe summary, not just its last
@@ -51,14 +55,22 @@ public struct TeacherBackgroundRequest: Hashable, Sendable {
         let fingerprintPayload = ["version": "teacher-context-v2", "sourceHash": project.sourceHash,
             "objectID": objectID, "title": title, "factsHash": try BookImporter.sha256(Data(visibleFacts.utf8)), "spoilers": avoidsSpoilers ? "avoid" : "allow"]
         let data = try JSONSerialization.data(withJSONObject: fingerprintPayload, options: [.sortedKeys])
-        let hashes = try Dictionary(uniqueKeysWithValues: Set(admitted.map(\.unitID)).map { id in
-            (id, try BookImporter.sha256(Data(units[id]!.text.utf8)))
-        })
-        let previous = project.readingKnowledge?.backgrounds.reversed().first {
-            $0.objectID == objectID && $0.sourceHash == project.sourceHash && $0.avoidsSpoilers == avoidsSpoilers &&
-                (!avoidsSpoilers || $0.cursorOrder <= cursor.order) &&
-                ReadingKnowledgeRuntime.sourcesCurrent($0, units: units, allowed: allowed)
+        let sourceHashes = KnowledgeSourceHashes()
+        var hashes: [String: String] = [:]
+        for id in Set(admitted.map(\.unitID)) {
+            try Task.checkCancellation()
+            hashes[id] = try sourceHashes.hash(units[id]!)
         }
+        var previous: TeacherBackgroundRecord?
+        for value in (project.readingKnowledge?.backgrounds ?? []).reversed() {
+            try Task.checkCancellation()
+            if value.objectID == objectID && value.sourceHash == project.sourceHash && value.avoidsSpoilers == avoidsSpoilers &&
+                (!avoidsSpoilers || value.cursorOrder <= cursor.order) &&
+                ReadingKnowledgeRuntime.sourcesCurrent(value, units: units, allowed: allowed, hashes: sourceHashes, isCancelled: { Task.isCancelled }) {
+                previous = value; break
+            }
+        }
+        try Task.checkCancellation()
         return Self(bookID: project.id, bookTitle: project.title, objectID: objectID, sourceHash: project.sourceHash,
             contextFingerprint: try BookImporter.sha256(data), unitHashes: hashes, evidence: admitted,
             allowedUnitIDs: allowed, avoidsSpoilers: avoidsSpoilers, cursorOrder: cursor.order,

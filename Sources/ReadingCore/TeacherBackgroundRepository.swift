@@ -21,7 +21,7 @@ extension LibraryRepository {
                   allowed: request.allowedUnitIDs) else {
             throw ReadingError.invalid("讲解期间原文或对象介绍已更新；旧背景未覆盖新内容，可以重试。")
         }
-        if ReadingKnowledgeRuntime.background(for: request, in: canonical) == nil &&
+        if ReadingKnowledgeRuntime.background(for: request, in: canonical, isCancelled: { false }) == nil &&
             !(canonical.readingKnowledge?.backgrounds ?? []).contains(where: { $0.id == record.id }) {
             if canonical.readingKnowledge == nil { canonical.readingKnowledge = ReadingKnowledgeState() }
             canonical.readingKnowledge?.backgrounds.append(record)

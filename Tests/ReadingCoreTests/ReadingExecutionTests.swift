@@ -94,6 +94,35 @@ final class ReadingExecutionTests: XCTestCase {
         XCTAssertEqual(value.insights.count, original.insights.count + 1)
     }
 
+    func testNewAnalysisAndKnowledgeEvidenceRequireOriginalUnicodeBytes() throws {
+        for (literal, substituted) in [("e\u{301}", "é"), ("é", "e\u{301}")] {
+            let configuration = ReadingExecutionConfiguration(granularity: .page, steps: [])
+            var value = try project(configuration)
+            value.units = [SourceUnit(id: "u1", order: 0, chapter: "第一章", page: 1, text: "中文\(literal)。中文\(literal)。")]
+            value.smartReading = try SmartReadingRuntime.freeze(SmartReadingSelection(execution: configuration), in: value, currentUnitID: "u1")
+            let chunk = try XCTUnwrap(SmartReadingRuntime.nextAnalysisChunk(in: value))
+            let authorization = try grant(chunk, in: value)
+            func submission(_ quote: String) throws -> Data {
+                try JSONSerialization.data(withJSONObject: ["unitIDs": chunk.unitIDs, "completedStepIDs": chunk.stepIDs,
+                    "markdown": "说明原文中的写法。", "evidence": [["unitID": "u1", "quote": quote]]])
+            }
+            let before = value.units[0].text
+            try ReadingAnalysisAuthority.$current.withValue(authorization) {
+                XCTAssertThrowsError(try PluginEngine.apply(name: "reading_analysis", arguments: submission(substituted), to: &value, allowedUnitIDs: ["u1"], phase: .reading))
+                XCTAssertFalse(SmartReadingRuntime.isChunkComplete(chunk, in: value))
+                let cards = try JSONSerialization.data(withJSONObject: ["entities": [["id": "term", "typeID": "concept", "name": "写法", "summary": "原文中的写法。",
+                    "evidence": [["unitID": "u1", "quote": substituted]]]]])
+                XCTAssertThrowsError(try PluginEngine.apply(name: "cards_upsert", arguments: cards, to: &value, allowedUnitIDs: ["u1"], phase: .reading))
+                _ = try PluginEngine.apply(name: "reading_analysis", arguments: submission("中文" + literal + "。"), to: &value, allowedUnitIDs: ["u1"], phase: .reading)
+            }
+            XCTAssertTrue(SmartReadingRuntime.isChunkComplete(chunk, in: value), "原字节相同的中文/重复引文仍合法，无需位置唯一。")
+            XCTAssertTrue(value.units[0].text.utf8.elementsEqual(before.utf8))
+            var archive = value
+            archive.smartReading?.analysisCheckpoints?[0].evidence[0].quote = substituted
+            XCTAssertNoThrow(try SmartReadingRuntime.validateStoredState(in: archive), "旧版本已接纳的规范等价档案仍可载入，不改写或隐藏原记录。")
+        }
+    }
+
     func testAuthorityCannotBeGrantedByStoredModeOrWidenedToAnotherChunk() throws {
         let value = try project()
         let chunk = try XCTUnwrap(SmartReadingRuntime.nextAnalysisChunk(in: value))
