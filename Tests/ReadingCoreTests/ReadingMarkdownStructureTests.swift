@@ -40,6 +40,32 @@ final class ReadingMarkdownStructureTests: XCTestCase {
     }
 
     #if os(macOS)
+    // Temporary CI diagnostics for Foundation's source positions on multiline
+    // inline code. Only hard-coded failing fixtures are printed, never books.
+    private func diagnoseFoundation(_ text: String) {
+        var options = AttributedString.MarkdownParsingOptions()
+        options.interpretedSyntax = .full
+        options.failurePolicy = .throwError
+        options.appliesSourcePositionAttributes = true
+        print("READING_MD_DIAG_SOURCE", text.debugDescription)
+        guard let value = try? AttributedString(markdown: text, options: options) else {
+            print("READING_MD_DIAG_PARSE_FAILED"); return
+        }
+        for run in value.runs {
+            let content = String(value.characters[run.range])
+            let range = run.markdownSourcePosition.flatMap { Range($0, in: text) }
+            let mapped = range.map { String(text[$0]) }
+            let utf16 = range.map { NSRange($0, in: text) }
+            print("READING_MD_DIAG_RUN", content.debugDescription,
+                  "intent", String(describing: run.presentationIntent),
+                  "inline", String(describing: run.inlinePresentationIntent),
+                  "position", String(describing: run.markdownSourcePosition),
+                  "officialUTF16", String(describing: utf16),
+                  "officialSource", String(describing: mapped))
+        }
+        print("READING_MD_DIAG_BLOCKS", String(describing: ReadingMarkdownStructure.blocks(in: text, displayMath: { _ in [] })?.map(\.range)))
+    }
+
     func testIndependentQuoteAndListParagraphsCannotShareACodeSpan() {
         let quote = "正文 `未闭合\n> 引用?`下一句。"
         XCTAssertEqual(quotes(quote), ["正文 `未闭合", "> 引用?", "`下一句。"])
@@ -59,10 +85,14 @@ final class ReadingMarkdownStructureTests: XCTestCase {
             "- 列表 `跨行\n  继续?`结束。"
         ] {
             let text = first + "下一句。"
-            XCTAssertEqual(quotes(text), [first, "下一句。"], text)
+            let actual = quotes(text), expected = [first, "下一句。"]
+            if actual != expected { diagnoseFoundation(text) }
+            XCTAssertEqual(actual, expected, text)
         }
         let nested = "- 外层尚无标点\n  - 嵌套 `跨行\n    继续?`结束。"
-        XCTAssertEqual(quotes(nested), ["- 外层尚无标点", "- 嵌套 `跨行\n    继续?`结束。"])
+        let actualNested = quotes(nested), expectedNested = ["- 外层尚无标点", "- 嵌套 `跨行\n    继续?`结束。"]
+        if actualNested != expectedNested { diagnoseFoundation(nested) }
+        XCTAssertEqual(actualNested, expectedNested)
         let index = ReadingSentenceAnchors.boundaryIndex(in: nested, syntax: .markdown)
         XCTAssertTrue(index.crossesStructuralBoundary(NSRange(location: 0, length: (nested as NSString).length)))
     }
@@ -107,7 +137,9 @@ final class ReadingMarkdownStructureTests: XCTestCase {
         XCTAssertEqual(quotes(independentCode), ["- 前文 `未闭合", "- " + math, "- 后文 `。"],
             "不同段落的反引号不能拼成代码跨度，进而遮住真实公式。")
         let sameParagraphCode = "> `$$\n> a?\n> $$`保留代码。\n>\n> 后文。"
-        XCTAssertEqual(quotes(sameParagraphCode), ["> `$$\n> a?\n> $$`保留代码。", "> 后文。"])
+        let actualCode = quotes(sameParagraphCode), expectedCode = ["> `$$\n> a?\n> $$`保留代码。", "> 后文。"]
+        if actualCode != expectedCode { diagnoseFoundation(sameParagraphCode) }
+        XCTAssertEqual(actualCode, expectedCode)
     }
 
     func testExactSourceLinesPreserveCRLFEmojiCombiningBytesAndOldIdentity() throws {

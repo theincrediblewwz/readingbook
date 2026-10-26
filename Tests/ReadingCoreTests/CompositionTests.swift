@@ -176,6 +176,55 @@ final class CompositionTests: XCTestCase {
         XCTAssertEqual(bounded["people"]!.mapPoints.map(\.id), ["presence.p208"])
     }
 
+    func testSharedTemporalQueriesPreserveScopeTimeAndOrderedEndpointEvidence() throws {
+        var book = try fixture()
+        let first = book.entities[1].evidence[0], second = book.entities[3].evidence[0]
+        let person = Evidence(unitID: "u1", quote: "神秘人"), participant = Evidence(unitID: "u1", quote: "刘备")
+        let place = Evidence(unitID: "u1", quote: "江陵"), yearQuote = Evidence(unitID: "u1", quote: "208年")
+        book.relations = [
+            KnowledgeRelation(id: "support", fromID: "cao", toID: "liu", label: "支持", evidence: [person, participant, person]),
+            KnowledgeRelation(id: "against", fromID: "cao", toID: "jiangling", label: "反对", evidence: [place, participant]),
+            KnowledgeRelation(id: "self", fromID: "cao", toID: "cao", label: "支持", evidence: [yearQuote, person])]
+        let anchor = book.temporalKnowledge!.anchors[0]
+        let extent = TemporalExtent(sourceText: "208年", calendar: "gregorian", start: TemporalDate(year: 208), precision: .year, uncertainty: .exact)
+        book.temporalKnowledge!.relationMetadata = ["one", "two"].map {
+            RelationTemporalMetadata(id: $0, relationID: "support", validity: extent, sourceAnchorIDs: [anchor.id], assertion: .explicit)
+        }
+        let sources = [
+            CompositionDataSource(id: "all", collection: .relations, scope: .book, timeGroup: "wide", relation: .neighbors),
+            CompositionDataSource(id: "supports", collection: .relations, scope: .book, timeGroup: "alsoWide", relation: .neighbors,
+                filters: [CompositionFilter(field: "label", operation: .equals, value: "支持")]),
+            CompositionDataSource(id: "local", collection: .relations, timeGroup: "wide", relation: .neighbors),
+            CompositionDataSource(id: "pointEvents", collection: .events, scope: .book, timeGroup: "point", relation: .events),
+            CompositionDataSource(id: "windowEvents", collection: .events, scope: .book, timeGroup: "wide", relation: .events),
+            CompositionDataSource(id: "map", collection: .objects, scope: .book, typeIDs: ["person"], timeGroup: "wide", relation: .selected)]
+        let primitives: [CompositionPrimitive] = [.relations, .relations, .relations, .timeline, .timeline, .map]
+        let context = ReadingContext(sourceHash: book.sourceHash, unitID: "u1", page: 1)
+        let selection: [String: Set<String>] = ["main": ["cao"]]
+        let times: [String: TemporalQueryPoint] = ["wide": .date(TemporalDate(year: 209), calendar: "gregorian"),
+            "alsoWide": .date(TemporalDate(year: 208), calendar: "gregorian"), "point": .date(TemporalDate(year: 209), calendar: "gregorian")]
+        let window = TemporalQueryWindow.date(from: TemporalDate(year: 208), to: TemporalDate(year: 209), calendar: "gregorian")
+        let windows = ["wide": window, "alsoWide": window]
+        let combined = try CompositionRuntime.project(definition(sources, primitives: primitives), in: book, context: context,
+            selections: selection, times: times, windows: windows)
+        for (index, source) in sources.enumerated() {
+            let single = try CompositionRuntime.project(definition([source], primitives: [primitives[index]]), in: book, context: context,
+                selections: selection, times: times, windows: windows)[source.id]!
+            let shared = combined[source.id]!
+            XCTAssertEqual(shared.items, single.items); XCTAssertEqual(shared.edges, single.edges)
+            XCTAssertEqual(shared.mapPoints, single.mapPoints); XCTAssertEqual(shared.total, single.total)
+            XCTAssertEqual(shared.partial, single.partial); XCTAssertEqual(shared.diagnostics, single.diagnostics)
+        }
+        XCTAssertEqual(combined["all"]!.items.first { $0.id == "cao" }?.evidence, [first, second, person, participant, place, yearQuote])
+        XCTAssertEqual(combined["supports"]!.items.first { $0.id == "cao" }?.evidence, [first, second, person, participant, yearQuote])
+        XCTAssertEqual(combined["supports"]!.edges.map(\.id), ["support", "self"])
+        XCTAssertEqual(combined["local"]!.items.first { $0.id == "cao" }?.title, "神秘人")
+        XCTAssertTrue(combined["pointEvents"]!.items.isEmpty)
+        XCTAssertEqual(combined["windowEvents"]!.items.map(\.id), ["campaign"])
+        XCTAssertTrue(combined["all"]!.items.first { $0.id == "cao" }!.fields["此时行动"]!.contains("返回"))
+        XCTAssertTrue(combined["supports"]!.items.first { $0.id == "cao" }!.fields["此时行动"]!.contains("抵达"))
+    }
+
     func testSharedSelectionTimeAndNoInventedParticipantLocations() throws {
         let book = try fixture()
         let value = definition([

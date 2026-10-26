@@ -13,7 +13,7 @@ public struct SentenceTranslationRequest: Sendable {
         let resolved = try ReadingExperienceRuntime.resolve(anchor, in: project)
         guard !ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter,
             syntax: ReadingSentenceAnchors.syntax(for: resolved.unit, in: project)).crossesStructuralBoundary(resolved.range) else {
-            throw ReadingError.invalid("这段原文无法可靠分句，请重新选择标题或原句。")
+            throw ReadingError.invalid("标题与正文、不同段落应分开选择，请重新选择标题或原句。")
         }
         guard !anchor.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               anchor.quote.count <= 2_000, targetLanguage == "简体中文" else {

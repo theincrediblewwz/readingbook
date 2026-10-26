@@ -108,24 +108,26 @@ public enum CompositionRuntime {
                                times: [String: TemporalQueryPoint] = [:], windows: [String: TemporalQueryWindow] = [:],
                                mapModes: [String: CompositionMapTimeMode] = [:]) throws -> [String: CompositionProjection] {
         var result: [String: CompositionProjection] = [:]
+        var queries = TemporalQueryCache()
+        var relatedCache: [RelatedQueryKey: Set<String>] = [:]
         for source in prepared.definition.sources {
             try Task.checkCancellation()
             guard let base = prepared.bases[source.scope] else { throw invalid("组合输入缺少已校验的数据范围。") }
             let point = times[source.timeGroup]
             let window = windows[source.timeGroup]
-            let events: [TemporalEventSnapshot], relations: [TemporalRelationSnapshot]
-            if let window {
-                events = try TemporalKnowledgeRuntime.events(in: base.project, within: window, boundary: .all)
-                relations = try TemporalKnowledgeRuntime.relations(in: base.project, within: window, boundary: .all)
-            } else {
-                events = try TemporalKnowledgeRuntime.events(in: base.project, at: point, boundary: .all)
-                relations = try TemporalKnowledgeRuntime.relations(in: base.project, at: point, boundary: .all)
-            }
-            let visibleIDs = Set(base.objects.map(\.id))
+            let eventResult = try queries.events(scope: source.scope, base: base, point: point, window: window)
+            let events = eventResult.events
+            let relations = try queries.relations(scope: source.scope, base: base, point: point, window: window)
             // Host selection is a hint, never authority to cross a source boundary.
-            let selected = (selections[source.selectionGroup] ?? []).intersection(visibleIDs)
-            let related = try relatedIDs(source.relation, selected: selected, base: base, events: events, relations: relations, point: point, window: window)
-            let eventIndex = Dictionary(events.map { ($0.object.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let selected = (selections[source.selectionGroup] ?? []).intersection(base.objectIDs)
+            let relatedKey = RelatedQueryKey(query: TemporalQueryKey(scope: source.scope, time: QueryTime(point: point, window: window)),
+                relation: source.relation.rawValue, selected: selected)
+            let related: Set<String>
+            if let cached = relatedCache[relatedKey] { related = cached }
+            else {
+                related = try relatedIDs(source.relation, selected: selected, base: base, events: events, relations: relations, point: point, window: window)
+                relatedCache[relatedKey] = related
+            }
             var items: [CompositionItem]
             var edges: [CompositionEdge] = []
             switch source.collection {
@@ -139,7 +141,7 @@ public enum CompositionRuntime {
                     }
                 } else { items = base.objects.filter { related.contains($0.id) }.map { item($0, order: base.order) } }
             case .objects:
-                items = base.objects.filter { $0.kind != .document && ($0.kind != .event || eventIndex[$0.id] != nil) }.map { item($0, order: base.order) }
+                items = base.objects.filter { $0.kind != .document && ($0.kind != .event || eventResult.byID[$0.id] != nil) }.map { item($0, order: base.order) }
             case .events: items = events.map { value in var row = item(value.object, order: base.order); row.fields["temporalMatch"] = value.match.rawValue; row.extent = value.extent; return row }
             case .documents: items = base.objects.filter { $0.kind == .document }.map { item($0, order: base.order) }
             case .relations:
@@ -155,14 +157,11 @@ public enum CompositionRuntime {
                     return CompositionEdge(id: relation.id, fromID: relation.fromID, toID: relation.toID, label: relation.label, kind: "knowledge", temporalMatch: value.match)
                 }
                 let linked = Set(edges.flatMap { [$0.fromID, $0.toID] }), edgeIDs = Set(edges.map(\.id))
+                let proofsByEndpoint = try relationEvidence(relations, edgeIDs: edgeIDs)
                 items = try items.filter { linked.contains($0.id) }.map { original in
                     try Task.checkCancellation()
                     var row = original, seen = Set(original.evidence)
-                    let proofs = try relations.filter {
-                        try Task.checkCancellation()
-                        return edgeIDs.contains($0.relation.id) && ($0.relation.fromID == row.id || $0.relation.toID == row.id)
-                    }.flatMap { $0.relation.evidence }
-                    row.evidence += proofs.filter { seen.insert($0).inserted }
+                    row.evidence += (proofsByEndpoint[row.id] ?? []).filter { seen.insert($0).inserted }
                     return row
                 }
             }
@@ -198,11 +197,11 @@ public enum CompositionRuntime {
             let allPoints: [CompositionMapPoint]
             if prepared.mapSourceIDs.contains(source.id) {
                 let footprintWindow = mapModes[source.timeGroup] == .windowFootprints ? window : nil
-                let mapEvents: [TemporalEventSnapshot]
+                let mapEvents: EventProjection
                 if window != nil, footprintWindow == nil {
-                    mapEvents = try TemporalKnowledgeRuntime.events(in: base.project, at: point, boundary: .all)
-                } else { mapEvents = events }
-                allPoints = try points(for: items, base: base, events: mapEvents, at: point, within: footprintWindow)
+                    mapEvents = try queries.events(scope: source.scope, base: base, point: point, window: nil)
+                } else { mapEvents = eventResult }
+                allPoints = try points(for: items, base: base, events: mapEvents.byID, at: point, within: footprintWindow)
             }
             else { allPoints = [] }
             let pointTruncated = allPoints.count > 400
@@ -223,8 +222,71 @@ public enum CompositionRuntime {
         var project: BookProject
         var snapshot: ReadingQuerySnapshot
         var objects: [TypedObject]
+        var objectsByID: [String: TypedObject]
+        var names: [String: String]
+        var objectIDs: Set<String>
         var order: [String: Int]
         var diagnostics: [String]
+    }
+
+    private enum QueryTime: Hashable {
+        case point(TemporalQueryPoint?)
+        case window(TemporalQueryWindow)
+        init(point: TemporalQueryPoint?, window: TemporalQueryWindow?) {
+            if let window { self = .window(window) } else { self = .point(point) }
+        }
+    }
+    private struct TemporalQueryKey: Hashable { var scope: CompositionScope; var time: QueryTime }
+    private struct RelatedQueryKey: Hashable { var query: TemporalQueryKey; var relation: String; var selected: Set<String> }
+    private struct EventProjection {
+        var events: [TemporalEventSnapshot]
+        var byID: [String: TemporalEventSnapshot]
+    }
+    /// Local to a single project() call. No cache can cross the prepared input's
+    /// immutable source slicing, scope or read boundary.
+    private struct TemporalQueryCache {
+        var eventResults: [TemporalQueryKey: EventProjection] = [:]
+        var relationResults: [TemporalQueryKey: [TemporalRelationSnapshot]] = [:]
+        mutating func events(scope: CompositionScope, base: ScopeBase, point: TemporalQueryPoint?, window: TemporalQueryWindow?) throws -> EventProjection {
+            try Task.checkCancellation()
+            let key = TemporalQueryKey(scope: scope, time: QueryTime(point: point, window: window))
+            if let cached = eventResults[key] { return cached }
+            let values: [TemporalEventSnapshot]
+            if let window { values = try TemporalKnowledgeRuntime.events(in: base.project, within: window, boundary: .all) }
+            else { values = try TemporalKnowledgeRuntime.events(in: base.project, at: point, boundary: .all) }
+            try Task.checkCancellation()
+            let result = EventProjection(events: values, byID: Dictionary(values.map { ($0.object.id, $0) }, uniquingKeysWith: { first, _ in first }))
+            eventResults[key] = result
+            return result
+        }
+        mutating func relations(scope: CompositionScope, base: ScopeBase, point: TemporalQueryPoint?, window: TemporalQueryWindow?) throws -> [TemporalRelationSnapshot] {
+            try Task.checkCancellation()
+            let key = TemporalQueryKey(scope: scope, time: QueryTime(point: point, window: window))
+            if let cached = relationResults[key] { return cached }
+            let values: [TemporalRelationSnapshot]
+            if let window { values = try TemporalKnowledgeRuntime.relations(in: base.project, within: window, boundary: .all) }
+            else { values = try TemporalKnowledgeRuntime.relations(in: base.project, at: point, boundary: .all) }
+            try Task.checkCancellation()
+            relationResults[key] = values
+            return values
+        }
+    }
+
+    private static func relationEvidence(_ relations: [TemporalRelationSnapshot], edgeIDs: Set<String>) throws -> [String: [Evidence]] {
+        var result: [String: [Evidence]] = [:], seen: [String: Set<Evidence>] = [:]
+        for value in relations {
+            try Task.checkCancellation()
+            let relation = value.relation
+            guard edgeIDs.contains(relation.id) else { continue }
+            let endpoints = relation.fromID == relation.toID ? [relation.fromID] : [relation.fromID, relation.toID]
+            for endpoint in endpoints {
+                for evidence in relation.evidence {
+                    try Task.checkCancellation()
+                    if seen[endpoint, default: []].insert(evidence).inserted { result[endpoint, default: []].append(evidence) }
+                }
+            }
+        }
+        return result
     }
     private static func scoped(_ scope: CompositionScope, project original: BookProject, context: ReadingContext?,
                                currentScope: CompositionCurrentScope, boundary: KnowledgeReadBoundary) throws -> ScopeBase {
@@ -271,7 +333,9 @@ public enum CompositionRuntime {
         // Legacy relations have no independent endpoint adapter; both endpoints
         // must survive exact evidence slicing before they become graph lines.
         safe.relations = safe.relations.filter { visible.contains($0.fromID) && visible.contains($0.toID) }
-        return ScopeBase(project: safe, snapshot: finalSnapshot, objects: objects,
+        let objectsByID = Dictionary(objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ScopeBase(project: safe, snapshot: finalSnapshot, objects: objects, objectsByID: objectsByID,
+            names: objectsByID.mapValues(\.name), objectIDs: Set(objectsByID.keys),
             order: Dictionary(original.units.map { ($0.id, $0.order) }, uniquingKeysWith: { first, _ in first }), diagnostics: diagnostics)
     }
 
@@ -287,10 +351,9 @@ public enum CompositionRuntime {
         guard original.kind == TypedObjectKind.entity.rawValue, let id = original.objectID else { return original }
         let snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, at: point, boundary: .all)
         var row = original
-        let names = Dictionary(base.objects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         func description(_ values: [EntityPresence]) -> String {
             values.prefix(8).map { value in
-                let place = value.placeID.flatMap { names[$0] }.map { " · " + $0 } ?? ""
+                let place = value.placeID.flatMap { base.names[$0] }.map { " · " + $0 } ?? ""
                 return value.action + place + (value.extent.sourceText.isEmpty ? "" : " · " + value.extent.sourceText)
             }.joined(separator: "\n")
         }
@@ -308,7 +371,7 @@ public enum CompositionRuntime {
     private static func relatedIDs(_ relation: CompositionSelectionRelation, selected: Set<String>, base: ScopeBase,
                                    events: [TemporalEventSnapshot], relations: [TemporalRelationSnapshot], point: TemporalQueryPoint?,
                                    window: TemporalQueryWindow?) throws -> Set<String> {
-        if relation == .none { return Set(base.objects.map(\.id)) }
+        if relation == .none { return base.objectIDs }
         guard !selected.isEmpty else { return [] }
         var result = Set<String>()
         switch relation {
@@ -323,7 +386,7 @@ public enum CompositionRuntime {
             for event in events where selected.contains(event.object.id) { result.formUnion(event.object.references["participants"] ?? []) }
         case .places:
             for event in events where selected.contains(event.object.id) { result.formUnion(event.object.references["places"] ?? []) }
-            for id in selected where base.project.entities.contains(where: { $0.id == id }) {
+            for id in selected where base.objectsByID[id]?.kind == .entity {
                 try Task.checkCancellation()
                 let snapshot: EntityTimeSnapshot
                 if let window { snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, within: window, boundary: .all) }
@@ -344,11 +407,10 @@ public enum CompositionRuntime {
         case .documents:
             for document in base.project.activeDocuments where !Set(document.linkedIDs).isDisjoint(with: selected) { result.insert(document.id) }
         }
-        return result.intersection(Set(base.objects.map(\.id)))
+        return result.intersection(base.objectIDs)
     }
-    private static func points(for items: [CompositionItem], base: ScopeBase, events: [TemporalEventSnapshot], at point: TemporalQueryPoint?,
+    private static func points(for items: [CompositionItem], base: ScopeBase, events: [String: TemporalEventSnapshot], at point: TemporalQueryPoint?,
                                within window: TemporalQueryWindow?) throws -> [CompositionMapPoint] {
-        let objects = Dictionary(base.objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var result: [CompositionMapPoint] = []
         var seen = Set<String>()
         func append(id: String, target: String, place: TypedObject, title: String, subtitle: String, evidence: [Evidence], kind: String) {
@@ -359,7 +421,7 @@ public enum CompositionRuntime {
         }
         for row in items {
             try Task.checkCancellation()
-            guard let id = row.objectID, let object = objects[id] else { continue }
+            guard let id = row.objectID, let object = base.objectsByID[id] else { continue }
             if object.kind == .entity {
                 let locations = Set(base.project.temporalKnowledge?.profile?.locationTypeIDs ?? []).union(["place", "location"])
                 // A person's unqualified stored coordinate is not a dated
@@ -372,15 +434,15 @@ public enum CompositionRuntime {
                 else { snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, at: point, boundary: .all) }
                 for presence in snapshot.footprints {
                     try Task.checkCancellation()
-                    guard let placeID = presence.placeID, let place = objects[placeID] else { continue }
+                    guard let placeID = presence.placeID, let place = base.objectsByID[placeID] else { continue }
                     let anchors = (base.project.temporalKnowledge?.anchors ?? []) + (base.project.readingExperience?.anchors ?? [])
                     let evidence = anchors.filter { presence.sourceAnchorIDs.contains($0.id) }.map { Evidence(unitID: $0.unitID, quote: $0.quote) }
                     append(id: "presence." + presence.id, target: id, place: place, title: object.name, subtitle: presence.action + " · " + presence.extent.sourceText, evidence: evidence, kind: "presence")
                     if result.count > 400 { return result }
                 }
-            } else if let event = events.first(where: { $0.object.id == id }) {
+            } else if let event = events[id] {
                 for placeID in event.object.references["places"] ?? [] {
-                    guard let place = objects[placeID] else { continue }
+                    guard let place = base.objectsByID[placeID] else { continue }
                     append(id: "event." + id + "." + placeID, target: id, place: place, title: object.name,
                         subtitle: place.name + " · " + event.extent.sourceText + (event.match == .unknown ? " · 时间未明" : event.match == .possible ? " · 时间待考" : ""), evidence: event.object.evidence, kind: "eventLocation")
                     if result.count > 400 { return result }
