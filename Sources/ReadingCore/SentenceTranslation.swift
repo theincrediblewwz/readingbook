@@ -35,15 +35,28 @@ public struct SentenceTranslationRequest: Sendable {
         guard project.id == bookID, let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: project),
               !ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter).crossesStructuralBoundary(resolved.range),
               let state = project.readingExperience else { return nil }
-        let exactIDs = Set(state.anchors.filter {
-            $0.sourceHash == anchor.sourceHash && $0.unitTextHash == anchor.unitTextHash && $0.unitID == anchor.unitID &&
-                $0.quote.utf8.elementsEqual(anchor.quote.utf8) && $0.utf16Location == anchor.utf16Location && $0.utf16Length == anchor.utf16Length
-        }.map(\.id))
+        let stored = state.anchors.filter { $0.id == anchor.id }
+        guard stored.count == 1, let storedAnchor = stored.first,
+              Self.matchesStoredAnchor(storedAnchor, resolved: resolved, in: project) else { return nil }
         return state.layers.first {
             $0.kind == "translation" && !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                $0.sourceAnchorIDs.count == 1 && exactIDs.contains($0.sourceAnchorIDs[0]) &&
+                $0.sourceAnchorIDs == [storedAnchor.id] &&
                 ($0.id == cacheID || $0.provenance?.label != "sentence-translation")
         }
+    }
+
+    /// Historical anchors may omit both offsets. Resolve them using the same
+    /// identity, literal quote and ambiguity checks instead of treating nil as
+    /// a different location, or rewriting their saved representation.
+    fileprivate static func matchesStoredAnchor(_ stored: SourceAnchor, resolved: ResolvedSourceAnchor,
+                                                in project: BookProject) -> Bool {
+        let expected = resolved.anchor
+        guard stored.id == expected.id, stored.sourceHash == expected.sourceHash,
+              stored.unitID == expected.unitID, stored.unitTextHash == expected.unitTextHash,
+              stored.quote.utf8.elementsEqual(expected.quote.utf8) else { return false }
+        if stored == expected { return true }
+        guard let verified = try? ReadingExperienceRuntime.resolve(stored, in: project) else { return false }
+        return verified.range == resolved.range
     }
 }
 
@@ -88,7 +101,12 @@ extension LibraryRepository {
         }
         var state = project.readingExperience ?? ReadingExperienceState()
         if let old = state.anchors.first(where: { $0.id == request.anchor.id }) {
-            guard old == request.anchor else { throw ReadingError.invalid("原句定位已改变，本次译文未覆盖已有内容。") }
+            if old != current.anchor {
+                let resolved = try ReadingExperienceRuntime.resolve(current.anchor, in: project)
+                guard SentenceTranslationRequest.matchesStoredAnchor(old, resolved: resolved, in: project) else {
+                    throw ReadingError.invalid("原句定位已改变，本次译文未覆盖已有内容。")
+                }
+            }
         } else { state.anchors.append(request.anchor) }
         guard !state.layers.contains(where: { $0.id == request.cacheID }) else {
             if requestHistory.isEmpty { return project }

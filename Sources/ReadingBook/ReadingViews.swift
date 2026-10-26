@@ -91,6 +91,10 @@ struct ReaderWorkspaceView: View {
                 .onChange(of: store.readingSourceMode) { _, _ in inlineReading.clear() }
                 .onChange(of: store.sourceReadingSelection != nil) { _, selecting in if selecting { inlineReading.clear() } }
                 .onChange(of: interactionBlocked) { _, blocked in if blocked { inlineReading.clear() } }
+                .onChange(of: store.projectRevision) { _, _ in refreshInlineContent(index: store.readingExperienceIndex) }
+                // Published sends in willSet. Use its argument instead of
+                // rereading the store's still-previous index here.
+                .onReceive(store.$readingExperienceIndex) { index in refreshInlineContent(index: index) }
                 .onDisappear { inlineReading.clear() }
         }
     }
@@ -142,7 +146,16 @@ struct ReaderWorkspaceView: View {
     private func sourceHovered(_ value: SourceReadingHover?) {
         guard !interactionBlocked else { inlineReading.clear(); return }
         guard let value else { inlineReading.leave(); return }
-        inlineReading.receive(value, book: store.book, index: store.readingExperienceIndex, boundary: store.inlineReadingBoundary(for: value.id))
+        inlineReading.receive(value, book: store.book, index: store.readingExperienceIndex, scope: inlineScope,
+                              boundary: { store.inlineReadingBoundary(for: $0) })
+    }
+    private var inlineScope: String {
+        [store.libraryRootURL.path, store.bookID ?? "", store.book?.sourceHash ?? "", store.selectedUnitID ?? "", store.readingSourceMode].joined(separator: "|")
+    }
+    private func refreshInlineContent(index: ReadingExperienceState) {
+        guard !interactionBlocked else { inlineReading.clear(); return }
+        inlineReading.refresh(book: store.book, index: index, scope: inlineScope,
+                              boundary: { store.inlineReadingBoundary(for: $0) })
     }
     private func sourceTapped(_ id: String) {
         if var value = inlineReading.lastHover, value.id == id { value.activated = true; sourceHovered(value) }

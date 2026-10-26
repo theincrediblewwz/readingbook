@@ -98,10 +98,11 @@ struct PDFReaderView: NSViewRepresentable {
         var rangeBytes = 0
         var geometry: [String: SourceGeometry] = [:]
         var geometryBytes = 0
-        var passageValues: [String: SourceReadingDecoration] = [:]
-        var passageRanges: [String: NSRange] = [:]
+        private(set) var passageValues: [String: SourceReadingDecoration] = [:]
+        private(set) var passageRanges: [String: NSRange] = [:]
         var passageIndex = ReadingRangeIndex<String>()
         var passageBytes = 0
+        private var passageIndexDirty = false
         var hitBands = ReadingGeometryBands<SourceLineKey>()
         var paintBands = ReadingGeometryBands<SourceLineKey>()
         var cost: Int { byteCount + rangeBytes + geometryBytes + passageBytes }
@@ -120,7 +121,8 @@ struct PDFReaderView: NSViewRepresentable {
             if removedPassages {
                 passageValues = passageValues.filter { validIDs.contains($0.key) }
                 passageRanges = passageRanges.filter { validIDs.contains($0.key) }
-                rebuildPassageIndex()
+                passageIndexDirty = true
+                rebuildPassageIndexIfNeeded()
             }
             guard geometry.keys.contains(where: { !validIDs.contains($0) }) else { return }
             geometry = geometry.filter { validIDs.contains($0.key) }
@@ -135,9 +137,20 @@ struct PDFReaderView: NSViewRepresentable {
                 }
             }
         }
-        func rebuildPassageIndex() {
+        func rememberPassage(_ value: SourceReadingDecoration, range: NSRange?) {
+            guard passageValues[value.id] != value || passageRanges[value.id] != range else { return }
+            passageValues[value.id] = value; passageRanges[value.id] = range
+            passageIndexDirty = true
+        }
+        func removePassage(_ id: String) {
+            let value = passageValues.removeValue(forKey: id), range = passageRanges.removeValue(forKey: id)
+            if value != nil || range != nil { passageIndexDirty = true }
+        }
+        func rebuildPassageIndexIfNeeded() {
+            guard passageIndexDirty else { return }
             passageIndex = ReadingRangeIndex(passageRanges.map { .init(id: $0.key, range: $0.value) })
             passageBytes = passageValues.values.reduce(0) { $0 + $1.quote.utf8.count + ($1.prefix?.utf8.count ?? 0) + ($1.suffix?.utf8.count ?? 0) + 256 }
+            passageIndexDirty = false
         }
     }
     private var sourceGeometries: [String: SourceGeometry] = [:]
@@ -1290,6 +1303,7 @@ struct PDFReaderView: NSViewRepresentable {
         // keys. An unusually large page still matches without retaining it.
         if text.length <= 2_000_000 { quoteCacheText = text }
         let range = Self.findNativeQuoteRange(quote, prefix: prefix, suffix: suffix, text: text)
+        guard !Task.isCancelled else { return nil }
         if key.byteCount <= 1_048_576 {
             if quoteRangeCache.count >= 256 || quoteCacheBytes + key.byteCount > 1_048_576 {
                 quoteRangeCache.removeAll(keepingCapacity: true); quoteCacheBytes = 0
@@ -1300,29 +1314,7 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     nonisolated private static func findNativeQuoteRange(_ quote: String, prefix: String?, suffix: String?, text: NSString) -> NSRange? {
-        var start = 0
-        var candidate: NSRange?
-        while start < text.length {
-            let range = text.range(of: quote, options: [.literal], range: NSRange(location: start, length: text.length - start))
-            guard range.location != NSNotFound else { break }
-            // Advance one UTF-16 unit to include overlapping matches. Imported
-            // unit offsets never enter this native page search.
-            start = range.location + 1
-            guard text.substring(with: range).utf8.elementsEqual(quote.utf8) else { continue }
-            if let prefix, !prefix.isEmpty {
-                let length = prefix.utf16.count
-                guard range.location >= length,
-                      text.substring(with: NSRange(location: range.location - length, length: length)).utf8.elementsEqual(prefix.utf8) else { continue }
-            }
-            if let suffix, !suffix.isEmpty {
-                let length = suffix.utf16.count
-                guard NSMaxRange(range) <= text.length - length,
-                      text.substring(with: NSRange(location: NSMaxRange(range), length: length)).utf8.elementsEqual(suffix.utf8) else { continue }
-            }
-            guard candidate == nil else { return nil }
-            candidate = range
-        }
-        return candidate
+        NativeQuoteRangeMatcher.range(of: quote, prefix: prefix, suffix: suffix, in: text)
     }
 
     private func focusQuote(on number: Int, quote: String, prefix: String? = nil, suffix: String? = nil) {
@@ -1419,7 +1411,7 @@ struct PDFReaderView: NSViewRepresentable {
                 var additions: [SourceReadingDecoration] = []
                 for value in values {
                     if value.interaction != .passage {
-                        cache.passageValues.removeValue(forKey: value.id); cache.passageRanges.removeValue(forKey: value.id)
+                        cache.removePassage(value.id)
                     }
                     if value.interaction == .passage, cache.passageValues[value.id] == value {
                         if let geometry = cache.geometry[value.id], geometry.value == value { self.sourceGeometries[value.id] = geometry }
@@ -1427,6 +1419,15 @@ struct PDFReaderView: NSViewRepresentable {
                     else { additions.append(value); self.sourceGeometries.removeValue(forKey: value.id) }
                 }
                 self.sourceCanvas.needsDisplay = true
+                if additions.isEmpty {
+                    // A cached neighbor may return after a partly completed
+                    // task was canceled. Finish its dirty index, but do not
+                    // sort unchanged ranges or launch an empty matching task.
+                    cache.rebuildPassageIndexIfNeeded()
+                    self.sourceGeometryPages[number] = cache
+                    self.trimSourceGeometryCache(keeping: window)
+                    continue
+                }
                 let text = cache.text, saved = cache.ranges, matchingAdditions = additions
                 let calculation = Task.detached(priority: .userInitiated) { () -> [String: CachedQuoteRange] in
                     let interval = pdfDecorationSignposter.beginInterval("MatchPageQuotes")
@@ -1460,8 +1461,7 @@ struct PDFReaderView: NSViewRepresentable {
                     if value.interaction == .passage {
                         // Cache pure ranges for sentences/paragraphs. PDFKit
                         // selection and line geometry are needed only on hover.
-                        cache.passageValues[value.id] = value
-                        cache.passageRanges[value.id] = matched?.range
+                        cache.rememberPassage(value, range: matched?.range)
                     } else {
                       if self.sourceScrollQuietUntil > ProcessInfo.processInfo.systemUptime {
                           pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval)
@@ -1500,17 +1500,19 @@ struct PDFReaderView: NSViewRepresentable {
                     }
                 }
                 pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval)
-                cache.rebuildPassageIndex()
+                cache.rebuildPassageIndexIfNeeded()
                 self.sourceGeometryPages[number] = cache
-                while self.sourceGeometryPageOrder.count > 16 || self.sourceGeometryPages.values.reduce(0, { $0 + $1.cost }) > 12_582_912 {
-                    // In-use visible geometry must not disappear merely because
-                    // a dense page exceeds the idle-cache target. Only evict
-                    // pages outside this small, already bounded active window.
-                    guard let unused = self.sourceGeometryPageOrder.firstIndex(where: { !window.contains($0) }) else { break }
-                    self.sourceGeometryPages.removeValue(forKey: self.sourceGeometryPageOrder.remove(at: unused))
-                }
+                self.trimSourceGeometryCache(keeping: window)
             }
             if self.sourceDecorationGeneration == generation { self.sourceDecorationTask = nil }
+        }
+    }
+    private func trimSourceGeometryCache(keeping window: [Int]) {
+        while sourceGeometryPageOrder.count > 16 || sourceGeometryPages.values.reduce(0, { $0 + $1.cost }) > 12_582_912 {
+            // In-use visible geometry must not disappear merely because a
+            // dense page exceeds the idle-cache target. Evict only idle pages.
+            guard let unused = sourceGeometryPageOrder.firstIndex(where: { !window.contains($0) }) else { break }
+            sourceGeometryPages.removeValue(forKey: sourceGeometryPageOrder.remove(at: unused))
         }
     }
     private func waitForSourceScrollIdle() async throws {

@@ -26,15 +26,18 @@ public enum ReadingSentenceAnchors {
     }
 
     public static func boundaryIndex(in text: String, chapterTitle: String? = nil) -> ReadingPassageBoundaryIndex {
+        guard !Task.isCancelled else { return ReadingPassageBoundaryIndex(length: -1, boundaries: []) }
         let value = scan(text, maximumUTF16Length: 1600, chapterTitle: chapterTitle, collectRanges: false)
+        guard !Task.isCancelled else { return ReadingPassageBoundaryIndex(length: -1, boundaries: []) }
         return ReadingPassageBoundaryIndex(length: text.utf16.count, boundaries: value.boundaries)
     }
 
     private static func scan(_ text: String, maximumUTF16Length: Int, chapterTitle: String?, collectRanges: Bool = true) -> (ranges: [NSRange], boundaries: [Int]) {
         guard !text.isEmpty, maximumUTF16Length >= 64 else { return ([], []) }
         var result: [NSRange] = [], boundaries: [Int] = [], start = text.startIndex, cursor = start, lineStart = start
-        var count = 0, mathWidth = 0, inlineCode = false
+        var count = 0, mathWidth = 0, lineOnlyWhitespace = true
         var fenceMarker: Character?, fenceWidth = 0, escapedMathEnd: String?
+        let codeSpanEnds = text.contains("`") ? backtickSpanEnds(in: text) : [:]
         let closing: Set<Character> = ["”", "’", "」", "』", "\"", "'", "）", ")", "】", "]"]
         func append(_ end: String.Index) {
             guard collectRanges else { return }
@@ -46,29 +49,46 @@ public enum ReadingSentenceAnchors {
         while cursor < text.endIndex {
             if Task.isCancelled { return ([], []) }
             let fenced = fenceMarker != nil
-            if cursor == lineStart, !fenced, !inlineCode, mathWidth == 0, escapedMathEnd == nil,
+            if cursor == lineStart, !fenced, mathWidth == 0, escapedMathEnd == nil,
                let end = headingEnd(in: text, at: cursor, chapterTitle: chapterTitle) {
                 append(cursor)
                 start = cursor; append(end)
                 let range = NSRange(cursor..<end, in: text)
                 boundaries.append(range.location); boundaries.append(NSMaxRange(range))
-                start = end; cursor = end; count = 0
+                start = end; cursor = end; count = 0; lineOnlyWhitespace = false
                 continue
             }
             let value = text[cursor], next = text.index(after: cursor)
-            if value.isNewline { lineStart = next }
+            let lineWasWhitespace = lineOnlyWhitespace
+            if value.isNewline { lineStart = next; lineOnlyWhitespace = true }
+            else if !value.isWhitespace { lineOnlyWhitespace = false }
             count += String(value).utf16.count
-            if (value == "`" || value == "~"), mathWidth == 0, escapedMathEnd == nil, text[lineStart..<cursor].allSatisfy(\.isWhitespace) {
+            if (value == "`" || value == "~"), mathWidth == 0, escapedMathEnd == nil, lineWasWhitespace {
                 let end = text[cursor...].prefix(while: { $0 == value }).endIndex
                 let width = text[cursor..<end].count
                 if width >= 3 {
-                    if !fenced && !inlineCode { fenceMarker = value; fenceWidth = width }
+                    if !fenced { fenceMarker = value; fenceWidth = width }
                     else if fenceMarker == value, width >= fenceWidth, line(in: text, at: end).value.isEmpty { fenceMarker = nil; fenceWidth = 0 }
                     cursor = end; continue
                 }
             }
-            if value == "`", !fenced { inlineCode.toggle() }
-            if value == "\\", !fenced, !inlineCode, mathWidth == 0,
+            if value == "`", !fenced, mathWidth == 0, escapedMathEnd == nil {
+                // Outside code an escape consumes just this tick. The rest
+                // of a longer run may still open a shorter code span.
+                if isEscaped(in: text, at: cursor) { cursor = next; continue }
+                let runEnd = text[cursor...].prefix(while: { $0 == "`" }).endIndex
+                if let end = codeSpanEnds[cursor] {
+                    let span = text[cursor..<end]
+                    count += span.utf16.count - 1 // The first delimiter was counted above.
+                    if let newline = span.lastIndex(where: \.isNewline) { lineStart = text.index(after: newline) }
+                    cursor = end; lineOnlyWhitespace = false; continue
+                }
+                // An unmatched run is literal text. Its second tick cannot
+                // become a different opener unless the first was escaped.
+                count += text[cursor..<runEnd].utf16.count - 1
+                cursor = runEnd; continue
+            }
+            if value == "\\", !fenced, mathWidth == 0,
                (cursor == text.startIndex || text[text.index(before: cursor)] != "\\") {
                 if let end = escapedMathEnd, text[cursor...].hasPrefix(end) { escapedMathEnd = nil; cursor = text.index(cursor, offsetBy: 2); continue }
                 if escapedMathEnd == nil {
@@ -80,7 +100,7 @@ public enum ReadingSentenceAnchors {
                     if escapedMathEnd != nil { continue }
                 }
             }
-            if value == "$", !fenced, !inlineCode, escapedMathEnd == nil, (cursor == text.startIndex || text[text.index(before: cursor)] != "\\") {
+            if value == "$", !fenced, escapedMathEnd == nil, (cursor == text.startIndex || text[text.index(before: cursor)] != "\\") {
                 let width = next < text.endIndex && text[next] == "$" ? 2 : 1
                 let after = width == 2 ? text.index(after: next) : next
                 if mathWidth == width { mathWidth = 0 }
@@ -89,8 +109,8 @@ public enum ReadingSentenceAnchors {
             }
             let decimal = value == "." && cursor > start && next < text.endIndex && text[text.index(before: cursor)].isNumber && text[next].isNumber
             let punctuation = "。！？!?；;".contains(value) || (value == "." && !decimal && (next == text.endIndex || text[next].isWhitespace || closing.contains(text[next])))
-            let paragraph = value.isNewline && (next == text.endIndex || text[next].isNewline)
-            if !fenced && !inlineCode && mathWidth == 0 && escapedMathEnd == nil && (punctuation || paragraph || count >= maximumUTF16Length) {
+            let paragraph = value.isNewline && (lineWasWhitespace || next == text.endIndex || text[next].isNewline)
+            if !fenced && mathWidth == 0 && escapedMathEnd == nil && (punctuation || paragraph || count >= maximumUTF16Length) {
                 var end = next
                 while end < text.endIndex, closing.contains(text[end]) { end = text.index(after: end) }
                 append(end); start = end; cursor = end; count = 0
@@ -98,6 +118,61 @@ public enum ReadingSentenceAnchors {
         }
         if start < text.endIndex { append(text.endIndex) }
         return (result, Array(Set(boundaries)).sorted())
+    }
+
+    /// Each backtick run knows the end of the next equal-width run. This makes
+    /// unmatched runs literal without repeatedly searching the remaining page.
+    /// Blank lines, ATX headings and fenced-block boundaries cannot be crossed
+    /// by an inline code span. Backslashes are checked only at an opener: inside code they
+    /// are literal and may precede a closing run.
+    private static func backtickSpanEnds(in text: String) -> [String.Index: String.Index] {
+        var result: [String.Index: String.Index] = [:], pending: [Int: [String.Index]] = [:]
+        var cursor = text.startIndex, lineOnlyWhitespace = true, atLineStart = true, headingLine = false
+        while cursor < text.endIndex {
+            if Task.isCancelled { return [:] }
+            if atLineStart {
+                let sourceLine = line(in: text, at: cursor)
+                let value = text[cursor..<sourceLine.end], spaces = value.prefix(while: { $0 == " " }).count
+                let content = value.dropFirst(spaces), hashes = content.prefix(while: { $0 == "#" }).count
+                let tail = content.dropFirst(hashes)
+                headingLine = spaces <= 3 && (1...6).contains(hashes) && (tail.isEmpty || tail.first == " " || tail.first == "\t")
+                if headingLine { pending.removeAll(keepingCapacity: true) }
+                atLineStart = false
+            }
+            let value = text[cursor]
+            if value.isNewline {
+                if lineOnlyWhitespace || headingLine { pending.removeAll(keepingCapacity: true) }
+                cursor = text.index(after: cursor); lineOnlyWhitespace = true; atLineStart = true; continue
+            }
+            if value == "`" || value == "~" {
+                let end = text[cursor...].prefix(while: { $0 == value }).endIndex
+                let width = text[cursor..<end].count
+                if width >= 3, lineOnlyWhitespace {
+                    pending.removeAll(keepingCapacity: true)
+                } else if value == "`" {
+                    for previous in pending[width] ?? [] { result[previous] = end }
+                    pending[width] = [cursor]
+                    if width > 1, isEscaped(in: text, at: cursor) {
+                        pending[width - 1, default: []].append(text.index(after: cursor))
+                    }
+                }
+                cursor = end; lineOnlyWhitespace = false
+            } else {
+                if !value.isWhitespace { lineOnlyWhitespace = false }
+                cursor = text.index(after: cursor)
+            }
+        }
+        return result
+    }
+
+    private static func isEscaped(in text: String, at index: String.Index) -> Bool {
+        var cursor = index, count = 0
+        while cursor > text.startIndex {
+            let previous = text.index(before: cursor)
+            guard text[previous] == "\\" else { break }
+            count += 1; cursor = previous
+        }
+        return count % 2 == 1
     }
 
     private struct SourceLine {
@@ -161,6 +236,8 @@ public enum ReadingSentenceAnchors {
     }
 
     public static func anchors(in unit: SourceUnit, project: BookProject, maximum: Int = 2000) -> [SourceAnchor] {
+        guard maximum > 0, !Task.isCancelled,
+              let creator = try? ReadingExperienceRuntime.anchorCreator(sourceHash: project.sourceHash, unitID: unit.id, in: project) else { return [] }
         var result: [SourceAnchor] = []
         for value in ranges(in: unit.text, chapterTitle: unit.chapter).prefix(max(0, min(2000, maximum))) {
             guard !Task.isCancelled, let range = Range(value, in: unit.text) else { break }
@@ -169,8 +246,7 @@ public enum ReadingSentenceAnchors {
             let quote = String(unit.text[range])
             let prefix = String(unit.text[..<range.lowerBound].suffix(200))
             let suffix = String(unit.text[range.upperBound...].prefix(200))
-            if let anchor = try? ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash, unitID: unit.id,
-                quote: quote, prefix: prefix, suffix: suffix, in: project) { result.append(anchor) }
+            if let anchor = try? creator(quote, prefix, suffix) { result.append(anchor) }
         }
         return result
     }

@@ -23,6 +23,89 @@ final class SentenceTranslationTests: XCTestCase {
         var changed = book; changed.units[0].text = "已改的原句。"
         XCTAssertThrowsError(try SentenceTranslationRequest.freeze(anchor: first.anchor, in: changed))
     }
+    func testLegacyOffsetlessAnchorCanReuseAndSaveWithoutChangingItsStoredRecord() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ReadingBook-LegacySentence-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var project = try book()
+        let current = try request(project)
+        var legacy = current.anchor; legacy.utf16Location = nil; legacy.utf16Length = nil
+        XCTAssertEqual(try ReadingExperienceRuntime.resolve(legacy, in: project).range,
+                       try ReadingExperienceRuntime.resolve(current.anchor, in: project).range)
+        project.readingExperience = ReadingExperienceState(anchors: [legacy])
+        let legacyRequest = try SentenceTranslationRequest.freeze(anchor: legacy, in: project)
+        XCTAssertEqual(legacyRequest.cacheID, current.cacheID)
+        let oldLayer = ReadingLayer(id: current.cacheID, kind: "translation", title: "已有句译", markdown: "已有的有效译文。",
+            sourceAnchorIDs: [legacy.id], provenance: ReadingProvenance(label: "sentence-translation", workTitle: "简体中文"))
+        var cachedProject = project; cachedProject.readingExperience?.layers = [oldLayer]
+        XCTAssertEqual(current.cachedLayer(in: cachedProject), oldLayer)
+        XCTAssertEqual(legacyRequest.cachedLayer(in: cachedProject), oldLayer)
+        // The compatibility rule is symmetric: an old request can find a new
+        // explicit-offset stored anchor at the exact same verified location.
+        cachedProject.readingExperience?.anchors = [current.anchor]
+        XCTAssertEqual(legacyRequest.cachedLayer(in: cachedProject), oldLayer)
+
+        let source = directory.appendingPathComponent("source.txt")
+        let original = Data(project.units[0].text.utf8); try original.write(to: source)
+        let repository = LibraryRepository(rootURL: directory.appendingPathComponent("library"))
+        try await repository.create(project, sourceURL: source)
+        let saved = try await repository.saveSentenceTranslation(request: current, markdown: "先顾好眼前的事情。", model: "offline")
+        XCTAssertEqual(saved.readingExperience?.anchors, [legacy], "兼容读取不能迁移或改写旧锚。")
+        XCTAssertEqual(saved.units, project.units)
+        XCTAssertEqual(current.cachedLayer(in: saved)?.markdown, "先顾好眼前的事情。")
+        XCTAssertEqual(legacyRequest.cachedLayer(in: saved)?.markdown, "先顾好眼前的事情。")
+        let repeated = try await repository.saveSentenceTranslation(request: current, markdown: "不覆盖已有译文", model: "offline")
+        XCTAssertEqual(repeated.readingExperience, saved.readingExperience)
+        XCTAssertEqual(try Data(contentsOf: source), original)
+    }
+    func testLegacyCompatibilityStillRejectsInvalidOffsetsIdentityAndAmbiguousContext() throws {
+        var project = try book(); let current = try request(project)
+        let layer = ReadingLayer(id: current.cacheID, kind: "translation", title: "已有句译", markdown: "不能错位复用。", sourceAnchorIDs: [current.anchor.id])
+        var bad = current.anchor; bad.utf16Location = (bad.utf16Location ?? 0) + 1
+        var partial = current.anchor; partial.utf16Location = nil
+        var foreign = current.anchor; foreign.sourceHash = "different-source"
+        var badContext = current.anchor; badContext.utf16Location = nil; badContext.utf16Length = nil; badContext.prefix = "并不相邻的前文"
+        for stored in [bad, partial, foreign, badContext] {
+            project.readingExperience = ReadingExperienceState(anchors: [stored], layers: [layer])
+            XCTAssertNil(current.cachedLayer(in: project))
+        }
+        project.readingExperience = ReadingExperienceState(anchors: [current.anchor, current.anchor], layers: [layer])
+        XCTAssertNil(current.cachedLayer(in: project), "重复身份不能凭第一次命中复用。")
+
+        let text = "甲。重复句。乙。重复句。"
+        var repeated = BookProject(title: "重复句", originalName: "source.txt", sourceHash: try BookImporter.sha256(Data(text.utf8)),
+            units: [SourceUnit(id: "u1", order: 0, chapter: "一", text: text)])
+        let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: repeated.sourceHash, unitID: "u1", quote: "重复句。", prefix: "甲。", in: repeated)
+        let request = try SentenceTranslationRequest.freeze(anchor: anchor, in: repeated)
+        var ambiguous = anchor; ambiguous.utf16Location = nil; ambiguous.utf16Length = nil; ambiguous.prefix = ""; ambiguous.suffix = ""
+        XCTAssertThrowsError(try ReadingExperienceRuntime.resolve(ambiguous, in: repeated))
+        repeated.readingExperience = ReadingExperienceState(anchors: [ambiguous], layers: [ReadingLayer(id: request.cacheID, kind: "translation", title: "旧句译", markdown: "不能猜在哪一句。", sourceAnchorIDs: [anchor.id])])
+        XCTAssertNil(request.cachedLayer(in: repeated))
+    }
+    func testCancelledBoundaryScanCannotAuthorizeAnOldMixedHeadingTranslation() async throws {
+        let title = "第三十八回\n定三分隆中决策\n战长江孙氏报仇", text = title + "\n却说玄德三顾茅庐。"
+        let project = BookProject(title: "三国", originalName: "source.txt", sourceHash: try BookImporter.sha256(Data(text.utf8)),
+            units: [SourceUnit(id: "u1", order: 0, chapter: "第三十八回", text: text)])
+        let mixed = try ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash, unitID: "u1", quote: text, in: project)
+        let range = try ReadingExperienceRuntime.resolve(mixed, in: project).range
+        let cancelled = Task.detached {
+            while !Task.isCancelled { await Task.yield() }
+            let index = ReadingSentenceAnchors.boundaryIndex(in: text, chapterTitle: project.units[0].chapter)
+            let rejectsRange = index.crossesStructuralBoundary(range)
+            let rejectsPlainRange = index.crossesStructuralBoundary(NSRange(location: 0, length: 1))
+            do {
+                _ = try SentenceTranslationRequest.freeze(anchor: mixed, in: project)
+                return (rejectsRange, rejectsPlainRange, false)
+            } catch { return (rejectsRange, rejectsPlainRange, true) }
+        }
+        cancelled.cancel()
+        let result = await cancelled.value
+        XCTAssertTrue(result.0, "取消不能被当作已成功扫描且没有结构边界。")
+        XCTAssertTrue(result.1, "不完整索引应保守拒绝所有范围。")
+        XCTAssertTrue(result.2, "取消期间旧的标题加正文请求仍不能通过冻结。")
+        XCTAssertEqual(ReadingSentenceAnchors.ranges(in: ""), [])
+        XCTAssertTrue(ReadingSentenceAnchors.boundaryIndex(in: "").crossesStructuralBoundary(NSRange(location: 0, length: 1)))
+    }
     func testChapterTranslationDoesNotSendItsOpeningSentenceAndRejectsOldMixedAnchor() async throws {
         let title = "第三十八回\n定三分隆中决策\n战长江孙氏报仇", opening = "却说玄德三顾茅庐。"
         let text = title + "\n" + opening + "后文不应进入标题的翻译。"

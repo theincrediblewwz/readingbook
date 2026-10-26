@@ -37,6 +37,39 @@ final class ReadingExperienceTests: XCTestCase {
         XCTAssertThrowsError(try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: "unicode", quote: "é", in: book), "原文匹配必须保留精确字节，不能悄悄归一化。")
     }
 
+    func testBatchAnchorCreatorPreservesCanonicalIdentityAndAmbiguityChecks() throws {
+        let book = project()
+        let create = try ReadingExperienceRuntime.anchorCreator(sourceHash: book.sourceHash, unitID: "u1", in: book)
+        for (quote, prefix, suffix) in [("刘备", "甲地，", ""), ("刘备", "", "离城。"), ("甲地，刘备入城。", "", "")] {
+            let anchor = try create(quote, prefix, suffix)
+            XCTAssertEqual(anchor, try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: "u1", quote: quote, prefix: prefix, suffix: suffix, in: book))
+            XCTAssertEqual(try ReadingExperienceRuntime.resolve(anchor, in: book).range,
+                           NSRange(location: anchor.utf16Location!, length: anchor.utf16Length!))
+        }
+        XCTAssertThrowsError(try create("刘备", "", ""), "批量准备不能绕过同名消歧。")
+        XCTAssertThrowsError(try create("刘备", "并不存在，", ""))
+        XCTAssertThrowsError(try create("  ", "", ""))
+        XCTAssertThrowsError(try create("刘备", String(repeating: "前", count: 342), ""))
+    }
+
+    func testBatchAnchorCreatorCapturesOnlyOneExactSourceSnapshot() throws {
+        var book = project()
+        book.units = [SourceUnit(id: "unicode", order: 0, chapter: "Unicode", text: "前😀e\u{301}后。")]
+        let create = try ReadingExperienceRuntime.anchorCreator(sourceHash: book.sourceHash, unitID: "unicode", in: book)
+        let anchor = try create("😀e\u{301}", "", "")
+        XCTAssertEqual(try ReadingExperienceRuntime.resolve(anchor, in: book).range, NSRange(location: 1, length: 4))
+        XCTAssertThrowsError(try create("😀é", "", ""), "不允许用规范等价文字替换精确原字节。")
+        book.units[0].text += "新OCR内容"
+        XCTAssertEqual(try create("😀e\u{301}", "", ""), anchor, "准备器只捕获本次不可变快照，不是跨版本缓存。")
+        XCTAssertThrowsError(try ReadingExperienceRuntime.resolve(anchor, in: book))
+        let refreshed = try ReadingExperienceRuntime.anchorCreator(sourceHash: book.sourceHash, unitID: "unicode", in: book)("😀e\u{301}", "", "")
+        XCTAssertNotEqual(refreshed.id, anchor.id)
+        XCTAssertNotEqual(refreshed.unitTextHash, anchor.unitTextHash)
+        var duplicate = book; duplicate.units.append(book.units[0])
+        XCTAssertThrowsError(try ReadingExperienceRuntime.anchorCreator(sourceHash: book.sourceHash, unitID: "unicode", in: duplicate))
+        XCTAssertThrowsError(try ReadingExperienceRuntime.anchorCreator(sourceHash: "foreign", unitID: "unicode", in: book))
+    }
+
     func testEmptyForeignHashChangedOCRTextAndCrossPageQuotesAreRejected() throws {
         var book = project()
         for (unit, quote) in [("u1", "  \n"), ("missing", "刘备"), ("u1", "离城。孙权")] {

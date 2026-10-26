@@ -182,6 +182,21 @@ public enum ReadingExperienceRuntime {
     public static func createAnchor(sourceHash: String, unitID: String, quote: String, prefix: String = "", suffix: String = "", in project: BookProject) throws -> SourceAnchor {
         guard !sourceHash.isEmpty, sourceHash == project.sourceHash else { throw invalid("原文来源版本已变化，不能建立锚点。") }
         let unit = try sourceUnit(unitID, in: project)
+        return try createAnchor(sourceHash: sourceHash, unit: unit, quote: quote, prefix: prefix, suffix: suffix)
+    }
+
+    /// A disposable batch shares only the immutable source-unit check and hash.
+    /// Every quote still passes the same ambiguity, byte and identity checks.
+    static func anchorCreator(sourceHash: String, unitID: String, in project: BookProject) throws -> (String, String, String) throws -> SourceAnchor {
+        guard !sourceHash.isEmpty, sourceHash == project.sourceHash else { throw invalid("原文来源版本已变化，不能建立锚点。") }
+        let unit = try sourceUnit(unitID, in: project)
+        let unitHash = try BookImporter.sha256(Data(unit.text.utf8))
+        return { quote, prefix, suffix in
+            try createAnchor(sourceHash: sourceHash, unit: unit, quote: quote, prefix: prefix, suffix: suffix, preparedUnitHash: unitHash)
+        }
+    }
+
+    private static func createAnchor(sourceHash: String, unit: SourceUnit, quote: String, prefix: String, suffix: String, preparedUnitHash: String? = nil) throws -> SourceAnchor {
         try checkQuote(quote, prefix: prefix, suffix: suffix)
         let range = try uniqueRange(quote: quote, prefix: prefix, suffix: suffix, text: unit.text)
         guard let stringRange = Range(range, in: unit.text) else { throw invalid("原句不是有效的 Unicode 边界。") }
@@ -192,9 +207,9 @@ public enum ReadingExperienceRuntime {
         while canonicalSuffix.utf8.count > 1_024 { canonicalSuffix.removeLast() }
         let canonicalRange = try uniqueRange(quote: quote, prefix: canonicalPrefix, suffix: canonicalSuffix, text: unit.text)
         guard canonicalRange == range else { throw invalid("请改用更完整的原句建立稳定锚点。") }
-        let unitHash = try BookImporter.sha256(Data(unit.text.utf8))
-        let id = try anchorIdentity(sourceHash: sourceHash, unitID: unitID, unitTextHash: unitHash, quote: quote, range: range)
-        return SourceAnchor(id: id, sourceHash: sourceHash, unitID: unitID, unitTextHash: unitHash, quote: quote, prefix: canonicalPrefix, suffix: canonicalSuffix, utf16Location: range.location, utf16Length: range.length)
+        let unitHash = try preparedUnitHash ?? BookImporter.sha256(Data(unit.text.utf8))
+        let id = try anchorIdentity(sourceHash: sourceHash, unitID: unit.id, unitTextHash: unitHash, quote: quote, range: range)
+        return SourceAnchor(id: id, sourceHash: sourceHash, unitID: unit.id, unitTextHash: unitHash, quote: quote, prefix: canonicalPrefix, suffix: canonicalSuffix, utf16Location: range.location, utf16Length: range.length)
     }
 
     public static func resolve(_ anchor: SourceAnchor, in project: BookProject) throws -> ResolvedSourceAnchor {

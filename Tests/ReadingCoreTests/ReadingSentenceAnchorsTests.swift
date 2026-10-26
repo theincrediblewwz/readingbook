@@ -31,6 +31,55 @@ final class ReadingSentenceAnchorsTests: XCTestCase {
         XCTAssertEqual(ReadingSentenceAnchors.ranges(in: display).map { (display as NSString).substring(with: $0) },
             ["等式 $$x! + 3.14$$ 保留。", "调用 `f?()` 完成。", "价格$5。", "下一句。"])
     }
+    func testCodeSpansUseEqualLengthRunsWithoutSwallowingUnmatchedOrEscapedTicks() {
+        let protected = [
+            "调用 ``f?()`` 完成。",
+            "调用 ``f`?()`` 完成。",
+            "调用 ```f``?()` ``` 完成。",
+            "调用 ``😀f?()\r\n第38回\r\nx!`` 完成。",
+            "调用 `f?\\` 完成。", // Inside code, a backslash does not escape its closing tick.
+            "调用 \\\\`f?()` 完成。", // An escaped backslash does not escape the following tick.
+            "调用 \\``f?()` 完成。", // Only the first tick was escaped; the remaining one opens code.
+            "调用 `f?\\``x!` 完成。"
+        ]
+        for first in protected {
+            let text = first + "下一句。"
+            XCTAssertEqual(ReadingSentenceAnchors.ranges(in: text).map { (text as NSString).substring(with: $0) }, [first, "下一句。"], first)
+            XCTAssertFalse(ReadingSentenceAnchors.boundaryIndex(in: first).crossesStructuralBoundary(NSRange(location: 0, length: (first as NSString).length)), first)
+        }
+        let literalCases: [(String, [String])] = [
+            ("调用 \\`f?()\\` 完成。下一句。", ["调用 \\`f?", "()\\` 完成。", "下一句。"]),
+            ("未闭合 `字。下一句。", ["未闭合 `字。", "下一句。"]),
+            ("未闭合 ``字?`。下一句。", ["未闭合 ``字?", "`。", "下一句。"]),
+            ("未闭合 `字。\n \t\n第二段`继续。", ["未闭合 `字。", "第二段`继续。"]),
+            ("未闭合 `字。\n~~~txt\n第二段`?\n~~~\n结束。", ["未闭合 `字。", "~~~txt\n第二段`?\n~~~\n结束。"])
+        ]
+        for (text, expected) in literalCases {
+            XCTAssertEqual(ReadingSentenceAnchors.ranges(in: text).map { (text as NSString).substring(with: $0) }, expected, text)
+            for range in ReadingSentenceAnchors.ranges(in: text) { XCTAssertNotNil(Range(range, in: text)) }
+        }
+        // Escaped longer runs inside code must not shadow its real opener in
+        // the precomputed next-delimiter index.
+        let first = "调用 `" + String(repeating: "\\``? ", count: 1000) + "` 完成。"
+        let text = first + "下一句。"
+        XCTAssertEqual(ReadingSentenceAnchors.ranges(in: text, maximumUTF16Length: (text as NSString).length + 1).map { (text as NSString).substring(with: $0) }, [first, "下一句。"])
+    }
+    func testWhitespaceBlankLinesAndATXBlocksDoNotJoinIndependentSentences() {
+        for newline in ["\n", "\r\n", "\u{2028}"] {
+            let text = "前段尚无标点" + newline + " \t " + newline + "后段才结束。"
+            XCTAssertEqual(ReadingSentenceAnchors.ranges(in: text).map { (text as NSString).substring(with: $0) }, ["前段尚无标点", "后段才结束。"])
+            let soft = "原文同一句" + newline + "依然没有换段。"
+            XCTAssertEqual(ReadingSentenceAnchors.ranges(in: soft).map { (soft as NSString).substring(with: $0) }, [soft])
+        }
+        let text = "未闭合 `字。\n# 标题\n第二段`继续。"
+        XCTAssertEqual(ReadingSentenceAnchors.ranges(in: text).map { (text as NSString).substring(with: $0) }, ["未闭合 `字。", "# 标题", "第二段`继续。"])
+        let heading = "# 标题 `未闭合\n第二段`继续。"
+        XCTAssertEqual(ReadingSentenceAnchors.ranges(in: heading).map { (heading as NSString).substring(with: $0) }, ["# 标题 `未闭合", "第二段`继续。"])
+        // Four-space indentation cannot interrupt an existing paragraph as
+        // an ATX block; its code span still crosses this ordinary soft wrap.
+        let continuation = "调用 `前半?\n    # 后半!`完成。下一句。"
+        XCTAssertEqual(ReadingSentenceAnchors.ranges(in: continuation).map { (continuation as NSString).substring(with: $0) }, ["调用 `前半?\n    # 后半!`完成。", "下一句。"])
+    }
     func testChapterHeadingAndItsCoupletStopBeforeTheFirstBodySentence() throws {
         let title = "第三十八回\n定三分隆中决策\n战长江孙氏报仇"
         let text = title + "\n却说玄德三顾茅庐。下一句不应进入标题。"

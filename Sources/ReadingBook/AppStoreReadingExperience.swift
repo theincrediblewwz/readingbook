@@ -22,6 +22,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
     }
     struct Request: Sendable {
         let project: BookProject; let selectedUnitID: String?; let owner: String; let scope: String; let visiblePages: [Int]
+        let revision: Int
     }
     struct Prepared: Sendable {
         let snapshots: [Snapshot]; let selected: Snapshot; let base: ReadingExperienceState
@@ -32,6 +33,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         let anchorsByID: [String: SourceAnchor]
     }
     var pendingScope: String?
+    var pendingRevision: Int?
     var queued: Request?
     var current: Snapshot?
     var currentBase: ReadingExperienceState?
@@ -48,7 +50,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
     var currentBoundary: KnowledgeReadBoundary?
     var anchorsByID: [String: SourceAnchor] = [:]
     func reset() {
-        pendingScope = nil; queued = nil; current = nil; currentBase = nil; entries = [:]; order = []
+        pendingScope = nil; pendingRevision = nil; queued = nil; current = nil; currentBase = nil; entries = [:]; order = []
         window = []; presentationRevision &+= 1; visiblePDFPages = []; unitIndices = [:]; pageIndices = [:]; boundariesByPage = [:]
         currentBoundary = nil; anchorsByID = [:]
     }
@@ -174,10 +176,18 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         let owner = libraryRootURL.path + "|" + book.id + "|" + book.sourceHash
         let visible = readingPageSnapshots.visiblePDFPages
         let scope = owner + "|" + (selectedUnitID ?? "") + "|" + visible.map(String.init).joined(separator: ",")
-        let request = ReadingPageSnapshotCache.Request(project: book, selectedUnitID: selectedUnitID, owner: owner, scope: scope, visiblePages: visible)
-        if readingPageSnapshots.pendingScope == scope { readingPageSnapshots.queued = request; return }
+        let request = ReadingPageSnapshotCache.Request(project: book, selectedUnitID: selectedUnitID, owner: owner, scope: scope, visiblePages: visible,
+                                                      revision: projectRevision)
+        if readingPageSnapshots.pendingScope == scope {
+            // Repeated layout/visibility notifications for the same publication
+            // do not need a second calculation. Keep only the newest real edit.
+            if readingPageSnapshots.pendingRevision != request.revision {
+                readingPageSnapshots.pendingRevision = request.revision; readingPageSnapshots.queued = request
+            }
+            return
+        }
         readingIndexTask?.cancel(); readingIndexGeneration &+= 1
-        readingPageSnapshots.pendingScope = scope; readingPageSnapshots.queued = nil
+        readingPageSnapshots.pendingScope = scope; readingPageSnapshots.pendingRevision = request.revision; readingPageSnapshots.queued = nil
         let generation = readingIndexGeneration
         readingIndexTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 35_000_000) } catch { return }
@@ -200,11 +210,16 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                 guard !Task.isCancelled, self.readingIndexGeneration == generation, self.bookID == book.id,
                       self.readingPageSnapshots.pendingScope == scope,
                       self.libraryRootURL.path + "|" + book.id + "|" + (self.book?.sourceHash ?? "") == owner else { return }
+                // An edit can arrive without changing page, source text or
+                // scope. Never republish that edit's old mentions/layers. Keep
+                // the exact-input page cache, then calculate the newest request
+                // immediately; do not restart cold on every AI publication.
+                if let prepared { for snapshot in prepared.snapshots { self.readingPageSnapshots.remember(snapshot) } }
+                guard self.readingPageSnapshots.pendingRevision == frozen.revision else { break }
                 if let prepared {
                     self.readingPageSnapshots.unitIndices = prepared.unitIndices; self.readingPageSnapshots.pageIndices = prepared.pageIndices
                     self.readingPageSnapshots.boundariesByPage = prepared.boundariesByPage
                     self.readingPageSnapshots.currentBoundary = prepared.currentBoundary; self.readingPageSnapshots.anchorsByID = prepared.anchorsByID
-                    for snapshot in prepared.snapshots { self.readingPageSnapshots.remember(snapshot) }
                     let units = self.visibleSourceUnits, expected = prepared.selected.input.units
                     let sourceStillMatches = units.count == expected.count && zip(expected, units).allSatisfy { left, right in
                         left.id == right.id && left.page == right.page && left.text.utf8.elementsEqual(right.text.utf8)
@@ -233,7 +248,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                 }
                 }
                 if let queued = self.readingPageSnapshots.queued { self.readingPageSnapshots.queued = nil; next = queued; continue }
-                self.readingPageSnapshots.pendingScope = nil; self.readingIndexTask = nil; break
+                self.readingPageSnapshots.pendingScope = nil; self.readingPageSnapshots.pendingRevision = nil; self.readingIndexTask = nil; break
             }
         }
     }

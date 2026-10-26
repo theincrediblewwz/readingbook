@@ -13,70 +13,116 @@ struct ReaderInlineContent: Sendable {
     let context: ReadingContext
     let composition: ViewDefinition?
     static func freeze(_ id: String, book: BookProject, index: ReadingExperienceState, boundary: KnowledgeReadBoundary) -> Self? {
-        guard let anchor = index.anchors.first(where: { $0.id == id }) ?? book.readingExperience?.anchors.first(where: { $0.id == id }),
+        guard !Task.isCancelled,
+              let anchor = index.anchors.first(where: { $0.id == id }) ?? book.readingExperience?.anchors.first(where: { $0.id == id }),
               boundary.allowedUnitIDs?.contains(anchor.unitID) != false,
               let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: book) else { return nil }
         let target = index.mentions.first(where: { $0.anchorID == id })?.targetID ?? book.readingExperience?.mentions.first(where: { $0.anchorID == id })?.targetID
-        let projection = ReadingSpoilerProjection.Context(project: book, allowedUnitIDs: boundary.allowedUnitIDs)
-        let entity = book.entities.first { $0.id == target }.flatMap { projection.entity($0) }
-        let event = book.events.first { $0.id == target }.flatMap { projection.event($0) }
-        let state = book.readingExperience ?? ReadingExperienceState()
-        let units = Dictionary(book.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let anchors = Dictionary(state.anchors.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let structuralBoundaries = ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter)
-        guard target != nil || !structuralBoundaries.crossesStructuralBoundary(resolved.range) else { return nil }
-        var localProject = book; localProject.units = [resolved.unit]
-        let localLayers = state.layers.filter { layer in
-            guard !layer.sourceAnchorIDs.isEmpty else { return false }
-            let ranges = layer.sourceAnchorIDs.compactMap { value -> NSRange? in
-                guard let candidate = anchors[value], candidate.unitID == anchor.unitID,
-                      let source = try? ReadingExperienceRuntime.resolve(candidate, in: localProject),
-                      !structuralBoundaries.crossesStructuralBoundary(source.range) else { return nil }
-                return source.range
-            }
-            guard ranges.count == layer.sourceAnchorIDs.count else { return false }
-            if layer.kind == "translation" { return ranges.count == 1 && ranges[0] == resolved.range }
-            return ranges.contains { NSIntersectionRange($0, resolved.range).length > 0 }
-        }.sorted { lhs, rhs in
-            let left = lhs.kind == "translation" ? 0 : 1, right = rhs.kind == "translation" ? 0 : 1
-            return left == right ? lhs.id < rhs.id : left < right
-        }
-        let title = entity?.name ?? event?.name ?? (localLayers.first?.kind == "translation" ? "这句话的意思" : "读到这里")
+        // Plain sentences have no object to project. In particular, do not
+        // rebuild every saved knowledge version just to display a sentence.
+        let projection = target.map { _ in ReadingSpoilerProjection.Context(project: book, allowedUnitIDs: boundary.allowedUnitIDs) }
+        let entity: KnowledgeEntity?, event: KnowledgeEvent?
+        if let target, let projection {
+            entity = book.entities.first { $0.id == target }.flatMap { projection.entity($0) }
+            event = book.events.first { $0.id == target }.flatMap { projection.event($0) }
+        } else { entity = nil; event = nil }
+        guard !Task.isCancelled else { return nil }
+        let passageBoundaries = target == nil ? ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter) : nil
+        guard passageBoundaries?.crossesStructuralBoundary(resolved.range) != true else { return nil }
         let evidence = entity?.evidence ?? event?.evidence ?? []
+        var units: [String: SourceUnit] = [:]
+        if !evidence.isEmpty {
+            for unit in book.units {
+                guard !Task.isCancelled else { return nil }
+                if units[unit.id] == nil { units[unit.id] = unit }
+            }
+        }
         // A later full-book aggregate must not leak back into an earlier page.
         // This has the same conservative reuse gate as the query/search path:
         // exact stored excerpts, all at or before the current reading cursor.
         let summaryIsSafe = !evidence.isEmpty && evidence.allSatisfy { item in
-            guard boundary.allowedUnitIDs?.contains(item.unitID) != false, let unit = units[item.unitID],
+            guard !Task.isCancelled, boundary.allowedUnitIDs?.contains(item.unitID) != false, let unit = units[item.unitID],
                   unit.order <= resolved.unit.order, !item.quote.isEmpty,
                   let range = unit.text.range(of: item.quote, options: .literal) else { return false }
             return unit.text[range].utf8.elementsEqual(item.quote.utf8)
         }
         let summary = summaryIsSafe ? (entity?.summary ?? event?.summary ?? "") : ""
+        let hasSummary = !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !Task.isCancelled else { return nil }
+        var localLayers: [ReadingLayer] = []
+        if !hasSummary {
+            let state = book.readingExperience ?? ReadingExperienceState()
+            var anchors: [String: SourceAnchor] = [:]
+            for candidate in state.anchors {
+                guard !Task.isCancelled else { return nil }
+                if candidate.unitID == anchor.unitID, anchors[candidate.id] == nil { anchors[candidate.id] = candidate }
+            }
+            let structuralBoundaries = passageBoundaries ?? ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter)
+            var localProject = book; localProject.units = [resolved.unit]
+            var rangesByID: [String: NSRange] = [:], invalidIDs = Set<String>()
+            func precedes(_ lhs: ReadingLayer, _ rhs: ReadingLayer) -> Bool {
+                let left = lhs.kind == "translation" ? 0 : 1, right = rhs.kind == "translation" ? 0 : 1
+                return left == right ? lhs.id < rhs.id : left < right
+            }
+            for layer in state.layers {
+                guard !Task.isCancelled else { return nil }
+                guard !layer.sourceAnchorIDs.isEmpty else { continue }
+                var ranges: [NSRange] = [], valid = true
+                for value in layer.sourceAnchorIDs {
+                    guard !Task.isCancelled else { return nil }
+                    guard let candidate = anchors[value], !invalidIDs.contains(value) else { valid = false; break }
+                    if let range = rangesByID[value] { ranges.append(range); continue }
+                    guard let source = try? ReadingExperienceRuntime.resolve(candidate, in: localProject),
+                          !structuralBoundaries.crossesStructuralBoundary(source.range) else {
+                        invalidIDs.insert(value); valid = false; break
+                    }
+                    rangesByID[value] = source.range; ranges.append(source.range)
+                }
+                guard valid else { continue }
+                let matches = layer.kind == "translation" ? ranges.count == 1 && ranges[0] == resolved.range : ranges.contains { NSIntersectionRange($0, resolved.range).length > 0 }
+                if matches {
+                    // Only three layers can be shown. Preserve the exact old
+                    // ordering without sorting/retaining all matching layers.
+                    localLayers.append(layer); localLayers.sort(by: precedes)
+                    if localLayers.count > 3 { localLayers.removeLast() }
+                }
+            }
+        }
+        guard !Task.isCancelled else { return nil }
+        let title = entity?.name ?? event?.name ?? (localLayers.first?.kind == "translation" ? "这句话的意思" : "读到这里")
         let markdown: String
-        if !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { markdown = summary }
-        else if !localLayers.isEmpty { markdown = localLayers.prefix(3).map(\.markdown).joined(separator: "\n\n") }
+        if hasSummary { markdown = summary }
+        else if !localLayers.isEmpty { markdown = localLayers.map(\.markdown).joined(separator: "\n\n") }
         else { markdown = "这里还没有保存更多介绍。可以围绕这句话，继续和 AI 聊聊。" }
         let objectID = entity?.id ?? event?.id
         let context = ReadingContext(sourceHash: book.sourceHash, unitID: anchor.unitID, selectedText: anchor.quote,
             selectedPrefix: anchor.prefix, selectedSuffix: anchor.suffix, objectID: objectID, page: resolved.page)
         let configured = book.views.first { view in
-            guard view.composition != nil, view.configuration?["presentation"] == "inline" else { return false }
+            guard !Task.isCancelled, view.composition != nil, view.configuration?["presentation"] == "inline" else { return false }
             let objects = view.configuration?["objectIDs"]?.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? []
             return objects.isEmpty || objectID.map { objects.contains($0) } == true
         }
+        guard !Task.isCancelled else { return nil }
+        let composition = configured ?? projection.flatMap { contextualComposition(objectID: objectID, unitID: anchor.unitID, book: book, projection: $0) }
+        guard !Task.isCancelled else { return nil }
         return Self(anchor: anchor, title: title, kind: entity.flatMap { value in book.types.first(where: { $0.id == value.typeID })?.name } ?? (event == nil ? "译注" : "事件"),
-            markdown: markdown, savedMarkdown: summary.isEmpty && localLayers.isEmpty ? nil : markdown, objectID: objectID, context: context,
-            composition: configured ?? contextualComposition(objectID: objectID, unitID: anchor.unitID, book: book, projection: projection))
+            markdown: markdown, savedMarkdown: hasSummary || !localLayers.isEmpty ? markdown : nil, objectID: objectID, context: context,
+            composition: composition)
     }
     private static func contextualComposition(objectID: String?, unitID: String, book: BookProject, projection: ReadingSpoilerProjection.Context) -> ViewDefinition? {
-        guard let objectID else { return nil }
-        let events = book.events.filter { ($0.id == objectID || $0.participantIDs.contains(objectID)) && $0.evidence.contains { $0.unitID == unitID } }
-            .compactMap { projection.event($0) }
-            .filter { $0.id == objectID || $0.participantIDs.contains(objectID) }
+        guard !Task.isCancelled, let objectID else { return nil }
+        var events: [KnowledgeEvent] = []
+        for event in book.events {
+            guard !Task.isCancelled else { return nil }
+            if (event.id == objectID || event.participantIDs.contains(objectID)), event.evidence.contains(where: { $0.unitID == unitID }),
+               let projected = projection.event(event), projected.id == objectID || projected.participantIDs.contains(objectID) { events.append(projected) }
+        }
         let places = Set(events.flatMap(\.placeIDs) + [objectID])
-        let visiblePlaces = book.entities.filter { places.contains($0.id) && $0.evidence.contains { $0.unitID == unitID } }
-            .compactMap { projection.entity($0) }
+        var visiblePlaces: [KnowledgeEntity] = []
+        for entity in book.entities {
+            guard !Task.isCancelled else { return nil }
+            if places.contains(entity.id), entity.evidence.contains(where: { $0.unitID == unitID }), let projected = projection.entity(entity) { visiblePlaces.append(projected) }
+        }
         let hasMap = visiblePlaces.contains { $0.latitude != nil && $0.longitude != nil }
         let hasTime = events.contains { $0.startYear != nil }
         var sources: [CompositionDataSource] = [], parts: [CompositionPart] = [], layout: [CompositionLayoutNode] = []
@@ -102,39 +148,111 @@ struct ReaderInlineContent: Sendable {
 }
 
 @MainActor final class ReaderInlineState: ObservableObject {
+    private struct Input: Sendable {
+        let scope: String; let serial: Int; let book: BookProject
+        let index: ReadingExperienceState; let boundary: KnowledgeReadBoundary
+    }
     @Published var hover: SourceReadingHover?
     @Published var content: ReaderInlineContent?
     @Published var pinned = false
     private var pendingID: String?
     private var task: Task<Void, Never>?
+    private var refreshTask: Task<Void, Never>?
+    private var inputs: [String: Input] = [:]
+    private var scope: String?
+    private var serial = 0
+    private var interactionGeneration = 0
+    private var displayedSerial: Int?
     private var inside = false
     private var closing = false
     var lastHover: SourceReadingHover?
-    func receive(_ value: SourceReadingHover?, book: BookProject?, index: ReadingExperienceState, boundary: KnowledgeReadBoundary) {
+    func receive(_ value: SourceReadingHover?, book: BookProject?, index: ReadingExperienceState, scope: String,
+                 boundary: (String) -> KnowledgeReadBoundary) {
+        if self.scope != nil, self.scope != scope { clear() }
         if let value { lastHover = value }
         if pinned && value?.activated != true { return }
         guard let value, let book else { leave(); return }
-        if hover?.id == value.id && !value.activated { task?.cancel(); task = nil; closing = false; pendingID = nil; return }
+        if hover?.id == value.id && !value.activated { cancelPending(); refreshDisplayed(); return }
         if pendingID == value.id && !value.activated { return }
-        task?.cancel(); closing = false; pendingID = value.id
+        cancelPending(); invalidateRefresh(); pendingID = value.id
+        updateInputs(book: book, index: index, scope: scope, boundary: boundary)
+        let generation = interactionGeneration
         task = Task { [weak self] in
             if !value.activated { do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return } }
-            guard !Task.isCancelled else { return }
-            let worker = Task.detached(priority: .userInitiated) { ReaderInlineContent.freeze(value.id, book: book, index: index, boundary: boundary) }
-            let frozen = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
-            guard !Task.isCancelled, let self else { return }
-            guard let content = frozen else { self.pendingID = nil; self.task = nil; return }
-            self.content = content; self.hover = value; self.pinned = value.activated; self.pendingID = nil; self.task = nil
+            guard let self else { return }
+            // A project/index update also updates the waiting hover. Preserve
+            // its delay, but never finish with the old captured book snapshot.
+            while !Task.isCancelled, self.interactionGeneration == generation, self.pendingID == value.id {
+                guard let input = self.inputs[value.id], input.scope == self.scope else { return }
+                let worker = Task.detached(priority: .userInitiated) { ReaderInlineContent.freeze(value.id, book: input.book, index: input.index, boundary: input.boundary) }
+                let frozen = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+                guard !Task.isCancelled, self.interactionGeneration == generation, self.pendingID == value.id,
+                      self.scope == input.scope else { return }
+                guard self.inputs[value.id]?.serial == input.serial else { continue }
+                guard let content = frozen else { self.clear(); return }
+                self.content = content; self.hover = value; self.pinned = value.activated
+                self.pendingID = nil; self.task = nil; self.displayedSerial = input.serial; self.inputs = [value.id: input]
+                return
+            }
+        }
+    }
+    /// Called only for actual project/index publications, never from body-time
+    /// array comparisons. This refresh cannot move, pin or reopen the popup.
+    func refresh(book: BookProject?, index: ReadingExperienceState, scope: String,
+                 boundary: (String) -> KnowledgeReadBoundary) {
+        guard hover != nil || pendingID != nil else { return }
+        guard let book, self.scope == scope else { clear(); return }
+        updateInputs(book: book, index: index, scope: scope, boundary: boundary)
+        if pendingID == nil { refreshDisplayed() }
+    }
+    private func updateInputs(book: BookProject, index: ReadingExperienceState, scope: String,
+                              boundary: (String) -> KnowledgeReadBoundary) {
+        self.scope = scope; serial &+= 1
+        let ids = Set([hover?.id, pendingID].compactMap { $0 })
+        inputs = Dictionary(uniqueKeysWithValues: ids.map { ($0, Input(scope: scope, serial: serial, book: book, index: index, boundary: boundary($0))) })
+    }
+    private func invalidateRefresh() {
+        interactionGeneration &+= 1; refreshTask?.cancel(); refreshTask = nil
+    }
+    private func cancelPending() {
+        task?.cancel(); task = nil; closing = false
+        if pendingID != nil { pendingID = nil; invalidateRefresh() }
+    }
+    private func refreshDisplayed() {
+        guard refreshTask == nil, pendingID == nil, let id = hover?.id,
+              let input = inputs[id], displayedSerial != input.serial else { return }
+        let generation = interactionGeneration
+        refreshTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, self.interactionGeneration == generation, self.pendingID == nil, self.hover?.id == id {
+                guard let input = self.inputs[id], input.scope == self.scope else { return }
+                let worker = Task.detached(priority: .userInitiated) { ReaderInlineContent.freeze(id, book: input.book, index: input.index, boundary: input.boundary) }
+                let frozen = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+                guard !Task.isCancelled, self.interactionGeneration == generation, self.pendingID == nil,
+                      self.hover?.id == id, self.scope == input.scope else { return }
+                guard self.inputs[id]?.serial == input.serial else { continue }
+                self.refreshTask = nil
+                guard let content = frozen else { self.clear(); return }
+                // A word rebound to another object is a different interaction,
+                // not permission to open a new automatic teacher request.
+                guard self.content?.objectID == content.objectID else { self.clear(); return }
+                self.content = content; self.displayedSerial = input.serial; self.inputs = [id: input]
+                return
+            }
         }
     }
     func leave() { scheduleClose() }
-    func pointer(_ value: Bool) { inside = value; if value { task?.cancel(); task = nil; closing = false; pendingID = nil } else { scheduleClose() } }
-    func pin() { task?.cancel(); task = nil; closing = false; pendingID = nil; pinned = true }
-    func clear() { task?.cancel(); task = nil; closing = false; pendingID = nil; hover = nil; content = nil; pinned = false; inside = false; lastHover = nil }
+    func pointer(_ value: Bool) { inside = value; if value { cancelPending(); refreshDisplayed() } else { scheduleClose() } }
+    func pin() { cancelPending(); pinned = true; refreshDisplayed() }
+    func clear() {
+        task?.cancel(); task = nil; closing = false; pendingID = nil; invalidateRefresh()
+        inputs = [:]; scope = nil; displayedSerial = nil; hover = nil; content = nil; pinned = false; inside = false; lastHover = nil
+    }
     private func scheduleClose() {
         guard !pinned, !closing else { return }
+        if pendingID != nil { invalidateRefresh() }
         task?.cancel(); pendingID = nil
-        guard hover != nil || content != nil else { task = nil; return }
+        guard hover != nil || content != nil else { task = nil; inputs = [:]; scope = nil; displayedSerial = nil; return }
         closing = true
         task = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
