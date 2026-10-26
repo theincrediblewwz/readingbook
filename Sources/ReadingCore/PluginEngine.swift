@@ -238,7 +238,8 @@ public enum PluginEngine {
         guard allowedUnitIDs.isSubset(of: Set(project.units.map(\.id))) else { throw invalid("知识目录读取范围引用了不存在的原文。") }
         var input = project
         let ranges = AnalysisSourceGuard.currentRanges
-        if let ranges {
+        if allowedUnitIDs.isEmpty { input.units = [] }
+        else if let ranges {
             input.units = try SmartReadingRuntime.analysisSourceUnits(in: project, allowedUnitIDs: allowedUnitIDs, ranges: ranges)
         } else { input.units = try SmartReadingRuntime.selectedUnits(in: project, allowedUnitIDs: allowedUnitIDs) }
         let snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: input)

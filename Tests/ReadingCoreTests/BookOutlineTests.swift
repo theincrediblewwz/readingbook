@@ -52,7 +52,9 @@ final class BookOutlineTests: XCTestCase {
         let good = try response(["entries": [["id": first.id, "level": 0]]])
         let entries = try await BookOutlineEngine.generate(request: batch, settings: .init()) { messages, _, _ in
             XCTAssertEqual(messages.count, 2)
-            XCTAssertTrue(String(describing: messages).contains(first.title))
+            let payload = try XCTUnwrap((messages.last?["content"] as? String)?.data(using: .utf8))
+            let candidates = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [[String: Any]])
+            XCTAssertEqual(candidates.first { $0["id"] as? String == first.id }?["text"] as? String, first.title)
             return good
         }
         XCTAssertEqual(entries, [first])

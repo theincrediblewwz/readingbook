@@ -4,7 +4,7 @@ import XCTest
 
 final class ChapterQueryScopeTests: XCTestCase {
     private func book() throws -> BookProject {
-        var book = BookProject(id: "chapter-query", title: "章界书", originalName: "book.pdf",
+        var book = BookProject(title: "章界书", originalName: "book.pdf",
             sourceHash: try BookImporter.sha256(Data("chapter-source".utf8)), units: [
                 SourceUnit(id: "shared", order: 0, chapter: "章界书", page: 1, text: "第一章\n甲章原文。\n第二章\n乙章原文。é"),
                 SourceUnit(id: "blank", order: 1, chapter: "章界书", page: 2, text: "")])
