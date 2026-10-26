@@ -123,7 +123,8 @@ final class ReadingAnalysisRunQueueTests: XCTestCase {
         book.entities.append(KnowledgeEntity(id: "jia", typeID: "person", name: "贾诩", summary: "人物的新介绍。"))
         let partial = try catalog.reconcile(in: book, previouslyCompleted: [], running: [catalog.chunks[0].id], dispatchCount: 1)
         XCTAssertTrue(partial.completedIDs.isEmpty); XCTAssertNil(partial.replacementQueue)
-        book.smartReading?.analysisCheckpoints = [checkpoint(catalog.chunks[0], in: book)]
+        let completed = checkpoint(catalog.chunks[0], in: book)
+        book.smartReading?.analysisCheckpoints = [completed]
         let terminal = try catalog.reconcile(in: book, previouslyCompleted: [], running: [catalog.chunks[0].id], dispatchCount: 1)
         XCTAssertEqual(terminal.newlyCompletedIDs, [catalog.chunks[0].id])
         XCTAssertEqual(book.entities.first?.summary, "人物的新介绍。")
@@ -136,10 +137,12 @@ final class ReadingAnalysisRunQueueTests: XCTestCase {
         let stamp = book.publicationStamp
         let catalog = try ReadingAnalysisRunCatalog(in: book, allowedUnitIDs: ["u0", "u1"])
         let first = catalog.chunks[0], second = catalog.chunks[1]
-        book.smartReading?.analysisCheckpoints = [checkpoint(first, in: book)]
+        let firstCheckpoint = checkpoint(first, in: book)
+        book.smartReading?.analysisCheckpoints = [firstCheckpoint]
         let before = try catalog.reconcile(in: book, previouslyCompleted: [], running: [], dispatchCount: 3)
         // Same count, different checkpoint: prefix/count/stamp shortcuts fail.
-        book.smartReading?.analysisCheckpoints = [checkpoint(second, in: book)]
+        let secondCheckpoint = checkpoint(second, in: book)
+        book.smartReading?.analysisCheckpoints = [secondCheckpoint]
         let after = try catalog.reconcile(in: book, previouslyCompleted: before.completedIDs, running: [second.id], dispatchCount: 3)
         var replacement = try XCTUnwrap(after.replacementQueue)
         XCTAssertEqual(after.completedIDs, [second.id]); XCTAssertFalse(replacement.isComplete(first.id))
