@@ -59,7 +59,9 @@ final class ReadingMarkdownStructureTests: XCTestCase {
             "- 列表 `跨行\n  继续?`结束。"
         ] {
             let text = first + "下一句。"
-            XCTAssertEqual(quotes(text), [first, "下一句。"], text)
+            let actual = quotes(text), expected = [first, "下一句。"]
+            if actual != expected { ReadingMarkdownStructure.diagnoseSourceMapping(text) }
+            XCTAssertEqual(actual, expected, text)
         }
         let nested = "- 外层尚无标点\n  - 嵌套 `跨行\n    继续?`结束。"
         XCTAssertEqual(quotes(nested), ["- 外层尚无标点", "- 嵌套 `跨行\n    继续?`结束。"])
@@ -118,10 +120,14 @@ final class ReadingMarkdownStructureTests: XCTestCase {
     func testCustomDisplayMathKeepsItsBlankLinesAndListLookingContentAtomic() {
         let dollar = "- 开始。\n\n  $$\n  x?\n\n  - y!\n  $$\n\n- 结束。"
         let dollarMath = "$$\n  x?\n\n  - y!\n  $$"
-        XCTAssertEqual(quotes(dollar), ["- 开始。", dollarMath, "- 结束。"])
+        let actualDollar = quotes(dollar), expectedDollar = ["- 开始。", dollarMath, "- 结束。"]
+        if actualDollar != expectedDollar { ReadingMarkdownStructure.diagnoseSourceMapping(dollar) }
+        XCTAssertEqual(actualDollar, expectedDollar)
         let escaped = "> \\[\n> a? + b\n>\n> - c!\n> \\]\n>\n> 结束。"
         let escapedMath = "> \\[\n> a? + b\n>\n> - c!\n> \\]"
-        XCTAssertEqual(quotes(escaped), [escapedMath, "> 结束。"])
+        let actualEscaped = quotes(escaped), expectedEscaped = [escapedMath, "> 结束。"]
+        if actualEscaped != expectedEscaped { ReadingMarkdownStructure.diagnoseSourceMapping(escaped) }
+        XCTAssertEqual(actualEscaped, expectedEscaped)
         for (text, math) in [(dollar, dollarMath), (escaped, escapedMath)] {
             let source = text as NSString, range = source.range(of: math, options: .literal)
             XCTAssertNotEqual(range.location, NSNotFound)

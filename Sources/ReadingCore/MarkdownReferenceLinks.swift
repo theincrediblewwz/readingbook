@@ -7,6 +7,7 @@ public enum MarkdownReferenceLinks {
         guard !bookID.isEmpty else { return source }
         let bytes = Array(source.utf8)
         let mathClosers = MathCloserIndex(bytes)
+        let backtickClosers = BacktickCloserIndex(bytes)
         var output: [UInt8] = []; output.reserveCapacity(bytes.count)
         var bracketEnds: [Int: Int] = [:], brackets: [Int] = []
         var parenthesisEnds: [Int: Int] = [:], parentheses: [Int] = []
@@ -30,7 +31,7 @@ public enum MarkdownReferenceLinks {
             }
             if bytes[offset] == 96 {
                 let length = run(bytes, from: offset, marker: 96)
-                if let end = closingRun(bytes, from: offset + length, marker: 96, count: length) { offset = end; continue }
+                if let end = backtickClosers.end(from: offset + length, count: length) { offset = end; continue }
                 offset += length; continue
             }
             if bytes[offset] == 36 {
@@ -76,7 +77,7 @@ public enum MarkdownReferenceLinks {
             }
             if value == 96 {
                 let length = run(bytes, from: offset, marker: 96)
-                if let end = closingRun(bytes, from: offset + length, marker: 96, count: length) {
+                if let end = backtickClosers.end(from: offset + length, count: length) {
                     output.append(contentsOf: bytes[offset..<end]); offset = end; continue
                 }
                 output.append(contentsOf: bytes[offset..<(offset + length)]); offset += length; continue
@@ -103,7 +104,7 @@ public enum MarkdownReferenceLinks {
                     output.append(contentsOf: bytes[offset...end]); offset = end + 1; continue
                 }
                 let inside = bytes[(offset + 1)..<close]
-                if referenceLabels.contains(normalizeLabel(String(decoding: inside, as: UTF8.self))) {
+                if !referenceLabels.isEmpty, referenceLabels.contains(normalizeLabel(String(decoding: inside, as: UTF8.self))) {
                     output.append(contentsOf: bytes[offset...close]); offset = close + 1; continue
                 }
                 let kind: String, idStart: Int
@@ -181,6 +182,38 @@ public enum MarkdownReferenceLinks {
             } else { index += 1 }
         }
         return nil
+    }
+    /// This disposable index deliberately includes runs in fences, math and
+    /// after backslashes: the old code-closer search treats all of them as
+    /// literal bytes, irrespective of what the outer scanner skips.
+    struct BacktickCloserIndex {
+        private let startsByLength: [Int: [Int]]
+
+        init(_ bytes: [UInt8]) {
+            var starts: [Int: [Int]] = [:], cursor = 0
+            while cursor < bytes.count {
+                if bytes[cursor] == 96 {
+                    let first = cursor
+                    while cursor < bytes.count, bytes[cursor] == 96 { cursor += 1 }
+                    starts[cursor - first, default: []].append(first)
+                } else { cursor += 1 }
+            }
+            startsByLength = starts
+        }
+
+        /// Call only at a maximal run boundary or outside a run. Both renderer
+        /// callers start after run(...); even an escaped first tick leaves an
+        /// opener suffix whose consumed end is still the maximal run's end.
+        /// One O(N) index replaces repeated suffix scans with O(log M) lookup.
+        func end(from start: Int, count: Int) -> Int? {
+            guard let positions = startsByLength[count] else { return nil }
+            var lower = 0, upper = positions.count
+            while lower < upper {
+                let middle = lower + (upper - lower) / 2
+                if positions[middle] < start { lower = middle + 1 } else { upper = middle }
+            }
+            return lower < positions.count ? positions[lower] + count : nil
+        }
     }
     private struct MathCloserIndex {
         private let round: [Int]

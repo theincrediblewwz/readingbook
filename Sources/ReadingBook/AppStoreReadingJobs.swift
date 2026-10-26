@@ -24,32 +24,67 @@ private final class ReadingPublicationCompletion: @unchecked Sendable {
     func runConfiguredReading(bookID: String, sessionID: String, allowedUnitIDs: Set<String>,
                               settings: ProviderSettings, apiKey: String, progressID: UUID) async throws {
         guard let initial = book, let configuration = initial.smartReading?.selection.execution else { return }
-        let chunkTask = Task.detached(priority: .utility) { try SmartReadingRuntime.analysisChunks(in: initial, allowedUnitIDs: allowedUnitIDs) }
-        let chunks = try await withTaskCancellationHandler(operation: { try await chunkTask.value }, onCancel: { chunkTask.cancel() })
-        let chapters = Dictionary(uniqueKeysWithValues: initial.units.map { ($0.id, $0.chapter) })
+        let runRepository = repository, root = libraryRootURL, initialRevision = projectRevision
+        let owner = runRepository.publicationOwner
+        let prepare = Task.detached(priority: .utility) {
+            let catalog = try ReadingAnalysisRunCatalog(in: initial, allowedUnitIDs: allowedUnitIDs)
+            return (catalog, try catalog.makeQueue(completed: catalog.initialCompletedIDs))
+        }
+        let (catalog, initialQueue) = try await withTaskCancellationHandler(operation: { try await prepare.value }, onCancel: { prepare.cancel() })
+        var queue = initialQueue, completedIDs = catalog.initialCompletedIDs
+        var checkedRevision = initialRevision, checkedStamp = initial.publicationStamp
         let limit = configuration.precision == .close ? 1 : max(1, aiConcurrencyLimit - 1)
         var running = Set<String>(), retries: [String: Int] = [:]
-        var dispatchedCount = 0
         try await withThrowingTaskGroup(of: ReadingChunkResult.self) { group in
             while true {
                 try Task.checkCancellation()
-                guard let latest = book, latest.id == bookID, latest.smartReading?.id == sessionID else { throw CancellationError() }
-                let checkpoints = Dictionary((latest.smartReading?.analysisCheckpoints ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
-                let complete = Set(chunks.filter { chunk in
-                    guard let checkpoint = checkpoints[chunk.id] else { return false }
-                    return checkpoint.unitIDs == chunk.unitIDs && checkpoint.configurationHash == chunk.configurationHash &&
-                        Set(checkpoint.completedStepIDs) == Set(chunk.stepIDs) && chunk.unitIDs.allSatisfy { checkpoint.unitHashes[$0] == latest.smartReading?.unitHashes[$0] }
-                }.map(\.id))
+                guard libraryRootURL == root, repository.publicationOwner == owner,
+                      let latest = book, latest.id == bookID, latest.smartReading?.id == sessionID else { throw CancellationError() }
+                if projectRevision != checkedRevision || latest.publicationStamp != checkedStamp {
+                    // A repository merge can contain changes never previously
+                    // published by this window. Recheck every new canonical
+                    // snapshot off-main, even after our own terminal commit.
+                    // The revision/stamp only detect stale work; neither proves
+                    // source bytes, work identity or append-only checkpoints.
+                    let revision = projectRevision, stamp = latest.publicationStamp
+                    let previous = completedIDs, active = running, dispatched = queue.dispatchCount
+                    let check = Task.detached(priority: .utility) {
+                        try catalog.reconcile(in: latest, previouslyCompleted: previous, running: active, dispatchCount: dispatched)
+                    }
+                    let update: ReadingAnalysisRunUpdate
+                    do {
+                        update = try await withTaskCancellationHandler(operation: { try await check.value }, onCancel: { check.cancel() })
+                    } catch {
+                        try Task.checkCancellation()
+                        guard libraryRootURL == root, repository.publicationOwner == owner,
+                              self.bookID == bookID, book?.smartReading?.id == sessionID else { throw CancellationError() }
+                        if projectRevision != revision || book?.publicationStamp != stamp { continue }
+                        throw error
+                    }
+                    try Task.checkCancellation()
+                    guard libraryRootURL == root, repository.publicationOwner == owner,
+                          self.bookID == bookID, book?.smartReading?.id == sessionID else { throw CancellationError() }
+                    // Coalesce concurrent publications: never apply a projection
+                    // from the snapshot we have just superseded.
+                    guard projectRevision == revision, book?.publicationStamp == stamp else { continue }
+                    if let replacement = update.replacementQueue { queue = replacement }
+                    else {
+                        for id in update.newlyCompletedIDs { try Task.checkCancellation(); queue.markComplete(id) }
+                    }
+                    completedIDs = update.completedIDs; checkedRevision = revision; checkedStamp = stamp
+                }
                 // Begin with one identity writer for a new book, then fan out.
-                let capacity = complete.isEmpty && latest.entities.isEmpty ? 1 : limit
-                while running.count < capacity, let chunk = ReadingAnalysisScheduler.nextReadyChunk(in: chunks, completed: complete, running: running,
-                    steps: configuration.steps, chapters: chapters, currentUnitID: selectedUnitID, dispatchCount: dispatchedCount) {
+                let capacity = queue.completedCount == 0 && latest.entities.isEmpty ? 1 : limit
+                while running.count < capacity, let chunk = queue.next(currentUnitID: selectedUnitID) {
                     let worker = AIReader(coordinator: sharedAIRequests)
                     let handler = workerProgressHandler(progressID)
                     let publisher = readingPublicationHandler(bookID: bookID, sessionID: sessionID, progressID: progressID)
                     let publication = ReadingPublicationCompletion()
+                    // Only work metadata is frozen. Each dispatch sees the
+                    // latest canonical knowledge, including prior publications.
                     let base = latest, priorityUnitID = selectedUnitID
-                    running.insert(chunk.id); dispatchedCount += 1
+                    guard queue.begin(chunk.id) else { throw ReadingError.invalid("分析队列已经改变，已保存内容保留。") }
+                    running.insert(chunk.id)
                     group.addTask {
                         await worker.setProgressHandler(handler)
                         await worker.setPublicationHandler { batch in
@@ -61,20 +96,22 @@ private final class ReadingPublicationCompletion: @unchecked Sendable {
                             return ReadingChunkResult(chunk: chunk, base: base, result: result, hasPublishedCompletion: publication.isSaved)
                         } catch {
                             let message = String(error.localizedDescription.prefix(2000))
-                            return ReadingChunkResult(chunk: chunk, base: base, result: nil, failure: message,
+                            return ReadingChunkResult(chunk: chunk, base: base, result: nil, hasPublishedCompletion: publication.isSaved, failure: message,
                                 cancelled: Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled,
                                 conflict: message.contains("另一条任务") || message.contains("并行保存"))
                         }
                     }
                 }
                 if running.isEmpty {
-                    guard complete.count == chunks.count else { throw ReadingError.invalid("阅读步骤的先后关系尚未满足，已保存结果保留。") }
+                    guard queue.completedCount == queue.count else { throw ReadingError.invalid("阅读步骤的先后关系尚未满足，已保存结果保留。") }
                     break
                 }
-                updateAIProgressDetail(progressID, detail: "已完成 \(complete.count)/\(chunks.count) 部分 · \(running.count) 条分析线")
+                updateAIProgressDetail(progressID, detail: "已完成 \(queue.completedCount)/\(queue.count) 部分 · \(running.count) 条分析线")
                 guard let finished = try await group.next() else { break }
-                running.remove(finished.chunk.id)
+                running.remove(finished.chunk.id); queue.finish(finished.chunk.id)
                 try Task.checkCancellation()
+                guard libraryRootURL == root, repository.publicationOwner == owner,
+                      self.bookID == bookID, book?.smartReading?.id == sessionID else { throw CancellationError() }
                 if let failure = finished.failure {
                     if finished.cancelled { throw CancellationError() }
                     if finished.conflict, retries[finished.chunk.id, default: 0] < 1 {
@@ -89,10 +126,14 @@ private final class ReadingPublicationCompletion: @unchecked Sendable {
                     // with a newer worker's valid changes to the same object.
                     // Exact receipt batches still use their original caller commit.
                     if !finished.hasPublishedCompletion {
-                        let committed = try await repository.commitAIResult(base: finished.base, result: result, operationID: UUID().uuidString, expectedReadingSessionID: sessionID)
+                        let committed = try await runRepository.commitAIResult(base: finished.base, result: result, operationID: UUID().uuidString, expectedReadingSessionID: sessionID)
+                        guard libraryRootURL == root, repository.publicationOwner == owner,
+                              self.bookID == bookID, book?.smartReading?.id == sessionID else { throw CancellationError() }
                         publish(committed)
                     }
                     requestsUsed = await sharedAIRequests.requestsUsed
+                    guard libraryRootURL == root, repository.publicationOwner == owner,
+                          self.bookID == bookID, book?.smartReading?.id == sessionID else { throw CancellationError() }
                     activeReadingUnitID = finished.chunk.unitIDs.first
                 } catch {
                     // One bounded retry reads the just-committed state, so local

@@ -205,6 +205,32 @@ enum ReadingMarkdownStructure {
     }
 
     #if os(macOS)
+    // Temporary failing-fixture diagnostics; called only by Core tests.
+    static func diagnoseSourceMapping(_ text: String) {
+        let lines = sourceLines(text), source = text as NSString
+        var options = AttributedString.MarkdownParsingOptions()
+        options.interpretedSyntax = .full; options.failurePolicy = .throwError
+        options.appliesSourcePositionAttributes = true
+        print("READING_MD_DIAG4_SOURCE", text.debugDescription)
+        let shadow = structureShadow(source, lines: lines)
+        let original = try? AttributedString(markdown: text, options: options)
+        let replacement = shadow.flatMap { try? AttributedString(markdown: $0, options: options) }
+        print("READING_MD_DIAG4_SIGNATURE", String(describing: original.flatMap { signature(of: $0, lineCount: lines.count) }),
+              "shadow", String(describing: replacement.flatMap { signature(of: $0, lineCount: lines.count) }))
+        for (phase, value) in [("original", original), ("shadow", replacement)] {
+            guard let value else { continue }
+            for run in value.runs {
+                let content = String(value.characters[run.range]), position = run.markdownSourcePosition
+                let firstWidth = position.flatMap { $0.startLine > 0 && $0.startLine <= lines.count ? lines[$0.startLine - 1].utf8Length : nil }
+                let lastWidth = position.flatMap { $0.endLine > 0 && $0.endLine <= lines.count ? lines[$0.endLine - 1].utf8Length : nil }
+                print("READING_MD_DIAG4_RUN", phase, content.debugDescription, "intent", String(describing: run.presentationIntent),
+                      "inline", String(describing: run.inlinePresentationIntent), "position", String(describing: position),
+                      "physicalUTF8Widths", String(describing: firstWidth), String(describing: lastWidth))
+            }
+        }
+        print("READING_MD_DIAG4_BASE", String(describing: blocks(in: text, displayMath: { _ in [] })?.map(\.range)))
+    }
+
     private struct SignatureBlock: Equatable {
         var first: Int
         var blockHTML: Bool

@@ -2,6 +2,54 @@ import XCTest
 @testable import ReadingCore
 
 final class MarkdownReferenceLinksTests: XCTestCase {
+    func testIndexedBacktickClosersMatchLegacySearchAtReachableBoundaries() {
+        func legacy(_ bytes: [UInt8], from start: Int, count: Int) -> Int? {
+            var cursor = start
+            while cursor < bytes.count {
+                if bytes[cursor] == 96 {
+                    let first = cursor
+                    while cursor < bytes.count, bytes[cursor] == 96 { cursor += 1 }
+                    if cursor - first == count { return cursor }
+                } else { cursor += 1 }
+            }
+            return nil
+        }
+        var seed: UInt64 = 0x9b27_6f41_a35c_082d
+        func next(_ bound: Int) -> Int {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Int((seed >> 32) % UInt64(bound))
+        }
+        let literal: [UInt8] = [92, 10, 13, 32, 36, 126, 91, 93, 40, 41, 120]
+        for sample in 0..<24 {
+            var bytes: [UInt8] = []
+            for _ in 0..<40 {
+                if next(3) == 0 { bytes += Array(repeating: 96, count: next(8) + 1) }
+                else { bytes.append(literal[next(literal.count)]) }
+            }
+            let index = MarkdownReferenceLinks.BacktickCloserIndex(bytes)
+            for start in 0...bytes.count {
+                // The actual callers have consumed the whole opener suffix,
+                // so their query can never begin inside a maximal tick run.
+                if start > 0, start < bytes.count, bytes[start - 1] == 96, bytes[start] == 96 { continue }
+                for count in 1...10 {
+                    XCTAssertEqual(index.end(from: start, count: count), legacy(bytes, from: start, count: count),
+                        "sample=\(sample), start=\(start), width=\(count)")
+                }
+            }
+        }
+    }
+    func testManyDistinctUnclosedBacktickWidthsKeepTheFinalReference() {
+        let source = (1...384).map { "text " + String(repeating: "`", count: $0) + " " }.joined() + "[doc:yes]"
+        XCTAssertEqual(MarkdownReferenceLinks.render(source, bookID: "b"),
+            source.replacingOccurrences(of: "[doc:yes]", with: "[笔记](readingbook://book/b/document/yes)"))
+    }
+    func testBacktickIndexKeepsEscapedOpenersAndLiteralBackslashClosers() {
+        for source in ["\\``[doc:inside]` [doc:yes]", "`[doc:inside]\\` [doc:yes]",
+                       "text ```[doc:inside]\n\\``` [doc:yes]"] {
+            XCTAssertEqual(MarkdownReferenceLinks.render(source, bookID: "b"),
+                source.replacingOccurrences(of: "[doc:yes]", with: "[笔记](readingbook://book/b/document/yes)"))
+        }
+    }
     func testOnlyActualShorthandBecomesNavigation() {
         let result = MarkdownReferenceLinks.render("中文 [unit:page-1] 与 [doc:my.note]。", bookID: "book-a")
         XCTAssertEqual(result, "中文 [原文](readingbook://book/book-a/unit/page-1) 与 [笔记](readingbook://book/book-a/document/my.note)。")

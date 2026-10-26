@@ -248,8 +248,21 @@ struct KnowledgeLibraryView: View {
     @State private var query = ""
     @State private var section = "documents"
     @State private var documentTexts: [String: String] = [:]
+    @State private var loadedDocumentKey: DocumentSearchRequest?
+    private struct DocumentSearchEntry: Hashable {
+        let id: String
+        let relativePath: String
+        let updatedAt: Date
+    }
+    private struct DocumentSearchRequest: Hashable {
+        let libraryRoot: URL
+        let bookID: String
+        let sourceHash: String
+        let documents: [DocumentSearchEntry]
+    }
     private var documents: [DocumentRecord] {
-        (store.book?.activeDocuments ?? []).filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || documentTexts[$0.id]?.localizedCaseInsensitiveContains(query) == true }
+        let contentIsCurrent = loadedDocumentKey == documentSearchKey
+        return (store.book?.activeDocuments ?? []).filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || (contentIsCurrent && documentTexts[$0.id]?.localizedCaseInsensitiveContains(query) == true) }
     }
     private var insights: [ReadingInsight] {
         (store.book?.insights ?? []).filter { query.isEmpty || $0.markdown.localizedCaseInsensitiveContains(query) }
@@ -273,13 +286,21 @@ struct KnowledgeLibraryView: View {
             .popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
             if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 330, height: 500) }
         }.task(id: documentSearchKey) {
-            documentTexts = [:]
+            documentTexts = [:]; loadedDocumentKey = nil
             // Opening the library needs metadata only. Read Markdown bodies
             // once when a content search is active, not on every library visit.
-            guard !query.isEmpty, let book = store.book else { return }; var loaded: [String: String] = [:]
-            do { for document in book.activeDocuments { try Task.checkCancellation(); loaded[document.id] = try await store.repository.readDocument(bookID: book.id, document: document) }; if !Task.isCancelled && store.book?.id == book.id { documentTexts = loaded } }
+            guard let request = documentSearchKey, let book = store.book else { return }
+            let repository = store.repository
+            var loaded: [String: String] = [:]
+            do {
+                for document in book.activeDocuments {
+                    try Task.checkCancellation()
+                    loaded[document.id] = try await repository.readDocument(bookID: book.id, document: document)
+                }
+                if !Task.isCancelled, documentSearchKey == request { documentTexts = loaded; loadedDocumentKey = request }
+            }
             catch is CancellationError { }
-            catch { store.errorMessage = error.localizedDescription }
+            catch { if !Task.isCancelled, documentSearchKey == request { store.errorMessage = error.localizedDescription } }
         }.onChange(of: store.bookID) { _, _ in inspectedID = nil; query = "" }
     }
     @ViewBuilder private var documentSection: some View {
@@ -393,6 +414,9 @@ struct KnowledgeLibraryView: View {
     private func insightActions(_ insight: ReadingInsight) -> some View {
         HStack { insightSources(insight); Spacer(); Button("保存为文档") { Task { await store.saveInsight(insight) } }.disabled(store.isBusy) }
     }
-    private var documentSearchKey: String { documentCacheKey + (query.isEmpty ? "|idle" : "|search") }
-    private var documentCacheKey: String { (store.book?.id ?? "") + (store.book?.activeDocuments.map { $0.id + String($0.updatedAt.timeIntervalSince1970) }.joined(separator: "|") ?? "") }
+    private var documentSearchKey: DocumentSearchRequest? {
+        guard !query.isEmpty, let book = store.book else { return nil }
+        return DocumentSearchRequest(libraryRoot: store.libraryRootURL, bookID: book.id, sourceHash: book.sourceHash,
+            documents: book.activeDocuments.map { DocumentSearchEntry(id: $0.id, relativePath: $0.relativePath, updatedAt: $0.updatedAt) })
+    }
 }
