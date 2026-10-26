@@ -12,6 +12,20 @@ final class ReadingAnalysisRunQueueTests: XCTestCase {
     }
     private var chapters: [String: String] { Dictionary(uniqueKeysWithValues: (0..<8).map { ("u\($0)", $0 < 4 ? "一" : "二") }) }
 
+    func testExactChapterBarriersStayIndependentWhenOneUnitContainsSeveralChapters() throws {
+        var jobs = (0..<4).map { ReadingAnalysisChunk(id: "slice-\($0)", title: "片段", unitIDs: ["u"], configurationHash: "same", stepIDs: $0 % 2 == 0 ? ["part"] : ["chapter"]) }
+        for index in jobs.indices { jobs[index].chapterID = index < 2 ? "chapter-a" : "chapter-b" }
+        let legacyLabels = ["u": "整本书"]
+        var queue = try ReadingAnalysisRunQueue(chunks: jobs, steps: steps, chapters: legacyLabels, completed: [])
+        XCTAssertEqual(queue.next(currentUnitID: nil)?.id, "slice-0")
+        XCTAssertTrue(queue.begin("slice-0"))
+        XCTAssertEqual(queue.next(currentUnitID: nil)?.id, "slice-2", "另一章普通分析不被旧书名屏障阻塞。")
+        XCTAssertFalse(queue.begin("slice-1"), "当前章末仍等待本章前序片段。")
+        queue.markComplete("slice-0"); queue.finish("slice-0")
+        XCTAssertEqual(queue.next(currentUnitID: nil)?.id, "slice-1")
+        XCTAssertEqual(queue.next(currentUnitID: nil)?.id, ReadingAnalysisScheduler.nextReadyChunk(in: jobs, completed: ["slice-0"], running: [], steps: steps, chapters: legacyLabels, currentUnitID: nil, dispatchCount: queue.dispatchCount)?.id)
+    }
+
     func testRunIndexMatchesStatelessOracleAcrossMixedCanonicalStates() throws {
         var jobs = chunks
         jobs[1].stepIDs = ["part", "chapter"]; jobs[2].unitIDs = ["u2", "u5"]; jobs[2].stepIDs = ["chapter"]

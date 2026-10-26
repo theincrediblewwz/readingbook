@@ -12,7 +12,7 @@ public enum ReadingAnalysisScheduler {
         for (index, chunk) in chunks.enumerated() where !completed.contains(chunk.id) {
             if firstIncomplete == nil { firstIncomplete = index }
             for unitID in chunk.unitIDs {
-                let chapter = chapters[unitID] ?? ""
+                let chapter = chunk.chapterID ?? chapters[unitID] ?? ""
                 if firstIncompleteByChapter[chapter] == nil { firstIncompleteByChapter[chapter] = index }
             }
         }
@@ -21,7 +21,7 @@ public enum ReadingAnalysisScheduler {
             let actions = chunk.stepIDs.compactMap { frequencies[$0] }
             if actions.contains(.book), let firstIncomplete, firstIncomplete < index { return false }
             if actions.contains(.chapter) {
-                let own = Set(chunk.unitIDs.compactMap { chapters[$0] })
+                let own = chunk.chapterID.map({ Set([$0]) }) ?? Set(chunk.unitIDs.compactMap { chapters[$0] })
                 if own.contains(where: { (firstIncompleteByChapter[$0] ?? index) < index }) { return false }
             }
             return true

@@ -37,11 +37,13 @@ extension ReadingQuerySession {
             // Match the already-saved knowledge prefix policy. Actual identity
             // was read in this scope; old context is not a new source grant.
             let slices = Dictionary(snapshot.sources.map { ($0.unitID, $0.text) }, uniquingKeysWith: { first, _ in first })
-            return SavedKnowledgeReuse(project: project, currentUnitIDs: Set(snapshot.unitIDs), currentSlices: slices)?.admits(record.evidence) == true
+            guard let ranges = try? snapshot.sourceRanges(in: project) else { return false }
+            return SavedKnowledgeReuse(project: project, currentUnitIDs: Set(snapshot.unitIDs), currentSlices: slices, currentRanges: ranges)?.admits(record.evidence) == true
         }
         // Selection and internal cropped .book components cannot borrow the
         // prefix permission. Explicit full-book queries already contain their
         // allowed source units, so the same exact gate is sufficient there.
-        return record.evidence.allSatisfy(snapshot.admits)
+        guard let admits = try? snapshot.savedEvidenceAdmitter(in: project) else { return false }
+        return record.evidence.allSatisfy(admits)
     }
 }

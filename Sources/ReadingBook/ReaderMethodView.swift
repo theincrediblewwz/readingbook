@@ -23,7 +23,8 @@ struct ReaderMethodView: View {
     }
     private var selectionChanged: Bool {
         guard let book = store.book else { return true }
-        return !SmartReadingRuntime.selectionMatchesFrozenContext(selection, in: book, currentUnitID: store.selectedUnitID)
+        return !SmartReadingRuntime.selectionMatchesFrozenContext(selection, in: book, currentUnitID: store.selectedUnitID,
+            currentOffsetUTF16: store.chapterReadingOffset(in: book, unitID: store.selectedUnitID))
     }
     private var activeMethods: [ReadingMethod] {
         guard let book = store.book else { return [] }
@@ -111,8 +112,8 @@ struct ReaderMethodView: View {
             Divider().opacity(0.35)
             Label("分析多少", systemImage: "scope").font(.system(size: 17, weight: .semibold))
             Picker("分析范围", selection: $scope) { ForEach(SmartReadingScope.allCases, id: \.self) { Text($0.displayTitle).tag($0) } }.pickerStyle(.segmented).controlSize(.large)
-            if scope == .currentChapter, Set(store.book?.units.map(\.chapter) ?? []).count <= 1 {
-                Text("这本书尚未分章；当前章可能覆盖整本书，请先核对范围。")
+            if scope == .currentChapter, store.book?.originalName.lowercased().hasSuffix(".pdf") == true {
+                Text("按原书目录或已整理的目录确定章首、章尾；边界未确定时先整理目录。")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             if scope == .pageRange {

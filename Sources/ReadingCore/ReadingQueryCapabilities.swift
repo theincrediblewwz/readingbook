@@ -114,23 +114,30 @@ enum ReadingQueryToolCatalog {
 }
 
 extension ReadingQuerySession {
+    private func savedKnowledgeEvidenceAdmitter(in project: BookProject) -> (Evidence) -> Bool {
+        savedEvidenceAdmission ?? (try? snapshot.savedEvidenceAdmitter(in: project)) ?? { _ in false }
+    }
     /// Identity can be reused when this scope has a genuine appearance. Aggregate
     /// descriptions and attributes backed by other scopes are withheld.
     func isIdentityStub(_ id: String) -> Bool {
         guard let project else { return false }
         let evidence = project.entities.first(where: { $0.id == id })?.evidence
             ?? project.events.first(where: { $0.id == id })?.evidence ?? []
-        return evidence.contains(where: snapshot.admits) && !evidence.allSatisfy(snapshot.admits)
+        let admitted = savedKnowledgeEvidenceAdmitter(in: project)
+        return evidence.contains(where: snapshot.admits) && !evidence.allSatisfy(admitted)
     }
     func identityStubIDs() -> Set<String> {
         guard let project else { return [] }
         var result = Set<String>()
-        for entity in project.entities where entity.evidence.contains(where: snapshot.admits) && !entity.evidence.allSatisfy(snapshot.admits) { result.insert(entity.id) }
-        for event in project.events where event.evidence.contains(where: snapshot.admits) && !event.evidence.allSatisfy(snapshot.admits) { result.insert(event.id) }
+        let admitted = savedKnowledgeEvidenceAdmitter(in: project)
+        for entity in project.entities where entity.evidence.contains(where: snapshot.admits) && !entity.evidence.allSatisfy(admitted) { result.insert(entity.id) }
+        for event in project.events where event.evidence.contains(where: snapshot.admits) && !event.evidence.allSatisfy(admitted) { result.insert(event.id) }
         return result
     }
     func scopedKnowledgeProject() -> BookProject? {
         guard var project else { return nil }
+        let admitsAnchor: (SourceAnchor) -> Bool = anchorAdmission ?? (try? snapshot.anchorAdmitter(in: project)) ?? { _ in false }
+        let admitsSavedEvidence = savedKnowledgeEvidenceAdmitter(in: project)
         func permitted(_ evidence: [Evidence]) -> Bool {
             !evidence.isEmpty && evidence.allSatisfy(snapshot.admits)
         }
@@ -138,7 +145,7 @@ extension ReadingQuerySession {
             let local = original.evidence.filter(snapshot.admits)
             guard !local.isEmpty else { return nil }
             var value = original
-            if local.count != original.evidence.count {
+            if local.count != original.evidence.count || !original.evidence.allSatisfy(admitsSavedEvidence) {
                 value.summary = ""; value.properties = [:]
                 value.latitude = nil; value.longitude = nil; value.locationNote = nil
                 value.aliases = value.aliases.filter { alias in local.contains { $0.quote.contains(alias) } }
@@ -151,7 +158,7 @@ extension ReadingQuerySession {
             let local = original.evidence.filter(snapshot.admits)
             guard !local.isEmpty else { return nil }
             var value = original
-            if local.count != original.evidence.count {
+            if local.count != original.evidence.count || !original.evidence.allSatisfy(admitsSavedEvidence) {
                 value.summary = ""; value.dateText = "时间待考"; value.startYear = nil; value.endYear = nil
                 value.placeIDs = []; value.participantIDs = []
                 if !local.contains(where: { $0.quote.contains(value.name) }) { value.name = "本段关联事件" }
@@ -162,13 +169,21 @@ extension ReadingQuerySession {
         let visible = ReadingSpoilerProjection.Context(project: project, allowedUnitIDs: allowsFullIdentity ? nil : Set(snapshot.unitIDs))
         project.entities = project.entities.compactMap { visible.entity($0) }
         project.events = project.events.compactMap { visible.event($0) }
-        project.relations = project.relations.filter { permitted($0.evidence) }
+        project.relations = project.relations.filter { permitted($0.evidence) && $0.evidence.allSatisfy(admitsSavedEvidence) }
         project.documents = snapshot.documents
         let anchors = ((project.readingExperience?.anchors ?? []) + (project.temporalKnowledge?.anchors ?? [])).filter {
-            permitted([Evidence(unitID: $0.unitID, quote: $0.quote)])
+            permitted([Evidence(unitID: $0.unitID, quote: $0.quote)]) && admitsAnchor($0)
         }
         let anchorIDs = Set(anchors.map(\.id))
-        if project.readingExperience != nil { project.readingExperience?.anchors = anchors }
+        if var experience = project.readingExperience {
+            func permits(_ ids: [String]) -> Bool { !ids.isEmpty && Set(ids).isSubset(of: anchorIDs) }
+            experience.anchors = anchors
+            experience.mentions = experience.mentions.filter { anchorIDs.contains($0.anchorID) }
+            experience.layers = experience.layers.filter { permits($0.sourceAnchorIDs) }
+            experience.alignments = experience.alignments.filter { permits($0.sourceAnchorIDs) }
+            experience.decisions = experience.decisions.filter { permits($0.sourceAnchorIDs) }
+            project.readingExperience = experience
+        }
         if var temporal = project.temporalKnowledge {
             temporal.anchors = anchors
             func permits(_ ids: [String]) -> Bool { !ids.isEmpty && Set(ids).isSubset(of: anchorIDs) }
@@ -229,7 +244,8 @@ extension ReadingQuerySession {
         // Construct this index once, rather than rebuilding it per result row.
         // Previous sources stay derived context, never current citation grants.
         let reuse = ["objects_search", "object_get"].contains(name) ? SavedKnowledgeReuse(project: project, currentUnitIDs: Set(snapshot.unitIDs),
-            currentSlices: Dictionary(snapshot.sources.map { ($0.unitID, $0.text) }, uniquingKeysWith: { first, _ in first })) : nil
+            currentSlices: Dictionary(snapshot.sources.map { ($0.unitID, $0.text) }, uniquingKeysWith: { first, _ in first }),
+            currentRanges: try snapshot.sourceRanges(in: project)) : nil
         switch name {
         case "capabilities_list":
             if let group = arguments["schemaFor"] as? String {

@@ -10,6 +10,7 @@ import ReadingCore
     @Published var bookID: String? {
         didSet {
             if oldValue != bookID {
+                readerChapterAnchor = nil
                 teacherBackground.cancelAll(); sentenceTranslation.cancelAll()
                 queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []; queryComposerDraft.text = ""
                 queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil
@@ -31,11 +32,12 @@ import ReadingCore
     @Published var selectedUnitID: String? {
         didSet {
             if let bookID, let selectedUnitID { UserDefaults.standard.set(selectedUnitID, forKey: "position-\(bookID)") }
-            if oldValue != selectedUnitID { sourceReadingSelection = nil; focusedReadingAnchorID = nil; selectedObjectID = nil; readingContextDocumentID = nil; refreshReadingExperienceIndex() }
+            if oldValue != selectedUnitID { readerChapterAnchor = nil; sourceReadingSelection = nil; focusedReadingAnchorID = nil; selectedObjectID = nil; readingContextDocumentID = nil; refreshReadingExperienceIndex() }
         }
     }
     @Published var sourceReadingSelection: SourceReadingSelection?
     @Published var focusedReadingAnchorID: String?
+    @Published var readerChapterAnchor: SourceAnchor?
     let queryComposerDraft = QueryComposerDraft()
     let teacherBackground = TeacherBackgroundState()
     let sentenceTranslation = SentenceTranslationState()
@@ -416,8 +418,9 @@ import ReadingCore
                 }
             }
             do {
+                let requestProject = scope == .chapter ? try await ensureBookChapterOutline(project: current) : current
                 let worker = Task.detached(priority: .userInitiated) {
-                    try ReadingPreparedAnswer.freeze(project: current, scope: scope, context: context,
+                    try ReadingPreparedAnswer.freeze(project: requestProject, scope: scope, context: context,
                         documentIDs: documentIDs, appendedDocumentIDs: attachedDocumentIDs,
                         authorizedNodeIDs: authorizedNodeIDs, preferences: preferences)
                 }
@@ -432,8 +435,8 @@ import ReadingCore
                 var sentMessage = ChatMessage(role: "user", content: question)
                 sentMessage.conversationMode = preferences.interaction; sentMessage.answerStyle = preferences.style
                 sentMessage.readingContext = chatContext
-                var pending = current; pending.chats.append(sentMessage)
-                let questionBase = try await repository.commitAIResult(base: current, result: pending, operationID: "question-" + sentMessage.id)
+                var pending = requestProject; pending.chats.append(sentMessage)
+                let questionBase = try await repository.commitAIResult(base: requestProject, result: pending, operationID: "question-" + sentMessage.id)
                 publish(questionBase)
                 try Task.checkCancellation()
                 if mayOrganize {
@@ -485,7 +488,7 @@ import ReadingCore
     func navigateToUnit(_ id: String) {
         guard book?.units.contains(where: { $0.id == id }) == true else { return }
         pdfNavigationToken += 1
-        sourceReadingSelection = nil; focusedReadingAnchorID = nil
+        readerChapterAnchor = nil; sourceReadingSelection = nil; focusedReadingAnchorID = nil
         readingContextDocumentID = nil
         selectedUnitID = id
     }

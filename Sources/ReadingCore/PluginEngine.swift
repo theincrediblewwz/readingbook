@@ -237,13 +237,35 @@ public enum PluginEngine {
     static func analysisContextProject(_ project: BookProject, allowedUnitIDs: Set<String>) throws -> BookProject {
         guard allowedUnitIDs.isSubset(of: Set(project.units.map(\.id))) else { throw invalid("知识目录读取范围引用了不存在的原文。") }
         var input = project
-        input.units = input.units.filter { allowedUnitIDs.contains($0.id) }
+        let ranges = AnalysisSourceGuard.currentRanges
+        if let ranges {
+            input.units = try SmartReadingRuntime.analysisSourceUnits(in: project, allowedUnitIDs: allowedUnitIDs, ranges: ranges)
+        } else { input.units = try SmartReadingRuntime.selectedUnits(in: project, allowedUnitIDs: allowedUnitIDs) }
         let snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: input)
-        let session = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: input)
+        let canonicalUnits = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var resolvers: [String: (SourceAnchor) throws -> ResolvedSourceAnchor] = [:]
+        for unit in input.units {
+            guard let canonical = canonicalUnits[unit.id] else { throw invalid("原文片段的源单元不存在。") }
+            let local = BookProject(id: project.id, title: project.title, originalName: project.originalName, sourceHash: project.sourceHash, units: [canonical])
+            resolvers[unit.id] = try ReadingExperienceRuntime.anchorResolver(sourceHash: project.sourceHash, unitID: unit.id, in: local)
+        }
+        let canonicalResolvers = resolvers, rangesByUnit = ranges.map { Dictionary(grouping: $0, by: \.unitID) }
+        let admitsAnchor: (SourceAnchor) -> Bool = { anchor in
+            guard let resolve = canonicalResolvers[anchor.unitID], let value = try? resolve(anchor) else { return false }
+            guard let rangesByUnit else { return true }
+            return (rangesByUnit[anchor.unitID] ?? []).contains { range in
+                value.utf16Location >= range.startUTF16 && value.utf16Location <= range.endUTF16 &&
+                    value.utf16Length <= range.endUTF16 - value.utf16Location
+            }
+        }
+        let admitsSavedEvidence = try ranges.map { try ReadingQuerySnapshot.savedEvidenceAdmitter(in: project, ranges: $0) }
+        let session = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: input,
+            anchorAdmission: admitsAnchor, savedEvidenceAdmission: admitsSavedEvidence)
         var scoped = session.scopedKnowledgeProject() ?? input
-        let candidates = analysisIdentityCandidates(project, allowedUnitIDs: allowedUnitIDs)
+        let candidates = analysisIdentityCandidates(project, allowedUnitIDs: allowedUnitIDs, occurrenceTexts: input.units.map(\.text))
         let relevantIDs = Set(scoped.entities.map(\.id) + scoped.events.map(\.id) + candidates.map(\.id))
-        if let reuse = SavedKnowledgeReuse(project: project, currentUnitIDs: allowedUnitIDs) {
+        let slices = ranges == nil ? nil : Dictionary(uniqueKeysWithValues: input.units.map { ($0.id, $0.text) })
+        if let reuse = SavedKnowledgeReuse(project: project, currentUnitIDs: allowedUnitIDs, currentSlices: slices, currentRanges: ranges) {
             for original in project.entities where relevantIDs.contains(original.id) {
                 guard let entity = reuse.entity(original) else { continue }
                 if let index = scoped.entities.firstIndex(where: { $0.id == entity.id }) { scoped.entities[index] = entity }
@@ -262,7 +284,7 @@ public enum PluginEngine {
             return event
         }
         if var experience = scoped.readingExperience {
-            let anchors = experience.anchors.filter { snapshot.admits(Evidence(unitID: $0.unitID, quote: $0.quote)) }
+            let anchors = experience.anchors.filter { snapshot.admits(Evidence(unitID: $0.unitID, quote: $0.quote)) && admitsAnchor($0) }
             let ids = Set(anchors.map(\.id))
             experience.anchors = anchors
             experience.mentions = experience.mentions.filter { ids.contains($0.anchorID) }
@@ -280,7 +302,11 @@ public enum PluginEngine {
     /// without revealing its other names or any facts learned on other pages.
     /// These are explicitly candidates, not an assertion that two names coincide.
     static func analysisIdentityCandidates(_ project: BookProject, allowedUnitIDs: Set<String>, occurrenceTexts: [String]? = nil) -> [AnalysisIdentityCandidate] {
-        let texts = occurrenceTexts ?? project.units.filter { allowedUnitIDs.contains($0.id) }.map(\.text)
+        let texts: [String]
+        if let occurrenceTexts { texts = occurrenceTexts }
+        else if let ranges = AnalysisSourceGuard.currentRanges {
+            texts = ((try? SmartReadingRuntime.analysisSourceUnits(in: project, allowedUnitIDs: allowedUnitIDs, ranges: ranges)) ?? []).map(\.text)
+        } else { texts = ((try? SmartReadingRuntime.selectedUnits(in: project, allowedUnitIDs: allowedUnitIDs)) ?? []).map(\.text) }
         func local(_ names: [String]) -> [String] {
             var seen = Set<String>()
             return names.filter { name in !name.isEmpty && seen.insert(name).inserted && texts.contains(where: { $0.contains(name) }) }
@@ -304,7 +330,10 @@ public enum PluginEngine {
         let limit = try integer(input, key: "limit") ?? 8
         guard (1...12).contains(limit) else { throw invalid("查询 limit 必须在 1–12 之间。") }
         let project = try analysisContextProject(original, allowedUnitIDs: allowed)
-        let reuse = SavedKnowledgeReuse(project: original, currentUnitIDs: allowed)
+        let slices = AnalysisSourceGuard.currentRanges == nil ? nil :
+            try Dictionary(uniqueKeysWithValues: SmartReadingRuntime.analysisSourceUnits(in: original, allowedUnitIDs: allowed,
+                ranges: AnalysisSourceGuard.currentRanges).map { ($0.id, $0.text) })
+        let reuse = SavedKnowledgeReuse(project: original, currentUnitIDs: allowed, currentSlices: slices, currentRanges: AnalysisSourceGuard.currentRanges)
         var matches: [[String: Any]] = []
         for entity in project.entities where matches.count < limit {
             guard ([entity.name, entity.summary] + entity.aliases).contains(where: { $0.localizedCaseInsensitiveContains(query) }) else { continue }

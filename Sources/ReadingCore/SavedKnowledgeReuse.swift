@@ -11,21 +11,29 @@ struct SavedKnowledgeReuse {
     private let events: [String: KnowledgeEvent]
     private let projection: ReadingSpoilerProjection.Context
     private let currentSlices: [String: String]?
+    private let savedEvidenceAdmission: ((Evidence) -> Bool)?
     private let versions: ReadingKnowledgeRuntime.VersionContext
 
-    init?(project: BookProject, currentUnitIDs: Set<String>, currentSlices: [String: String]? = nil) {
+    init?(project: BookProject, currentUnitIDs: Set<String>, currentSlices: [String: String]? = nil, currentRanges: [ReadingSourceRange]? = nil) {
         let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         guard !currentUnitIDs.isEmpty, currentUnitIDs.allSatisfy({ units[$0] != nil }),
               currentSlices.map({ Set($0.keys) == currentUnitIDs }) ?? true,
               let cursor = currentUnitIDs.compactMap({ units[$0]?.order }).max() else { return nil }
         self.sourceHash = project.sourceHash; self.cursorOrder = cursor; self.units = units
         self.currentSlices = currentSlices
+        let admission: ((Evidence) -> Bool)?
+        if let currentRanges {
+            guard let scoped = try? ReadingQuerySnapshot.savedEvidenceAdmitter(in: project, ranges: currentRanges) else { return nil }
+            let current = Set(currentRanges.map(\.unitID))
+            admission = { evidence in !current.contains(evidence.unitID) || scoped(evidence) }
+        } else { admission = nil }
+        self.savedEvidenceAdmission = admission
         self.entities = Dictionary(project.entities.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         self.events = Dictionary(project.events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         self.projection = ReadingSpoilerProjection.Context(project: project,
             allowedUnitIDs: Set(units.values.filter { $0.order <= cursor }.map(\.id)))
         self.versions = ReadingKnowledgeRuntime.VersionContext(project: project,
-            allowed: Set(units.values.filter { $0.order <= cursor }.map(\.id)), slices: currentSlices)
+            allowed: Set(units.values.filter { $0.order <= cursor }.map(\.id)), slices: currentSlices, admittingEvidence: admission)
     }
 
     func record(id: String) -> [String: Any]? {
@@ -54,6 +62,7 @@ struct SavedKnowledgeReuse {
             guard let unit = units[item.unitID], unit.order <= cursorOrder, !item.quote.isEmpty,
                   let range = unit.text.range(of: item.quote, options: .literal) else { return false }
             guard unit.text[range].utf8.elementsEqual(item.quote.utf8) else { return false }
+            guard savedEvidenceAdmission?(item) != false else { return false }
             if let slice = currentSlices?[item.unitID] {
                 guard let selected = slice.range(of: item.quote, options: .literal) else { return false }
                 return slice[selected].utf8.elementsEqual(item.quote.utf8)

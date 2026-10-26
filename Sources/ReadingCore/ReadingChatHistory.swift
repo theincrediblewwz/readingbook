@@ -17,14 +17,16 @@ public struct ReadingChatContext: Codable, Hashable, Sendable {
         // Only source/slice identity and explicit document membership enter this
         // fingerprint. A new question/request never invalidates its own history.
         scopeFingerprint = try Self.fingerprint(scope: snapshot.scope, sourceHash: snapshot.sourceHash,
-            sources: snapshot.sources.map { ($0.unitID, $0.textHash) }, documents: snapshot.documents)
+            sources: snapshot.sources.map { ($0.unitID, $0.textHash) }, documents: snapshot.documents,
+            ranges: [.selection, .chapter].contains(snapshot.scope) ? snapshot.sources.compactMap(\.sourceRange) : nil)
     }
 
     fileprivate static func fingerprint(scope: ReadingQueryScope, sourceHash: String,
-                                        sources: [(String, String)], documents: [DocumentRecord]) throws -> String {
-        let value: [String: Any] = ["scope": scope.rawValue, "sourceHash": sourceHash,
+                                        sources: [(String, String)], documents: [DocumentRecord], ranges: [ReadingSourceRange]? = nil) throws -> String {
+        var value: [String: Any] = ["scope": scope.rawValue, "sourceHash": sourceHash,
             "sources": sources.map { ["id": $0.0, "hash": $0.1] },
             "documents": documents.map { ["id": $0.id, "updatedAt": $0.updatedAt.timeIntervalSince1970] as [String: Any] }]
+        if let ranges { value["sourceRanges"] = ranges.map { ["id": $0.unitID, "start": $0.startUTF16, "end": $0.endUTF16] as [String: Any] } }
         return try BookImporter.sha256(JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]))
     }
 }
@@ -70,7 +72,7 @@ public enum ReadingChatHistory {
                   Set(context.unitIDs).count == context.unitIDs.count, context.documentIDs.count <= 1024,
                   Set(context.documentIDs).count == context.documentIDs.count,
                   Set(context.documentIDs).isSubset(of: documents) else { return false }
-            if current.scope == .selection || current.scope == .notes {
+            if current.scope == .selection || current.scope == .chapter || current.scope == .notes {
                 return context.scopeFingerprint == current.scopeFingerprint
             }
             guard sameVersion(context) else { return false }

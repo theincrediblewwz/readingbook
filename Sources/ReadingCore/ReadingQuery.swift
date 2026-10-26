@@ -17,6 +17,8 @@ struct QuerySourceSlice: Hashable, Sendable {
     let chapter: String
     let text: String
     let textHash: String
+    var sourceRange: ReadingSourceRange? = nil
+    var canonicalTextHash: String? = nil
 }
 
 public struct ReadingQuerySnapshot: Sendable {
@@ -36,6 +38,105 @@ public struct ReadingQuerySnapshot: Sendable {
         guard !evidence.quote.isEmpty, let source = sourceByID[evidence.unitID],
               let range = source.text.range(of: evidence.quote, options: .literal) else { return false }
         return source.text[range].utf8.elementsEqual(evidence.quote.utf8)
+    }
+
+    /// Exact, disposable reader projection. A unit shared by two chapters
+    /// does not grant its other text merely because its ID is in the scope.
+    public func sourceRanges(in project: BookProject, unitIDs: Set<String>? = nil) throws -> [ReadingSourceRange] {
+        guard project.id == bookID, project.sourceHash == sourceHash else { throw ReadingError.invalid("提问范围属于其他原书。") }
+        guard unitIDs?.allSatisfy({ sourceByID[$0] != nil }) ?? true else { throw ReadingError.invalid("原文不属于已冻结的提问范围。") }
+        let units = Dictionary(grouping: project.units, by: \.id)
+        return try sources.filter { unitIDs?.contains($0.unitID) ?? true }.compactMap { source in
+            try Task.checkCancellation()
+            guard let matches = units[source.unitID], matches.count == 1, let unit = matches.first else { throw ReadingError.invalid("提问原文单元不存在或身份重复。") }
+            if unit.text.isEmpty, source.text.isEmpty { return nil }
+            let range = source.sourceRange ?? ReadingSourceRange(unitID: unit.id, startUTF16: 0, endUTF16: (unit.text as NSString).length)
+            guard try range.text(in: unit).utf8.elementsEqual(source.text.utf8),
+                  source.canonicalTextHash.map({ $0 == (try? BookImporter.sha256(Data(unit.text.utf8))) }) ?? true else {
+                throw ReadingError.invalid("提问原文已变化，请重新选择范围。")
+            }
+            return range
+        }
+    }
+    public func scopedSourceUnits(in project: BookProject) throws -> [SourceUnit] {
+        let ranges = try sourceRanges(in: project)
+        let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let byID = Dictionary(uniqueKeysWithValues: ranges.map { ($0.unitID, $0) })
+        return try sources.map { source in
+            guard var unit = units[source.unitID] else { throw ReadingError.invalid("提问原文不存在。") }
+            if let range = byID[source.unitID] { unit.text = try range.text(in: unit) }
+            else { guard source.text.isEmpty, unit.text.isEmpty else { throw ReadingError.invalid("提问原文范围不存在。") } }
+            unit.chapter = source.chapter
+            return unit
+        }
+    }
+    /// Reuse one canonical unit resolver for all anchors of a frozen scope.
+    /// Equal quotations elsewhere in a shared unit are not the same position.
+    public func anchorAdmitter(in project: BookProject) throws -> (SourceAnchor) -> Bool {
+        let ranges = Dictionary(grouping: try sourceRanges(in: project), by: \.unitID)
+        let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var resolvers: [String: (SourceAnchor) throws -> ResolvedSourceAnchor] = [:]
+        var failed = Set<String>()
+        return { anchor in
+            guard !Task.isCancelled, let allowed = ranges[anchor.unitID], !failed.contains(anchor.unitID),
+                  anchor.sourceHash == project.sourceHash, let unit = units[anchor.unitID] else { return false }
+            if resolvers[unit.id] == nil {
+                let local = BookProject(id: project.id, title: project.title, originalName: project.originalName, sourceHash: project.sourceHash, units: [unit])
+                guard let resolve = try? ReadingExperienceRuntime.anchorResolver(sourceHash: project.sourceHash, unitID: unit.id, in: local) else {
+                    failed.insert(unit.id); return false
+                }
+                resolvers[unit.id] = resolve
+            }
+            guard let resolve = resolvers[unit.id], let position = try? resolve(anchor) else { return false }
+            return allowed.contains { position.utf16Location >= $0.startUTF16 && position.utf16Location <= $0.endUTF16 &&
+                position.utf16Length <= $0.endUTF16 - position.utf16Location }
+        }
+    }
+    /// Legacy facts carry only a quotation, without its occurrence offset.
+    /// A repeated name outside this excerpt cannot prove which occurrence
+    /// supplied an old aggregate summary. Keep its identity, withhold that prose.
+    public func savedEvidenceAdmitter(in project: BookProject) throws -> (Evidence) -> Bool {
+        try Self.savedEvidenceAdmitter(in: project, ranges: sourceRanges(in: project))
+    }
+    public static func savedEvidenceAdmitter(in project: BookProject, ranges: [ReadingSourceRange]) throws -> (Evidence) -> Bool {
+        let grouped = Dictionary(grouping: ranges, by: \.unitID)
+        let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for range in ranges {
+            try Task.checkCancellation()
+            guard let unit = units[range.unitID] else { throw ReadingError.invalid("原文证据的章节范围不存在。") }
+            try range.validate(in: unit)
+        }
+        struct Key: Hashable { var unitID: String; var quote: Data }
+        var checked: [Key: Bool] = [:]
+        return { evidence in
+            let key = Key(unitID: evidence.unitID, quote: Data(evidence.quote.utf8))
+            if let previous = checked[key] { return previous }
+            guard !Task.isCancelled, !evidence.quote.isEmpty, let unit = units[evidence.unitID], let granted = grouped[evidence.unitID] else {
+                checked[key] = false; return false
+            }
+            let source = unit.text as NSString
+            if granted.count == 1, granted[0].startUTF16 == 0, granted[0].endUTF16 == source.length {
+                let valid = SourceTextLiteral.contains(evidence.quote, in: unit.text)
+                checked[key] = valid; return valid
+            }
+            var search = NSRange(location: 0, length: source.length), seen = false
+            while search.length > 0 {
+                if Task.isCancelled { return false }
+                let found = source.range(of: evidence.quote, options: [.literal], range: search)
+                if found.location == NSNotFound { break }
+                seen = true
+                var frontier = found.location
+                for range in granted where range.endUTF16 > frontier {
+                    if range.startUTF16 > frontier { break }
+                    frontier = max(frontier, range.endUTF16)
+                    if frontier >= NSMaxRange(found) { break }
+                }
+                guard frontier >= NSMaxRange(found) else { checked[key] = false; return false }
+                let next = found.location + 1
+                search = NSRange(location: next, length: max(0, source.length - next))
+            }
+            checked[key] = seen; return seen
+        }
     }
 
     /// Derive once from a freshly frozen scope. The visible data capabilities
@@ -63,6 +164,7 @@ public struct ReadingQuerySnapshot: Sendable {
         let current = context.flatMap { value in value.unitID.flatMap { id in ordered.first { $0.id == id } } }
         var units: [SourceUnit] = [], documents: [DocumentRecord] = []
         var selectedSlices: [QuerySourceSlice]?
+        var chapterRanges: [ReadingSourceRange]?
         var title = scope.title
         switch scope {
         case .selection:
@@ -75,7 +177,25 @@ public struct ReadingQuerySnapshot: Sendable {
             title += " · " + current.locator
         case .chapter:
             guard let current else { throw ReadingError.invalid("请先打开原文，再使用当前章节范围。") }
-            units = ordered.filter { $0.chapter == current.chapter }; title += " · " + current.chapter
+            let chapter: BookChapterRange
+            if let index = try BookChapterRuntime.index(in: project) {
+                let anchor = context?.selectedSourceAnchor ?? context?.selectedAnchorID.flatMap { id in project.readingExperience?.anchors.first { $0.id == id } }
+                let offset = try anchor.map { try ReadingExperienceRuntime.resolve($0, in: project).range.location }
+                chapter = try index.chapter(unitID: current.id, offsetUTF16: offset)
+            } else if let legacy = try BookChapterRuntime.legacyChapter(in: project, unitID: current.id) { chapter = legacy }
+            else { throw ReadingError.invalid("还没有可信的章节范围，请先在目录中整理章节，或选择当前页。") }
+            guard chapter.isComplete else { throw ReadingError.invalid("这一章的结尾尚未确定，请继续整理目录，或选择当前页。") }
+            let byID = Dictionary(uniqueKeysWithValues: ordered.map { ($0.id, $0) })
+            chapterRanges = chapter.ranges
+            selectedSlices = try chapter.ranges.map { range in
+                try Task.checkCancellation()
+                guard let unit = byID[range.unitID] else { throw ReadingError.invalid("章节原文位置不存在。") }
+                let text = try range.text(in: unit)
+                return QuerySourceSlice(unitID: unit.id, locator: unit.locator, chapter: chapter.title, text: text,
+                    textHash: try BookImporter.sha256(Data(text.utf8)), sourceRange: range,
+                    canonicalTextHash: try BookImporter.sha256(Data(unit.text.utf8)))
+            }
+            title += " · " + chapter.title
         case .book: units = ordered
         case .notes:
             let active = project.activeDocuments
@@ -106,10 +226,16 @@ public struct ReadingQuerySnapshot: Sendable {
         }
         try Task.checkCancellation()
         guard Set(sources.map(\.unitID)).count == sources.count else { throw ReadingError.invalid("原文单元身份重复，不能建立可靠查询范围。") }
-        let payload: [String: Any] = ["scope": scope.rawValue, "bookID": project.id, "sourceHash": project.sourceHash,
+        var payload: [String: Any] = ["scope": scope.rawValue, "bookID": project.id, "sourceHash": project.sourceHash,
             "sources": sources.map { ["id": $0.unitID, "hash": $0.textHash] },
             "documents": documents.map { ["id": $0.id, "updatedAt": String($0.updatedAt.timeIntervalSince1970), "path": $0.relativePath] },
             "authorizedNodeIDs": sortedLayoutIDs]
+        if let chapterRanges {
+            payload["chapterRanges"] = chapterRanges.map { ["id": $0.unitID, "start": $0.startUTF16, "end": $0.endUTF16] as [String: Any] }
+        }
+        if scope == .selection {
+            payload["selectionRanges"] = sources.compactMap(\.sourceRange).map { ["id": $0.unitID, "start": $0.startUTF16, "end": $0.endUTF16] as [String: Any] }
+        }
         let fingerprint = try BookImporter.sha256(JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]))
         try Task.checkCancellation()
         return ReadingQuerySnapshot(scope: scope, bookID: project.id, sourceHash: project.sourceHash,
@@ -134,8 +260,11 @@ public struct ReadingQuerySnapshot: Sendable {
                   let unit = ordered.first(where: { $0.id == anchor.unitID }),
                   quote.utf8.elementsEqual(anchor.quote.utf8) else { throw ReadingError.invalid("原句锚点与提问范围不一致。") }
             try Task.checkCancellation()
+            let resolved = try ReadingExperienceRuntime.resolve(anchor, in: project)
             return [QuerySourceSlice(unitID: unit.id, locator: unit.locator, chapter: unit.chapter,
-                text: anchor.quote, textHash: try BookImporter.sha256(Data(anchor.quote.utf8)))]
+                text: anchor.quote, textHash: try BookImporter.sha256(Data(anchor.quote.utf8)),
+                sourceRange: ReadingSourceRange(unitID: unit.id, startUTF16: resolved.range.location, endUTF16: NSMaxRange(resolved.range)),
+                canonicalTextHash: try BookImporter.sha256(Data(unit.text.utf8)))]
         }
         if context.selectedAnchorID != nil {
             _ = try ReadingExperienceRuntime.validatedContext(context, in: project)
@@ -178,7 +307,9 @@ public struct ReadingQuerySnapshot: Sendable {
                         let intersection = NSIntersectionRange(found, range)
                         if intersection.length > 0 {
                             let text = source.substring(with: intersection)
-                            slices.append(QuerySourceSlice(unitID: unit.id, locator: unit.locator, chapter: unit.chapter, text: text, textHash: try BookImporter.sha256(Data(text.utf8))))
+                            slices.append(QuerySourceSlice(unitID: unit.id, locator: unit.locator, chapter: unit.chapter, text: text, textHash: try BookImporter.sha256(Data(text.utf8)),
+                                sourceRange: ReadingSourceRange(unitID: unit.id, startUTF16: intersection.location - range.location, endUTF16: NSMaxRange(intersection) - range.location),
+                                canonicalTextHash: try BookImporter.sha256(Data(unit.text.utf8))))
                             identities.append("\(unit.id):\(intersection.location - range.location):\(intersection.length)")
                         }
                     }
@@ -254,6 +385,10 @@ struct ReadingQuerySession {
     /// Host-only rendering/answer preference. Internal component sessions keep
     /// research defaults and cannot opt into teacher context via tool arguments.
     let answerPreferences: ReadingAnswerPreferences
+    /// Internal cropped analysis sessions retain a canonical anchor validator;
+    /// a full-unit anchor hash cannot be resolved against a copied excerpt.
+    let anchorAdmission: ((SourceAnchor) -> Bool)?
+    let savedEvidenceAdmission: ((Evidence) -> Bool)?
     var hostReceipts: [String] = []
     var taskCreatedNodeIDs = Set<String>()
     var sourceExcerpts: [(String, String)] = []
@@ -267,11 +402,15 @@ struct ReadingQuerySession {
     init(snapshot: ReadingQuerySnapshot, history: [ChatMessage], loader: ReadingDocumentLoader?, providedDocuments: [String: String],
          project: BookProject? = nil, workspace: ReadingWorkspaceSnapshot? = nil, hostTools: ReadingHostToolAccess? = nil, proposalAccess: ReadingProposalToolAccess? = nil,
          allowsFullIdentity: Bool = false,
-         answerPreferences: ReadingAnswerPreferences = .init(style: .research, avoidsSpoilers: true)) {
+         answerPreferences: ReadingAnswerPreferences = .init(style: .research, avoidsSpoilers: true),
+         anchorAdmission: ((SourceAnchor) -> Bool)? = nil,
+         savedEvidenceAdmission: ((Evidence) -> Bool)? = nil) {
         self.snapshot = snapshot; self.history = history; self.loader = loader; self.providedDocuments = providedDocuments
         self.project = project; self.workspace = workspace; self.hostTools = hostTools; self.proposalAccess = proposalAccess
         self.allowsFullIdentity = allowsFullIdentity && snapshot.scope == .book
         self.answerPreferences = answerPreferences
+        self.anchorAdmission = anchorAdmission
+        self.savedEvidenceAdmission = savedEvidenceAdmission
     }
 
     /// Repack only genuinely supplied text for a standalone final request.

@@ -59,8 +59,12 @@ actor QueryMemoryFiles {
         await QueryMemoryFiles.shared.read(snapshot: snapshot, history: history, root: root)
     }
     func prepareQueryMemoryDisplay() async -> QueryMemoryDisplay {
-        guard let project = book else { return QueryMemoryDisplay() }
+        guard let original = book else { return QueryMemoryDisplay() }
         let key = queryMemoryPreparationKey, preferences = currentQueryPreferences
+        let project: BookProject
+        do { project = key.scope == .chapter ? try await ensureBookChapterOutline(project: original) : original }
+        catch { return QueryMemoryDisplay() }
+        guard !Task.isCancelled, bookID == original.id, libraryRootURL == key.root else { return QueryMemoryDisplay() }
         let worker = Task.detached(priority: .userInitiated) { () throws -> (ReadingQuerySnapshot, [ChatMessage]) in
             let snapshot = try ReadingQuerySnapshot.freeze(scope: key.scope, in: project, context: key.context,
                 documentIDs: key.documents, appendedDocumentIDs: key.scope == .notes ? [] : key.attachments, authorizedNodeIDs: key.nodes)

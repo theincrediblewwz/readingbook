@@ -70,6 +70,52 @@ final class BookOutlineTests: XCTestCase {
         }
     }
 
+    func testMultilineChapterHeadingIsOneLiteralCandidateAndCannotAlsoSelectItsLines() async throws {
+        var project = try book(count: 1)
+        let heading = "第三十八回\n定三分隆中决策\n战长江孙氏报仇"
+        project.units[0].text = heading + "\n却说玄德两次拜访孔明未遇，打算再次前往。"
+        let batch = try firstBatch(project)
+        let combined = try XCTUnwrap(batch.candidates.first { $0.title == heading })
+        let marker = try XCTUnwrap(batch.candidates.first { $0.title == "第三十八回" })
+        let upper = try XCTUnwrap(batch.candidates.first { $0.title == "定三分隆中决策" })
+        let resolved = try ReadingExperienceRuntime.resolve(XCTUnwrap(combined.anchor), in: project)
+        XCTAssertEqual(resolved.anchor.quote, heading)
+        let good = try response(["entries": [["id": combined.id, "level": 0]]])
+        let result = try await BookOutlineEngine.generate(request: batch, settings: .init()) { messages, _, _ in
+            XCTAssertTrue(String(describing: messages).contains("不得把标题续行单列成子节"))
+            return good
+        }
+        XCTAssertEqual(result, [combined])
+        for contained in [marker, upper] {
+            let overlapping = try response(["entries": [["id": combined.id, "level": 0], ["id": contained.id, "level": 1]]])
+            do { _ = try await BookOutlineEngine.generate(request: batch, settings: .init()) { _, _, _ in overlapping }; XCTFail("组合回目不能与其中单行重复成章") }
+            catch { XCTAssertTrue(error.localizedDescription.contains("目录")) }
+        }
+        project.generatedOutline = GeneratedBookOutline(sourceHash: project.sourceHash, sourceFingerprint: try BookOutlineRuntime.fingerprint(in: project),
+            scannedUnitCount: 1, totalUnitCount: 1, entries: result)
+        project.smartReading = try SmartReadingRuntime.freeze(.init(execution: .init(granularity: .chapter, steps: [])), in: project, currentUnitID: project.units[0].id)
+        XCTAssertEqual(try SmartReadingRuntime.analysisChunks(in: project).count, 1, "回号和上下联共同属于一章，不拆出空的章末任务。")
+    }
+
+    func testOldSingleLinePartialDirectoryResumesAtItsVerifiedFrontierWithNewCandidates() throws {
+        var project = try book(count: 50)
+        let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash, unitID: project.units[0].id, quote: "第1章", in: project)
+        let old = BookOutlineEntry(id: anchor.id, title: "第1章", page: 1, anchor: anchor)
+        // The old strategy offered four rows/unit: 120 candidates ended at 30.
+        // Combined titles now end an earlier batch, but this known old frontier
+        // is still source-proved and must not strand its existing partial work.
+        project.generatedOutline = GeneratedBookOutline(sourceHash: project.sourceHash, sourceFingerprint: try BookOutlineRuntime.fingerprint(in: project),
+            scannedUnitCount: 30, totalUnitCount: 50, entries: [old])
+        let prepared = try BookOutlineRuntime.prepare(in: project)
+        XCTAssertEqual(prepared.cached?.entries, [old])
+        XCTAssertEqual(prepared.cached?.scannedUnitCount, 30)
+        let next = try XCTUnwrap(prepared.remainingBatches.first)
+        XCTAssertEqual(next.startUnit, 30)
+        XCTAssertEqual(try prepared.request(for: next).startUnit, 30)
+        var forged = project; forged.generatedOutline?.scannedUnitCount = 29
+        XCTAssertNil(try BookOutlineRuntime.prepare(in: forged).cached, "不能把任意计数伪装成旧批次前沿。")
+    }
+
     func testFingerprintIncludesExtractionBytesAndPartialCacheResumesExactFrontier() throws {
         var project = try book(count: 40)
         let prepared = try BookOutlineRuntime.prepare(in: project), first = try firstBatch(project)

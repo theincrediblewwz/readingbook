@@ -77,15 +77,24 @@ public actor AIReader {
         var staged = project
         PluginEngine.seed(&staged)
         let disabled = disabledDefinitions(in: staged)
-        let ordered = try SmartReadingRuntime.selectedUnits(in: project, allowedUnitIDs: allowedUnitIDs)
+        let ordered = try SmartReadingRuntime.analysisSourceUnits(in: project, allowedUnitIDs: allowedUnitIDs)
         guard !ordered.isEmpty else { throw ReadingError.invalid("所选范围没有可预读的原文。") }
         let offeredMethods = PluginEngine.recommendedMethods(in: staged)
         guard Set(preferredMethodIDs).count == preferredMethodIDs.count,
               Set(preferredMethodIDs).isSubset(of: Set(offeredMethods.map(\.id))) else { throw ReadingError.invalid("偏好读书法不在当前可用列表中；未发送请求。") }
         var chapters: [String] = []
-        for unit in ordered where !chapters.contains(unit.chapter) {
-            chapters.append(unit.chapter)
-            if chapters.count == 80 { break }
+        if let index = project.smartReading?.chapterIndex, let ranges = project.smartReading?.sourceRanges {
+            let offeredIDs = Set(ordered.map(\.id))
+            let granted = Dictionary(grouping: ranges.filter { offeredIDs.contains($0.unitID) }, by: \.unitID)
+            for chapter in index.chapters where chapters.count < 80 {
+                let intersects = chapter.ranges.contains { item in (granted[item.unitID] ?? []).contains { $0.startUTF16 < item.endUTF16 && $0.endUTF16 > item.startUTF16 } }
+                if intersects { chapters.append(chapter.title) }
+            }
+        } else {
+            for unit in ordered where !chapters.contains(unit.chapter) {
+                chapters.append(unit.chapter)
+                if chapters.count == 80 { break }
+            }
         }
         var sampleBudget = 12_000
         var samples: [[String: Any]] = []
@@ -176,7 +185,7 @@ public actor AIReader {
         let grant = ReadingAnalysisAuthority.Grant(bookID: project.id, sessionID: session.id, sourceHash: project.sourceHash, chunk: chunk, unitHashes: hashes)
         return try await ReadingAnalysisAuthority.$current.withValue(grant) {
             try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowed, in: project)
-            let units = project.units.filter { allowed.contains($0.id) }.sorted { $0.order < $1.order }
+            let units = try SmartReadingRuntime.analysisSourceUnits(in: project, allowedUnitIDs: allowed, ranges: chunk.sourceRanges)
             let priority = units.first { $0.id == priorityUnitID }
             let timelyResults = priority.map { "读者正在看\($0.locator)（工具unitID：\($0.id)），优先把该处已经可靠的解释和译注保存出来，再继续本块其他内容。" }
                 ?? "按原文顺序尽早保存已经可靠的解释和译注。"
@@ -191,7 +200,7 @@ public actor AIReader {
             let prompt = """
             陪读者阅读本次实际提供的原文块。阅读原文是始终执行的基础动作；附加步骤只做本次启用的部分，不要把答案写成开发记录或逐项核查公文。本次步骤为空时只留下有界的简短阅读摘要和真实引文，不做额外讲解、要素整理或组件操作。
             本轮精细度：\(configuration.precision.title)。标准阅读不要求逐段复述；精读所需回执已由宿主在前面的真实批次保存。本次不调用read_receipt、workflow_step_complete或reading_finish。一次分析可以包含同页多个单元或同章多页，但引文必须回到原始unitID，不合并或重写原文。
-            本次原文块：\(chunk.title)。unitIDs必须精确为\(try encodedString(chunk.unitIDs))。
+            本次原文块：\(chunk.title)。unitIDs必须精确为\(try encodedString(chunk.unitIDs))。\(chunk.sourceRanges == nil ? "" : "提供的是单位内精确章节片段，不能把同一unitID的其他内容视为本次已读；引用只取下方实际片段。")
             \(timelyResults) 已有可用人物、事件、关系或译注就调用相应工具；宿主会在每次响应后发布通过校验的产物，不必等整块结尾。不要为了最后总结而积压已有结果。分批发布不表示本块已完成，reading_analysis仍在真正完成后最后调用。
             本次步骤：\(try encodedString(steps))。最后调用reading_analysis，completedStepIDs精确为\(try encodedString(chunk.stepIDs))，每个unitID至少有一条连续精确引文。
             已确认的阅读方向：\(try encodedString(SmartReadingRuntime.readingDirections(in: project)))；关注问题：\(try encodedString(project.plan?.focus ?? []))。这只是理解内容的方向，不是额外必做流水线；实际工作只执行本次启用步骤，已删掉的步骤不能借方法参考重新启用。
@@ -269,23 +278,38 @@ public actor AIReader {
     /// A user-requested supplement has the same bounded checkpoint size as sequential reading.
     /// If receipts are missing this call saves one real batch; call again after persisting it.
     /// It does not replay old methods or alter coverage, analyses or the reading plan.
-    public func enrichCurrent(project: BookProject, unitID: String, settings: ProviderSettings, apiKey: String) async throws -> BookProject {
+    public func enrichCurrent(project: BookProject, unitID: String, settings: ProviderSettings, apiKey: String, sourceRanges: [ReadingSourceRange]? = nil) async throws -> BookProject {
+        if let sourceRanges {
+            guard let unit = project.units.first(where: { $0.id == unitID }) else { throw ReadingError.invalid("章节原文不存在。") }
+            let grant = ReadingEnrichmentAuthority.Grant(bookID: project.id, sourceHash: project.sourceHash, unitID: unitID,
+                unitHash: try BookImporter.sha256(Data(unit.text.utf8)), ranges: sourceRanges)
+            return try await ReadingEnrichmentAuthority.$current.withValue(grant) {
+                _ = try ReadingEnrichmentAuthority.validate(in: project, unitIDs: [unitID])
+                return try await enrichCurrent(project: project, unitID: unitID, settings: settings, apiKey: apiKey)
+            }
+        }
         try PluginEngine.requireActivePlan(in: project)
         try beginOperation(settings: settings)
         defer { operationActive = false }
-        guard let unit = project.units.first(where: { $0.id == unitID }),
+        guard var unit = project.units.first(where: { $0.id == unitID }),
               !unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ReadingError.invalid("当前原文不存在或尚无可靠文字，请先完成OCR；未发送增强请求。")
         }
         var staged = project
         PluginEngine.seed(&staged)
-        if let receipted = try await collectNextReceiptBatch(for: unit, project: staged, previousContext: "这是用户主动补建当前单元的多层伴读；不改变既有阅读覆盖。", settings: settings, apiKey: apiKey) {
-            return receipted
+        let excerpt = ReadingEnrichmentAuthority.current != nil
+        if !excerpt {
+            if let receipted = try await collectNextReceiptBatch(for: unit, project: staged, previousContext: "这是用户主动补建当前单元的多层伴读；不改变既有阅读覆盖。", settings: settings, apiKey: apiKey) { return receipted }
+        } else {
+            guard let projected = try SmartReadingRuntime.analysisSourceUnits(in: staged, allowedUnitIDs: [unitID], ranges: ReadingEnrichmentAuthority.current?.ranges).first else {
+                throw ReadingError.invalid("章节没有可读取的文字。")
+            }
+            unit.text = projected.text
         }
         staged.receiptBatch = nil
-        try ReadingLedger.requireComplete(unitIDs: [unit.id], in: staged)
+        try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: [unit.id], in: staged)
         let prompt = """
-        用户请求为当前原文补建可点击、多层伴读体验。仅分析下方这个已通过全部逐段回执的单元，不重新运行既有方法，不改阅读计划，不宣称完成整本书。
+        用户请求为当前原文补建可点击、多层伴读体验。仅分析下方实际提供的文字，不重新运行既有方法，不改阅读计划，不宣称完成整本书。\(excerpt ? "本次是章节片段，原unitID的其余文字不在本次范围；此操作不生成逐段核对回执。" : "本单元已通过逐段回执。")
         实际调用reading_enrich保存适用内容：文言文可有白话翻译，数学或其他书可有术语、符号、证明条件或语境解释；为可辨认且已有依据的实体建立词语提及。没有可靠来源的外部材料不能捏造为资料对齐；不强制人物或地图，不创建已停用的思考卡。
         \(spoilerConstraint(staged))
         原文明确人物出现/参与或关系有效期时可先knowledge_temporal保存有来源的时态记录；不要把事件的所有参与者乘上所有地点，不推造人物路线。数字日期必须保留历法，不明确时间用unknown或有来源叙事次序。复用同一实体；新ID由宿主返回idMap，后续调用使用真实ID。
@@ -295,7 +319,7 @@ public actor AIReader {
         只允许当前原文的知识和阅读增强工具，不编辑用户Markdown、不联网、不调用Shell。最后调用reading_enrich并立即结束，全部工具通过后宿主原子保存。
         已有知识索引：\(try objectIndex(staged, allowedUnitIDs: [unit.id]))
         当前已保存阅读层：\(try experienceIndex(staged, unitID: unit.id))
-        已通过逐段回执：\(try encodedString(ReadingLedger.receipts(for: unit, in: staged)))
+        \(excerpt ? "本次不附加原单元其他部分的回执。" : "已通过逐段回执：" + (try encodedString(ReadingLedger.receipts(for: unit, in: staged))))
         已启用类型：\(try encodedString(staged.types.filter { !disabledDefinitions(in: staged).types.contains($0.id) }))
         当前原文（\(unit.id)，\(unit.locator)，源警告：\(unit.warning ?? "无")）：
         \(try jsonString(["unitID": unit.id, "text": unit.text]))
@@ -702,7 +726,7 @@ public actor AIReader {
             let saved = Set(try ReadingLedger.receipts(for: unit, in: project).map(\.paragraphID))
             guard Set(batch.paragraphIDs).isSubset(of: saved) else { throw ReadingError.invalid("逐段批次回执未齐，结果未提交。") }
         } else if requiredTool == "reading_enrich" {
-            try ReadingLedger.requireComplete(unitIDs: [currentUnitID], in: project)
+            try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: [currentUnitID], in: project)
             if let state = project.readingExperience { try ReadingExperienceRuntime.validate(state, in: project) }
             guard project.audit.last?.name == "reading_enrich" else { throw ReadingError.invalid("阅读增强未经过真实插件工具提交。") }
         } else if requiredTool == "workflow_step_complete" {

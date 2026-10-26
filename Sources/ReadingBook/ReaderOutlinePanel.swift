@@ -67,6 +67,11 @@ struct ReaderOutlinePanel: View {
     }
     private var selectedOutlineID: String? {
         let entries = outlineEntries
+        if let project = store.book, let position = store.chapterReadingAnchor(in: project), let offset = position.utf16Location {
+            if let match = entries.last(where: { entry in
+                entry.anchor?.unitID == position.unitID && (entry.anchor?.utf16Location ?? Int.max) <= offset
+            }) { return match.id }
+        }
         guard isPDF, let page = store.selectedUnit?.page else {
             return entries.first(where: { $0.title == store.selectedUnit?.chapter })?.id
         }
@@ -140,7 +145,7 @@ struct ReaderOutlinePanel: View {
                 // Also reset/cancel the PDF-owned task on a switch to text or
                 // EPUB. A guard-return here leaves the old request alive.
                 await outline.load(owner: outlineOwner, project: isPDF ? store.book : nil,
-                    url: isPDF ? store.sourceFileURL : nil, password: store.pdfPassword(for: store.bookID))
+                    url: isPDF ? store.sourceFileURL : nil, store: store)
             }
             .onDisappear { outline.cancel(); sourceRefreshTask?.cancel() }
     }
@@ -193,10 +198,7 @@ struct ReaderOutlinePanel: View {
                 }.buttonStyle(.plain).accessibilityLabel(collapsed.contains(entry.id) ? "展开章节" : "收起章节")
             } else { Color.clear.frame(width: 22, height: 24) }
             Button {
-                if let anchor = entry.anchor {
-                    store.navigateToUnit(anchor.unitID)
-                } else if isPDF, let page = entry.page, let unit = sourceUnits.first(where: { $0.page == page }) { store.navigateToUnit(unit.id) }
-                else if !isPDF { store.navigateToUnit(entry.id) }
+                store.navigateToChapter(entry)
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(entry.title).font(.system(size: 15, weight: .medium)).fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)

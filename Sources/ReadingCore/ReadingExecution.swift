@@ -71,6 +71,9 @@ public struct ReadingAnalysisChunk: Codable, Hashable, Identifiable, Sendable {
     public var unitIDs: [String]
     public var configurationHash: String
     public var stepIDs: [String]
+    /// Nil in historical whole-unit work. Exact source offsets never replace original unit identities.
+    public var sourceRanges: [ReadingSourceRange]? = nil
+    public var chapterID: String? = nil
 }
 public struct ReadingAnalysisCheckpoint: Codable, Hashable, Identifiable, Sendable {
     public var id: String
@@ -81,6 +84,8 @@ public struct ReadingAnalysisCheckpoint: Codable, Hashable, Identifiable, Sendab
     public var markdown: String
     public var evidence: [Evidence]
     public var updatedAt: Date
+    public var sourceRanges: [ReadingSourceRange]? = nil
+    public var chapterID: String? = nil
     public var noChangesReasons: [String: String]? = nil
     /// Computed by the host; never accepted from model tool arguments.
     public var hostCitationSummary: String? = nil
@@ -98,6 +103,10 @@ enum ReadingAnalysisAuthority {
 
 extension SmartReadingRuntime {
     public static func analysisChunks(in project: BookProject, allowedUnitIDs: Set<String>? = nil) throws -> [ReadingAnalysisChunk] {
+        if project.smartReading?.chapterIndex != nil { return try chapterAnalysisChunks(in: project, allowedUnitIDs: allowedUnitIDs) }
+        return try legacyAnalysisChunks(in: project, allowedUnitIDs: allowedUnitIDs)
+    }
+    static func legacyAnalysisChunks(in project: BookProject, allowedUnitIDs: Set<String>? = nil) throws -> [ReadingAnalysisChunk] {
         guard let session = project.smartReading, let configuration = session.selection.execution else { return [] }
         try configuration.validate()
         let allowed = allowedUnitIDs ?? Set(session.unitIDs)
@@ -171,6 +180,7 @@ extension SmartReadingRuntime {
         guard let session = project.smartReading else { return false }
         return (session.analysisCheckpoints ?? []).contains { checkpoint in
             checkpoint.id == chunk.id && checkpoint.unitIDs == chunk.unitIDs && checkpoint.configurationHash == chunk.configurationHash &&
+                checkpoint.sourceRanges == chunk.sourceRanges && checkpoint.chapterID == chunk.chapterID &&
                 Set(checkpoint.completedStepIDs) == Set(chunk.stepIDs) && chunk.unitIDs.allSatisfy { checkpoint.unitHashes[$0] == session.unitHashes[$0] }
         }
     }
@@ -203,21 +213,25 @@ extension SmartReadingRuntime {
         guard reasons.count <= 30, Set(reasons.keys).isSubset(of: keys), reasons.values.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 400 }) else {
             throw ReadingError.invalid("无新增说明须逐项对应当前步骤或组件，每项不超过400字。")
         }
-        let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         func literal(_ quote: String, unitID: String) -> Bool {
-            units[unitID].map { SourceTextLiteral.contains(quote, in: $0.text) } ?? false
+            analysisEvidenceAdmitted(Evidence(unitID: unitID, quote: quote), in: project)
         }
         func exact(_ values: [Evidence]) -> Bool {
             let local = values.filter { allowed.contains($0.unitID) }
+            if grant.chunk.sourceRanges != nil { return local.contains { literal($0.quote, unitID: $0.unitID) } }
             return !local.isEmpty && local.allSatisfy { literal($0.quote, unitID: $0.unitID) }
         }
-        let anchors = (project.readingExperience?.anchors ?? []).filter { allowed.contains($0.unitID) && literal($0.quote, unitID: $0.unitID) }
+        let anchors = (project.readingExperience?.anchors ?? []).filter { allowed.contains($0.unitID) && literal($0.quote, unitID: $0.unitID) && analysisAnchorAdmitted($0, in: project) }
         let anchorIDs = Set(anchors.map(\.id))
         let mentioned = Set((project.readingExperience?.mentions ?? []).filter { anchorIDs.contains($0.anchorID) }.map(\.targetID))
-        let reuse = SavedKnowledgeReuse(project: project, currentUnitIDs: allowed)
+        let currentSlices = try grant.chunk.sourceRanges.map { ranges -> [String: String] in
+            let projected = try analysisSourceUnits(in: project, allowedUnitIDs: allowed, ranges: ranges)
+            return Dictionary(uniqueKeysWithValues: projected.map { ($0.id, $0.text) })
+        }
+        let reuse = SavedKnowledgeReuse(project: project, currentUnitIDs: allowed, currentSlices: currentSlices, currentRanges: grant.chunk.sourceRanges)
         let entities = project.entities.filter { (exact($0.evidence) || mentioned.contains($0.id)) && reuse?.admits($0.evidence) == true }
         let events = project.events.filter { (exact($0.evidence) || mentioned.contains($0.id)) && reuse?.admits($0.evidence) == true }
-        let relations = project.relations.filter { exact($0.evidence) }, objectIDs = Set(entities.map(\.id) + events.map(\.id))
+        let relations = project.relations.filter { exact($0.evidence) && (grant.chunk.sourceRanges == nil || reuse?.admits($0.evidence) == true) }, objectIDs = Set(entities.map(\.id) + events.map(\.id))
         let hasLayers = (project.readingExperience?.layers ?? []).contains { !$0.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.sourceAnchorIDs.isEmpty && Set($0.sourceAnchorIDs).isSubset(of: anchorIDs) }
         let hasMentions = (project.readingExperience?.mentions ?? []).contains { anchorIDs.contains($0.anchorID) && objectIDs.contains($0.targetID) }
         let hasFacts = !objectIDs.isEmpty || !relations.isEmpty
@@ -252,7 +266,7 @@ extension SmartReadingRuntime {
         let evidence = project.entities.flatMap(\.evidence) + project.events.flatMap(\.evidence) + project.relations.flatMap(\.evidence) + submissionEvidence
         let local = evidence.filter { allowed.contains($0.unitID) }
         let entityIDs = Set(project.entities.map(\.id)), targetIDs = entityIDs.union(project.events.map(\.id))
-        guard local.allSatisfy({ !$0.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && literal($0.quote, unitID: $0.unitID) }),
+        guard local.allSatisfy({ evidence in !evidence.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && project.units.first(where: { $0.id == evidence.unitID }).map { SourceTextLiteral.contains(evidence.quote, in: $0.text) } == true }),
               project.relations.allSatisfy({ targetIDs.contains($0.fromID) && targetIDs.contains($0.toID) }),
               project.events.allSatisfy({ Set($0.placeIDs + $0.participantIDs).isSubset(of: entityIDs) }) else {
             throw ReadingError.invalid("宿主引用核验未通过：存在不匹配引文或失效对象关联，未标记该步完成。")
@@ -261,6 +275,7 @@ extension SmartReadingRuntime {
     }
     /// Standard authority is granted by readChunk, not merely by a stored mode.
     public static func requireAnalysisAuthority(unitIDs: Set<String>, in project: BookProject) throws {
+        if try ReadingEnrichmentAuthority.validate(in: project, unitIDs: unitIDs) { return }
         guard let grant = ReadingAnalysisAuthority.current else { try ReadingLedger.requireComplete(unitIDs: unitIDs, in: project); return }
         guard let session = project.smartReading, let configuration = session.selection.execution,
               grant.bookID == project.id, grant.sessionID == session.id, grant.sourceHash == project.sourceHash,
@@ -270,6 +285,13 @@ extension SmartReadingRuntime {
         for id in unitIDs {
             guard let unit = project.units.first(where: { $0.id == id }), let expected = grant.unitHashes[id],
                   session.unitHashes[id] == expected, try BookImporter.sha256(Data(unit.text.utf8)) == expected else { throw ReadingError.invalid("当前分析块的原文已变化，未保存结果。") }
+        }
+        if let ranges = grant.chunk.sourceRanges {
+            guard let selected = session.sourceRanges, let chapterID = grant.chunk.chapterID,
+                  session.chapterIndex?.segments.contains(where: { $0.id == chapterID }) == true,
+                  Set(ranges.map(\.unitID)) == unitIDs,
+                  ranges.allSatisfy({ range in selected.contains { $0.unitID == range.unitID && $0.startUTF16 <= range.startUTF16 && $0.endUTF16 >= range.endUTF16 } }) else { throw ReadingError.invalid("本次章节片段已不属于冻结范围。") }
+            for range in ranges { _ = try range.text(in: project) }
         }
         if configuration.precision == .close { try ReadingLedger.requireComplete(unitIDs: unitIDs, in: project) }
     }
@@ -284,7 +306,7 @@ extension SmartReadingRuntime {
               Set(value.completedStepIDs) == Set(grant.chunk.stepIDs), value.completedStepIDs.count == grant.chunk.stepIDs.count,
               !value.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.markdown.count <= 16_000,
               (1...128).contains(value.evidence.count), Set(value.evidence.map(\.unitID)) == allowedUnitIDs,
-              value.evidence.allSatisfy({ evidence in allowedUnitIDs.contains(evidence.unitID) && !evidence.quote.isEmpty && evidence.quote.count <= 32_768 && project.units.first(where: { $0.id == evidence.unitID }).map({ SourceTextLiteral.contains(evidence.quote, in: $0.text) }) == true }) else {
+              value.evidence.allSatisfy({ evidence in allowedUnitIDs.contains(evidence.unitID) && !evidence.quote.isEmpty && evidence.quote.count <= 32_768 && analysisEvidenceAdmitted(evidence, in: project) }) else {
             throw ReadingError.invalid("分析范围、步骤或原文引用未通过核验；未增加已分析覆盖。")
         }
         let reasons = value.noChangesReasons ?? [:]
@@ -292,6 +314,7 @@ extension SmartReadingRuntime {
         var checkpoint = ReadingAnalysisCheckpoint(id: grant.chunk.id, unitIDs: grant.chunk.unitIDs, unitHashes: grant.unitHashes,
             configurationHash: grant.chunk.configurationHash, completedStepIDs: grant.chunk.stepIDs, markdown: value.markdown,
             evidence: value.evidence, updatedAt: Date())
+        checkpoint.sourceRanges = grant.chunk.sourceRanges; checkpoint.chapterID = grant.chunk.chapterID
         checkpoint.noChangesReasons = reasons.isEmpty ? nil : reasons
         checkpoint.hostCitationSummary = hostSummary
         var records = project.smartReading?.analysisCheckpoints ?? []
@@ -344,6 +367,8 @@ enum ReadingAnalysisReviewTools {
     private struct Metadata: Codable {
         var id: String; var title: String; var unitCount: Int; var firstOrder: Int; var lastOrder: Int
         var configurationMatchesCurrent: Bool
+        var firstUTF16: Int? = nil
+        var lastUTF16: Int? = nil
     }
     private struct Candidate { var checkpoint: ReadingAnalysisCheckpoint; var metadata: Metadata }
     private struct OutlineResponse: Encodable {
@@ -376,6 +401,7 @@ enum ReadingAnalysisReviewTools {
         let current = grant.chunk.unitIDs.compactMap { units[$0] }.sorted { $0.order < $1.order }
         guard let first = current.first, let last = current.last, current.count == grant.chunk.unitIDs.count else { throw ReadingError.invalid("当前分析块原文缺失。") }
         let scopeIDs = Set(session.unitIDs)
+        let currentStart = grant.chunk.sourceRanges?.first?.startUTF16 ?? 0
         var hashes: [String: String] = [:], result: [Candidate] = []
         for checkpoint in session.analysisCheckpoints ?? [] {
             try Task.checkCancellation()
@@ -384,8 +410,20 @@ enum ReadingAnalysisReviewTools {
                   Set(checkpoint.unitHashes.keys) == ids else { continue }
             let sources = checkpoint.unitIDs.compactMap { units[$0] }.sorted { $0.order < $1.order }
             guard sources.count == checkpoint.unitIDs.count, let start = sources.first, let end = sources.last,
-                  end.order < first.order, scope != .chapter || sources.allSatisfy({ $0.chapter == last.chapter }),
+                  (end.order < first.order || (end.id == first.id && (checkpoint.sourceRanges?.last?.endUTF16 ?? (end.text as NSString).length) <= currentStart)),
                   Set(checkpoint.evidence.map(\.unitID)) == ids else { continue }
+            if let selected = session.sourceRanges {
+                let checkpointRanges = checkpoint.sourceRanges ?? sources.filter { !$0.text.isEmpty }.map {
+                    ReadingSourceRange(unitID: $0.id, startUTF16: 0, endUTF16: ($0.text as NSString).length)
+                }
+                guard SmartReadingRuntime.rangesContained(checkpointRanges, in: selected) else { continue }
+            }
+            if scope == .chapter {
+                if let chapterID = grant.chunk.chapterID {
+                    guard checkpoint.chapterID == chapterID else { continue }
+                } else if !sources.allSatisfy({ $0.chapter == last.chapter }) { continue }
+            }
+            guard checkpoint.evidence.allSatisfy({ SmartReadingRuntime.evidenceAdmitted($0, ranges: checkpoint.sourceRanges, in: project) }) else { continue }
             var unchanged = true
             for unit in sources {
                 guard checkpoint.unitHashes[unit.id] == session.unitHashes[unit.id] else { unchanged = false; break }
@@ -397,13 +435,17 @@ enum ReadingAnalysisReviewTools {
             guard unchanged, checkpoint.evidence.allSatisfy({ evidence in units[evidence.unitID].map { SourceTextLiteral.contains(evidence.quote, in: $0.text) } == true }) else { continue }
             let pages = Array(Set(sources.compactMap(\.page))).sorted()
             let title = pages.first.map { page in pages.last == page ? "第 \(page) 页" : "第 \(page)–\(pages.last ?? page) 页" } ?? String(start.chapter.prefix(100))
-            let metadata = Metadata(id: checkpoint.id, title: title, unitCount: sources.count, firstOrder: start.order, lastOrder: end.order,
+            var metadata = Metadata(id: checkpoint.id, title: title, unitCount: sources.count, firstOrder: start.order, lastOrder: end.order,
                 configurationMatchesCurrent: checkpoint.configurationHash == grant.chunk.configurationHash)
+            metadata.firstUTF16 = checkpoint.sourceRanges?.first?.startUTF16
+            metadata.lastUTF16 = checkpoint.sourceRanges?.last?.endUTF16
             result.append(Candidate(checkpoint: checkpoint, metadata: metadata))
         }
         return result.sorted { left, right in
             if left.metadata.firstOrder != right.metadata.firstOrder { return left.metadata.firstOrder < right.metadata.firstOrder }
+            if (left.metadata.firstUTF16 ?? 0) != (right.metadata.firstUTF16 ?? 0) { return (left.metadata.firstUTF16 ?? 0) < (right.metadata.firstUTF16 ?? 0) }
             if left.metadata.lastOrder != right.metadata.lastOrder { return left.metadata.lastOrder < right.metadata.lastOrder }
+            if (left.metadata.lastUTF16 ?? Int.max) != (right.metadata.lastUTF16 ?? Int.max) { return (left.metadata.lastUTF16 ?? Int.max) < (right.metadata.lastUTF16 ?? Int.max) }
             return left.metadata.id < right.metadata.id
         }
     }

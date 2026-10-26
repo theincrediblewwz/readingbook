@@ -41,7 +41,7 @@ public struct ReadingAnalysisRunQueue: Sendable {
             var own = Set<String>()
             for id in chunk.unitIDs {
                 if unitIndices[id] == nil { unitIndices[id] = index }
-                let chapter = chapters[id] ?? ""
+                let chapter = chunk.chapterID ?? chapters[id] ?? ""
                 guard own.insert(chapter).inserted else { continue }
                 let barrier: Int
                 if let found = chapterBarriers[chapter] { barrier = found }
@@ -68,7 +68,7 @@ public struct ReadingAnalysisRunQueue: Sendable {
             if actions.contains(.chapter) {
                 // Match the original scheduler exactly: missing own chapters
                 // are omitted, but a missing prior chapter belongs to "".
-                for chapter in Set(chunk.unitIDs.compactMap { chapters[$0] }) {
+                for chapter in chunk.chapterID.map({ Set([$0]) }) ?? Set(chunk.unitIDs.compactMap { chapters[$0] }) {
                     if let barrier = chapterBarriers[chapter] { required.append(barrier) }
                 }
             }

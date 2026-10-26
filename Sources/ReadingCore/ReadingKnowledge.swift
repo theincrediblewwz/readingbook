@@ -152,10 +152,14 @@ public enum ReadingKnowledgeRuntime {
         private let allowed: Set<String>?
         private let slices: [String: String]?
         private let hashes = KnowledgeSourceHashes()
-        public init(project: BookProject, allowed: Set<String>?, slices: [String: String]? = nil) {
+        public init(project: BookProject, allowed: Set<String>?, slices: [String: String]? = nil,
+                    admittingEvidence: ((Evidence) -> Bool)? = nil) {
             sourceHash = project.sourceHash
             units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            versions = Dictionary(grouping: project.readingKnowledge?.versions ?? [], by: \.objectID)
+            let candidates = project.readingKnowledge?.versions ?? []
+            versions = Dictionary(grouping: admittingEvidence.map { admits in
+                candidates.filter { $0.evidence.allSatisfy(admits) }
+            } ?? candidates, by: \.objectID)
             self.allowed = allowed; self.slices = slices
         }
         public func entity(_ id: String) -> KnowledgeEntity? { visible(id, entity: true)?.entity }

@@ -23,6 +23,10 @@ import ReadingCore
             // These controls and their preview refer to the current reading
             // cursor, never the beginning of a native drag on another page.
             context.documentID = nil; context.unitID = selectedUnitID; context.page = selectedUnit?.page
+            if scope == .chapter, let book, let anchor = chapterReadingAnchor(in: book, unitID: selectedUnitID),
+               anchor.unitID == selectedUnitID, anchor.sourceHash == book?.sourceHash {
+                context.selectedSourceAnchor = anchor
+            }
         case .selection:
             context.documentID = nil
             // A pinned sentence may belong to a simultaneously visible page.
@@ -47,7 +51,7 @@ import ReadingCore
         switch queryScope {
         case .selection: return querySelectionText.map { "所选文字 · \($0.count) 字" } ?? "请先在原文选择文字"
         case .page: return selectedUnit?.page.map { "当前页 · 第 \($0) 页" } ?? "当前阅读位置"
-        case .chapter: return selectedUnit?.chapter.isEmpty == false ? selectedUnit!.chapter : "当前章节"
+        case .chapter: return "当前章节"
         case .book: return "整本书 · \(book?.title ?? "")"
         case .notes: return queryDocumentIDs.map { "我的笔记 · 已选 \($0.count) 篇" } ?? "我的笔记 · 全部已保存笔记"
         }

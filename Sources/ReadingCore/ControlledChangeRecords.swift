@@ -10,7 +10,7 @@ enum ControlledChangeRecords {
         // Transport counters and host-only explanation caches do not change
         // what the reader reviewed or grant new write authority. Actual source,
         // object, document and layout changes remain part of this revision.
-        value.aiRequestHistory = nil; value.readingKnowledge = nil; value.generatedOutline = nil
+        value.aiRequestHistory = nil; value.readingKnowledge = nil; value.generatedOutline = nil; value.originalBookOutline = nil
         return try ControlledChangeCoding.hash(value)
     }
 

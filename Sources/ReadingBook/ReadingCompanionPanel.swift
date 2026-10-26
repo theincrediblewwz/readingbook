@@ -10,30 +10,106 @@ private struct CompanionProjection: Sendable {
     let groups: [CompanionObjectGroup]
     let entities: [String: KnowledgeEntity]
     let events: [String: KnowledgeEvent]
+    let sourceUnits: [SourceUnit]
+    let scopeTitle: String
+    let scopeMessage: String?
+    let scopeStartAnchor: SourceAnchor?
+
+    static func sameSource(_ old: [SourceUnit], _ current: [SourceUnit]) -> Bool {
+        let sameBuffer = old.withUnsafeBufferPointer { left in
+            current.withUnsafeBufferPointer { right in left.count == right.count && left.baseAddress == right.baseAddress }
+        }
+        if sameBuffer { return true }
+        guard old.count == current.count else { return false }
+        for (index, pair) in zip(old, current).enumerated() {
+            if index.isMultiple(of: 64), Task.isCancelled { return false }
+            if pair.0.order != pair.1.order || pair.0.page != pair.1.page || !pair.0.id.utf8.elementsEqual(pair.1.id.utf8)
+                || !pair.0.text.utf8.elementsEqual(pair.1.text.utf8) { return false }
+        }
+        return true
+    }
 
     static func build(book: BookProject, index: ReadingExperienceState, scope: String,
                       companionScope: ReadingQueryScope, frozenScope: ReadingQuerySnapshot?,
-                      selectedUnitID: String?, avoidsSpoilers: Bool) -> Self? {
+                      selectedUnitID: String?, chapterAnchor: SourceAnchor?, avoidsSpoilers: Bool) -> Self? {
         guard !Task.isCancelled else { return nil }
         let state = book.readingExperience ?? ReadingExperienceState()
         var items: ReadingContextItems
         let count: Int
+        var selectedUnits: [SourceUnit] = []
+        var title = "请先打开原文", scopeMessage: String?
+        var scopeStartAnchor: SourceAnchor?
         if scope == "book" {
+            selectedUnits = book.units.sorted { $0.order < $1.order }; title = "全书已有伴读"
             items = ReadingContextItems(anchors: state.anchors, mentions: state.mentions, entities: book.entities,
                 events: book.events, layers: state.layers, alignments: state.alignments); count = 0
         } else {
             let selected = book.units.first { $0.id == selectedUnitID }
-            let units: [SourceUnit]
-            if let frozenScope, frozenScope.bookID == book.id {
-                let ids = Set(frozenScope.unitIDs); units = book.units.filter { ids.contains($0.id) }
-            } else if let selected {
-                if companionScope == .chapter { units = book.units.filter { $0.chapter == selected.chapter } }
-                else { units = selected.page.map { page in book.units.filter { $0.page == page } } ?? [selected] }
-            } else { units = [] }
+            var units: [SourceUnit] = [], ranges: [ReadingSourceRange]?
+            do {
+                if let frozenScope, frozenScope.bookID == book.id {
+                    units = try frozenScope.scopedSourceUnits(in: book)
+                    ranges = try frozenScope.sourceRanges(in: book)
+                    title = frozenScope.displayTitle + " · 已固定"
+                } else if let selected {
+                    if companionScope == .chapter {
+                        if let chapters = try BookChapterRuntime.index(in: book) {
+                            let offset = try chapterAnchor.map { try ReadingExperienceRuntime.resolve($0, in: book).utf16Location }
+                            let chapter = try chapters.chapter(unitID: selected.id, offsetUTF16: offset)
+                            guard chapter.isComplete else { throw ReadingError.invalid("这一章的结尾尚未确定，请先继续整理目录。") }
+                            ranges = chapter.ranges; title = chapter.title
+                            let byID = Dictionary(book.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                            units = try chapter.ranges.map { range in
+                                guard var unit = byID[range.unitID] else { throw ReadingError.invalid("目录原文位置已变化。") }
+                                unit.text = try range.text(in: unit); unit.chapter = chapter.title; return unit
+                            }
+                        } else if book.originalName.lowercased().hasSuffix(".pdf") {
+                            throw ReadingError.invalid("请先读取或整理目录，再查看当前章节。")
+                        } else {
+                            let ordered = book.units.sorted { $0.order < $1.order }
+                            guard let cursor = ordered.firstIndex(where: { $0.id == selected.id }) else { return nil }
+                            var first = cursor, last = cursor
+                            while first > 0 && ordered[first - 1].chapter == selected.chapter { first -= 1 }
+                            while last + 1 < ordered.count && ordered[last + 1].chapter == selected.chapter { last += 1 }
+                            units = Array(ordered[first...last]); title = selected.chapter
+                        }
+                    } else {
+                        units = selected.page.map { page in book.units.filter { $0.page == page } } ?? [selected]
+                        title = selected.locator
+                    }
+                }
+            } catch { scopeMessage = error.localizedDescription; title = "当前章节" }
+            selectedUnits = units
+            if let firstRange = ranges?.first, let original = book.units.first(where: { $0.id == firstRange.unitID }),
+               let text = try? firstRange.text(in: original), !text.isEmpty {
+                let quote = String(text.prefix(32)), ns = original.text as NSString
+                let prefix = ns.substring(to: firstRange.startUTF16)
+                let suffix = ns.substring(from: firstRange.startUTF16 + quote.utf16.count)
+                scopeStartAnchor = try? ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: original.id,
+                    quote: quote, prefix: String(prefix.suffix(48)), suffix: String(suffix.prefix(48)), in: book)
+            }
             let allowed = Set(units.map(\.id))
-            var anchors = state.anchors.filter { allowed.contains($0.unitID) }
+            let byID = Dictionary(units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let rangesByID = Dictionary(grouping: ranges ?? [], by: \.unitID)
+            var resolvers: [String: (SourceAnchor) throws -> ResolvedSourceAnchor] = [:]
+            func localAnchor(_ anchor: SourceAnchor) -> Bool {
+                guard allowed.contains(anchor.unitID) else { return false }
+                guard ranges != nil else { return true }
+                if resolvers[anchor.unitID] == nil {
+                    guard let resolver = try? ReadingExperienceRuntime.anchorResolver(sourceHash: book.sourceHash, unitID: anchor.unitID, in: book) else { return false }
+                    resolvers[anchor.unitID] = resolver
+                }
+                guard let resolve = resolvers[anchor.unitID], let value = try? resolve(anchor) else { return false }
+                return (rangesByID[anchor.unitID] ?? []).contains { $0.startUTF16 <= value.utf16Location && $0.endUTF16 >= value.utf16Location + value.utf16Length }
+            }
+            func localEvidence(_ evidence: Evidence) -> Bool {
+                guard let unit = byID[evidence.unitID], !evidence.quote.isEmpty,
+                      let match = unit.text.range(of: evidence.quote, options: .literal) else { return false }
+                return unit.text[match].utf8.elementsEqual(evidence.quote.utf8)
+            }
+            var anchors = state.anchors.filter(localAnchor)
             let existing = Set(anchors.map(\.id))
-            anchors.append(contentsOf: index.anchors.filter { allowed.contains($0.unitID) && !existing.contains($0.id) })
+            anchors.append(contentsOf: index.anchors.filter { localAnchor($0) && !existing.contains($0.id) })
             let anchorIDs = Set(anchors.map(\.id))
             var mentions = state.mentions.filter { anchorIDs.contains($0.anchorID) }
             let existingMentions = Set(mentions.map(\.id))
@@ -45,13 +121,13 @@ private struct CompanionProjection: Sendable {
             var events: [KnowledgeEvent] = []
             for event in book.events {
                 guard !Task.isCancelled else { return nil }
-                if targets.contains(event.id) || event.evidence.contains(where: { allowed.contains($0.unitID) }), let value = projection.event(event) { events.append(value) }
+                if targets.contains(event.id) || event.evidence.contains(where: localEvidence), let value = projection.event(event) { events.append(value) }
             }
             let relatedEntities = Set(events.flatMap { $0.placeIDs + $0.participantIDs })
             var entities: [KnowledgeEntity] = []
             for entity in book.entities {
                 guard !Task.isCancelled else { return nil }
-                if targets.contains(entity.id) || relatedEntities.contains(entity.id) || entity.evidence.contains(where: { allowed.contains($0.unitID) }), let value = projection.entity(entity) { entities.append(value) }
+                if targets.contains(entity.id) || relatedEntities.contains(entity.id) || entity.evidence.contains(where: localEvidence), let value = projection.entity(entity) { entities.append(value) }
             }
             func fullyLocal(_ ids: [String]) -> Bool { !ids.isEmpty && ids.allSatisfy { anchorIDs.contains($0) } }
             let layers = state.layers.filter { fullyLocal($0.sourceAnchorIDs) }, alignments = state.alignments.filter { fullyLocal($0.sourceAnchorIDs) }
@@ -109,7 +185,8 @@ private struct CompanionProjection: Sendable {
         }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         return Self(items: items, crossScopeCount: count, groups: groups,
             entities: Dictionary(items.entities.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
-            events: Dictionary(items.events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }))
+            events: Dictionary(items.events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
+            sourceUnits: selectedUnits, scopeTitle: title, scopeMessage: scopeMessage, scopeStartAnchor: scopeStartAnchor)
     }
 }
 
@@ -138,28 +215,25 @@ struct ReadingCompanionPanel: View {
     @State private var projectionTask: Task<Void, Never>?
     @State private var projectionGeneration = 0
     @State private var displayedScopeKey: String?
+    @State private var projectedSourceUnits: [SourceUnit] = []
+    @State private var projectedScopeTitle = "请先打开原文"
+    @State private var scopeMessage: String?
+    @State private var scopeStartAnchor: SourceAnchor?
+    @State private var preparedChapterSource: [SourceUnit] = []
+    @State private var preparedChapterOwner: String?
     private var avoidsSpoilers: Bool { scope != "book" && store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false }
     private var sourceUnits: [SourceUnit] {
-        guard let book = store.book else { return [] }
-        if let frozenScope, frozenScope.bookID == book.id {
-            let ids = Set(frozenScope.unitIDs); return book.units.filter { ids.contains($0.id) }.sorted { $0.order < $1.order }
-        }
-        if scope == "book" { return book.units.sorted { $0.order < $1.order } }
-        guard let unit = store.selectedUnit else { return [] }
-        if companionScope == .chapter { return book.units.filter { $0.chapter == unit.chapter }.sorted { $0.order < $1.order } }
-        return unit.page.map { page in book.units.filter { $0.page == page }.sorted { $0.order < $1.order } } ?? [unit]
+        displayedScopeKey == scopeKey ? projectedSourceUnits : []
     }
     private var scopeTitle: String {
-        if let frozenScope { return frozenScope.displayTitle + " · 已固定" }
-        if scope == "book" { return "全书已有伴读" }
-        if companionScope == .chapter { return store.selectedUnit?.chapter ?? "当前章节" }
-        return store.selectedUnit?.locator ?? "请先打开原文"
+        displayedScopeKey == scopeKey ? projectedScopeTitle : "正在读取范围…"
     }
     private var projectionKey: String {
         scopeKey + "|" + String(store.projectRevision)
     }
     private var scopeKey: String {
-        [store.bookID ?? "", store.selectedUnitID ?? "", companionScope.rawValue, frozenScope?.scopeFingerprint ?? "", scope].joined(separator: "|")
+        [store.bookID ?? "", store.selectedUnitID ?? "", companionScope.rawValue, frozenScope?.scopeFingerprint ?? "", scope,
+         store.readerChapterAnchor?.id ?? "", store.focusedReadingAnchorID ?? ""].joined(separator: "|")
     }
     private var effectiveSection: String {
         let value = section == "context" ? store.readingCompanionSection : section
@@ -205,6 +279,7 @@ struct ReadingCompanionPanel: View {
                         }.buttonStyle(.borderless).disabled(store.isBusy)
                     }
                     if scope != "book" {
+                        if let scopeMessage { Text(scopeMessage).font(.system(size: 13)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
                         if let quote = selectedQuote {
                             Text(quote).font(typography.font(for: .source)).lineSpacing(6).textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 12).padding(.vertical, 4)
@@ -235,7 +310,7 @@ struct ReadingCompanionPanel: View {
         .onChange(of: store.bookID) { _, _ in frozenScope = nil; companionScope = .page; expandedObjectGroups = []; objectLimits = [:]; refreshItems() }
         .onChange(of: store.selectedObjectID) { _, _ in revealSelectedObjectGroup() }
         .onChange(of: scopeKey) { _, _ in layerLimit = 8; alignmentLimit = 8; objectLimits = [:] }
-        .onDisappear { projectionTask?.cancel(); projectionGeneration &+= 1 }
+        .onDisappear { projectionTask?.cancel(); projectionGeneration &+= 1; preparedChapterSource = []; preparedChapterOwner = nil }
         .confirmationDialog("移除这条阅读增强？", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), presenting: removal) { item in
             Button("移除", role: .destructive) { Task { await store.removeReadingItem(item.id, kind: item.kind) } }
         } message: { item in Text("\(item.title)\n原书和已保存的 Markdown 保留。") }
@@ -322,12 +397,18 @@ struct ReadingCompanionPanel: View {
     }
     private func enhanceThisScope() {
         // The host freezes a fresh page/chapter snapshot before any paid request.
-        if let first = sourceUnits.first { store.navigateToUnit(first.id) }
+        if frozenScope?.scope == .chapter {
+            guard let anchor = scopeStartAnchor, let first = sourceUnits.first else { store.readingExperienceError = "请回到该章节的原文再补充。"; return }
+            store.navigateToChapter(BookOutlineEntry(id: anchor.id, title: projectedScopeTitle, page: first.page, anchor: anchor))
+        } else if companionScope != .chapter, let first = sourceUnits.first { store.navigateToUnit(first.id) }
         if let snapshot = store.enhanceSourceScope(scope: companionScope) { frozenScope = snapshot }
     }
     private func askThisScope() {
         guard store.canStartQuery, let first = sourceUnits.first else { return }
-        store.navigateToUnit(first.id)
+        if frozenScope?.scope == .chapter {
+            guard let anchor = scopeStartAnchor else { store.readingExperienceError = "请回到该章节的原文再提问。"; return }
+            store.navigateToChapter(BookOutlineEntry(id: anchor.id, title: projectedScopeTitle, page: first.page, anchor: anchor))
+        } else if companionScope != .chapter { store.navigateToUnit(first.id) }
         store.queryScope = scope == "book" ? .book : (frozenScope?.scope ?? companionScope)
         // This is an explicit transfer. General question controls keep their
         // independent scope until the reader presses this action.
@@ -335,7 +416,8 @@ struct ReadingCompanionPanel: View {
         else { store.requestedWorkspaceRoute = "query" }
     }
     private var selectedQuote: String? {
-        guard let anchor = store.selectedSourceAnchor, sourceUnits.contains(where: { $0.id == anchor.unitID }), !anchor.quote.isEmpty else { return nil }
+        guard let anchor = store.selectedSourceAnchor, !anchor.quote.isEmpty,
+              sourceUnits.contains(where: { $0.id == anchor.unitID && $0.text.range(of: anchor.quote, options: .literal) != nil }) else { return nil }
         return anchor.quote
     }
     private func noteThisScope() {
@@ -346,26 +428,53 @@ struct ReadingCompanionPanel: View {
     private func refreshItems() {
         projectionTask?.cancel(); projectionGeneration &+= 1
         guard let book = store.book else {
-            items = ReadingContextItems(); crossScopeCount = 0; objectGroups = []; entitiesByID = [:]; eventsByID = [:]; return
+            items = ReadingContextItems(); crossScopeCount = 0; objectGroups = []; entitiesByID = [:]; eventsByID = [:]
+            projectedSourceUnits = []; scopeMessage = nil; return
         }
         let expected = projectionKey, expectedScope = scopeKey, generation = projectionGeneration
         let root = store.libraryRootURL.path, index = store.readingExperienceIndex
         let requestedScope = scope, requestedCompanionScope = companionScope, frozen = frozenScope
         let selected = store.selectedUnitID, avoids = avoidsSpoilers
+        let chapterAnchor = store.chapterReadingAnchor(in: book, unitID: selected)
+        let previousChapterSource = preparedChapterSource, previousChapterOwner = preparedChapterOwner
+        let chapterOwner = root + "|" + book.id + "|" + book.sourceHash
         if displayedScopeKey != expectedScope {
             items = ReadingContextItems(); crossScopeCount = 0; objectGroups = []; entitiesByID = [:]; eventsByID = [:]
+            projectedSourceUnits = []; scopeMessage = nil
         }
         projectionTask = Task {
             do { try await Task.sleep(nanoseconds: 35_000_000) } catch { return }
+            var current = book
+            if requestedCompanionScope == .chapter, requestedScope != "book", frozen == nil {
+                let checker = Task.detached(priority: .userInitiated) {
+                    previousChapterOwner == chapterOwner && CompanionProjection.sameSource(previousChapterSource, book.units)
+                }
+                let unchanged = await withTaskCancellationHandler(operation: { await checker.value }, onCancel: { checker.cancel() })
+                do {
+                    try Task.checkCancellation()
+                    if !unchanged { current = try await store.ensureBookChapterOutline(project: book) }
+                    try Task.checkCancellation()
+                    guard projectionGeneration == generation, scopeKey == expectedScope else { return }
+                    preparedChapterSource = current.units; preparedChapterOwner = chapterOwner
+                }
+                catch {
+                    guard !Task.isCancelled, projectionGeneration == generation, scopeKey == expectedScope else { return }
+                    projectedSourceUnits = []; projectedScopeTitle = "当前章节"; scopeMessage = error.localizedDescription
+                    displayedScopeKey = expectedScope; projectionTask = nil; return
+                }
+            }
+            let preparedBook = current
             let worker = Task.detached(priority: .userInitiated) {
-                CompanionProjection.build(book: book, index: index, scope: requestedScope, companionScope: requestedCompanionScope,
-                    frozenScope: frozen, selectedUnitID: selected, avoidsSpoilers: avoids)
+                CompanionProjection.build(book: preparedBook, index: index, scope: requestedScope, companionScope: requestedCompanionScope,
+                    frozenScope: frozen, selectedUnitID: selected, chapterAnchor: chapterAnchor, avoidsSpoilers: avoids)
             }
             let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
             guard !Task.isCancelled, projectionGeneration == generation, store.bookID == book.id,
                   store.libraryRootURL.path == root, projectionKey == expected, let result else { return }
             items = result.items; crossScopeCount = result.crossScopeCount
             objectGroups = result.groups; entitiesByID = result.entities; eventsByID = result.events
+            projectedSourceUnits = result.sourceUnits; projectedScopeTitle = result.scopeTitle; scopeMessage = result.scopeMessage
+            scopeStartAnchor = result.scopeStartAnchor
             displayedScopeKey = expectedScope; projectionTask = nil
             revealSelectedObjectGroup()
         }

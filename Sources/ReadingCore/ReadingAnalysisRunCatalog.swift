@@ -80,6 +80,7 @@ public struct ReadingAnalysisRunCatalog: Sendable {
             try Task.checkCancellation()
             guard let checkpoint = checkpoints[chunk.id], checkpoint.unitIDs == chunk.unitIDs,
                   checkpoint.configurationHash == chunk.configurationHash,
+                  checkpoint.sourceRanges == chunk.sourceRanges, checkpoint.chapterID == chunk.chapterID,
                   Set(checkpoint.completedStepIDs) == Set(chunk.stepIDs),
                   chunk.unitIDs.allSatisfy({ checkpoint.unitHashes[$0] == session.unitHashes[$0] }) else { continue }
             complete.insert(chunk.id)

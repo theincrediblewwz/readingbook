@@ -25,18 +25,20 @@ import ReadingCore
 
     func cancel() { task?.cancel(); metadataTask?.cancel() }
 
-    func load(owner: String, project: BookProject?, url: URL?, password: String?) async {
+    func load(owner: String, project: BookProject?, url: URL?, store: AppStore) async {
         if self.owner != owner { task?.cancel(); metadataTask?.cancel(); metadataRun = UUID(); runID = nil; generating = false }
         self.owner = owner
         original = []; generated = nil; preparation = nil; remainingRequestCount = 0; message = nil; phase = .loading
         guard let project, let url else { phase = .idle; return }
-        let worker = Task.detached(priority: .userInitiated) {
-            let original = try BookOutlineRuntime.originalPDFOutline(at: url, expectedSourceHash: project.sourceHash, password: password)
-            try Task.checkCancellation()
-            let preparation = original.isEmpty ? try BookOutlineRuntime.prepare(in: project) : nil
-            return (original, preparation)
-        }
         do {
+            let current = try await store.ensureBookChapterOutline(project: project)
+            try Task.checkCancellation()
+            guard self.owner == owner, store.sourceFileURL == url else { return }
+            let worker = Task.detached(priority: .userInitiated) {
+                let original = current.originalBookOutline?.entries ?? []
+                let preparation = original.isEmpty ? try BookOutlineRuntime.prepare(in: current) : nil
+                return (original, preparation)
+            }
             let value = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
             try Task.checkCancellation()
             guard self.owner == owner else { return }

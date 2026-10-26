@@ -675,8 +675,10 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         guard [.page, .chapter].contains(scope), let initial = book, let unit = selectedUnit, !isBusy else { return nil }
         let snapshot: ReadingQuerySnapshot
         do {
+            var context = ReadingContext(sourceHash: initial.sourceHash, unitID: unit.id, page: unit.page)
+            if scope == .chapter { context.selectedSourceAnchor = chapterReadingAnchor(in: initial, unitID: unit.id) }
             snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: initial,
-                context: ReadingContext(sourceHash: initial.sourceHash, unitID: unit.id, page: unit.page))
+                context: context)
         } catch { readingExperienceError = error.localizedDescription; return nil }
         let allowedIDs = Set(snapshot.unitIDs)
         guard !allowedIDs.isEmpty else { return nil }
@@ -717,9 +719,16 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                         updateAIProgressDetail(aiRunID, detail: source.page.map { "第 \($0) 页" } ?? source.chapter)
                         activity = "正在准备伴读 · \(actionableIDs.count - remainingIDs.count + index + 1)/\(actionableIDs.count) · \(source.locator)"
                         let previousReceipts = try ReadingLedger.receipts(for: source, in: current).count
-                        // enrichCurrent first checkpoints bounded paragraph receipts,
-                        // and only then permits the real reading_enrich tool write.
-                        var result = try await reader.enrichCurrent(project: current, unitID: unitID, settings: frozenSettings, apiKey: frozenKey)
+                        let checker = Task.detached(priority: .userInitiated) {
+                            try snapshot.sourceRanges(in: current, unitIDs: [unitID])
+                        }
+                        let ranges = try await withTaskCancellationHandler(operation: { try await checker.value }, onCancel: { checker.cancel() })
+                        let wholeUnit = ranges.count == 1 && ranges[0].startUTF16 == 0 && ranges[0].endUTF16 == source.text.utf16.count
+                        // Whole units keep the existing bounded receipt path.
+                        // A unit shared by chapters uses the host's exact slice
+                        // capability instead of widening a chapter to the page.
+                        var result = try await reader.enrichCurrent(project: current, unitID: unitID, settings: frozenSettings, apiKey: frozenKey,
+                            sourceRanges: wholeUnit ? nil : ranges)
                         try Task.checkCancellation()
                         guard bookID == snapshot.bookID else { throw CancellationError() }
                         let completed = result.audit.contains { $0.name == "reading_enrich" && !oldAuditIDs.contains($0.id) }

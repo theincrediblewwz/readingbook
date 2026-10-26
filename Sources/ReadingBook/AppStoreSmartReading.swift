@@ -40,6 +40,7 @@ import ReadingCore
             let aiRunID = await beginAIProgress(title: "制定阅读方案", backgroundReading: true)
             var committedSessionID: String?
             do {
+                let original = try await ensureBookChapterOutline(project: original)
                 var session = try await freezeReadingSelection(selection, project: original, currentUnitID: selectedID)
                 let ids = Set(session.unitIDs)
                 guard !smartReadingNeedsOCR(in: original, unitIDs: ids) else {
@@ -114,6 +115,7 @@ import ReadingCore
         readingTask = Task {
             var committedSessionID: String?
             do {
+                let original = try await ensureBookChapterOutline(project: original)
                 try PluginEngine.requireActivePlan(in: original)
                 var adjusted = selection; adjusted.preferredMethodIDs = []
                 var session = try await freezeReadingSelection(adjusted, project: original, currentUnitID: selectedID)
@@ -146,10 +148,20 @@ import ReadingCore
         readingTask = Task {
             let aiRunID = await beginAIProgress(title: "智能阅读 · " + existing.scopeTitle, backgroundReading: true)
             do {
-                let analysisIDs = try await validatedAnalysisIDs(existing, project: original)
-                let unitIDs = Set(existing.unitIDs)
+                let original = try await ensureBookChapterOutline(project: original)
+                let worker = Task.detached(priority: .userInitiated) {
+                    var candidate = original
+                    // This entry point owns admission; a persisted running flag
+                    // after app termination is not a live worker/catalog.
+                    if candidate.smartReading?.status == .running { candidate.smartReading?.status = .paused }
+                    try SmartReadingRuntime.freezeChapterBoundaries(in: &candidate)
+                    return candidate
+                }
+                var started = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                guard let session = started.smartReading else { throw CancellationError() }
+                let analysisIDs = try await validatedAnalysisIDs(session, project: started)
+                let unitIDs = Set(session.unitIDs)
                 guard !smartReadingNeedsOCR(in: original, unitIDs: unitIDs) else { throw ReadingError.invalid("所选范围还有未识别页面，请先 OCR。") }
-                var started = original
                 started.smartReading?.status = .running; started.smartReading?.updatedAt = Date(); started.smartReading?.lastMessage = nil
                 try Task.checkCancellation()
                 let frozen = try await repository.commitAIResult(base: original, result: started, operationID: "reading-start-" + UUID().uuidString)
@@ -213,7 +225,13 @@ import ReadingCore
     }
 
     private func freezeReadingSelection(_ selection: SmartReadingSelection, project: BookProject, currentUnitID: String?) async throws -> SmartReadingSession {
-        let worker = Task.detached(priority: .userInitiated) { try SmartReadingRuntime.freeze(selection, in: project, currentUnitID: currentUnitID) }
+        let position = [selectedSourceAnchor, focusedReadingSourceAnchor, readerChapterAnchor].compactMap { $0 }.first {
+            $0.sourceHash == project.sourceHash && $0.unitID == currentUnitID
+        }
+        let worker = Task.detached(priority: .userInitiated) {
+            let offset = try position.map { try ReadingExperienceRuntime.resolve($0, in: project).utf16Location }
+            return try SmartReadingRuntime.freeze(selection, in: project, currentUnitID: currentUnitID, currentOffsetUTF16: offset)
+        }
         return try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
     }
     private func validatedAnalysisIDs(_ session: SmartReadingSession, project: BookProject) async throws -> Set<String> {
