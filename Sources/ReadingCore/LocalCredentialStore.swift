@@ -100,10 +100,18 @@ public struct LocalCredentialStore: Sendable {
     /// symlink. Only the final private directory may be created or chmodded.
     private func openDirectory(create: Bool) throws -> Int32? {
         let path = directoryURL.path
+        guard let declared = URLComponents(string: directoryURL.absoluteString) else { throw failure() }
+        let encodedPath = declared.percentEncodedPath
+        // URL.path can sanitize an encoded NUL instead of exposing a zero byte.
+        // Inspect the original escaped path too, without decoding literal %25
+        // twice or letting URL standardization hide dot components.
+        let declaredComponents = encodedPath.replacingOccurrences(of: "%2e", with: ".", options: .caseInsensitive)
+            .split(separator: "/").map(String.init)
         // Foundation standardization may turn a physical /private/var path back
         // into the /var symlink on macOS. Validate lexically, then let each
         // O_NOFOLLOW open prove the actual directory instead of rewriting it.
-        guard directoryURL.isFileURL, path.hasPrefix("/"), !path.utf8.contains(0),
+        guard directoryURL.isFileURL, path.hasPrefix("/"), !path.utf8.contains(0), !encodedPath.contains("%00"),
+              !declaredComponents.contains("."), !declaredComponents.contains(".."),
               directoryURL.host.map({ $0.isEmpty || $0 == "localhost" }) ?? true,
               directoryURL.user == nil, directoryURL.password == nil, directoryURL.port == nil,
               directoryURL.query == nil, directoryURL.fragment == nil else { throw failure() }

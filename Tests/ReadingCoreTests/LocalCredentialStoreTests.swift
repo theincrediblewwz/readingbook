@@ -63,15 +63,19 @@ final class LocalCredentialStoreTests: XCTestCase {
         try f.store.save("fixture", for: "a")
         XCTAssertEqual(try f.store.key(for: "a"), "fixture", "A physical path must not be rewritten through a Foundation system alias.")
         let original = try Data(contentsOf: f.file)
-        for url in [
-            try XCTUnwrap(URL(string: "file://credentials.invalid" + f.directory.path)),
-            f.temporary.appendingPathComponent("../" + f.temporary.lastPathComponent + "/ReadingBook-Private", isDirectory: true),
-            try XCTUnwrap(URL(string: f.temporary.absoluteString + "bad%00path/"))
+        for (label, url) in [
+            ("remote-host", try XCTUnwrap(URL(string: "file://credentials.invalid" + f.directory.path))),
+            ("dotdot", f.temporary.appendingPathComponent("../" + f.temporary.lastPathComponent + "/ReadingBook-Private", isDirectory: true)),
+            ("encoded-dotdot", try XCTUnwrap(URL(string: f.temporary.absoluteString + "%2e%2e/" + f.temporary.lastPathComponent + "/ReadingBook-Private/"))),
+            ("encoded-NUL", try XCTUnwrap(URL(string: f.temporary.absoluteString + "bad%00path/")))
         ] {
             let untrusted = LocalCredentialStore(directoryURL: url)
-            XCTAssertThrowsError(try untrusted.key(for: "a"))
-            XCTAssertThrowsError(try untrusted.save("must-not-write", for: "a"))
+            XCTAssertThrowsError(try untrusted.key(for: "a"), label)
+            XCTAssertThrowsError(try untrusted.save("must-not-write", for: "a"), label)
         }
+        let literalPercent = LocalCredentialStore(directoryURL: f.temporary.appendingPathComponent("literal-%00", isDirectory: true))
+        try literalPercent.save("literal-fixture", for: "a")
+        XCTAssertEqual(try literalPercent.key(for: "a"), "literal-fixture", "A literal percent filename is not an encoded NUL; do not decode twice.")
         let alias = f.temporary.appendingPathComponent("alias", isDirectory: true)
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: f.temporary)
         let aliased = LocalCredentialStore(directoryURL: alias.appendingPathComponent("ReadingBook-Private", isDirectory: true))
