@@ -166,13 +166,14 @@ final class TemporalKnowledgeTests: XCTestCase {
         let window = TemporalQueryWindow.date(from: TemporalDate(year: 208), to: TemporalDate(year: 209), calendar: "gregorian")
         // Both individually intersect the window, but there is no simultaneous
         // point. Retain the contradictory source records without joining them.
+        let laterAnchorID = book.temporalKnowledge!.anchors[1].id
         book.temporalKnowledge?.participations[0].extent = year(209)
-        book.temporalKnowledge?.participations[0].sourceAnchorIDs = [book.temporalKnowledge!.anchors[1].id]
+        book.temporalKnowledge?.participations[0].sourceAnchorIDs = [laterAnchorID]
         try TemporalKnowledgeRuntime.validateStoredState(in: book)
         XCTAssertFalse(try TemporalKnowledgeRuntime.events(in: book, within: window, boundary: .all).isEmpty)
         XCTAssertTrue(try TemporalKnowledgeRuntime.events(in: book, entityID: "liu", within: window, boundary: .all).isEmpty)
         book.temporalKnowledge?.presences[0].extent = year(209)
-        book.temporalKnowledge?.presences[0].sourceAnchorIDs = [book.temporalKnowledge!.anchors[1].id]
+        book.temporalKnowledge?.presences[0].sourceAnchorIDs = [laterAnchorID]
         XCTAssertFalse(try TemporalKnowledgeRuntime.events(in: book, entityID: "cao", within: window, boundary: .all).contains { $0.object.id == "phase" })
 
         book.temporalKnowledge?.participations[0].extent?.calendar = "reign-era"
