@@ -4,7 +4,7 @@ import ReadingCore
 /// Host-only progress in the existing audit stream. A unit checkpoint is
 /// appended to the same project transaction as its successful reading_enrich.
 /// Receipt batches alone never count as a generated companion unit.
-struct CompanionScopeProgress {
+struct CompanionScopeProgress: Sendable {
     let scopeFingerprint: String
     let runID: String
     var completedUnitIDs: Set<String> = []

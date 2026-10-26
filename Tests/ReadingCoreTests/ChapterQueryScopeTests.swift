@@ -90,7 +90,8 @@ final class ChapterQueryScopeTests: XCTestCase {
         let saved = try await reader.enrichCurrent(project: book, unitID: "shared",
             settings: ProviderSettings(model: "offline-fixture", maxRequestsPerRun: 2, maxOutputTokens: 1_000), apiKey: "", sourceRanges: ranges)
         XCTAssertEqual(saved.units, book.units)
-        XCTAssertEqual(saved.coverage, book.coverage)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(try encoder.encode(saved.coverage), try encoder.encode(book.coverage))
         XCTAssertEqual(saved.paragraphReceipts, book.paragraphReceipts)
         XCTAssertNil(saved.smartReading)
         XCTAssertEqual(saved.audit.last?.name, "reading_enrich")

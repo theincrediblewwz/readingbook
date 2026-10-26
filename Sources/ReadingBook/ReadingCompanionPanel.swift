@@ -401,7 +401,13 @@ struct ReadingCompanionPanel: View {
             guard let anchor = scopeStartAnchor, let first = sourceUnits.first else { store.readingExperienceError = "请回到该章节的原文再补充。"; return }
             store.navigateToChapter(BookOutlineEntry(id: anchor.id, title: projectedScopeTitle, page: first.page, anchor: anchor))
         } else if companionScope != .chapter, let first = sourceUnits.first { store.navigateToUnit(first.id) }
-        if let snapshot = store.enhanceSourceScope(scope: companionScope) { frozenScope = snapshot }
+        let owner = store.bookID, root = store.libraryRootURL, requestedScope = companionScope
+        Task {
+            if let snapshot = await store.enhanceSourceScope(scope: requestedScope),
+               store.bookID == owner, store.libraryRootURL == root, companionScope == requestedScope {
+                frozenScope = snapshot
+            }
+        }
     }
     private func askThisScope() {
         guard store.canStartQuery, let first = sourceUnits.first else { return }

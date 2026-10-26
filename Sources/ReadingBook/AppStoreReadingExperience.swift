@@ -4,6 +4,15 @@ import os
 
 private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.app", category: "PageEvidence")
 
+private struct CompanionScopePreparation: Sendable {
+    let snapshot: ReadingQuerySnapshot
+    let actionableIDs: [String]
+    let remainingIDs: [String]
+    let progress: CompanionScopeProgress
+    let isContinuation: Bool
+    let needsOCR: Bool
+}
+
 /// Disposable page presentation only. Canonical anchors and evidence stay in
 /// the book; neither a receipt update nor another page invalidates this key.
 @MainActor final class ReadingPageSnapshotCache {
@@ -666,42 +675,79 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
         newReadingNote(title: "关于\(selectedUnit?.chapter ?? "原文")的理解", markdown: "", anchorIDs: [anchor.id])
     }
     func enhanceCurrentSource() {
-        enhanceSourceScope(scope: .page)
+        Task { _ = await enhanceSourceScope(scope: .page) }
     }
     /// Freeze all unit identities before starting. Turning a PDF page changes
     /// the viewport, never the in-flight generation scope or its receipt gate.
     @discardableResult
-    func enhanceSourceScope(scope: ReadingQueryScope) -> ReadingQuerySnapshot? {
-        guard [.page, .chapter].contains(scope), let initial = book, let unit = selectedUnit, !isBusy else { return nil }
-        let snapshot: ReadingQuerySnapshot
-        do {
-            var context = ReadingContext(sourceHash: initial.sourceHash, unitID: unit.id, page: unit.page)
-            if scope == .chapter { context.selectedSourceAnchor = chapterReadingAnchor(in: initial, unitID: unit.id) }
-            snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: initial,
-                context: context)
-        } catch { readingExperienceError = error.localizedDescription; return nil }
-        let allowedIDs = Set(snapshot.unitIDs)
-        guard !allowedIDs.isEmpty else { return nil }
-        guard !initial.units.contains(where: { allowedIDs.contains($0.id) && $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !readerConfirmedBlank($0, in: initial) }) else {
-            readingExperienceError = "所选范围仍有未识别的原文，请先完成 OCR 或核对空白页。"; showingOCR = true; return nil
-        }
-        let actionableIDs = snapshot.unitIDs.filter { id in initial.units.first(where: { $0.id == id }).map { !readerConfirmedBlank($0, in: initial) } ?? false }
-        guard !actionableIDs.isEmpty else { readingExperienceError = "这部分已由你对照原书确认为空白，无需生成伴读。"; return nil }
-        let unfinished = CompanionScopeProgress.unfinished(for: snapshot, in: initial)
-        let progress = unfinished ?? CompanionScopeProgress(scopeFingerprint: snapshot.scopeFingerprint, runID: UUID().uuidString)
-        let remainingIDs = actionableIDs.filter { !progress.completedUnitIDs.contains($0) }
-        guard remainingIDs.isEmpty || providerReady else { return nil }
+    func enhanceSourceScope(scope: ReadingQueryScope) async -> ReadingQuerySnapshot? {
+        guard !Task.isCancelled, [.page, .chapter].contains(scope), let initial = book, let unit = selectedUnit, !isBusy else { return nil }
+        let root = libraryRootURL, runID = UUID()
+        var context = ReadingContext(sourceHash: initial.sourceHash, unitID: unit.id, page: unit.page)
+        if scope == .chapter { context.selectedSourceAnchor = chapterReadingAnchor(in: initial, unitID: unit.id) }
+        let frozenContext = context
         var frozenSettings = settings
         frozenSettings.transportSessionID = "readingbook-\(initial.id)-companion"
         let frozenKey = apiKey
+        companionScopeRunID = runID
         isBusy = true; readingExperienceError = nil; readingCompanionVisible = true; readingCompanionTab = "companion"
+        activity = "正在准备伴读范围…"
+        return await withCheckedContinuation { continuation in
         task = Task {
-            let aiRunID = await beginAIProgress(title: "生成伴读 · \(snapshot.displayTitle)")
-            defer { finishAIProgress(aiRunID); activeReadingUnitID = nil; isBusy = false }
+            var returnedScope = false
+            let aiRunID = await beginAIProgress(title: "准备伴读范围")
+            defer {
+                if !returnedScope { continuation.resume(returning: nil) }
+                finishAIProgress(aiRunID)
+                if companionScopeRunID == runID { activeReadingUnitID = nil; isBusy = false; task = nil; companionScopeRunID = nil }
+            }
             do {
-                if unfinished == nil {
+                try Task.checkCancellation()
+                var current = initial
+                if scope == .chapter { current = try await ensureBookChapterOutline(project: initial) }
+                try Task.checkCancellation()
+                guard companionScopeRunID == runID, bookID == initial.id, libraryRootURL == root,
+                      book?.sourceHash == initial.sourceHash else { throw CancellationError() }
+                let preparationProject = current
+                let worker = Task.detached(priority: .userInitiated) {
+                    let snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: preparationProject, context: frozenContext)
+                    let byID = Dictionary(preparationProject.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                    var actionable: [String] = [], needsOCR = false
+                    for id in snapshot.unitIDs {
+                        try Task.checkCancellation()
+                        guard let source = byID[id] else { throw ReadingError.invalid("伴读原文位置已变化。") }
+                        if SmartReadingRuntime.isConfirmedBlank(source, in: preparationProject) { continue }
+                        if source.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { needsOCR = true }
+                        actionable.append(id)
+                    }
+                    let unfinished = CompanionScopeProgress.unfinished(for: snapshot, in: preparationProject)
+                    let progress = unfinished ?? CompanionScopeProgress(scopeFingerprint: snapshot.scopeFingerprint, runID: UUID().uuidString)
+                    return CompanionScopePreparation(snapshot: snapshot, actionableIDs: actionable,
+                        remainingIDs: actionable.filter { !progress.completedUnitIDs.contains($0) }, progress: progress,
+                        isContinuation: unfinished != nil, needsOCR: needsOCR)
+                }
+                let prepared = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                try Task.checkCancellation()
+                guard companionScopeRunID == runID, bookID == initial.id, libraryRootURL == root,
+                      let latest = book, latest.sourceHash == initial.sourceHash else { throw CancellationError() }
+                let validator = Task.detached(priority: .userInitiated) { _ = try prepared.snapshot.sourceRanges(in: latest) }
+                try await withTaskCancellationHandler(operation: { try await validator.value }, onCancel: { validator.cancel() })
+                try Task.checkCancellation()
+                guard companionScopeRunID == runID, bookID == initial.id, libraryRootURL == root,
+                      book?.sourceHash == initial.sourceHash else { throw CancellationError() }
+                guard !prepared.needsOCR else {
+                    readingExperienceError = "所选范围仍有未识别的原文，请先完成 OCR 或核对空白页。"; showingOCR = true; return
+                }
+                let snapshot = prepared.snapshot, actionableIDs = prepared.actionableIDs, remainingIDs = prepared.remainingIDs, progress = prepared.progress
+                guard !actionableIDs.isEmpty else { readingExperienceError = "这部分已由你对照原书确认为空白，无需生成伴读。"; return }
+                guard remainingIDs.isEmpty || providerReady else { return }
+                returnedScope = true; continuation.resume(returning: snapshot)
+                if aiProgress.runID == aiRunID { aiProgress.title = "生成伴读 · " + snapshot.displayTitle }
+                updateAIProgressDetail(aiRunID, detail: snapshot.displayTitle)
+                if !prepared.isContinuation {
                     try Task.checkCancellation()
-                    guard var starting = book, starting.id == snapshot.bookID, starting.sourceHash == snapshot.sourceHash else { throw CancellationError() }
+                    guard companionScopeRunID == runID, libraryRootURL == root, var starting = book,
+                          starting.id == snapshot.bookID, starting.sourceHash == snapshot.sourceHash else { throw CancellationError() }
                     starting.audit.append(try progress.audit("companion_scope_started"))
                     // Persist the run before its first paid request so a restart
                     // can distinguish a continuation from a deliberate refresh.
@@ -709,11 +755,13 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                 }
                 await reader.resetBudget()
                 for (index, unitID) in remainingIDs.enumerated() {
-                    guard let starting = book, starting.id == snapshot.bookID, starting.sourceHash == snapshot.sourceHash else { throw CancellationError() }
+                    guard companionScopeRunID == runID, libraryRootURL == root, let starting = book,
+                          starting.id == snapshot.bookID, starting.sourceHash == snapshot.sourceHash else { throw CancellationError() }
                     let oldAuditIDs = Set(starting.audit.filter { $0.name == "reading_enrich" }.map(\.id))
                     while true {
                         try Task.checkCancellation()
-                        guard let current = book, current.id == snapshot.bookID, current.sourceHash == snapshot.sourceHash,
+                        guard companionScopeRunID == runID, libraryRootURL == root, let current = book,
+                              current.id == snapshot.bookID, current.sourceHash == snapshot.sourceHash,
                               let source = current.units.first(where: { $0.id == unitID }) else { throw CancellationError() }
                         activeReadingUnitID = unitID
                         updateAIProgressDetail(aiRunID, detail: source.page.map { "第 \($0) 页" } ?? source.chapter)
@@ -730,7 +778,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                         var result = try await reader.enrichCurrent(project: current, unitID: unitID, settings: frozenSettings, apiKey: frozenKey,
                             sourceRanges: wholeUnit ? nil : ranges)
                         try Task.checkCancellation()
-                        guard bookID == snapshot.bookID else { throw CancellationError() }
+                        guard companionScopeRunID == runID, libraryRootURL == root, bookID == snapshot.bookID else { throw CancellationError() }
                         let completed = result.audit.contains { $0.name == "reading_enrich" && !oldAuditIDs.contains($0.id) }
                         let receiptCount = try ReadingLedger.receipts(for: source, in: result).count
                         guard completed || receiptCount > previousReceipts else { throw ReadingError.invalid("这部分没有新增核对回执或伴读结果，已停止以避免重复请求。") }
@@ -742,18 +790,18 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
                     }
                 }
                 try Task.checkCancellation()
-                guard var finished = book, finished.id == snapshot.bookID, finished.sourceHash == snapshot.sourceHash else { throw CancellationError() }
+                guard companionScopeRunID == runID, libraryRootURL == root, var finished = book,
+                      finished.id == snapshot.bookID, finished.sourceHash == snapshot.sourceHash else { throw CancellationError() }
                 finished.audit.append(try progress.audit("companion_scope_finished"))
                 publish(try await repository.save(finished))
                 activity = "\(snapshot.displayTitle)的伴读已保存，请结合原文核对。"
-            } catch { finishAIProgress(aiRunID, error: error); readingExperienceError = error is CancellationError ? nil : error.localizedDescription; handle(error) }
+            } catch {
+                finishAIProgress(aiRunID, error: error)
+                guard companionScopeRunID == runID, bookID == initial.id, libraryRootURL == root else { return }
+                readingExperienceError = error is CancellationError ? nil : error.localizedDescription; handle(error)
+            }
         }
-        return snapshot
-    }
-    private func readerConfirmedBlank(_ unit: SourceUnit, in project: BookProject) -> Bool {
-        unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && project.coverage[unit.id]?.status == .completed &&
-        project.coverage[unit.id]?.message == "用户确认此单元为原书空白。" &&
-        project.insights.contains { $0.id == "blank-\(unit.id)" && $0.unitIDs == [unit.id] && $0.markdown == "用户对照原书确认此单元为空白，无需 AI 提取文字。" }
+        }
     }
     func removeReadingItem(_ id: String, kind: String) async {
         guard var current = book, let state = current.readingExperience, !isBusy else { return }
