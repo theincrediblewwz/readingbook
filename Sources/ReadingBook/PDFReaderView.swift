@@ -526,7 +526,12 @@ struct PDFReaderView: NSViewRepresentable {
         // and fall back to unique matching rather than flashing the page.
         let newProofMetadata = input.sourcePageTexts.contains { sourcePageTexts[$0.key]?.identity != $0.value.identity }
         sourcePageTexts = input.sourcePageTexts
-        for (number, cache) in sourceGeometryPages where cache.sourceTextProofIdentity != sourcePageTexts[number]?.identity {
+        for (number, cache) in sourceGeometryPages {
+            // Missing window metadata is not evidence that an idle page's
+            // source changed. Reuse still requires present, matching metadata
+            // at the use site; a new document/source clears all page caches.
+            guard let identity = sourcePageTexts[number]?.identity,
+                  cache.sourceTextProofIdentity != identity else { continue }
             cache.sourceTextProofIdentity = nil; cache.sourceTextProof = nil
         }
         let sourceDecorationsChanged = sourceChanged || input.url.standardizedFileURL != loadedURL || sourceDecorationPage != requestedPage || (sourceDecorationFocusID != input.focusedDecorationID && sourceDecorations != input.sourceDecorations) || (input.sourceDecorationRevision.map { $0 != sourceDecorationRevision }
