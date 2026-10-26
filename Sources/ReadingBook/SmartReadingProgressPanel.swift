@@ -36,25 +36,14 @@ struct SmartReadingProgressPanel: View {
         guard let progress, session?.isPlanConfirmed == true else { return nil }
         return "\(progress.completed)/\(progress.total)"
     }
+    private var progressAccessibilityValue: String {
+        if let count = countText { return "\(title)，已处理 \(count)" }
+        return title
+    }
     var body: some View {
       Group {
         if minimized {
-            Button { minimized = false; expanded = true } label: {
-                Image(systemName: statusIcon).font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
-                    .frame(width: 52, height: 52).contentShape(Circle())
-            }.buttonStyle(.plain).readingGlass(radius: 26, interactive: true)
-                .overlay {
-                    if let compactInteraction {
-                        FloatingLauncherPointerInput(interaction: compactInteraction) { minimized = false; expanded = true }
-                    }
-                }
-                .help("\(title)；点击展开进度，拖动调整位置")
-                .accessibilityLabel("展开智能阅读进度")
-                .accessibilityValue(title + (countText.map { "，已处理 " + $0 } ?? ""))
-                .contextMenu {
-                    if store.isSmartReadingRunning || store.aiProgress.isRunning { Button("停止任务，保留已保存内容") { store.pause() } }
-                    if let resetCompactPosition { Button("还原浮钮位置", action: resetCompactPosition) }
-                }
+            minimizedControl
         } else {
         VStack(spacing: 0) {
             compactHeader
@@ -114,6 +103,25 @@ struct SmartReadingProgressPanel: View {
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: expanded)
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: minimized)
     }
+    private func expandProgress() { minimized = false; expanded = true }
+    private var minimizedControl: some View {
+        Button(action: expandProgress) {
+            Image(systemName: statusIcon).font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
+                .frame(width: 52, height: 52).contentShape(Circle())
+        }.buttonStyle(.plain).readingGlass(radius: 26, interactive: true)
+            .overlay { minimizedPointerInput }
+            .help("\(title)；点击展开进度，拖动调整位置")
+            .accessibilityLabel("展开智能阅读进度")
+            .accessibilityValue(Text(progressAccessibilityValue))
+            .contextMenu { minimizedActions }
+    }
+    @ViewBuilder private var minimizedPointerInput: some View {
+        if let compactInteraction { FloatingLauncherPointerInput(interaction: compactInteraction, activate: expandProgress) }
+    }
+    @ViewBuilder private var minimizedActions: some View {
+        if store.isSmartReadingRunning || store.aiProgress.isRunning { Button("停止任务，保留已保存内容") { store.pause() } }
+        if let resetCompactPosition { Button("还原浮钮位置", action: resetCompactPosition) }
+    }
     private var compactHeader: some View {
         HStack(spacing: 0) {
             Button { expanded.toggle() } label: {
@@ -125,7 +133,7 @@ struct SmartReadingProgressPanel: View {
                 }.padding(.leading, 15).padding(.trailing, 5).frame(maxWidth: .infinity, minHeight: 52).contentShape(Rectangle())
             }.buttonStyle(.plain).help("\(title)；点击\(expanded ? "收起" : "展开")进度")
                 .accessibilityLabel(expanded ? "收起智能阅读详情" : "展开智能阅读详情")
-                .accessibilityValue(title + (countText.map { "，已处理 " + $0 } ?? ""))
+                .accessibilityValue(Text(progressAccessibilityValue))
             if store.isSmartReadingRunning || (store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID) {
                 Button { store.pause() } label: { Image(systemName: "pause") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("停止任务，保留已保存内容").accessibilityLabel("停止任务")

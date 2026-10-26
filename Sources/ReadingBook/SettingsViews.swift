@@ -33,10 +33,10 @@ struct ProviderSettingsView: View {
                 Divider().opacity(0.4)
                 HStack(spacing: 0) {
                     if wide && showServices {
-                        serviceList.frame(width: 216).background(Palette.accent.opacity(0.025))
+                        serviceList.frame(width: 216).background(Palette.accent.opacity(0.025)).disabled(store.isRecoveringLegacyKey)
                         Divider().opacity(0.4)
                     }
-                    modelConfiguration(wide: wide && showServices).frame(maxWidth: .infinity)
+                    modelConfiguration(wide: wide && showServices).frame(maxWidth: .infinity).disabled(store.isRecoveringLegacyKey)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.frame(width: cardWidth, height: cardHeight)
                 .font(.system(size: 15))

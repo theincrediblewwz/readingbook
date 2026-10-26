@@ -142,11 +142,11 @@ struct ReaderMethodView: View {
             }
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("每次读多少").font(.system(size: 14, weight: .medium))
+                    Text("讲解分段").font(.system(size: 14, weight: .medium))
                     Spacer(minLength: 8)
-                    Text("每次交给 AI 的原文范围").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text("合在一起讲解的原文范围").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
-                Picker("每次读多少", selection: $execution.granularity) {
+                Picker("讲解分段", selection: $execution.granularity) {
                     ForEach(ReadingAnalysisGranularity.allCases, id: \.self) { Text($0.title).tag($0) }
                 }.pickerStyle(.segmented).labelsHidden().controlSize(.large)
             }
@@ -186,7 +186,7 @@ struct ReaderMethodView: View {
                                 Picker("处理方式", selection: $step.actionID) {
                                     Text("内容讲解").tag("ai.analyze"); Text("整理要素").tag("facts.extract")
                                     Text("译注与解释").tag("reading.enrich"); Text("回顾").tag("reading.review")
-                                    Text("查看引文出处").tag("citations.verify")
+                                    Text("确认引文来源").tag("citations.verify")
                                 }.labelsHidden()
                                 Picker("执行频率", selection: $step.frequency) {
                                     ForEach(ReadingStepFrequency.allCases, id: \.self) { Text($0.title).tag($0) }
