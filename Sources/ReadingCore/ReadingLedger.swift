@@ -89,7 +89,7 @@ public enum ReadingLedger {
     /// Blank separators stay attached to a fragment. Concatenating the manifest texts exactly reproduces unit.text.
     /// Fenced code and display-math blocks remain together; long ordinary blocks are explicitly labelled fragments.
     public static func paragraphs(for unit: SourceUnit, in project: BookProject) throws -> [ReadingParagraph] {
-        guard project.units.contains(where: { $0.id == unit.id && $0.text == unit.text }), unit.text.utf8.count <= 2_000_000 else {
+        guard project.units.contains(where: { $0.id == unit.id && $0.text.utf8.elementsEqual(unit.text.utf8) }), unit.text.utf8.count <= 2_000_000 else {
             throw ReadingError.invalid("逐段清单来源不存在、已变化或过大。")
         }
         if unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [] }

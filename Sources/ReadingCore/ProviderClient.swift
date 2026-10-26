@@ -154,11 +154,15 @@ enum ProviderClient {
         streaming.decoder.onProgress = { value in reporter?.emit(value) }
         streaming.onBufferedProgress = { bytes in reporter?.emit(ProviderStreamSnapshot(receivedBytes: bytes)) }
         defer { reporter?.stop() }
-        let (data, response) = try await BoundedProviderResponse.read(prepared.request, configuration: configuration,
-            onResponse: { response in
-                streaming.setContentType(response.mimeType)
-                reporter?.emit(ProviderStreamSnapshot())
-            }, onChunk: { chunk in try streaming.append(chunk) })
+        let transport: (Data, URLResponse)
+        do {
+            transport = try await BoundedProviderResponse.read(prepared.request, configuration: configuration,
+                onResponse: { response in
+                    streaming.setContentType(response.mimeType)
+                    reporter?.emit(ProviderStreamSnapshot())
+                }, onChunk: { chunk in try streaming.append(chunk) })
+        } catch { throw userFacingTransportError(error) }
+        let (data, response) = transport
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw ReadingError.invalid("模型服务未返回 HTTP 响应。") }
         guard (200...299).contains(http.statusCode) else {
@@ -192,5 +196,25 @@ enum ProviderClient {
         if let reported, !(0...4_194_304).contains(reported) { throw ReadingError.invalid("模型返回了无效或超出保护范围的 token 计数。") }
         return Result(message: message, finishReason: reason,
                       tokenCost: max(1, reported ?? (prepared.estimatedInputTokens + data.count)))
+    }
+
+    /// Transport diagnostics can contain a provider URL or echoed credentials.
+    /// Map only network failures; cancellation and protocol/storage errors keep
+    /// their control semantics and original types.
+    static func userFacingTransportError(_ error: Error) -> Error {
+        guard let network = error as? URLError, network.code != .cancelled else { return error }
+        let message: String
+        switch network.code {
+        case .timedOut: message = "模型响应超时，请稍后重试。"
+        case .notConnectedToInternet, .dataNotAllowed: message = "网络暂不可用，请恢复连接后重试。"
+        case .networkConnectionLost: message = "与模型服务的连接中断，请稍后重试；已保存内容保留。"
+        case .cannotConnectToHost: message = "无法连接模型服务，请检查服务是否运行及地址是否正确。"
+        case .cannotFindHost, .dnsLookupFailed: message = "找不到模型服务，请检查服务地址和网络连接。"
+        case .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
+             .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .clientCertificateRejected, .clientCertificateRequired:
+            message = "模型服务的安全连接或证书验证失败，请检查服务配置。"
+        default: message = "模型服务连接失败，请检查网络和服务设置后重试。"
+        }
+        return ReadingError.invalid(message)
     }
 }

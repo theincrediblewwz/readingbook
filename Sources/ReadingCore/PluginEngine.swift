@@ -709,7 +709,10 @@ public enum PluginEngine {
             guard let paragraph = selected.first(where: { $0.id == id }),
                   let start = value["startQuote"] as? String, let end = value["endQuote"] as? String else { throw invalid("回执缺少精确首尾锚点。") }
             let receipt = ParagraphReceipt(paragraphID: id, unitID: unit.id, unitHash: paragraph.unitHash, textHash: try identifier(value, key: "textHash"), utf8Start: paragraph.utf8Start, utf8End: paragraph.utf8End, summary: try string(value, key: "summary", maximum: 1200), startQuote: start, endQuote: end, issues: try strings(value, key: "issues", required: true, maximum: 12), createdAt: Date())
-            guard ReadingLedger.matches(receipt, paragraph: paragraph) else { throw invalid("片段回执哈希、范围或首尾原文锚点不匹配：\(id)") }
+            // New submissions copy raw source bytes; legacy stored receipts
+            // retain their original compatibility check in ReadingLedger.matches.
+            guard ReadingLedger.matches(receipt, paragraph: paragraph),
+                  start.utf8.elementsEqual(paragraph.startQuote.utf8), end.utf8.elementsEqual(paragraph.endQuote.utf8) else { throw invalid("片段回执哈希、范围或首尾原文锚点不匹配：\(id)") }
             if let old = records.first(where: { $0.paragraphID == id }) {
                 guard old.summary == receipt.summary, old.startQuote == receipt.startQuote, old.endQuote == receipt.endQuote, old.issues == receipt.issues else { throw invalid("已通过回执不能用重试改写；请保留原核对记录。") }
             } else { records.append(receipt) }

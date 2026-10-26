@@ -8,9 +8,11 @@ private final class FixtureProviderProtocol: URLProtocol {
     static var chunks: [Data] = []
     static var suspendAfterHeaders = false
     static var onStart: (() -> Void)?
+    static var failure: Error?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        if let failure = Self.failure { client?.urlProtocol(self, didFailWithError: failure); return }
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.responseStatus, httpVersion: "HTTP/1.1", headerFields: Self.responseHeaders)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         Self.onStart?()
@@ -42,6 +44,7 @@ final class ProviderTransportTests: XCTestCase {
     override func setUp() {
         FixtureProviderProtocol.responseStatus = 200; FixtureProviderProtocol.responseHeaders = [:]; FixtureProviderProtocol.chunks = []
         FixtureProviderProtocol.suspendAfterHeaders = false; FixtureProviderProtocol.onStart = nil
+        FixtureProviderProtocol.failure = nil
     }
     func testValidBoundedResponseStillDecodes() async throws {
         FixtureProviderProtocol.chunks = [Data(#"{"choices":[{"message":{"role":"assistant","content":"完成"},"finish_reason":"stop"}],"usage":{"total_tokens":5}}"#.utf8)]
@@ -85,5 +88,33 @@ final class ProviderTransportTests: XCTestCase {
         task.cancel()
         do { _ = try await task.value; XCTFail("活动请求取消后不应挂住或成功") }
         catch { XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled) }
+    }
+
+    func testNetworkFailuresUseChineseWithoutEchoingProviderDetails() async {
+        let privateURL = "https://secret-provider.invalid/PRIVATE_KEY_AND_BOOK"
+        FixtureProviderProtocol.failure = URLError(.notConnectedToInternet, userInfo: [
+            NSURLErrorFailingURLStringErrorKey: privateURL, NSLocalizedDescriptionKey: "PRIVATE_KEY_AND_BOOK " + privateURL])
+        do { _ = try await ProviderClient.perform(prepared(), configuration: configuration()); XCTFail("离线不能返回成功") }
+        catch {
+            XCTAssertTrue(error.localizedDescription.contains("网络暂不可用"))
+            XCTAssertFalse(error.localizedDescription.contains("https://"))
+            XCTAssertFalse(error.localizedDescription.contains("PRIVATE_KEY_AND_BOOK"))
+        }
+    }
+
+    func testNetworkMappingPreservesCancellationAndNonNetworkErrors() {
+        for (code, expected) in [(URLError.Code.timedOut, "超时"), (.cannotConnectToHost, "无法连接"),
+                                 (.dnsLookupFailed, "找不到"), (.secureConnectionFailed, "证书"), (.unknown, "连接失败")] {
+            let failure = URLError(code, userInfo: [NSLocalizedDescriptionKey: "PRIVATE_PROVIDER_URL"])
+            let message = ProviderClient.userFacingTransportError(failure).localizedDescription
+            XCTAssertTrue(message.contains(expected)); XCTAssertFalse(message.contains("PRIVATE_PROVIDER_URL"))
+        }
+        XCTAssertTrue(ProviderClient.userFacingTransportError(CancellationError()) is CancellationError)
+        XCTAssertEqual((ProviderClient.userFacingTransportError(URLError(.cancelled)) as? URLError)?.code, .cancelled)
+        let protocolFailure = ReadingError.invalid("模型响应格式无效。")
+        XCTAssertEqual(ProviderClient.userFacingTransportError(protocolFailure).localizedDescription, protocolFailure.localizedDescription)
+        let other = NSError(domain: "NonNetworkFixture", code: 7, userInfo: [NSLocalizedDescriptionKey: "保留未知错误"])
+        let preserved = ProviderClient.userFacingTransportError(other) as NSError
+        XCTAssertEqual(preserved.domain, other.domain); XCTAssertEqual(preserved.code, other.code)
     }
 }

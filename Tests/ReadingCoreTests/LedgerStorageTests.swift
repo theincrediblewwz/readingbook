@@ -3,11 +3,10 @@ import XCTest
 @testable import ReadingCore
 
 final class LedgerStorageTests: XCTestCase {
-    private func fixture() throws -> (URL, URL, BookProject) {
+    private func fixture(_ text: String = "第一段：设 α > 0。\n\n第二段：因此结论成立。\n") throws -> (URL, URL, BookProject) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ReadingBook-LedgerStorage-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         let source = directory.appendingPathComponent("原书.txt")
-        let text = "第一段：设 α > 0。\n\n第二段：因此结论成立。\n"
         try Data(text.utf8).write(to: source)
         let project = BookProject(title: "账本存储", originalName: source.lastPathComponent,
                                   sourceHash: try BookImporter.sha256(Data(text.utf8)),
@@ -56,6 +55,28 @@ final class LedgerStorageTests: XCTestCase {
         XCTAssertEqual(imported.plan?.methodIDs, ["new-method"])
         let loaded = try await repository.loadAll()
         XCTAssertEqual(loaded.count, 2)
+    }
+
+    func testLegacyCanonicallyEquivalentReceiptAnchorsLoadWithoutRewritingBytes() async throws {
+        let (directory, source, original) = try fixture("é条件" + String(repeating: "中文", count: 30) + "é结论。\n")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repository = LibraryRepository(rootURL: directory.appendingPathComponent("library"))
+        var legacy = try withLedger(original)
+        let originalReceipt = try XCTUnwrap(legacy.paragraphReceipts?.first)
+        let start = originalReceipt.startQuote.decomposedStringWithCanonicalMapping
+        let end = originalReceipt.endQuote.decomposedStringWithCanonicalMapping
+        legacy.paragraphReceipts![0].startQuote = start; legacy.paragraphReceipts![0].endQuote = end
+        XCTAssertEqual(start, originalReceipt.startQuote)
+        XCTAssertFalse(start.utf8.elementsEqual(originalReceipt.startQuote.utf8))
+        XCTAssertFalse(end.utf8.elementsEqual(originalReceipt.endQuote.utf8))
+        XCTAssertNoThrow(try ReadingLedger.validateStoredRecords(in: legacy), "旧版本接纳的规范等价回执保留载入兼容。")
+        try await repository.create(legacy, sourceURL: source)
+        let report = try await repository.loadReport()
+        XCTAssertTrue(report.issues.isEmpty)
+        let loaded = try XCTUnwrap(report.projects.first), receipt = try XCTUnwrap(loaded.paragraphReceipts?.first)
+        XCTAssertTrue(receipt.startQuote.utf8.elementsEqual(start.utf8))
+        XCTAssertTrue(receipt.endQuote.utf8.elementsEqual(end.utf8))
+        XCTAssertTrue(loaded.units[0].text.utf8.elementsEqual(original.units[0].text.utf8))
     }
 
     func testSaveRejectsBrokenLedgerWithoutReplacingStoredMetadata() async throws {

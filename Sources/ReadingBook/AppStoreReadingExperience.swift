@@ -111,7 +111,8 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
             }
             var literalBytes: [Data] = []
             for unit in units {
-                guard !Task.isCancelled else { return nil }; literalBytes.append(Data(unit.text.utf8))
+                guard !Task.isCancelled else { return nil }
+                literalBytes.append(Data(unit.text.utf8)); literalBytes.append(Data(unit.chapter.utf8))
             }
             for object in objects {
                 for name in object.names {
@@ -449,7 +450,7 @@ private let pageEvidenceSignposter = OSSignposter(subsystem: "org.readingbook.ap
             } else if ids.contains(unit.id) { currentUnits.append(unit) }
         }
         return currentUnits.count == snapshot.input.units.count && zip(snapshot.input.units, currentUnits).allSatisfy {
-            $0.id == $1.id && $0.page == $1.page && $0.text.utf8.elementsEqual($1.text.utf8) &&
+            $0.id == $1.id && $0.page == $1.page && $0.text.utf8.elementsEqual($1.text.utf8) && $0.chapter.utf8.elementsEqual($1.chapter.utf8) &&
                 snapshot.input.markdownUnitIDs.contains($1.id) == (ReadingSentenceAnchors.syntax(for: $1, in: book) == .markdown)
         }
     }

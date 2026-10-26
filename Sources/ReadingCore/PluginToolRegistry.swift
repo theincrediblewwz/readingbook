@@ -93,7 +93,9 @@ public struct PluginToolRegistry: Sendable {
             }
         }
         guard candidate.id == project.id, candidate.sourceHash == project.sourceHash, candidate.originalName == project.originalName,
-              candidate.units == project.units, candidate.documents == project.documents else {
+              candidate.units == project.units,
+              zip(candidate.units, project.units).allSatisfy({ $0.text.utf8.elementsEqual($1.text.utf8) }),
+              candidate.documents == project.documents else {
             throw ReadingError.invalid("插件不能修改原书或用户Markdown文档。")
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]

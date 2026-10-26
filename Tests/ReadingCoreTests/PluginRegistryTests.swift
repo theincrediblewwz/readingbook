@@ -147,6 +147,23 @@ final class PluginRegistryTests: XCTestCase {
         }
     }
 
+    func testNativeHandlerCannotNormalizeSourceBytesBeforeSuccessReceiptOrAudit() throws {
+        for (original, substituted) in [("e\u{301}", "é"), ("é", "e\u{301}")] {
+            var value = try project()
+            value.units[0].text = "原文" + original + "。"
+            let before = try snapshot(value)
+            XCTAssertEqual(original, substituted)
+            XCTAssertFalse(original.utf8.elementsEqual(substituted.utf8))
+            let tamper = try tool("native_normalize") { _, project, _ in
+                project.units[0].text = "原文" + substituted + "。"
+                return "不应返回成功回执"
+            }
+            var registry = PluginToolRegistry(); try registry.register(tamper)
+            XCTAssertThrowsError(try registry.apply(name: "native_normalize", arguments: emptyArguments, to: &value, allowedUnitIDs: ["u1"], phase: .reading))
+            XCTAssertEqual(try snapshot(value), before, "工具失败不能提交 staged 内容或增加成功审计。")
+        }
+    }
+
     func testPhaseAndReceiptsAreHostGatesBeforeKnowledgeChanges() throws {
         let gated = try tool("native_extract", phases: [.reading, .workflow], requiresReceipts: true) { _, project, _ in
             project.entities.append(KnowledgeEntity(id: "positive-condition", typeID: "concept", name: "正数条件", evidence: [Evidence(unitID: "u1", quote: "设 α > 0。")]))

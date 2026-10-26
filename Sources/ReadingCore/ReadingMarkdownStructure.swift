@@ -13,6 +13,7 @@ enum ReadingMarkdownStructure {
         let start: Int
         let contentEnd: Int
         let end: Int
+        let utf8Length: Int
     }
     private struct Group {
         var first: Int
@@ -47,15 +48,49 @@ enum ReadingMarkdownStructure {
     static func blocks(in text: String, displayMath: ([Int]) -> [NSRange]) -> [Block]? {
         guard !Task.isCancelled else { return nil }
         let source = text as NSString
-        let lines = sourceLines(source)
+        let lines = sourceLines(text)
         guard !lines.isEmpty, !Task.isCancelled else { return nil }
         #if os(macOS)
         var options = AttributedString.MarkdownParsingOptions()
         options.interpretedSyntax = .full
         options.failurePolicy = .throwError
         options.appliesSourcePositionAttributes = true
-        guard let parsed = try? AttributedString(markdown: text, options: options), !Task.isCancelled else { return nil }
-        var groups: [Int: Group] = [:], invalidGroups = Set<Int>()
+        guard let original = try? AttributedString(markdown: text, options: options), !Task.isCancelled else { return nil }
+        var parsed = original, codeGroups = Set<Int>(), invalidGroups = Set<Int>()
+        for run in original.runs {
+            guard !Task.isCancelled else { return nil }
+            guard let intent = run.presentationIntent, let leaf = Self.leaf(in: intent) else { continue }
+            if run.inlinePresentationIntent?.contains(.inlineHTML) == true || run.inlinePresentationIntent?.contains(.blockHTML) == true {
+                invalidGroups.insert(leaf.identity)
+            }
+            if run.inlinePresentationIntent?.contains(.code) == true {
+                switch leaf.kind {
+                case .paragraph, .header: codeGroups.insert(leaf.identity)
+                default: break
+                }
+            }
+        }
+        if !codeGroups.isEmpty {
+            // Foundation currently flattens the source positions of multiline
+            // inline code and the text following it onto its opening line.
+            // Even Range(sourcePosition, in:) then addresses the wrong bytes.
+            // A disposable, byte-length-preserving shadow removes only inline
+            // tick syntax. Block structure must be identical before its line
+            // positions are allowed to map back to the untouched source.
+            let shadow = structureShadow(source, lines: lines)
+            if !Task.isCancelled, let shadow,
+               let candidate = try? AttributedString(markdown: shadow, options: options),
+               let before = signature(of: original, lineCount: lines.count),
+               let after = signature(of: candidate, lineCount: lines.count), before == after {
+                parsed = candidate
+            } else {
+                // An uncertain shadow does not invalidate unrelated ordinary
+                // paragraphs. Only its original code-bearing blocks lose
+                // automatic sentence affordances; saved data stays intact.
+                invalidGroups.formUnion(codeGroups)
+            }
+        }
+        var groups: [Int: Group] = [:]
         var owners: [ReadingRangeIndex<[Int]>.Entry] = [], codeLines: [NSRange] = [], unknownLines: [NSRange] = []
         for run in parsed.runs {
             guard !Task.isCancelled else { return nil }
@@ -64,19 +99,16 @@ enum ReadingMarkdownStructure {
             let position = run.markdownSourcePosition
             let mappedLines: NSRange?
             if let position, position.startLine > 0, position.endLine >= position.startLine,
-               position.endLine <= lines.count, position.startColumn > 0, position.endColumn > 0 {
+               position.endLine <= lines.count, position.startColumn > 0, position.endColumn > 0,
+               position.startColumn <= lines[position.startLine - 1].utf8Length,
+               position.endColumn <= lines[position.endLine - 1].utf8Length {
                 mappedLines = NSRange(location: position.startLine - 1, length: position.endLine - position.startLine + 1)
             } else { mappedLines = nil }
             guard let intent = run.presentationIntent else {
                 guard let mappedLines else { return nil }
                 unknownLines.append(mappedLines); continue
             }
-            let leaf = intent.components.first { component in
-                switch component.kind {
-                case .paragraph, .header, .codeBlock, .tableCell: return true
-                default: return false
-                }
-            }
+            let leaf = Self.leaf(in: intent)
             guard let leaf else {
                 guard let mappedLines else { return nil }
                 unknownLines.append(mappedLines); continue
@@ -110,9 +142,6 @@ enum ReadingMarkdownStructure {
                 // map cannot honestly claim their individual source ranges.
                 unknownLines.append(lineRange)
                 continue
-            }
-            if run.inlinePresentationIntent?.contains(.inlineHTML) == true || run.inlinePresentationIntent?.contains(.blockHTML) == true {
-                invalidGroups.insert(leaf.identity)
             }
             if var existing = groups[leaf.identity] {
                 existing.first = min(existing.first, first); existing.last = max(existing.last, last)
@@ -175,18 +204,80 @@ enum ReadingMarkdownStructure {
         #endif
     }
 
-    private static func sourceLines(_ text: NSString) -> [Line] {
-        var result: [Line] = [], start = 0, cursor = 0
-        while cursor < text.length {
-            if Task.isCancelled { return [] }
-            let value = text.character(at: cursor)
-            if value == 10 || value == 13 {
-                let contentEnd = cursor
-                cursor += value == 13 && cursor + 1 < text.length && text.character(at: cursor + 1) == 10 ? 2 : 1
-                result.append(Line(start: start, contentEnd: contentEnd, end: cursor)); start = cursor
-            } else { cursor += 1 }
+    #if os(macOS)
+    private struct SignatureBlock: Equatable {
+        var first: Int
+        var blockHTML: Bool
+    }
+
+    private static func leaf(in intent: PresentationIntent) -> PresentationIntent.IntentType? {
+        intent.components.first { component in
+            switch component.kind {
+            case .paragraph, .header, .codeBlock, .tableCell: return true
+            default: return false
+            }
         }
-        result.append(Line(start: start, contentEnd: text.length, end: text.length))
+    }
+
+    /// Full intent values include every container's kind, identity and ordinal.
+    /// Comparing their first source lines proves a one-to-one block skeleton,
+    /// rather than guessing a paragraph end from the next visible paragraph.
+    private static func signature(of value: AttributedString, lineCount: Int) -> [PresentationIntent: SignatureBlock]? {
+        var result: [PresentationIntent: SignatureBlock] = [:]
+        for run in value.runs {
+            guard !Task.isCancelled else { return nil }
+            if value.characters[run.range].allSatisfy(\.isWhitespace) { continue }
+            guard let intent = run.presentationIntent, let position = run.markdownSourcePosition,
+                  position.startLine > 0, position.startLine <= lineCount else { return nil }
+            let html = run.inlinePresentationIntent?.contains(.blockHTML) == true
+            if var block = result[intent] {
+                block.first = min(block.first, position.startLine); block.blockHTML = block.blockHTML || html
+                result[intent] = block
+            } else { result[intent] = SignatureBlock(first: position.startLine, blockHTML: html) }
+        }
+        return result
+    }
+
+    private static func structureShadow(_ source: NSString, lines: [Line]) -> String? {
+        var result = String(); result.reserveCapacity(source.length)
+        for line in lines {
+            guard !Task.isCancelled else { return nil }
+            let content = source.substring(with: NSRange(location: line.start, length: line.contentEnd - line.start))
+            var preservesFence = false
+            if let first = content.firstIndex(where: { $0 == "`" || $0 == "~" }), isContainerPrefix(String(content[..<first])) {
+                let marker = content[first], end = content[first...].prefix(while: { $0 == marker }).endIndex
+                let width = content[first..<end].count
+                // Backtick fence info cannot itself contain a backtick.
+                // Preserve tilde fence info too, including its language hint.
+                preservesFence = width >= 3 && (marker == "~" || !content[end...].contains("`"))
+            }
+            result += preservesFence ? content : content.replacingOccurrences(of: "`", with: "x", options: .literal)
+            result += source.substring(with: NSRange(location: line.contentEnd, length: line.end - line.contentEnd))
+        }
+        return result
+    }
+    #endif
+
+    private static func sourceLines(_ text: String) -> [Line] {
+        // One sequential UTF8 pass gives both original UTF16 offsets and byte
+        // columns. No per-run seek from the beginning of a Swift String.
+        let bytes = Array(text.utf8)
+        var result: [Line] = [], start = 0, byteStart = 0, cursor = 0, byteCursor = 0
+        while byteCursor < bytes.count {
+            if Task.isCancelled { return [] }
+            let value = bytes[byteCursor]
+            if value == 10 || value == 13 {
+                let contentEnd = cursor, byteLength = byteCursor - byteStart
+                let width = value == 13 && byteCursor + 1 < bytes.count && bytes[byteCursor + 1] == 10 ? 2 : 1
+                cursor += width; byteCursor += width
+                result.append(Line(start: start, contentEnd: contentEnd, end: cursor, utf8Length: byteLength))
+                start = cursor; byteStart = byteCursor
+            } else {
+                if value < 0x80 || value >= 0xc0 { cursor += value >= 0xf0 ? 2 : 1 }
+                byteCursor += 1
+            }
+        }
+        result.append(Line(start: start, contentEnd: cursor, end: cursor, utf8Length: byteCursor - byteStart))
         return result
     }
 
