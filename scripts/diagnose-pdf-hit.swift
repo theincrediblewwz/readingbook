@@ -200,8 +200,8 @@ struct PDFHitProbe {
         print("gap selection method=\(method) preparedContains=\(prepared.contains(gap))")
         pointDump(gap, page: page, text: text, label: "actual no-character gap")
         let directory = try productionDirectory(on: page, text: text)
-        let line = try require(directory.lines(at: gap).first, "production directory actual glyph gap")
-        guard line.intersects(full), NativePDFTextLine.firstHit(at: gap, candidates: [.init(id: "sentence", range: full)], geometry: {
+        let physical = try require(directory.lines(at: gap).first, "production directory actual glyph gap")
+        guard physical.intersects(full), NativePDFTextLine.firstHit(at: gap, candidates: [.init(id: "sentence", range: full)], geometry: {
             NativePDFTextLine.rectangles(for: $0.range, on: page)
         }) != nil else { throw FixtureFailure(message: "production actual glyph gap hit") }
         print("PASS production directory actual no-character gap \(gap)")
