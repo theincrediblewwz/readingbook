@@ -344,7 +344,7 @@ struct PDFReaderView: NSViewRepresentable {
     func setInteractionBlocked(_ blocked: Bool) {
         guard interactionBlocked != blocked else { return }
         interactionBlocked = blocked; pdfView.interactionBlocked = blocked
-        if blocked { resetPageGesture(); invalidateSourcePress(); cancelSourceQuotePreparation() }
+        if blocked { awaitingSourceFocusProof = false; resetPageGesture(); invalidateSourcePress(); cancelSourceQuotePreparation() }
         else { scheduleSourceHoverRefresh() }
         guard blocked, let owner = window, let responder = owner.firstResponder else { return }
         // Only resign a PDF-owned responder. A management card may already
@@ -1374,7 +1374,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     @objc private func selectionChanged(_ notification: Notification) {
         refreshControls()
-        if pdfView.currentSelection?.pages.isEmpty == false { cancelSourceQuotePreparation(); clearQuoteFocusHighlight() }
+        if pdfView.currentSelection?.pages.isEmpty == false { awaitingSourceFocusProof = false; cancelSourceQuotePreparation(); clearQuoteFocusHighlight() }
         else { scheduleSourceHoverRefresh() }
         sourceSelectionObservation &+= 1
         let observation = sourceSelectionObservation, generation = documentGeneration
