@@ -10,10 +10,6 @@ on:
         options:
           - macos-26
           - macos-26-intel
-      pdf_probe:
-        description: Run only the temporary synthetic PDFKit hit probe
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -37,19 +33,10 @@ jobs:
           xcodebuild -version
           swift --version
       - name: Core data and plugin checks
-        if: ${{ !inputs.pdf_probe }}
         run: swift test --scratch-path .build/tests
-      - name: Synthetic PDFKit hit probe
-        if: ${{ inputs.pdf_probe }}
-        timeout-minutes: 3
-        run: |
-          xcrun swiftc -parse-as-library Sources/ReadingCore/ReadingGeometryBands.swift Sources/ReadingCore/NativePDFTextLine.swift scripts/diagnose-pdf-hit.swift -o "$RUNNER_TEMP/pdf-hit-probe"
-          "$RUNNER_TEMP/pdf-hit-probe"
       - name: Build universal app and package
-        if: ${{ !inputs.pdf_probe }}
         run: bash scripts/build-macos.sh
       - uses: actions/upload-artifact@v7
-        if: ${{ !inputs.pdf_probe }}
         with:
           name: ReadingBook-macos-universal
           path: |
