@@ -1,0 +1,23 @@
+name: Probe native PDF fixture
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-26-intel
+    timeout-minutes: 5
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Inspect cold PDF round trips
+        run: |
+          swiftc -swift-version 5 -parse-as-library scripts/probe-native-worker-fixture.swift -o "$RUNNER_TEMP/native-fixture-probe"
+          for lifetime in cold held; do
+            for mode in direct-data raw-file plain crop rotation crop-rotation password combined; do
+              "$RUNNER_TEMP/native-fixture-probe" "$mode" "$lifetime"
+            done
+          done

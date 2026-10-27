@@ -68,7 +68,12 @@ final class NativePDFPreparationWorkerTests: XCTestCase {
         let nativePage = try XCTUnwrap(reference.page(at: 0)), text = try XCTUnwrap(nativePage.string)
         var ranges: [String: NSRange] = [:], geometry: [String: [CGRect]] = [:]
         for (index, quote) in quotes.enumerated() {
-            let range = NSRange(try XCTUnwrap(text.range(of: quote, options: .literal)), in: text)
+            let scalars = text.unicodeScalars.map { String(format: "U+%04X", $0.value) }.joined(separator: " ")
+            let expectedScalars = quote.unicodeScalars.map { String(format: "U+%04X", $0.value) }.joined(separator: " ")
+            let diagnostic = "Synthetic fixture quote=\(String(reflecting: quote)) scalars=\(expectedScalars); " +
+                "written PDF text=\(String(reflecting: text)) scalars=\(scalars); " +
+                "crop=\(nativePage.bounds(for: .cropBox)) rotation=\(nativePage.rotation) nativeCount=\(nativePage.numberOfCharacters) UTF16=\((text as NSString).length)"
+            let range = NSRange(try XCTUnwrap(text.range(of: quote, options: .literal), diagnostic), in: text)
             ranges[String(index)] = range
             geometry[String(index)] = NativePDFTextLine.rectangles(for: range, on: nativePage)
             XCTAssertFalse(geometry[String(index), default: []].isEmpty)
