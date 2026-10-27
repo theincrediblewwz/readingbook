@@ -32,11 +32,16 @@ jobs:
         run: |
           xcodebuild -version
           swift --version
-      - name: Inspect cold PDF round trips
-        run: |
-          swiftc -swift-version 5 -parse-as-library scripts/probe-native-worker-fixture.swift -o "$RUNNER_TEMP/native-fixture-probe"
-          for lifetime in cold held; do
-            for mode in direct-data raw-file plain crop rotation crop-rotation password combined; do
-              "$RUNNER_TEMP/native-fixture-probe" "$mode" "$lifetime"
-            done
-          done
+      - name: Core data and plugin checks
+        run: swift test --scratch-path .build/tests
+      - name: Build universal app and package
+        run: bash scripts/build-macos.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ReadingBook-macos-universal
+          path: |
+            dist/ReadingBook-macos-universal.zip
+            dist/ReadingBook-macos-universal.zip.sha256
+            dist/build-info.txt
+          if-no-files-found: error
+          retention-days: 14

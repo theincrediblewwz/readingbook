@@ -30,9 +30,10 @@ final class NativePDFPreparationWorkerTests: XCTestCase {
         var values: [ReadingPreparationProgress] { lock.lock(); defer { lock.unlock() }; return storage }
     }
 
-    @MainActor private func attributed(_ text: String, size: CGFloat = 24, kerning: CGFloat = 0) -> NSAttributedString {
+    @MainActor private func attributed(_ text: String, size: CGFloat = 24, kerning: CGFloat = 0,
+                                      fontName: String = "PingFangSC-Regular") -> NSAttributedString {
         NSAttributedString(string: text, attributes: [
-            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("PingFangSC-Regular" as CFString, size, nil),
+            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(fontName as CFString, size, nil),
             NSAttributedString.Key(kCTKernAttributeName as String): kerning
         ])
     }
@@ -46,22 +47,32 @@ final class NativePDFPreparationWorkerTests: XCTestCase {
         let output = try XCTUnwrap(CGDataConsumer(data: data as CFMutableData))
         var media = CGRect(x: 0, y: 0, width: 600, height: 600)
         let renderer = try XCTUnwrap(CGContext(consumer: output, mediaBox: &media, nil))
+        let rewritesPDF = rotation != 0 || password != nil
+        let fontName = rewritesPDF ? "Helvetica" : "PingFangSC-Regular"
         renderer.beginPDFPage(nil); renderer.textMatrix = .identity
         for (index, quote) in quotes.enumerated() {
             let value: NSAttributedString
             if index == mixedLine {
-                let mixed = NSMutableAttributedString(attributedString: attributed(String(quote.prefix(1)), size: 64))
-                mixed.append(attributed(String(quote.dropFirst()), size: 18, kerning: 8)); value = mixed
-            } else { value = attributed(quote) }
+                let mixed = NSMutableAttributedString(attributedString: attributed(String(quote.prefix(1)), size: 64, fontName: fontName))
+                mixed.append(attributed(String(quote.dropFirst()), size: 18, kerning: 8, fontName: fontName)); value = mixed
+            } else { value = attributed(quote, fontName: fontName) }
             renderer.textPosition = CGPoint(x: 32, y: 510 - CGFloat(index) * 120)
             CTLineDraw(CTLineCreateWithAttributedString(value as CFAttributedString), renderer)
         }
         renderer.endPDFPage(); renderer.closePDF()
-        let document = try XCTUnwrap(PDFDocument(data: data as Data)), page = try XCTUnwrap(document.page(at: 0))
-        page.setBounds(CGRect(x: 10, y: 15, width: 580, height: 570), for: .cropBox); page.rotation = rotation
-        if let password {
-            XCTAssertTrue(document.write(to: url, withOptions: [.ownerPasswordOption: "fixture-owner-only", .userPasswordOption: password]))
-        } else { XCTAssertTrue(document.write(to: url)) }
+        if rewritesPDF {
+            // PDFKit's writer changes this CoreText fixture's CJK/emoji mapping
+            // on the tested SDK. Exercise crop/rotation/encryption separately
+            // with ASCII, without normalizing the source-byte proof below.
+            XCTAssertTrue(quotes.allSatisfy { $0.unicodeScalars.allSatisfy { $0.isASCII } })
+            let document = try XCTUnwrap(PDFDocument(data: data as Data)), page = try XCTUnwrap(document.page(at: 0))
+            page.setBounds(CGRect(x: 10, y: 15, width: 580, height: 570), for: .cropBox); page.rotation = rotation
+            if let password {
+                XCTAssertTrue(document.write(to: url, withOptions: [.ownerPasswordOption: "fixture-owner-only", .userPasswordOption: password]))
+            } else { XCTAssertTrue(document.write(to: url)) }
+        } else {
+            try (data as Data).write(to: url)
+        }
         // This is a separate document from the worker's future file-backed copy.
         let reference = try XCTUnwrap(PDFDocument(url: url))
         if let password { XCTAssertTrue(reference.unlock(withPassword: password)) }
@@ -99,7 +110,7 @@ final class NativePDFPreparationWorkerTests: XCTestCase {
     }
 
     @MainActor func testOwnedPreparationPreservesEmojiLastLineGlyphGapAndNativeGeometry() async throws {
-        let source = try fixture(["首行😀正文。", "高小字间距句。", "页末最后一句。"], mixedLine: 1, rotation: 90)
+        let source = try fixture(["首行😀正文。", "高小字间距句。", "页末最后一句。"], mixedLine: 1)
         defer { try? FileManager.default.removeItem(at: source.directory) }
         let worker = NativePDFPreparationWorker(), progress = ProgressLog()
         let prepared = try await worker.preparePage(session: source.session(), page: 1, onProgress: { progress.append($0) })
@@ -135,15 +146,25 @@ final class NativePDFPreparationWorkerTests: XCTestCase {
     }
 
     @MainActor func testIndependentWorkersAndSequentialSessionsNeverExchangePages() async throws {
-        let first = try fixture(["第一本文字😀。"]), second = try fixture(["第二本不同正文。"], rotation: 180)
+        let first = try fixture(["第一本文字😀。"]), second = try fixture(["Independent second source."], rotation: 90)
         defer { try? FileManager.default.removeItem(at: first.directory); try? FileManager.default.removeItem(at: second.directory) }
         let left = NativePDFPreparationWorker(), right = NativePDFPreparationWorker()
         async let leftPage = left.preparePage(session: first.session(), page: 1)
         async let rightPage = right.preparePage(session: second.session(), page: 1)
         let (a, b) = try await (leftPage, rightPage)
         XCTAssertTrue(a.text.utf8.elementsEqual(first.text.utf8)); XCTAssertTrue(b.text.utf8.elementsEqual(second.text.utf8))
+        XCTAssertEqual(b.crop, CGRect(x: 10, y: 15, width: 580, height: 570)); XCTAssertEqual(b.rotation, 90)
+        let secondRange = try XCTUnwrap(second.ranges["0"]), secondGeometry = try XCTUnwrap(second.geometry["0"])
+        for rectangle in secondGeometry {
+            let point = CGPoint(x: rectangle.midX, y: rectangle.midY)
+            XCTAssertTrue(b.directory.lines(at: point).contains { $0.intersects(secondRange) })
+        }
+        let preparedGeometry = try await right.prepareGeometry(session: second.session(), page: 1,
+            requests: [.init(id: "rotated", range: secondRange)])
+        XCTAssertEqual(preparedGeometry["rotated"], secondGeometry)
         let switched = try await left.preparePage(session: second.session(), page: 1)
-        XCTAssertTrue(switched.text.utf8.elementsEqual(second.text.utf8)); XCTAssertEqual(switched.rotation, 180)
+        XCTAssertTrue(switched.text.utf8.elementsEqual(second.text.utf8)); XCTAssertEqual(switched.rotation, 90)
+        XCTAssertEqual(switched.crop, second.crop)
         let returned = try await left.preparePage(session: first.session(2), page: 1)
         XCTAssertTrue(returned.text.utf8.elementsEqual(first.text.utf8))
         let wrongHash = NativePDFPreparationWorker.Session(url: first.url, sourceHash: second.hash, generation: 2)
@@ -167,11 +188,12 @@ final class NativePDFPreparationWorkerTests: XCTestCase {
     }
 
     @MainActor func testPasswordIdentityIsNotReusedOrWrittenToSidecars() async throws {
-        let password = "native-worker-fixture-only-7c91", source = try fixture(["加密正文。"], password: password)
+        let password = "native-worker-fixture-only-7c91", source = try fixture(["Encrypted native source."], password: password)
         defer { try? FileManager.default.removeItem(at: source.directory) }
         let before = try Data(contentsOf: source.url), worker = NativePDFPreparationWorker()
         let opened = try await worker.preparePage(session: source.session(password: password), page: 1)
-        XCTAssertTrue(opened.text.contains("加密正文"))
+        XCTAssertTrue(opened.text.utf8.elementsEqual(source.text.utf8))
+        XCTAssertTrue(opened.text.contains("Encrypted native source."))
         do { _ = try await worker.preparePage(session: source.session(password: "wrong"), page: 1); XCTFail("A changed password cannot reuse an unlocked document.") }
         catch { XCTAssertEqual(error as? PDFPasswordError, .wrongPassword); XCTAssertFalse(error.localizedDescription.contains(password)) }
         do { _ = try await worker.preparePage(session: source.session(), page: 1); XCTFail("A missing password cannot reuse an unlocked document.") }
