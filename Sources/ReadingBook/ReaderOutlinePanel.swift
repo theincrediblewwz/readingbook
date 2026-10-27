@@ -5,6 +5,7 @@ import ReadingCore
 /// a change to every view subscribed to the reading workspace's AppStore.
 struct ReaderOutlinePanel: View {
     @EnvironmentObject private var store: AppStore
+    @Environment(\.isReaderPanelActive) private var panelActive
     @Binding var bookmarksOnly: Bool
     @State private var query = ""
     @State private var results: [SourceUnit] = []
@@ -20,6 +21,8 @@ struct ReaderOutlinePanel: View {
     @State private var outlineRetry = 0
     @State private var sourceRefreshTask: Task<Void, Never>?
     @State private var sourceRefreshSerial = 0
+    @State private var outlineProgressID: UUID?
+    @State private var outlineProgressOwner: String?
 
     private struct SearchRequest: Hashable, Sendable {
         let bookID: String?
@@ -32,15 +35,23 @@ struct ReaderOutlinePanel: View {
                       revision: sourceRevision, query: query)
     }
     private var visibleUnits: [SourceUnit] {
-        guard resultRequest == request else { return [] }
+        guard panelActive, resultRequest == request else { return [] }
         return bookmarksOnly ? results.filter { store.book?.bookmarks.contains($0.id) == true } : results
     }
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     private var outlineOwner: String {
         [store.libraryRootURL.path, store.bookID ?? "", store.book?.sourceHash ?? "", store.sourceFileURL?.path ?? "", String(sourceRevision), String(outlineRetry), store.pdfUnlockedBookIDs.contains(store.bookID ?? "") ? "unlocked" : "locked"].joined(separator: "|")
     }
+    private var activeSearchRequest: SearchRequest? {
+        panelActive && (!isPDF || bookmarksOnly || !query.isEmpty) ? request : nil
+    }
+    private var activeOutlineOwner: String? { panelActive ? outlineOwner : nil }
     private var outlineEntries: [BookOutlineEntry] {
-        if isPDF { return outline.original.isEmpty ? outline.generated?.entries ?? [] : outline.original }
+        guard panelActive else { return [] }
+        if isPDF {
+            guard outline.isCurrent(owner: outlineOwner) else { return [] }
+            return outline.original.isEmpty ? outline.generated?.entries ?? [] : outline.original
+        }
         var seen = Set<String>()
         return sourceUnits.compactMap { unit in
             guard seen.insert(unit.chapter).inserted else { return nil }
@@ -66,6 +77,7 @@ struct ReaderOutlinePanel: View {
         return result
     }
     private var selectedOutlineID: String? {
+        guard panelActive else { return nil }
         let entries = outlineEntries
         if let project = store.book, let position = store.chapterReadingAnchor(in: project), let offset = position.utf16Location {
             if let match = entries.last(where: { entry in
@@ -135,19 +147,46 @@ struct ReaderOutlinePanel: View {
             // Library reloads can replace units without incrementing the
             // project's edit revision. Observe source publication, not typing.
             .onReceive(store.$books) { books in
+                guard panelActive else { return }
                 refreshSource(from: books)
-                outline.refreshDerived(from: books.first { $0.id == store.bookID })
+                if outline.isCurrent(owner: outlineOwner) { outline.refreshDerived(from: books.first { $0.id == store.bookID }) }
             }
             .onChange(of: store.bookID) { _, _ in refreshSource(from: store.books) }
-            .task(id: currentRequest) { await search(currentRequest) }
-            .task(id: outlineOwner) {
-                collapsed = []
+            .onChange(of: panelActive) { _, active in
+                if active { refreshSource(from: store.books) }
+                else { suspendPreparation() }
+            }
+            .task(id: activeSearchRequest) {
+                guard !Task.isCancelled, let input = activeSearchRequest else { return }
+                await search(input)
+            }
+            .task(id: activeOutlineOwner) {
+                guard !Task.isCancelled, let owner = activeOutlineOwner, panelActive else { return }
+                if outline.isCurrent(owner: owner), outline.phase == .ready {
+                    outline.refreshDerived(from: store.book)
+                    return
+                }
+                if !isPDF {
+                    collapsed = []
+                    await outline.load(owner: owner, project: nil, url: nil, store: store)
+                    return
+                }
+                let progressID = UUID(), progressOwner = store.libraryRootURL.path + "|" + (store.bookID ?? "")
+                finishOutlineProgress()
+                outlineProgressID = progressID; outlineProgressOwner = progressOwner
+                store.readingPreparationState.apply(.started(progressID, ReadingPreparationProgress(phase: .outline)), lane: "outline", owner: progressOwner)
+                defer {
+                    if outlineProgressID == progressID { finishOutlineProgress() }
+                }
+                if !outline.isCurrent(owner: owner) { collapsed = [] }
                 // Also reset/cancel the PDF-owned task on a switch to text or
                 // EPUB. A guard-return here leaves the old request alive.
-                await outline.load(owner: outlineOwner, project: isPDF ? store.book : nil,
+                await outline.load(owner: owner, project: isPDF ? store.book : nil,
                     url: isPDF ? store.sourceFileURL : nil, store: store)
+                guard !Task.isCancelled, panelActive, activeOutlineOwner == owner else { return }
+                outline.refreshDerived(from: store.book)
             }
-            .onDisappear { outline.cancel(); sourceRefreshTask?.cancel() }
+            .onDisappear(perform: suspendPreparation)
     }
 
     @ViewBuilder private var directoryHeader: some View {
@@ -232,6 +271,7 @@ struct ReaderOutlinePanel: View {
     }
 
     private func refreshSource(from books: [BookProject]) {
+        guard panelActive else { return }
         let project = books.first { $0.id == store.bookID }
         let units = project?.units ?? []
         sourceRefreshTask?.cancel(); sourceRefreshSerial &+= 1
@@ -268,11 +308,12 @@ struct ReaderOutlinePanel: View {
     }
 
     @MainActor private func search(_ input: SearchRequest) async {
-        guard input == request, snapshotBookID == input.bookID, snapshotSourceHash == input.sourceHash else { return }
+        guard panelActive, !Task.isCancelled, input == request, snapshotBookID == input.bookID, snapshotSourceHash == input.sourceHash else { return }
+        if resultRequest == input { return }
         let units = sourceUnits
         resultRequest = nil; results = []; searching = !input.query.isEmpty
         guard !input.query.isEmpty else {
-            guard !Task.isCancelled, input == request else { return }
+            guard panelActive, !Task.isCancelled, input == request else { return }
             results = units; resultRequest = input; searching = false; return
         }
         do {
@@ -290,12 +331,22 @@ struct ReaderOutlinePanel: View {
                 return matches
             }
             let found = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
-            guard !Task.isCancelled, input == request else { return }
+            guard panelActive, !Task.isCancelled, input == request else { return }
             results = found; resultRequest = input; searching = false
         } catch {
             // A replacement task owns the current input and its result state.
-            if !Task.isCancelled, input == request { resultRequest = input; searching = false }
+            if panelActive, !Task.isCancelled, input == request { resultRequest = input; searching = false }
         }
+    }
+    private func finishOutlineProgress() {
+        guard let id = outlineProgressID, let owner = outlineProgressOwner else { return }
+        outlineProgressID = nil; outlineProgressOwner = nil
+        guard owner == store.libraryRootURL.path + "|" + (store.bookID ?? "") else { return }
+        store.readingPreparationState.apply(.finished(id), lane: "outline", owner: owner)
+    }
+    private func suspendPreparation() {
+        outline.cancel(); sourceRefreshTask?.cancel(); sourceRefreshTask = nil; sourceRefreshSerial &+= 1
+        searching = false; finishOutlineProgress()
     }
 }
 

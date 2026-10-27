@@ -177,6 +177,7 @@ struct SentenceTranslationCard: View {
 
 private struct SentenceTranslationCardBody: View {
     @EnvironmentObject private var store: AppStore
+    @Environment(\.isReaderPanelActive) private var panelActive
     @ObservedObject var state: SentenceTranslationState
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("reading.hoverTranslation") private var automaticHoverTranslation = false
@@ -190,7 +191,7 @@ private struct SentenceTranslationCardBody: View {
     let automaticHoverActive: Bool
     private var key: String { state.key(anchor: anchor, store: store) }
     private var canAutomaticallyTranslate: Bool {
-        automaticHoverTranslation && automaticHoverActive && automaticHoverState?.automaticTranslationActive == true &&
+        panelActive && automaticHoverTranslation && automaticHoverActive && automaticHoverState?.automaticTranslationActive == true &&
             automaticHoverState?.content?.anchor.id == anchor.id && scenePhase == .active && !store.storageState.working &&
             !store.settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -238,7 +239,10 @@ private struct SentenceTranslationCardBody: View {
             }
         }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
             .readingTextContext(.companion)
-            .task(id: key + "|revision:" + String(store.projectRevision)) { await state.refresh(anchor: anchor, store: store) }
+            .task(id: panelActive ? key + "|revision:" + String(store.projectRevision) : "inactive") {
+                guard panelActive else { return }
+                await state.refresh(anchor: anchor, store: store)
+            }
             .task(id: AutomaticIntent(key: key, active: canAutomaticallyTranslate)) {
                 let owner = key
                 if canAutomaticallyTranslate, state.entries[owner]?.markdown != nil {

@@ -10,6 +10,7 @@ import ReadingCore
     @Published var bookID: String? {
         didSet {
             if oldValue != bookID {
+                readingPreparationState.reset()
                 readerChapterAnchor = nil
                 teacherBackground.cancelAll(); sentenceTranslation.cancelAll()
                 queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []; queryComposerDraft.text = ""
@@ -41,11 +42,15 @@ import ReadingCore
     let queryComposerDraft = QueryComposerDraft()
     let teacherBackground = TeacherBackgroundState()
     let sentenceTranslation = SentenceTranslationState()
+    let readingPreparationState = ReadingPreparationState()
     @Published var readingCompanionTab = "companion"
     @Published var readingCompanionVisible = false
     @Published var readingCompanionSection = "context"
     @Published var readingSourceMode = "original" { didSet { updateWorkspaceMemory { $0.readingSourceMode = readingSourceMode } } }
-    @Published var readingExperienceIndex = ReadingExperienceState()
+    private(set) var readingExperienceIndexRevision: UInt64 = 0
+    @Published var readingExperienceIndex = ReadingExperienceState() {
+        didSet { readingExperienceIndexRevision &+= 1 }
+    }
     @Published var readingScopeCurrent = false
     @Published var lastQuestionContext = ""
     @Published var queryScope: ReadingQueryScope = .page
@@ -146,7 +151,7 @@ import ReadingCore
     }
     @Published var catalogOperations = 0
     @Published var libraryRootURL: URL {
-        didSet { if oldValue != libraryRootURL { teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); queryTask?.cancel() } }
+        didSet { if oldValue != libraryRootURL { teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); queryTask?.cancel(); readingPreparationState.reset() } }
     }
     @Published var lastTrashedProjectURL: URL?
     let storageState = StorageSettingsState()

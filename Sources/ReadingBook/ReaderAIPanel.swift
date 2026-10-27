@@ -4,6 +4,7 @@ import SwiftUI
 /// question, its permission controls, a frozen companion scope or a save sheet.
 struct ReaderAIPanel: View {
     @EnvironmentObject private var store: AppStore
+    @Environment(\.isReaderPanelActive) private var panelActive
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 3) {
@@ -11,12 +12,15 @@ struct ReaderAIPanel: View {
                 tab("对话", value: "chat")
             }.padding(3).background(Palette.accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+            ReadingPreparationIndicator(state: store.readingPreparationState)
             ZStack {
                 ReadingCompanionPanel(showsHeader: false)
+                    .environment(\.isReaderPanelActive, panelActive && store.readingCompanionTab != "chat")
                     .opacity(store.readingCompanionTab == "chat" ? 0 : 1)
                     .allowsHitTesting(store.readingCompanionTab != "chat").accessibilityHidden(store.readingCompanionTab == "chat")
                     .disabled(!store.readingCompanionVisible || store.readingCompanionTab == "chat")
                 EnhancedBookChatView(embedded: true)
+                    .environment(\.isReaderPanelActive, panelActive && store.readingCompanionTab == "chat")
                     .opacity(store.readingCompanionTab == "chat" ? 1 : 0)
                     .allowsHitTesting(store.readingCompanionTab == "chat").accessibilityHidden(store.readingCompanionTab != "chat")
                     .disabled(!store.readingCompanionVisible || store.readingCompanionTab != "chat")

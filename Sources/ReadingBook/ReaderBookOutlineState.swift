@@ -21,19 +21,30 @@ import ReadingCore
     private var task: Task<Void, Never>?
     private var metadataTask: Task<Void, Never>?
     private var metadataRun = UUID()
+    private var loadRun = UUID()
     private var runID: UUID?
 
-    func cancel() { task?.cancel(); metadataTask?.cancel() }
+    func cancel() {
+        task?.cancel(); metadataTask?.cancel()
+        metadataRun = UUID(); loadRun = UUID()
+    }
+
+    func isCurrent(owner: String) -> Bool { self.owner == owner }
 
     func load(owner: String, project: BookProject?, url: URL?, store: AppStore) async {
+        guard !Task.isCancelled else { return }
+        // A temporary hide does not invalidate an already prepared directory.
+        // Source/unit revisions and unlock changes remain part of the owner.
+        if self.owner == owner, phase == .ready { return }
         if self.owner != owner { task?.cancel(); metadataTask?.cancel(); metadataRun = UUID(); runID = nil; generating = false }
+        let load = UUID(); loadRun = load
         self.owner = owner
         original = []; generated = nil; preparation = nil; remainingRequestCount = 0; message = nil; phase = .loading
         guard let project, let url else { phase = .idle; return }
         do {
             let current = try await store.ensureBookChapterOutline(project: project)
             try Task.checkCancellation()
-            guard self.owner == owner, store.sourceFileURL == url else { return }
+            guard self.owner == owner, loadRun == load, store.sourceFileURL == url else { return }
             let worker = Task.detached(priority: .userInitiated) {
                 let original = current.originalBookOutline?.entries ?? []
                 let preparation = original.isEmpty ? try BookOutlineRuntime.prepare(in: current) : nil
@@ -41,14 +52,14 @@ import ReadingCore
             }
             let value = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
             try Task.checkCancellation()
-            guard self.owner == owner else { return }
+            guard self.owner == owner, loadRun == load else { return }
             original = value.0; preparation = value.1; generated = value.1?.cached; phase = .ready
             remainingRequestCount = value.1?.remainingBatches.filter { $0.candidateCount > 0 }.count ?? 0
         } catch is PDFPasswordError {
-            guard !Task.isCancelled, self.owner == owner else { return }
+            guard !Task.isCancelled, self.owner == owner, loadRun == load else { return }
             phase = .locked; message = "解锁原书后显示目录。"
         } catch {
-            guard !Task.isCancelled, self.owner == owner else { return }
+            guard !Task.isCancelled, self.owner == owner, loadRun == load else { return }
             phase = .failed; message = error.localizedDescription
         }
     }

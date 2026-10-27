@@ -90,7 +90,8 @@ private struct CompanionScopePreparation: Sendable {
             if let removed = entries.removeValue(forKey: order.removeFirst()) { historyEstimatedCost -= removed.estimatedRetainedCost }
         }
     }
-    nonisolated static func prepare(_ request: Request, entries: [Int: Snapshot], current: Snapshot?, currentWindow: [Snapshot] = [], previousBase: ReadingExperienceState?, previousDecorations: [[SourceReadingDecoration]] = [], includeWindow: Bool = true) -> Prepared? {
+    nonisolated static func prepare(_ request: Request, entries: [Int: Snapshot], current: Snapshot?, currentWindow: [Snapshot] = [], previousBase: ReadingExperienceState?, previousDecorations: [[SourceReadingDecoration]] = [], includeWindow: Bool = true,
+                                    onProgress: @Sendable (ReadingPreparationProgress) -> Void = { _ in }) -> Prepared? {
         let book = request.project
         // These pages are already retained for display. Reuse them on exact
         // input equality even when an oversized page is not admitted to history.
@@ -102,6 +103,9 @@ private struct CompanionScopePreparation: Sendable {
             guard !Task.isCancelled else { return nil }
             if unitIndices.updateValue(index, forKey: unit.id) != nil { duplicateUnitIDs.insert(unit.id) }
             if let page = unit.page { pageIndices[page, default: []].append(index) }
+            if index.isMultiple(of: 256) || index + 1 == book.units.count {
+                onProgress(.init(phase: .sourceIndex, completed: index + 1, total: book.units.count))
+            }
         }
         guard !Task.isCancelled, let position = request.selectedUnitID.flatMap({ unitIndices[$0] }) else { return nil }
         let selectedUnit = book.units[position], base = book.readingExperience ?? ReadingExperienceState()
@@ -136,6 +140,7 @@ private struct CompanionScopePreparation: Sendable {
         var snapshots: [Snapshot] = [], boundaries: [Int: KnowledgeReadBoundary] = [:]
         for units in groups {
             guard !Task.isCancelled else { return nil }
+            onProgress(.init(phase: .sourceIndex, page: units.first?.page))
             let unitIDs = Set(units.map(\.id))
             if let page = units.first?.page, let last = units.max(by: { $0.order < $1.order }) {
                 boundaries[page] = try? KnowledgeReadBoundary.throughSourceUnit(last.id, in: book)
@@ -430,7 +435,11 @@ private struct CompanionScopePreparation: Sendable {
         readingIndexTask?.cancel(); readingIndexGeneration &+= 1
         readingPageSnapshots.pendingScope = scope; readingPageSnapshots.pendingRevision = request.revision; readingPageSnapshots.queued = nil
         let generation = readingIndexGeneration
+        let progressRun = UUID(), progressOwner = libraryRootURL.path + "|" + book.id
+        let progressState = readingPreparationState
+        progressState.apply(.started(progressRun, .init(phase: .sourceIndex, completed: 0, total: book.units.count)), lane: "source", owner: progressOwner)
         readingIndexTask = Task { [weak self] in
+            defer { progressState.apply(.finished(progressRun), lane: "source", owner: progressOwner) }
             do { try await Task.sleep(nanoseconds: 35_000_000) } catch { return }
             guard let self, !Task.isCancelled, self.readingIndexGeneration == generation else { return }
             var next = self.readingPageSnapshots.queued ?? request
@@ -446,7 +455,13 @@ private struct CompanionScopePreparation: Sendable {
                 let currentWindow = self.readingPageSnapshots.window
                 let previousDecorations = currentWindow.map(\.decorations)
                 let calculation = Task.detached(priority: .userInitiated) {
-                    ReadingPageSnapshotCache.prepare(frozen, entries: entries, current: current, currentWindow: currentWindow, previousBase: base, previousDecorations: previousDecorations, includeWindow: includeWindow)
+                    ReadingPageSnapshotCache.prepare(frozen, entries: entries, current: current, currentWindow: currentWindow, previousBase: base, previousDecorations: previousDecorations, includeWindow: includeWindow, onProgress: { [weak self] progress in
+                        Task { @MainActor [weak self] in
+                            guard let self, self.readingIndexGeneration == generation,
+                                  self.bookID == book.id, self.libraryRootURL.path + "|" + book.id == progressOwner else { return }
+                            progressState.apply(.advanced(progressRun, progress), lane: "source", owner: progressOwner)
+                        }
+                    })
                 }
                 let prepared = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
                 guard !Task.isCancelled, self.readingIndexGeneration == generation, self.bookID == book.id,

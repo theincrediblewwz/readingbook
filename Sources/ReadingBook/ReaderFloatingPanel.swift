@@ -1,6 +1,19 @@
 import SwiftUI
 import ReadingCore
 
+private struct ReaderPanelActiveKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    /// Hiding a mounted panel preserves its editors and scopes, but must not
+    /// authorize source preparation or an automatic background request.
+    var isReaderPanelActive: Bool {
+        get { self[ReaderPanelActiveKey.self] }
+        set { self[ReaderPanelActiveKey.self] = newValue }
+    }
+}
+
 /// Only the title handle drags. The original PDF keeps its own scroll and selection.
 struct ReaderFloatingPanel<Content: View>: View {
     @EnvironmentObject private var store: AppStore
@@ -184,7 +197,8 @@ struct ReaderFloatingPanel<Content: View>: View {
                             Button { transientPresentation = nil; isPresented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭\(title)")
                         }
                     }.padding(.leading, 16).padding(.trailing, resizable ? 16 : 8).frame(height: headerHeight).layoutPriority(1)
-                    content().frame(maxWidth: .infinity).frame(minHeight: 0, maxHeight: collapsed ? 0 : .infinity)
+                    content().environment(\.isReaderPanelActive, isPresented && !collapsed)
+                        .frame(maxWidth: .infinity).frame(minHeight: 0, maxHeight: collapsed ? 0 : .infinity)
                         .opacity(collapsed ? 0 : 1).clipped().allowsHitTesting(!collapsed).disabled(collapsed || !isPresented).accessibilityHidden(collapsed || panelHeight <= headerHeight)
                 }.frame(width: panelWidth, height: panelHeight).readingGlass(radius: 24, prominent: true)
                     .overlay {

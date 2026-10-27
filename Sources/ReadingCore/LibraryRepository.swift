@@ -104,7 +104,8 @@ public actor LibraryRepository {
         return LibraryLoadReport(projects: projects.sorted { $0.importedAt > $1.importedAt }, issues: issues)
     }
 
-    public func create(_ project: BookProject, sourceURL: URL) throws {
+    @discardableResult
+    public func create(_ project: BookProject, sourceURL: URL) throws -> BookProject {
         try validate(project)
         guard project.documents.isEmpty else { throw ReadingError.invalid("创建书籍时不能引用尚未写入的 Markdown。请随后使用 saveDocument 保存。") }
         let destination = try bookDirectory(project.id, mustExist: false)
@@ -117,6 +118,10 @@ public actor LibraryRepository {
         try files.moveItem(at: staging, to: destination)
         _ = try? refreshReadableViews(id: project.id)
         _ = try? refreshReadableLibraryIndex()
+        // The committed import must enter the UI with this repository's
+        // publication identity, just like load/save. The caller's draft has no
+        // stamp and cannot authorize reuse of disposable page preparation.
+        return stampForPublication(project)
     }
 
     @discardableResult

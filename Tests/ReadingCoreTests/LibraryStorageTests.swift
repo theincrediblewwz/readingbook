@@ -3,6 +3,35 @@ import XCTest
 @testable import ReadingCore
 
 final class LibraryStorageTests: XCTestCase {
+    func testNewImportReturnsCommittedPublicationWithoutChangingStoredBookOrOriginal() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("ReadingBook-ImportPublication-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let original = temporary.appendingPathComponent("原书.txt"), bytes = Data("新书第一页。\n".utf8)
+        try bytes.write(to: original)
+        let root = temporary.appendingPathComponent("library")
+        let repository = LibraryRepository(rootURL: root)
+        let draft = BookProject(title: "新书", originalName: original.lastPathComponent,
+                                sourceHash: try BookImporter.sha256(bytes),
+                                units: [SourceUnit(id: "u", order: 0, chapter: "第一章", page: 1, text: "新书第一页。\n")])
+        XCTAssertNil(draft.publicationStamp)
+        let committed = try await repository.create(draft, sourceURL: original)
+        let stamp = try XCTUnwrap(committed.publicationStamp)
+        XCTAssertEqual(stamp.owner, repository.publicationOwner)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(try encoder.encode(committed), try encoder.encode(draft), "Publication identity is transient; imported source and metadata stay exact.")
+        let directory = root.appendingPathComponent("books/" + draft.id)
+        let stored = try JSONDecoder().decode(BookProject.self, from: Data(contentsOf: directory.appendingPathComponent("project.json")))
+        XCTAssertNil(stored.publicationStamp)
+        XCTAssertEqual(try encoder.encode(stored), try encoder.encode(draft))
+        XCTAssertEqual(try Data(contentsOf: original), bytes)
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("source/" + draft.originalName)), bytes)
+        let loaded = try await repository.loadAll()
+        let reloaded = try XCTUnwrap(loaded.first)
+        XCTAssertGreaterThan(try XCTUnwrap(reloaded.publicationStamp).ordinal, stamp.ordinal)
+        XCTAssertTrue(LibraryPublicationStamp.accepts(reloaded, replacing: committed, owner: repository.publicationOwner))
+    }
+
     private struct Fixture {
         let temporary: URL
         let root: URL

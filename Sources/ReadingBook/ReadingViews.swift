@@ -30,6 +30,8 @@ struct ReaderWorkspaceView: View {
                         else if isPDF, showPDF, let url = store.sourceFileURL {
                             let requestToken = store.pdfNavigationToken
                             let sourceBookID = store.bookID
+                            let preparationOwner = store.libraryRootURL.path + "|" + (sourceBookID ?? "")
+                            let preparationSourceHash = store.book?.sourceHash ?? ""
                             let memoryKey = store.workspaceMemoryKey
                             PDFReaderView(controller: pdfController, url: url, sourceHash: store.book?.sourceHash ?? "", page: unit.page, navigationToken: requestToken, password: store.pdfPassword(for: store.bookID), annotations: store.book?.readerAnnotations ?? [], canEditAnnotations: !store.isBusy, onPageChange: { page in
                                 guard store.pdfNavigationToken == requestToken else { return }
@@ -56,6 +58,16 @@ struct ReaderWorkspaceView: View {
                                    guard store.bookID == sourceBookID else { return }
                                    store.updateVisiblePDFPages(pages)
                                },
+                               onPreparationChanged: { event in
+                                   guard store.bookID == sourceBookID,
+                                         store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
+                                         store.book?.sourceHash == preparationSourceHash else { return }
+                                   let run: UUID
+                                   switch event {
+                                   case .started(let id, _), .advanced(let id, _), .finished(let id): run = id
+                                   }
+                                   store.readingPreparationState.apply(event, lane: "pdf:" + run.uuidString, owner: preparationOwner)
+                               },
                                workspaceMemory: store.workspaceMemory.pdf, memoryRevision: store.workspaceMemoryRevision,
                                onWorkspaceMemory: { memory in store.updateWorkspaceMemory({ $0.pdf = memory }, expectedKey: memoryKey) })
                         } else { sourceText(unit) }
@@ -74,6 +86,13 @@ struct ReaderWorkspaceView: View {
                 }
                 ReaderInlineCard(state: inlineReading, viewport: geometry.size,
                     obstacles: inlineObstacles(in: geometry)).zIndex(9)
+                if !store.readingCompanionVisible {
+                    ReadingPreparationIndicator(state: store.readingPreparationState)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .padding(.leading, 12).padding(.bottom, 88)
+                        .allowsHitTesting(false)
+                }
             }
                 .coordinateSpace(name: ReaderInlineCoordinateSpace.name)
                 .background {

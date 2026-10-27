@@ -158,6 +158,13 @@ public struct NativePDFTextLine: Sendable {
 
     @MainActor public static func physicalLine(_ selection: PDFSelection, on page: PDFPage,
                                                pageText: NSString) -> PhysicalLine? {
+        ownedPhysicalLine(selection, on: page, pageText: pageText)
+    }
+
+    // Only the preparation actor may use this with its exclusively owned
+    // document. Public APIs retain main-actor isolation for displayed pages.
+    static func ownedPhysicalLine(_ selection: PDFSelection, on page: PDFPage,
+                                   pageText: NSString) -> PhysicalLine? {
         guard selection.pages.count == 1, selection.pages.first === page,
               let text = selection.string, !text.isEmpty else { return nil }
         let rawBounds = selection.bounds(for: page)
@@ -204,6 +211,10 @@ public struct NativePDFTextLine: Sendable {
     }
 
     @MainActor public static func rectangles(for range: NSRange, on page: PDFPage) -> [CGRect] {
+        ownedRectangles(for: range, on: page)
+    }
+
+    static func ownedRectangles(for range: NSRange, on page: PDFPage) -> [CGRect] {
         // PDFKit raises an Objective-C exception for invalid ranges; reject
         // them before making the call rather than trying to catch Swift errors.
         guard validEnd(range, limit: page.numberOfCharacters) != nil,

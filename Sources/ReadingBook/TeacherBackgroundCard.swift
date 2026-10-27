@@ -11,6 +11,7 @@ struct TeacherBackgroundCard: View {
 
 private struct TeacherBackgroundCardBody: View {
     @EnvironmentObject private var store: AppStore
+    @Environment(\.isReaderPanelActive) private var panelActive
     @ObservedObject var state: TeacherBackgroundState
     let objectID: String
     let unitID: String?
@@ -47,7 +48,8 @@ private struct TeacherBackgroundCardBody: View {
             }
         }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
             .readingTextContext(.companion)
-            .task(id: key + "|revision:" + String(store.projectRevision)) {
+            .task(id: panelActive ? key + "|revision:" + String(store.projectRevision) : "inactive") {
+                guard panelActive else { return }
                 await state.refresh(objectID: objectID, unitID: unitID, store: store, autoGenerate: autoGenerate)
             }
     }

@@ -194,6 +194,7 @@ private struct CompanionProjection: Sendable {
 struct ReadingCompanionPanel: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject private var typography: ReadingTypographySettings
+    @Environment(\.isReaderPanelActive) private var panelActive
     var section: String = "context"
     var scope: String = "current"
     var onClose: (() -> Void)?
@@ -214,6 +215,10 @@ struct ReadingCompanionPanel: View {
     @State private var eventsByID: [String: KnowledgeEvent] = [:]
     @State private var projectionTask: Task<Void, Never>?
     @State private var projectionGeneration = 0
+    @State private var projectionProgressID: UUID?
+    @State private var projectionProgressOwner: String?
+    @State private var displayedProjectionKey: String?
+    @State private var displayedPublicationStamp: LibraryPublicationStamp?
     @State private var displayedScopeKey: String?
     @State private var projectedSourceUnits: [SourceUnit] = []
     @State private var projectedScopeTitle = "请先打开原文"
@@ -223,13 +228,15 @@ struct ReadingCompanionPanel: View {
     @State private var preparedChapterOwner: String?
     private var avoidsSpoilers: Bool { scope != "book" && store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false }
     private var sourceUnits: [SourceUnit] {
-        displayedScopeKey == scopeKey ? projectedSourceUnits : []
+        panelActive && displayedScopeKey == scopeKey ? projectedSourceUnits : []
     }
     private var scopeTitle: String {
         displayedScopeKey == scopeKey ? projectedScopeTitle : "正在读取范围…"
     }
     private var projectionKey: String {
-        scopeKey + "|" + String(store.projectRevision)
+        // Page-derived anchors/mentions can arrive without a persisted edit.
+        // Their publication must invalidate this projection as well.
+        scopeKey + "|" + String(store.projectRevision) + "|index:" + String(store.readingExperienceIndexRevision)
     }
     private var scopeKey: String {
         [store.bookID ?? "", store.selectedUnitID ?? "", companionScope.rawValue, frozenScope?.scopeFingerprint ?? "", scope,
@@ -240,7 +247,7 @@ struct ReadingCompanionPanel: View {
         return value == "decisions" ? "layers" : value
     }
     private var recoverableItems: [ReadingExperienceTrashItem] {
-        (store.book?.readingExperience?.trash ?? []).filter { $0.kind != "decision" }
+        panelActive ? (store.book?.readingExperience?.trash ?? []).filter { $0.kind != "decision" } : []
     }
     private var contentTitle: String {
         effectiveSection == "mentions" ? "原文对象" : effectiveSection == "references" ? "资料对读" : "解释与译文"
@@ -305,12 +312,15 @@ struct ReadingCompanionPanel: View {
         .environment(\.markdownReadingStyle, "companion")
         .readingTextContext(.companion)
         .onAppear(perform: refreshItems)
+        .onChange(of: panelActive) { _, active in
+            if active { refreshItems() } else { cancelProjection() }
+        }
         .onChange(of: projectionKey) { _, _ in refreshItems() }
         .onChange(of: companionScope) { _, _ in frozenScope = nil; sourceContextLimit = 4 }
         .onChange(of: store.bookID) { _, _ in frozenScope = nil; companionScope = .page; expandedObjectGroups = []; objectLimits = [:]; refreshItems() }
         .onChange(of: store.selectedObjectID) { _, _ in revealSelectedObjectGroup() }
         .onChange(of: scopeKey) { _, _ in layerLimit = 8; alignmentLimit = 8; objectLimits = [:] }
-        .onDisappear { projectionTask?.cancel(); projectionGeneration &+= 1; preparedChapterSource = []; preparedChapterOwner = nil }
+        .onDisappear { cancelProjection(); preparedChapterSource = []; preparedChapterOwner = nil }
         .confirmationDialog("移除这条阅读增强？", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), presenting: removal) { item in
             Button("移除", role: .destructive) { Task { await store.removeReadingItem(item.id, kind: item.kind) } }
         } message: { item in Text("\(item.title)\n原书和已保存的 Markdown 保留。") }
@@ -422,7 +432,7 @@ struct ReadingCompanionPanel: View {
         else { store.requestedWorkspaceRoute = "query" }
     }
     private var selectedQuote: String? {
-        guard let anchor = store.selectedSourceAnchor, !anchor.quote.isEmpty,
+        guard panelActive, let anchor = store.selectedSourceAnchor, !anchor.quote.isEmpty,
               sourceUnits.contains(where: { $0.id == anchor.unitID && $0.text.range(of: anchor.quote, options: .literal) != nil }) else { return nil }
         return anchor.quote
     }
@@ -432,10 +442,13 @@ struct ReadingCompanionPanel: View {
         } else if let unit = sourceUnits.first { store.newNote(for: unit) }
     }
     private func refreshItems() {
-        projectionTask?.cancel(); projectionGeneration &+= 1
+        guard panelActive else { return }
+        if let stamp = store.book?.publicationStamp, displayedProjectionKey == projectionKey,
+           displayedPublicationStamp == stamp { return }
+        cancelProjection()
         guard let book = store.book else {
             items = ReadingContextItems(); crossScopeCount = 0; objectGroups = []; entitiesByID = [:]; eventsByID = [:]
-            projectedSourceUnits = []; scopeMessage = nil; return
+            projectedSourceUnits = []; scopeMessage = nil; displayedProjectionKey = nil; displayedPublicationStamp = nil; return
         }
         let expected = projectionKey, expectedScope = scopeKey, generation = projectionGeneration
         let root = store.libraryRootURL.path, index = store.readingExperienceIndex
@@ -444,12 +457,23 @@ struct ReadingCompanionPanel: View {
         let chapterAnchor = store.chapterReadingAnchor(in: book, unitID: selected)
         let previousChapterSource = preparedChapterSource, previousChapterOwner = preparedChapterOwner
         let chapterOwner = root + "|" + book.id + "|" + book.sourceHash
+        let progressID = UUID(), progressOwner = root + "|" + book.id
+        projectionProgressID = progressID; projectionProgressOwner = progressOwner
+        store.readingPreparationState.apply(.started(progressID, ReadingPreparationProgress(phase: .companion)), lane: "companion", owner: progressOwner)
         if displayedScopeKey != expectedScope {
             items = ReadingContextItems(); crossScopeCount = 0; objectGroups = []; entitiesByID = [:]; eventsByID = [:]
             projectedSourceUnits = []; scopeMessage = nil
         }
         projectionTask = Task {
+            defer {
+                if projectionGeneration == generation, projectionProgressID == progressID {
+                    finishProjectionProgress()
+                    projectionTask = nil
+                }
+            }
             do { try await Task.sleep(nanoseconds: 35_000_000) } catch { return }
+            guard panelActive, !Task.isCancelled, projectionGeneration == generation,
+                  store.bookID == book.id, store.libraryRootURL.path == root else { return }
             var current = book
             if requestedCompanionScope == .chapter, requestedScope != "book", frozen == nil {
                 let checker = Task.detached(priority: .userInitiated) {
@@ -460,11 +484,13 @@ struct ReadingCompanionPanel: View {
                     try Task.checkCancellation()
                     if !unchanged { current = try await store.ensureBookChapterOutline(project: book) }
                     try Task.checkCancellation()
-                    guard projectionGeneration == generation, scopeKey == expectedScope else { return }
+                    guard panelActive, projectionGeneration == generation, scopeKey == expectedScope,
+                          store.bookID == book.id, store.libraryRootURL.path == root else { return }
                     preparedChapterSource = current.units; preparedChapterOwner = chapterOwner
                 }
                 catch {
-                    guard !Task.isCancelled, projectionGeneration == generation, scopeKey == expectedScope else { return }
+                    guard panelActive, !Task.isCancelled, projectionGeneration == generation, scopeKey == expectedScope,
+                          store.bookID == book.id, store.libraryRootURL.path == root else { return }
                     projectedSourceUnits = []; projectedScopeTitle = "当前章节"; scopeMessage = error.localizedDescription
                     displayedScopeKey = expectedScope; projectionTask = nil; return
                 }
@@ -475,15 +501,25 @@ struct ReadingCompanionPanel: View {
                     frozenScope: frozen, selectedUnitID: selected, chapterAnchor: chapterAnchor, avoidsSpoilers: avoids)
             }
             let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
-            guard !Task.isCancelled, projectionGeneration == generation, store.bookID == book.id,
+            guard panelActive, !Task.isCancelled, projectionGeneration == generation, store.bookID == book.id,
                   store.libraryRootURL.path == root, projectionKey == expected, let result else { return }
             items = result.items; crossScopeCount = result.crossScopeCount
             objectGroups = result.groups; entitiesByID = result.entities; eventsByID = result.events
             projectedSourceUnits = result.sourceUnits; projectedScopeTitle = result.scopeTitle; scopeMessage = result.scopeMessage
             scopeStartAnchor = result.scopeStartAnchor
-            displayedScopeKey = expectedScope; projectionTask = nil
+            displayedScopeKey = expectedScope; displayedProjectionKey = expected; displayedPublicationStamp = book.publicationStamp
             revealSelectedObjectGroup()
         }
+    }
+    private func finishProjectionProgress() {
+        guard let id = projectionProgressID, let owner = projectionProgressOwner else { return }
+        projectionProgressID = nil; projectionProgressOwner = nil
+        guard owner == store.libraryRootURL.path + "|" + (store.bookID ?? "") else { return }
+        store.readingPreparationState.apply(.finished(id), lane: "companion", owner: owner)
+    }
+    private func cancelProjection() {
+        projectionTask?.cancel(); projectionTask = nil; projectionGeneration &+= 1
+        finishProjectionProgress()
     }
     @ViewBuilder private var layerSection: some View {
         if let id = store.focusedReadingAnchorID, let anchor = store.readingExperienceIndex.anchors.first(where: { $0.id == id }) {
