@@ -51,6 +51,7 @@ struct WorkspaceView: View {
                     .allowsHitTesting(managementRoute == nil)
                     .environment(\.workspaceCanvasBlocked, canvasInteractionBlocked)
                     .environment(\.workspaceCanvasExclusionRects, canvasExclusionRects)
+                    .environment(\.workspaceProgressBounds, chromeBounds["smart-progress"] ?? .zero)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityHidden(managementRoute != nil)
                     .overlay {
@@ -209,17 +210,20 @@ struct WorkspaceView: View {
     private func floatingProgress(in geometry: GeometryProxy) -> some View {
         let global = geometry.frame(in: .global)
         let available = CGRect(x: 20, y: 88, width: max(0, geometry.size.width - 40), height: max(0, geometry.size.height - 112))
-        let obstacles = chromeBounds.filter { $0.key != "smart-progress" && $0.key != "window-drag" && $0.key != "reading-position" }.map {
+        // A transient sentence card yields to settled panels. Including it
+        // here makes merely hovering a sentence hide an expanded progress
+        // panel, then makes the card move again when that panel disappears.
+        let obstacles = chromeBounds.filter { $0.key != "smart-progress" && $0.key != "window-drag" && $0.key != "reading-position" && $0.key != "reader-inline" }.map {
             $0.value.offsetBy(dx: -global.minX, dy: -global.minY)
         }
         let preferred = CGPoint(x: geometry.size.width < 700 ? 68 : 80, y: geometry.size.height - 104 - progressSize.height)
         let placement = FloatingChromeGeometry.place(size: progressSize, preferredOrigin: preferred, within: available, avoiding: obstacles)
         let circle = CGSize(width: 52, height: 52)
-        let usesFallback = placement == nil || (progressLauncherDragOrigin != nil && progressLauncherDraggingFallback)
-        let compact = usesFallback ? FloatingChromeGeometry.place(size: circle, preferredOrigin: preferred, within: available, avoiding: obstacles) : nil
         let saved = WorkspacePoint(x: progressLauncherX, y: progressLauncherY)
         let manualPanelCenter = progressLauncherMovingCenter.map { FloatingLauncherGeometry.clampedCenter($0, viewport: geometry.size, control: progressSize) }
             ?? FloatingLauncherGeometry.restoredCenter(saved, viewport: geometry.size, control: progressSize)
+        let usesFallback = (manualPanelCenter == nil && placement == nil) || (progressLauncherDragOrigin != nil && progressLauncherDraggingFallback)
+        let compact = usesFallback ? FloatingChromeGeometry.place(size: circle, preferredOrigin: preferred, within: available, avoiding: obstacles) : nil
         let frame = manualPanelCenter.map { CGRect(x: $0.x - progressSize.width / 2, y: $0.y - progressSize.height / 2, width: progressSize.width, height: progressSize.height) }
             ?? placement ?? CGRect(origin: preferred, size: progressSize)
         let compactCenter = progressLauncherMovingCenter.map { FloatingLauncherGeometry.clampedCenter($0, viewport: geometry.size, control: circle) }

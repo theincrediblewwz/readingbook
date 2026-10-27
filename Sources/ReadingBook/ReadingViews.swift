@@ -6,6 +6,7 @@ struct ReaderWorkspaceView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.readingReduceMotion) private var reduceMotion
     @Environment(\.workspaceCanvasBlocked) private var interactionBlocked
+    @Environment(\.workspaceProgressBounds) private var progressBounds
     @Binding var showPDF: Bool
     @Binding var showOutline: Bool
     @Binding var bookmarksOnly: Bool
@@ -72,7 +73,7 @@ struct ReaderWorkspaceView: View {
                     ReaderAIPanel()
                 }
                 ReaderInlineCard(state: inlineReading, viewport: geometry.size,
-                    obstacles: pdfChrome + [outlineFrame, companionFrame].filter { !$0.isEmpty }).zIndex(9)
+                    obstacles: inlineObstacles(in: geometry)).zIndex(9)
             }
                 .coordinateSpace(name: ReaderInlineCoordinateSpace.name)
                 .background {
@@ -98,6 +99,14 @@ struct ReaderWorkspaceView: View {
                 .onReceive(store.$readingExperienceIndex) { index in refreshInlineContent(index: index) }
                 .onDisappear { inlineReading.clear() }
         }
+    }
+    private func inlineObstacles(in geometry: GeometryProxy) -> [CGRect] {
+        var obstacles = pdfChrome + [outlineFrame, companionFrame].filter { !$0.isEmpty && !$0.isNull }
+        if !progressBounds.isEmpty, !progressBounds.isNull {
+            let origin = geometry.frame(in: .global).origin
+            obstacles.append(progressBounds.offsetBy(dx: -origin.x, dy: -origin.y))
+        }
+        return obstacles
     }
     private func pdfChromeBounds(offset: CGPoint) -> [String: CGRect] {
         guard isPDF, showPDF, store.readingSourceMode == "original" else { return [:] }

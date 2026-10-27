@@ -7,6 +7,9 @@ private struct WorkspaceCanvasBlockedKey: EnvironmentKey {
 private struct WorkspaceCanvasExclusionRectsKey: EnvironmentKey {
     static let defaultValue: [CGRect] = []
 }
+private struct WorkspaceProgressBoundsKey: EnvironmentKey {
+    static let defaultValue = CGRect.zero
+}
 
 extension EnvironmentValues {
     /// A global overlay owns input until it is dismissed. This does not change
@@ -22,6 +25,13 @@ extension EnvironmentValues {
     var workspaceCanvasExclusionRects: [CGRect] {
         get { self[WorkspaceCanvasExclusionRectsKey.self] }
         set { self[WorkspaceCanvasExclusionRectsKey.self] = newValue }
+    }
+
+    /// Global bounds of the settled progress control. Transient sentence cards
+    /// yield to this frame; progress placement never depends on those cards.
+    var workspaceProgressBounds: CGRect {
+        get { self[WorkspaceProgressBoundsKey.self] }
+        set { self[WorkspaceProgressBoundsKey.self] = newValue }
     }
 }
 

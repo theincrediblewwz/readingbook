@@ -205,7 +205,14 @@ struct ReaderInlineContent: Sendable {
         }
         guard let value, let book else { leave(); return }
         sourceInside = true
-        if hover?.id == value.id && !value.activated { automaticTranslationActive = true; cancelPending(); refreshDisplayed(); return }
+        if var current = hover, current.id == value.id && !value.activated {
+            // The same sentence can wrap across lines or move after a scroll.
+            // Refresh only its presentation geometry, preserving content and
+            // dwell intent. A pinned card returned above keeps its position.
+            current.rect = value.rect; current.point = value.point
+            if hover != current { hover = current }
+            automaticTranslationActive = true; cancelPending(); refreshDisplayed(); return
+        }
         if pendingID == value.id && !value.activated { return }
         automaticTranslationActive = false
         cancelPending(); invalidateRefresh(); pendingID = value.id
@@ -224,7 +231,14 @@ struct ReaderInlineContent: Sendable {
                       self.scope == input.scope else { return }
                 guard self.inputs[value.id]?.serial == input.serial else { continue }
                 guard let content = frozen else { self.clear(); return }
-                self.content = content; self.hover = value; self.pinned = value.activated
+                // lastHover also receives same-ID events during the dwell and
+                // background projection. Only its latest geometry is reused;
+                // source identity and activation still belong to this request.
+                var presentation = value
+                if let latest = self.lastHover, latest.id == value.id {
+                    presentation.rect = latest.rect; presentation.point = latest.point
+                }
+                self.content = content; self.hover = presentation; self.pinned = value.activated
                 self.automaticTranslationActive = self.sourceInside || self.inside
                 self.pendingID = nil; self.task = nil; self.displayedSerial = input.serial; self.inputs = [value.id: input]
                 return
@@ -371,7 +385,8 @@ struct ReaderInlineCard: View {
                 .environment(\.markdownReadingStyle, "companion")
                 .readingTextContext(.companion)
                 .onHover { state.pointer($0) }.onChange(of: content.anchor.id) { _, _ in showsComposition = false }
-                .position(x: placement.midX, y: placement.midY).workspaceChromeBounds("reader-inline")
+                .workspaceChromeBounds("reader-inline")
+                .position(x: placement.midX, y: placement.midY)
         } else if let content = state.content, state.pinned {
             // A click must still reach its saved content when no safe popup
             // slot exists. Reuse the existing companion instead of covering
