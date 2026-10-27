@@ -70,14 +70,22 @@ public struct NativePDFTextLine: Sendable {
 
         public mutating func append(_ line: PhysicalLine) {
             guard NativePDFTextLine.usable(line.rectangle) else { return }
-            if abs(line.rectangle.minY) > 1_000_000_000 || abs(line.rectangle.maxY) > 1_000_000_000 {
+            let outsideDomain = abs(line.rectangle.minY) > 1_000_000_000 || abs(line.rectangle.maxY) > 1_000_000_000
+            let bandCount: Int
+            if outsideDomain {
                 // The broad phase deliberately bounds coordinate arithmetic.
                 // Retain the exceptional physical lines rather than drop them.
                 unindexed.append(values.count)
-            } else { bands.insert(values.count, rectangle: line.rectangle) }
+                bandCount = 1
+            } else {
+                bands.insert(values.count, rectangle: line.rectangle)
+                // Match the broad phase's actual endpoint bands, including
+                // a line just over 4,096pt that still occupies 65 bands.
+                let span = Int(floor(line.rectangle.maxY / 64) - floor(line.rectangle.minY / 64))
+                bandCount = span <= 64 ? span + 1 : 1
+            }
             values.append(line)
             // Include a conservative allowance for the broad-phase entries.
-            let bandCount = line.rectangle.height <= 4_096 ? Int(ceil(line.rectangle.height / 64)) + 1 : 1
             byteCount += line.byteCount + 72 + bandCount * 32
         }
 

@@ -176,6 +176,24 @@ final class NativePDFTextLineTests: XCTestCase {
         XCTAssertTrue(directory.lines(at: CGPoint(x: 20, y: CGFloat.infinity)).isEmpty)
     }
 
+    func testDirectoryChargesActualEndpointBandsAtTheOverflowBoundary() throws {
+        let line = try XCTUnwrap(NativePDFTextLine.validate([NSRange(location: 0, length: 1)], lineText: "甲",
+                                                          pageText: "甲", nativeCharacterCount: 1))
+        func directory(height: CGFloat) -> NativePDFTextLine.Directory {
+            var value = NativePDFTextLine.Directory()
+            value.append(.init(text: line, rectangle: CGRect(x: 10, y: 0, width: 30, height: height)))
+            return value
+        }
+        let atLimit = directory(height: 4_096), aboveLimit = directory(height: 4_097)
+        XCTAssertEqual(atLimit.byteCount, aboveLimit.byteCount,
+                       "Both lines occupy endpoint bands 0 through 64; height alone cannot select the overflow charge.")
+        let overflow = directory(height: 4_160), singleBand = directory(height: 1)
+        XCTAssertEqual(overflow.byteCount, singleBand.byteCount, "A span of 65 really uses the single overflow entry.")
+        XCTAssertGreaterThan(aboveLimit.byteCount, overflow.byteCount)
+        XCTAssertEqual(aboveLimit.lines(at: CGPoint(x: 20, y: 4_096.5)).map(\.ranges), [line.ranges])
+        XCTAssertEqual(overflow.lines(at: CGPoint(x: 20, y: 4_159)).map(\.ranges), [line.ranges])
+    }
+
     func testDirectoryRetainsFiniteLinesOutsideAndAcrossTheBandCoordinateDomain() throws {
         let page = "甲乙丙"
         var directory = NativePDFTextLine.Directory()
