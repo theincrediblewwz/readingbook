@@ -59,14 +59,20 @@ struct ReaderWorkspaceView: View {
                                    store.updateVisiblePDFPages(pages)
                                },
                                onPreparationChanged: { event in
-                                   guard store.bookID == sourceBookID,
-                                         store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
-                                         store.book?.sourceHash == preparationSourceHash else { return }
-                                   let run: UUID
-                                   switch event {
-                                   case .started(let id, _), .advanced(let id, _), .finished(let id): run = id
+                                   // Native make/update callbacks can start or
+                                   // cancel preparation synchronously. Publish
+                                   // only after SwiftUI finishes that update;
+                                   // use one FIFO for every event kind.
+                                   DispatchQueue.main.async {
+                                       guard store.bookID == sourceBookID,
+                                             store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
+                                             store.book?.sourceHash == preparationSourceHash else { return }
+                                       let run: UUID
+                                       switch event {
+                                       case .started(let id, _), .advanced(let id, _), .finished(let id): run = id
+                                       }
+                                       store.readingPreparationState.apply(event, lane: "pdf:" + run.uuidString, owner: preparationOwner)
                                    }
-                                   store.readingPreparationState.apply(event, lane: "pdf:" + run.uuidString, owner: preparationOwner)
                                },
                                workspaceMemory: store.workspaceMemory.pdf, memoryRevision: store.workspaceMemoryRevision,
                                onWorkspaceMemory: { memory in store.updateWorkspaceMemory({ $0.pdf = memory }, expectedKey: memoryKey) })
