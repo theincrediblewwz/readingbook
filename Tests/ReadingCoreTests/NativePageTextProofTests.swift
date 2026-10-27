@@ -43,14 +43,79 @@ final class NativePageTextProofTests: XCTestCase {
         XCTAssertEqual(try ReadingExperienceRuntime.resolve(legacy, in: book).range, right.range)
     }
 
-    func testMissingUnitsOCRWrongPageAndRawLineEndingsCannotProveMapping() throws {
+    func testMissingUnitsOCRAndWrongPageCannotProveMapping() throws {
         let source = try PDFPageSourceText(page: 1, text: "甲。\n乙。")
         XCTAssertNil(NativePageTextProof.prove(page: 2, nativeText: source.text, source: source))
-        XCTAssertNil(NativePageTextProof.prove(page: 1, nativeText: "甲。\r\n乙。", source: source))
         XCTAssertNil(NativePageTextProof.prove(page: 1, nativeText: "甲。", source: source))
         XCTAssertNil(NativePageTextProof.prove(page: 1, nativeText: "甲。\n新的OCR正文。", source: source))
         XCTAssertNotEqual(source.identity, try PDFPageSourceText(page: 2, text: source.text).identity)
         XCTAssertThrowsError(try PDFPageSourceText(page: 0, text: "甲"))
+    }
+
+    func testImportedLineEndingsMapCrossLineFirstAndLastSentencesWithCanonicalContext() throws {
+        let native = "首😀句，\r\n仍是首句。\r\n中句。\r末😀句。\r\n"
+        let units = try BookImporter.splitText(native, chapter: "一", page: 1)
+        let book = BookProject(title: "换行页", originalName: "source.pdf", sourceHash: "line-endings", units: units)
+        let canonical = units.map(\.text).joined()
+        XCTAssertEqual(canonical, "首😀句，\n仍是首句。\n中句。\n末😀句。\n")
+        let source = try PDFPageSourceText(page: 1, text: canonical)
+        let proof = try XCTUnwrap(NativePageTextProof.prove(page: 1, nativeText: native, source: source))
+        XCTAssertEqual(proof.identity, source.identity)
+        let unit = try XCTUnwrap(units.first)
+        for (quote, nativeQuote) in [("首😀句，\n仍是首句。", "首😀句，\r\n仍是首句。"), ("中句。", "中句。"), ("末😀句。", "末😀句。")] {
+            let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: unit.id, quote: quote, in: book)
+            let resolved = try ReadingExperienceRuntime.resolve(anchor, in: book)
+            let range = try XCTUnwrap(proof.range(of: anchor.quote, location: resolved.range.location, length: resolved.range.length))
+            XCTAssertEqual(range, (native as NSString).range(of: nativeQuote))
+            XCTAssertEqual((native as NSString).substring(with: range), nativeQuote)
+            if quote.hasPrefix("首") { XCTAssertTrue(anchor.prefix.isEmpty); XCTAssertTrue(anchor.suffix.hasPrefix("\n中句。")) }
+            if quote.hasPrefix("末") { XCTAssertTrue(anchor.prefix.hasSuffix("中句。\n")); XCTAssertEqual(anchor.suffix, "\n") }
+        }
+        XCTAssertEqual(proof.range(of: canonical, location: 0, length: canonical.utf16.count), NSRange(location: 0, length: native.utf16.count))
+        XCTAssertEqual(proof.byteCount, canonical.utf16.count * 2 + 3 * MemoryLayout<Int>.stride)
+    }
+
+    func testLineEndingMappingKeepsEmojiAndEndBoundariesExact() throws {
+        let native = "😀\r\n甲\r乙😀\r\n", canonical = "😀\n甲\n乙😀\n"
+        let source = try PDFPageSourceText(page: 1, text: canonical)
+        let proof = try XCTUnwrap(NativePageTextProof.prove(page: 1, nativeText: native, source: source))
+        XCTAssertEqual(proof.range(of: "😀", location: 0, length: 2), NSRange(location: 0, length: 2))
+        XCTAssertEqual(proof.range(of: "😀", location: 6, length: 2), NSRange(location: 7, length: 2))
+        XCTAssertEqual(proof.range(of: "\n", location: 2, length: 1), NSRange(location: 2, length: 2))
+        XCTAssertEqual(proof.range(of: "\n", location: 4, length: 1), NSRange(location: 5, length: 1))
+        XCTAssertEqual(proof.range(of: "\n", location: 8, length: 1), NSRange(location: 9, length: 2))
+        XCTAssertEqual(proof.range(of: "甲\n乙😀\n", location: 3, length: 6), NSRange(location: 4, length: 7))
+        XCTAssertNil(proof.range(of: "�", location: 1, length: 1))
+        XCTAssertNil(proof.range(of: "�", location: 7, length: 1))
+        XCTAssertNil(proof.range(of: "\r\n", location: 2, length: 2), "只验证canonical quote，不因原生换行匹配而接受错误原句。")
+        XCTAssertNil(proof.range(of: "甲", location: 4, length: 1))
+        XCTAssertEqual(proof.byteCount, canonical.utf16.count * 2 + 2 * MemoryLayout<Int>.stride)
+
+        let bareCRSource = try PDFPageSourceText(page: 1, text: "甲\n乙\n")
+        let bareCR = try XCTUnwrap(NativePageTextProof.prove(page: 1, nativeText: "甲\r乙\r", source: bareCRSource))
+        XCTAssertEqual(bareCR.range(of: "乙\n", location: 2, length: 2), NSRange(location: 2, length: 2))
+        XCTAssertEqual(bareCR.byteCount, bareCRSource.text.utf16.count * 2, "裸CR替换不改变UTF16长度，不保留偏移表。")
+    }
+
+    func testLineEndingConversionDoesNotAdmitOtherTextOrWhitespaceChanges() throws {
+        let canonical = "甲 e\u{301}\n乙😀\n", source = try PDFPageSourceText(page: 1, text: canonical)
+        for native in ["甲 é\r\n乙😀\r\n", "甲\te\u{301}\r\n乙😀\r\n", "甲 e\u{301} \r\n乙😀\r\n",
+                       "甲 e\u{301}\r\n乙😀", "甲 e\u{301}\r\n乙😀\r\n丙", "甲 e\u{301}\r\n丙😀\r\n"] {
+            XCTAssertNil(NativePageTextProof.prove(page: 1, nativeText: native, source: source))
+        }
+    }
+
+    func testRawIdenticalCRPagesKeepExistingProofWithoutMapping() throws {
+        for text in ["首😀句。\r\n末句。\r\n", "首😀句。\r末句。\r", "甲\re\u{301}\r\n乙😀"] {
+            let source = try PDFPageSourceText(page: 1, text: text)
+            let proof = try XCTUnwrap(NativePageTextProof.prove(page: 1, nativeText: text, source: source))
+            XCTAssertEqual(proof.identity, source.identity)
+            XCTAssertEqual(proof.range(of: text, location: 0, length: text.utf16.count), NSRange(location: 0, length: text.utf16.count))
+            XCTAssertEqual(proof.byteCount, text.utf16.count * 2, "字节原样相等仍使用原有proof，不分配换行映射。")
+            let rawBreak = text.contains("\r\n") ? "\r\n" : "\r"
+            let range = (text as NSString).range(of: rawBreak)
+            XCTAssertEqual(proof.range(of: rawBreak, location: range.location, length: range.length), range)
+        }
     }
 
     func testRepeatedIdenticalUnitsAndAdjacentContextKeepTheirOwnValidatedOffsets() throws {
@@ -103,6 +168,21 @@ final class NativePageTextProofTests: XCTestCase {
         XCTAssertNil(proof.range(of: "前😀后", location: 0, length: 4, isCancelled: { true }))
         checks = 0
         XCTAssertNil(proof.range(of: "前😀后", location: 0, length: 4, isCancelled: {
+            checks += 1; return checks >= 3
+        }))
+    }
+
+    func testCancelledLineEndingConversionAndMappedLookupDoNotReturnPartialProof() throws {
+        let native = String(repeating: "前😀\r\n后\r", count: 1000)
+        let canonical = native.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        let source = try PDFPageSourceText(page: 1, text: canonical)
+        var checks = 0
+        XCTAssertNil(NativePageTextProof.prove(page: 1, nativeText: native, source: source, isCancelled: {
+            checks += 1; return checks >= 4
+        }))
+        let proof = try XCTUnwrap(NativePageTextProof.prove(page: 1, nativeText: native, source: source))
+        checks = 0
+        XCTAssertNil(proof.range(of: "前😀\n后\n", location: 0, length: 6, isCancelled: {
             checks += 1; return checks >= 3
         }))
     }

@@ -99,6 +99,8 @@ struct PDFReaderView: NSViewRepresentable {
     @MainActor private final class SourceGeometryPage {
         let text: String
         let byteCount: Int
+        let nativeText: NSString
+        let nativeTextBytes: Int
         var ranges: [QuoteCacheKey: CachedQuoteRange] = [:]
         var rangeBytes = 0
         // Identity is the canonical page's raw-byte hash. A nil proof with a
@@ -116,8 +118,12 @@ struct PDFReaderView: NSViewRepresentable {
         private var passageIndexDirty = false
         var hitBands = ReadingGeometryBands<SourceLineKey>()
         var paintBands = ReadingGeometryBands<SourceLineKey>()
-        var cost: Int { byteCount + rangeBytes + geometryBytes + passageBytes + (sourceTextProof?.byteCount ?? 0) + unresolvedIDs.count * 192 }
-        init(text: String, byteCount: Int) { self.text = text; self.byteCount = byteCount }
+        var cost: Int { byteCount + nativeTextBytes + rangeBytes + geometryBytes + passageBytes + (sourceTextProof?.byteCount ?? 0) + unresolvedIDs.count * 192 }
+        init(text: String, byteCount: Int) {
+            self.text = text; self.byteCount = byteCount
+            let bridged = text as NSString
+            nativeText = bridged; nativeTextBytes = bridged.length * 2
+        }
         func remember(_ value: SourceGeometry) {
             geometryBytes += value.cost - (geometry[value.value.id]?.cost ?? 0)
             geometry[value.value.id] = value
@@ -542,11 +548,11 @@ struct PDFReaderView: NSViewRepresentable {
             ?? (sourceDecorations != input.sourceDecorations))
         if sourceDecorationsChanged {
             invalidateSourcePress()
-            sourceDecorations = Array(input.sourceDecorations.prefix(12_000)); sourceInputGeneration &+= 1
+            sourceDecorations = input.sourceDecorations; sourceInputGeneration &+= 1
             groupedSourceDecorations = Dictionary(grouping: sourceDecorations, by: { $0.page ?? requestedPage ?? 1 })
-            // The geometry work cap is not a deletion manifest: keep valid IDs
-            // after that cap as well, so later page-priority batches can reuse
-            // their existing geometry instead of rebuilding it.
+            // Keep every supplied mark eligible. Matching is consumed in
+            // bounded worker batches below; a work limit must not delete the
+            // tail of a dense page from the presentation catalog.
             validSourceDecorationIDsByPage = [:]
             for value in input.sourceDecorations {
                 validSourceDecorationIDsByPage[value.page ?? requestedPage ?? 1, default: []].insert(value.id)
@@ -1543,7 +1549,10 @@ struct PDFReaderView: NSViewRepresentable {
                     let values = grouped[number] ?? []
                     var additions: [SourceReadingDecoration] = []
                     let pageText = self.sourcePageTexts[number]
+                    var inspected = 0
                     for value in values {
+                        guard !Task.isCancelled, self.documentGeneration == documentID,
+                              self.sourceDecorationGeneration == generation else { return }
                         if value.interaction != .passage {
                             cache.removePassage(value.id)
                         }
@@ -1553,6 +1562,13 @@ struct PDFReaderView: NSViewRepresentable {
                             if let geometry = cache.geometry[value.id], geometry.value == value { self.sourceGeometries[value.id] = geometry }
                         } else if let geometry = cache.geometry[value.id], geometry.value == value { self.sourceGeometries[value.id] = geometry }
                         else { additions.append(value); self.sourceGeometries.removeValue(forKey: value.id) }
+                        inspected += 1
+                        if inspected.isMultiple(of: 512) {
+                            self.sourceGeometryPages[number] = cache
+                            do { try await Task.sleep(nanoseconds: 1_000_000) } catch { return }
+                            guard !Task.isCancelled, self.documentGeneration == documentID,
+                                  self.sourceDecorationGeneration == generation else { return }
+                        }
                     }
                     additions = additions.filter { ($0.interaction == .passage) == passages }
                     self.sourceCanvas.needsDisplay = true
@@ -1566,104 +1582,114 @@ struct PDFReaderView: NSViewRepresentable {
                         self.scheduleSourceHoverRefresh()
                         continue
                     }
-                    let text = cache.text, saved = cache.ranges
-                    let matchingAdditions = additions
-                    let checkedProof = pageText != nil && cache.sourceTextProofIdentity == pageText?.identity
-                    let savedProof = checkedProof ? cache.sourceTextProof : nil
-                    let calculation = Task.detached(priority: .userInitiated) { () -> PageQuoteMatches in
-                        let interval = pdfDecorationSignposter.beginInterval("MatchPageQuotes")
-                        defer { pdfDecorationSignposter.endInterval("MatchPageQuotes", interval) }
-                        let source = text as NSString
-                        let proof = checkedProof ? savedProof : pageText.flatMap { NativePageTextProof.prove(page: number, nativeText: text, source: $0) }
-                        var ranges: [String: CachedQuoteRange] = [:]
-                        var uniqueMatchedIDs: Set<String> = []
+                    let text = cache.text
+                    var phaseProofChecked = pageText != nil && cache.sourceTextProofIdentity == pageText?.identity
+                    var phaseProof = phaseProofChecked ? cache.sourceTextProof : nil
+                    for batchStart in stride(from: 0, to: additions.count, by: 12_000) {
+                        let batchEnd = batchStart + min(12_000, additions.count - batchStart)
+                        let matchingAdditions = Array(additions[batchStart..<batchEnd])
+                        let saved = cache.ranges
+                        let checkedProof = phaseProofChecked, savedProof = phaseProof
+                        let calculation = Task.detached(priority: .userInitiated) { () -> PageQuoteMatches in
+                            let interval = pdfDecorationSignposter.beginInterval("MatchPageQuotes")
+                            defer { pdfDecorationSignposter.endInterval("MatchPageQuotes", interval) }
+                            var nativeSource: NSString?
+                            let proof = checkedProof ? savedProof : pageText.flatMap { NativePageTextProof.prove(page: number, nativeText: text, source: $0) }
+                            var ranges: [String: CachedQuoteRange] = [:]
+                            var uniqueMatchedIDs: Set<String> = []
+                            for value in matchingAdditions {
+                                guard !Task.isCancelled else { break }
+                                guard !value.quote.isEmpty, value.quote.utf16.count <= 32_768,
+                                      (value.prefix?.utf8.count ?? 0) <= 4_096, (value.suffix?.utf8.count ?? 0) <= 4_096 else { continue }
+                                // The Snapshot supplied only host-validated offsets.
+                                // A whole-page proof plus this exact quote maps
+                                // them to native offsets, including repeated quotes.
+                                if let range = proof?.range(of: value.quote, location: value.rangeLocation, length: value.rangeLength) {
+                                    ranges[value.id] = CachedQuoteRange(range: range)
+                                    continue
+                                }
+                                let key = QuoteCacheKey(quote: Data(value.quote.utf8), prefix: value.prefix.map { Data($0.utf8) }, suffix: value.suffix.map { Data($0.utf8) })
+                                if let cached = saved[key] { ranges[value.id] = cached }
+                                else {
+                                    let source = nativeSource ?? (text as NSString); nativeSource = source
+                                    ranges[value.id] = CachedQuoteRange(range: Self.findNativeQuoteRange(value.quote, prefix: value.prefix, suffix: value.suffix, text: source))
+                                }
+                                uniqueMatchedIDs.insert(value.id)
+                            }
+                            return PageQuoteMatches(ranges: ranges, uniqueMatchedIDs: uniqueMatchedIDs, sourceTextIdentity: pageText?.identity, proof: proof)
+                        }
+                        let matches = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
+                        guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
+                        phaseProofChecked = true; phaseProof = matches.proof
+                        // Metadata can change while the worker is running even if the
+                        // decorations did not. Never install that older page proof.
+                        if let identity = matches.sourceTextIdentity, self.sourcePageTexts[number]?.identity == identity {
+                            if (matches.proof?.byteCount ?? 0) <= 2_097_152 {
+                                cache.sourceTextProofIdentity = identity; cache.sourceTextProof = matches.proof
+                            } else {
+                                // Do not retain large proofs across the window. The
+                                // term stage may prove this page once more instead.
+                                cache.sourceTextProofIdentity = nil; cache.sourceTextProof = nil
+                            }
+                        }
+                        var began = ProcessInfo.processInfo.systemUptime, count = 0
+                        var interval = pdfDecorationSignposter.beginInterval("PrepareGeometryBatch")
                         for value in matchingAdditions {
-                            guard !Task.isCancelled else { break }
-                            guard !value.quote.isEmpty, value.quote.utf16.count <= 32_768,
-                                  (value.prefix?.utf8.count ?? 0) <= 4_096, (value.suffix?.utf8.count ?? 0) <= 4_096 else { continue }
-                            // The Snapshot supplied only host-validated offsets.
-                            // A byte-exact whole page plus this exact quote makes
-                            // them native offsets, including repeated page quotes.
-                            if let range = proof?.range(of: value.quote, location: value.rangeLocation, length: value.rangeLength) {
-                                ranges[value.id] = CachedQuoteRange(range: range)
-                                continue
+                            guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else {
+                                pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval); return
                             }
                             let key = QuoteCacheKey(quote: Data(value.quote.utf8), prefix: value.prefix.map { Data($0.utf8) }, suffix: value.suffix.map { Data($0.utf8) })
-                            ranges[value.id] = saved[key] ?? CachedQuoteRange(range: Self.findNativeQuoteRange(value.quote, prefix: value.prefix, suffix: value.suffix, text: source))
-                            uniqueMatchedIDs.insert(value.id)
-                        }
-                        return PageQuoteMatches(ranges: ranges, uniqueMatchedIDs: uniqueMatchedIDs, sourceTextIdentity: pageText?.identity, proof: proof)
-                    }
-                    let matches = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
-                    guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
-                    // Metadata can change while the worker is running even if the
-                    // decorations did not. Never install that older page proof.
-                    if let identity = matches.sourceTextIdentity, self.sourcePageTexts[number]?.identity == identity {
-                        if (matches.proof?.byteCount ?? 0) <= 2_097_152 {
-                            cache.sourceTextProofIdentity = identity; cache.sourceTextProof = matches.proof
-                        } else {
-                            // Do not retain large proofs across the window. The
-                            // term stage may prove this page once more instead.
-                            cache.sourceTextProofIdentity = nil; cache.sourceTextProof = nil
-                        }
-                    }
-                    var began = ProcessInfo.processInfo.systemUptime, count = 0
-                    var interval = pdfDecorationSignposter.beginInterval("PrepareGeometryBatch")
-                    for value in matchingAdditions {
-                        guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else {
-                            pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval); return
-                        }
-                        let key = QuoteCacheKey(quote: Data(value.quote.utf8), prefix: value.prefix.map { Data($0.utf8) }, suffix: value.suffix.map { Data($0.utf8) })
-                        let matched = matches.ranges[value.id]
-                        // A validated offset can distinguish two identical source
-                        // units. Such a result is not a page-wide unique match and
-                        // must never poison the raw quote/context cache.
-                        if matches.uniqueMatchedIDs.contains(value.id), let matched, key.byteCount <= 1_048_576,
-                           cache.ranges[key] != nil || (cache.ranges.count < 2000 && cache.rangeBytes + key.byteCount <= 1_048_576) {
-                            if cache.ranges[key] == nil { cache.rangeBytes += key.byteCount }; cache.ranges[key] = matched
-                        }
-                        var lines: [CGRect] = []
-                        if passages {
-                            // Build the sentence index once after this stage, not
-                            // on every progressive yield below.
-                            cache.rememberPassage(value, range: matched?.range)
-                        } else {
-                            if self.sourceScrollQuietUntil > ProcessInfo.processInfo.systemUptime {
+                            let matched = matches.ranges[value.id]
+                            // A validated offset can distinguish two identical source
+                            // units. Such a result is not a page-wide unique match and
+                            // must never poison the raw quote/context cache.
+                            if matches.uniqueMatchedIDs.contains(value.id), let matched, key.byteCount <= 1_048_576,
+                               cache.ranges[key] != nil || (cache.ranges.count < 2000 && cache.rangeBytes + key.byteCount <= 1_048_576) {
+                                if cache.ranges[key] == nil { cache.rangeBytes += key.byteCount }; cache.ranges[key] = matched
+                            }
+                            var lines: [CGRect] = []
+                            if passages {
+                                // Build the sentence index once after this stage, not
+                                // on every progressive yield below.
+                                cache.rememberPassage(value, range: matched?.range)
+                            } else {
+                                if self.sourceScrollQuietUntil > ProcessInfo.processInfo.systemUptime {
+                                    pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval)
+                                    do { try await self.waitForSourceScrollIdle() } catch { return }
+                                    began = ProcessInfo.processInfo.systemUptime; count = 0
+                                    interval = pdfDecorationSignposter.beginInterval("PrepareGeometryBatch")
+                                }
+                                if let range = matched?.range, let selection = page.selection(for: range) {
+                                    for line in selection.selectionsByLine() {
+                                        let rect = line.bounds(for: page).intersection(page.bounds(for: .cropBox))
+                                        if !rect.isNull && !rect.isEmpty && [rect.minX, rect.minY, rect.maxX, rect.maxY].allSatisfy(\.isFinite) { lines.append(rect) }
+                                        count += 1
+                                        if count >= 24 || ProcessInfo.processInfo.systemUptime - began >= 0.003 {
+                                            pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval)
+                                            do { try await Task.sleep(nanoseconds: 1_000_000) } catch { return }
+                                            guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
+                                            began = ProcessInfo.processInfo.systemUptime; count = 0
+                                            interval = pdfDecorationSignposter.beginInterval("PrepareGeometryBatch")
+                                        }
+                                    }
+                                }
+                                let cost = value.quote.utf8.count + (value.prefix?.utf8.count ?? 0) + (value.suffix?.utf8.count ?? 0) + lines.count * 64 + 256
+                                let geometry = SourceGeometry(value: value, page: number, lines: lines, cost: cost)
+                                cache.remember(geometry); self.sourceGeometries[value.id] = geometry
+                            }
+                            cache.rememberMatch(value.id, range: matched?.range, proofIdentity: matches.sourceTextIdentity)
+                            self.sourceCanvas.needsDisplay = true; count += 1
+                            if count >= 12 || ProcessInfo.processInfo.systemUptime - began >= 0.003 {
+                                self.sourceGeometryPages[number] = cache
                                 pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval)
-                                do { try await self.waitForSourceScrollIdle() } catch { return }
+                                do { try await Task.sleep(nanoseconds: 1_000_000) } catch { return }
+                                guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
                                 began = ProcessInfo.processInfo.systemUptime; count = 0
                                 interval = pdfDecorationSignposter.beginInterval("PrepareGeometryBatch")
                             }
-                            if let range = matched?.range, let selection = page.selection(for: range) {
-                                for line in selection.selectionsByLine() {
-                                    let rect = line.bounds(for: page).intersection(page.bounds(for: .cropBox))
-                                    if !rect.isNull && !rect.isEmpty && [rect.minX, rect.minY, rect.maxX, rect.maxY].allSatisfy(\.isFinite) { lines.append(rect) }
-                                    count += 1
-                                    if count >= 24 || ProcessInfo.processInfo.systemUptime - began >= 0.003 {
-                                        pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval)
-                                        do { try await Task.sleep(nanoseconds: 1_000_000) } catch { return }
-                                        guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
-                                        began = ProcessInfo.processInfo.systemUptime; count = 0
-                                        interval = pdfDecorationSignposter.beginInterval("PrepareGeometryBatch")
-                                    }
-                                }
-                            }
-                            let cost = value.quote.utf8.count + (value.prefix?.utf8.count ?? 0) + (value.suffix?.utf8.count ?? 0) + lines.count * 64 + 256
-                            let geometry = SourceGeometry(value: value, page: number, lines: lines, cost: cost)
-                            cache.remember(geometry); self.sourceGeometries[value.id] = geometry
                         }
-                        cache.rememberMatch(value.id, range: matched?.range, proofIdentity: matches.sourceTextIdentity)
-                        self.sourceCanvas.needsDisplay = true; count += 1
-                        if count >= 12 || ProcessInfo.processInfo.systemUptime - began >= 0.003 {
-                            self.sourceGeometryPages[number] = cache
-                            pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval)
-                            do { try await Task.sleep(nanoseconds: 1_000_000) } catch { return }
-                            guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
-                            began = ProcessInfo.processInfo.systemUptime; count = 0
-                            interval = pdfDecorationSignposter.beginInterval("PrepareGeometryBatch")
-                        }
+                        pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval)
                     }
-                    pdfDecorationSignposter.endInterval("PrepareGeometryBatch", interval)
                     if passages { cache.rebuildPassageIndexIfNeeded() }
                     self.sourceGeometryPages[number] = cache
                     self.trimSourceGeometryCache(keeping: window)
@@ -1744,9 +1770,11 @@ struct PDFReaderView: NSViewRepresentable {
         if preferTerm, let term = cachedSourceHit(at: local, on: page, number: index + 1, cache: cache, preferTerm: true, onlyTerms: true) { return term }
         // Find the sentence by native character offset before asking PDFKit
         // for geometry. Never prepare every sentence merely to hover one.
-        if ProcessInfo.processInfo.systemUptime >= sourceScrollQuietUntil, !cache.passageIndex.isEmpty {
+        let canPrepare = ProcessInfo.processInfo.systemUptime >= sourceScrollQuietUntil
+        var geometryBudget = 8
+        if canPrepare, !cache.passageIndex.isEmpty {
             let character = page.characterIndex(at: local)
-            if character != NSNotFound {
+            if character >= 0, character < page.numberOfCharacters {
                 let ids = cache.passageIndex.ids(containing: character).filter {
                     validSourceDecorationIDsByPage[index + 1]?.contains($0) == true &&
                         cache.passageValues[$0]?.interaction == .passage && cache.passageValues[$0] == sourceDecorationValuesByID[$0]
@@ -1761,17 +1789,77 @@ struct PDFReaderView: NSViewRepresentable {
                     guard validSourceDecorationIDsByPage[index + 1]?.contains(id) == true,
                           let value = cache.passageValues[id], value == sourceDecorationValuesByID[id],
                           let range = cache.passageRanges[id] else { continue }
-                    if let geometry = cache.geometry[id], geometry.value == value { sourceGeometries[id] = geometry; continue }
-                    let lines = page.selection(for: range)?.selectionsByLine().compactMap { line -> CGRect? in
-                        let rect = line.bounds(for: page).intersection(page.bounds(for: .cropBox))
-                        return !rect.isNull && !rect.isEmpty && [rect.minX, rect.minY, rect.maxX, rect.maxY].allSatisfy(\.isFinite) ? rect : nil
-                    } ?? []
-                    let geometry = SourceGeometry(value: value, page: index + 1, lines: lines, cost: lines.count * 64 + 128)
-                    cache.remember(geometry); sourceGeometries[id] = geometry
+                    if let geometry = prepareSourcePassage(value, range: range, on: page, number: index + 1,
+                                                           cache: cache, budget: &geometryBudget),
+                       let rectangle = geometry.lines.first(where: { $0.contains(local) }) {
+                        return PDFSourceDecorationHit(id: id, rect: pdfView.convert(rectangle, from: page))
+                    }
                 }
             }
         }
-        return cachedSourceHit(at: local, on: page, number: index + 1, cache: cache, preferTerm: preferTerm)
+        let prepared = cachedSourceHit(at: local, on: page, number: index + 1, cache: cache, preferTerm: preferTerm)
+        // A line rectangle can contain points between glyphs for which PDFKit
+        // returns no character index. Cold and already prepared sentences must
+        // use the same physical hit rule, without accepting a neighboring line.
+        guard canPrepare, !cache.passageIndex.isEmpty,
+              let line = NativePDFTextLine.at(local, on: page, pageText: cache.nativeText) else { return prepared }
+        var candidates: [NativePDFTextLine.Candidate<String>] = []
+        var cached: (id: String, rectangle: CGRect, length: Int)?
+        var visited = Set<String>()
+        for range in line.ranges {
+            cache.passageIndex.forEachEntry(intersecting: range) { entry in
+                guard visited.insert(entry.id).inserted, validSourceDecorationIDsByPage[index + 1]?.contains(entry.id) == true,
+                      let value = cache.passageValues[entry.id], value.interaction == .passage,
+                      value == sourceDecorationValuesByID[entry.id] else { return }
+                if let geometry = cache.geometry[entry.id], geometry.value == value {
+                    sourceGeometries[entry.id] = geometry
+                    if let rectangle = geometry.lines.first(where: { $0.contains(local) }) {
+                        let moreSpecific = cached.map {
+                            entry.range.length < $0.length || (entry.range.length == $0.length && entry.id < $0.id)
+                        } ?? true
+                        if moreSpecific { cached = (entry.id, rectangle, entry.range.length) }
+                    }
+                    // Cached empty/non-containing geometry cannot occupy a slot
+                    // in the bounded pool of new native geometry requests.
+                    return
+                }
+                guard geometryBudget > 0 else { return }
+                let candidate = NativePDFTextLine.Candidate(id: entry.id, range: entry.range)
+                let position = candidates.firstIndex {
+                    candidate.range.length < $0.range.length || (candidate.range.length == $0.range.length && candidate.id < $0.id)
+                } ?? candidates.count
+                if position < geometryBudget {
+                    candidates.insert(candidate, at: position)
+                    if candidates.count > geometryBudget { candidates.removeLast() }
+                }
+            }
+        }
+        // An already prepared long paragraph must not hide an unprepared
+        // shorter sentence. Try only candidates that can improve this winner.
+        let moreSpecific = candidates.prefix { candidate in
+            cached.map { candidate.range.length < $0.length || (candidate.range.length == $0.length && candidate.id < $0.id) } ?? true
+        }
+        let hit = NativePDFTextLine.firstHit(at: local, candidates: Array(moreSpecific)) { candidate in
+            guard let value = cache.passageValues[candidate.id], value == sourceDecorationValuesByID[candidate.id],
+                  cache.passageRanges[candidate.id] == candidate.range else { return [] }
+            return prepareSourcePassage(value, range: candidate.range, on: page, number: index + 1,
+                                        cache: cache, budget: &geometryBudget)?.lines ?? []
+        }
+        if let hit { return PDFSourceDecorationHit(id: hit.id, rect: pdfView.convert(hit.rectangle, from: page)) }
+        if let cached { return PDFSourceDecorationHit(id: cached.id, rect: pdfView.convert(cached.rectangle, from: page)) }
+        return prepared
+    }
+    private func prepareSourcePassage(_ value: SourceReadingDecoration, range: NSRange, on page: PDFPage, number: Int,
+                                      cache: SourceGeometryPage, budget: inout Int) -> SourceGeometry? {
+        if let geometry = cache.geometry[value.id], geometry.value == value {
+            sourceGeometries[value.id] = geometry; return geometry
+        }
+        guard budget > 0 else { return nil }
+        budget -= 1
+        let lines = NativePDFTextLine.rectangles(for: range, on: page)
+        let geometry = SourceGeometry(value: value, page: number, lines: lines, cost: lines.count * 64 + 128)
+        cache.remember(geometry); sourceGeometries[value.id] = geometry
+        return geometry
     }
     private func cachedSourceHit(at local: CGPoint, on page: PDFPage, number: Int, cache: SourceGeometryPage,
                                  preferTerm: Bool, onlyTerms: Bool = false) -> PDFSourceDecorationHit? {

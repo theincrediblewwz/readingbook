@@ -153,6 +153,19 @@ final class ReadingSentenceAnchorsTests: XCTestCase {
             XCTAssertThrowsError(try ReadingExperienceRuntime.resolve(normalized, in: project), "规范等价的替换仍不是原文字节。")
         }
     }
+    func testEverySentenceOfAValidDenseUnitIncludingItsTailIsRepresented() throws {
+        // A legal source unit holds up to 5,000 Characters. The former 2,000
+        // range prefix silently discarded this unit's final sentence.
+        let sentences = (0..<2001).map { String(UnicodeScalar(0x4E00 + $0)!) + "。" }
+        let project = book(sentences.joined())
+        XCTAssertLessThanOrEqual(project.units[0].text.count, 5_000)
+        let anchors = ReadingSentenceAnchors.anchors(in: project.units[0], project: project)
+        XCTAssertEqual(anchors.count, sentences.count)
+        let last = try XCTUnwrap(anchors.last)
+        XCTAssertEqual(last.quote, sentences.last)
+        XCTAssertEqual(NSMaxRange(try ReadingExperienceRuntime.resolve(last, in: project).range), project.units[0].text.utf16.count)
+        XCTAssertEqual(ReadingSentenceAnchors.anchors(in: project.units[0], project: project, maximum: 3).count, 3)
+    }
     func testVisiblePagesWinBeforeNeighborsAndWorkIsBounded() {
         let pages = Set(1...1484)
         XCTAssertEqual(ReadingSentenceAnchors.pageWindow(current: 740, visible: [739, 740, 741], available: pages, maximum: 5), [740, 739, 741, 738, 742])
@@ -160,5 +173,42 @@ final class ReadingSentenceAnchorsTests: XCTestCase {
         let bounded = ReadingSentenceAnchors.pageWindow(current: 700, visible: Array(1...1484), available: pages)
         XCTAssertEqual(bounded.count, 12)
         XCTAssertEqual(bounded.first, 700)
+    }
+    func testHardStructureCutsKeepAnchorsExactAndRejectOldMixedPassagesWithoutDeletingThem() throws {
+        let text = "横排大字本\n😀e\u{301}玄德来到\n城中。末句尚未结束\n471"
+        var project = book(text)
+        let old = try ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash, unitID: "u1",
+            quote: "横排大字本\n😀e\u{301}玄德来到\n城中。", in: project)
+        project.readingExperience = ReadingExperienceState(anchors: [old])
+        let originalBytes = Data(project.units[0].text.utf8)
+        let cuts = PDFReadingStructure.boundaries(in: text, peers: ["横排大字本\n前页正文。", "横排大字本\n后页正文。"])
+        let anchors = ReadingSentenceAnchors.anchors(in: project.units[0], project: project, structuralBreaks: cuts)
+        XCTAssertEqual(anchors.map(\.quote), ["横排大字本", "😀e\u{301}玄德来到\n城中。", "末句尚未结束", "471"])
+        let index = ReadingSentenceAnchors.boundaryIndex(in: text, structuralBreaks: cuts)
+        XCTAssertTrue(index.crossesStructuralBoundary(try ReadingExperienceRuntime.resolve(old, in: project).range))
+        for anchor in anchors {
+            let resolved = try ReadingExperienceRuntime.resolve(anchor, in: project)
+            XCTAssertFalse(index.crossesStructuralBoundary(resolved.range))
+            XCTAssertTrue((text as NSString).substring(with: resolved.range).utf8.elementsEqual(anchor.quote.utf8))
+            XCTAssertEqual(anchor.id, try ReadingExperienceRuntime.createAnchor(sourceHash: project.sourceHash, unitID: "u1",
+                quote: anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix, in: project).id)
+        }
+        XCTAssertEqual(project.readingExperience?.anchors, [old])
+        XCTAssertEqual(Data(project.units[0].text.utf8), originalBytes)
+    }
+    func testHardCutsIgnoreOutOfBoundsSurrogatesAndCombiningSequenceOffsets() {
+        let text = "😀甲e\u{301}乙。下一句没有句号"
+        let invalid = [-1, 0, 1, 4, (text as NSString).length, Int.max]
+        let ordinary = ReadingSentenceAnchors.ranges(in: text)
+        XCTAssertEqual(ReadingSentenceAnchors.ranges(in: text, structuralBreaks: invalid), ordinary)
+        let whole = NSRange(location: 0, length: (text as NSString).length)
+        XCTAssertFalse(ReadingSentenceAnchors.boundaryIndex(in: text, structuralBreaks: invalid).crossesStructuralBoundary(whole))
+        let first = (text as NSString).range(of: "下一句").location
+        let withCut = ReadingSentenceAnchors.ranges(in: text, structuralBreaks: invalid + [first, first])
+        XCTAssertEqual(withCut, ordinary)
+        XCTAssertTrue(ReadingSentenceAnchors.boundaryIndex(in: text, structuralBreaks: invalid + [first]).crossesStructuralBoundary(whole))
+        XCTAssertEqual(ReadingSentenceAnchors.ranges(in: "无句号的前半后半", structuralBreaks: [6]).map {
+            ("无句号的前半后半" as NSString).substring(with: $0)
+        }, ["无句号的前半", "后半"])
     }
 }

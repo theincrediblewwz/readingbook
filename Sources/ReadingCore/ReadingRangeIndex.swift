@@ -1,6 +1,6 @@
 import Foundation
 
-/// Immutable point lookup for source offsets. No text, PDFKit object or view
+/// Immutable point and range lookup for source offsets. No text, PDFKit object or view
 /// geometry is retained. Build this index when a page's matched ranges change,
 /// never while drawing or processing a pointer movement.
 public struct ReadingRangeIndex<ID: Hashable & Sendable>: Sendable {
@@ -62,25 +62,56 @@ public struct ReadingRangeIndex<ID: Hashable & Sendable>: Sendable {
             if orderedEntries[middle].range.location <= offset { lower = middle + 1 }
             else { upper = middle }
         }
-        let limit = lower
-        var seen = Set<ID>(), matches: [Entry] = []
-        func visit(_ lower: Int, _ upper: Int) {
-            guard lower < upper, lower < limit else { return }
-            let middle = lower + (upper - lower) / 2
-            guard subtreeMaxEnd[middle] > offset else { return }
-            visit(lower, middle)
-            if middle < limit {
-                let entry = orderedEntries[middle]
-                if ends[middle] > offset, seen.insert(entry.id).inserted { matches.append(entry) }
-                visit(middle + 1, upper)
-            }
-        }
-        visit(0, orderedEntries.count)
+        var matches: [Entry] = []
+        forEachEntry(startLimit: lower, endingAfter: offset) { matches.append($0) }
         return matches
+    }
+
+    /// Returns ranges with a nonempty intersection. Ranges that only touch at
+    /// an endpoint do not intersect. Ordering and ID deduplication match point queries.
+    public func entries(intersecting range: NSRange) -> [Entry] {
+        var matches: [Entry] = []
+        forEachEntry(intersecting: range) { matches.append($0) }
+        return matches
+    }
+
+    /// Visits matching entries without allocating a result array. Invalid,
+    /// empty, not-found and overflowing query ranges produce no visits.
+    /// The start bound and max-end subtrees prune nonintersecting ranges;
+    /// visiting every record is unavoidable if every range actually intersects.
+    public func forEachEntry(intersecting range: NSRange, _ visit: (Entry) -> Void) {
+        guard range.location != NSNotFound, range.length != NSNotFound,
+              range.location >= 0, range.length > 0, !orderedEntries.isEmpty else { return }
+        let (end, overflow) = range.location.addingReportingOverflow(range.length)
+        guard !overflow, end > range.location else { return }
+        var lower = 0, upper = orderedEntries.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if orderedEntries[middle].range.location < end { lower = middle + 1 }
+            else { upper = middle }
+        }
+        forEachEntry(startLimit: lower, endingAfter: range.location, visit)
     }
 
     public func ids(containing offset: Int) -> [ID] {
         entries(containing: offset).map(\.id)
+    }
+
+    private func forEachEntry(startLimit: Int, endingAfter offset: Int, _ visit: (Entry) -> Void) {
+        guard startLimit > 0 else { return }
+        var seen = Set<ID>()
+        func walk(_ lower: Int, _ upper: Int) {
+            guard lower < upper, lower < startLimit else { return }
+            let middle = lower + (upper - lower) / 2
+            guard subtreeMaxEnd[middle] > offset else { return }
+            walk(lower, middle)
+            if middle < startLimit {
+                let entry = orderedEntries[middle]
+                if ends[middle] > offset, seen.insert(entry.id).inserted { visit(entry) }
+                walk(middle + 1, upper)
+            }
+        }
+        walk(0, orderedEntries.count)
     }
 
     private static func makeSubtreeMaxEnds(_ ends: [Int]) -> [Int] {

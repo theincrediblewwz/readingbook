@@ -157,6 +157,7 @@ struct ReaderWorkspaceView: View {
         guard !interactionBlocked else { inlineReading.clear(); return }
         guard let value else { inlineReading.leave(); return }
         inlineReading.receive(value, book: store.book, index: store.readingExperienceIndex, scope: inlineScope,
+                              structuralBreaks: { store.inlineSentenceBreaks(for: $0) },
                               boundary: { store.inlineReadingBoundary(for: $0) })
     }
     private var inlineScope: String {
@@ -165,6 +166,7 @@ struct ReaderWorkspaceView: View {
     private func refreshInlineContent(index: ReadingExperienceState) {
         guard !interactionBlocked else { inlineReading.clear(); return }
         inlineReading.refresh(book: store.book, index: index, scope: inlineScope,
+                              structuralBreaks: { store.inlineSentenceBreaks(for: $0) },
                               boundary: { store.inlineReadingBoundary(for: $0) })
     }
     private func sourceTapped(_ id: String) {

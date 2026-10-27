@@ -13,6 +13,20 @@ public struct ReadingPassageBoundaryIndex: Sendable {
     fileprivate init(length: Int, boundaries: [Int], regions: [NSRange]? = nil) {
         self.length = length; self.boundaries = boundaries; self.regions = regions
     }
+    fileprivate static func joining(_ pieces: [(offset: Int, index: Self)], length: Int, cuts: [Int]) -> Self {
+        var boundaries = cuts, regions: [NSRange] = []
+        for piece in pieces {
+            guard !Task.isCancelled, piece.index.length >= 0 else { return Self(length: -1, boundaries: []) }
+            boundaries += piece.index.boundaries.map { piece.offset + $0 }
+            if let local = piece.index.regions {
+                regions += local.map { NSRange(location: piece.offset + $0.location, length: $0.length) }
+            } else {
+                regions.append(NSRange(location: piece.offset, length: piece.index.length))
+            }
+        }
+        guard !Task.isCancelled else { return Self(length: -1, boundaries: []) }
+        return Self(length: length, boundaries: Array(Set(boundaries)).sorted(), regions: regions)
+    }
     public func crossesStructuralBoundary(_ range: NSRange) -> Bool {
         guard range.location >= 0, range.length > 0, range.location <= length, range.length <= length - range.location else { return true }
         let end = range.location + range.length
@@ -44,8 +58,18 @@ public enum ReadingSentenceAnchors {
     }
 
     public static func ranges(in text: String, maximumUTF16Length: Int = 1600, chapterTitle: String? = nil,
-                              syntax: ReadingSentenceSyntax = .plainText) -> [NSRange] {
+                              syntax: ReadingSentenceSyntax = .plainText, structuralBreaks: [Int] = []) -> [NSRange] {
         guard maximumUTF16Length >= 64, !Task.isCancelled else { return [] }
+        if let pieces = fragments(in: text, structuralBreaks: structuralBreaks) {
+            var result: [NSRange] = []
+            for piece in pieces {
+                guard !Task.isCancelled else { return [] }
+                result += ranges(in: piece.text, maximumUTF16Length: maximumUTF16Length, chapterTitle: chapterTitle,
+                    syntax: syntax).map { NSRange(location: piece.offset + $0.location, length: $0.length) }
+            }
+            guard !Task.isCancelled else { return [] }
+            return result
+        }
         guard syntax == .markdown, ReadingMarkdownStructure.needsStructure(text) else {
             return scan(text, maximumUTF16Length: maximumUTF16Length, chapterTitle: chapterTitle).ranges
         }
@@ -75,8 +99,16 @@ public enum ReadingSentenceAnchors {
     }
 
     public static func boundaryIndex(in text: String, chapterTitle: String? = nil,
-                                     syntax: ReadingSentenceSyntax = .plainText) -> ReadingPassageBoundaryIndex {
+                                     syntax: ReadingSentenceSyntax = .plainText, structuralBreaks: [Int] = []) -> ReadingPassageBoundaryIndex {
         guard !Task.isCancelled else { return ReadingPassageBoundaryIndex(length: -1, boundaries: []) }
+        if let pieces = fragments(in: text, structuralBreaks: structuralBreaks) {
+            var indices: [(offset: Int, index: ReadingPassageBoundaryIndex)] = []
+            for piece in pieces {
+                guard !Task.isCancelled else { return ReadingPassageBoundaryIndex(length: -1, boundaries: []) }
+                indices.append((piece.offset, boundaryIndex(in: piece.text, chapterTitle: chapterTitle, syntax: syntax)))
+            }
+            return .joining(indices, length: text.utf16.count, cuts: pieces.dropFirst().map(\.offset))
+        }
         if syntax == .markdown, ReadingMarkdownStructure.needsStructure(text) {
             guard let blocks = ReadingMarkdownStructure.blocks(in: text, displayMath: { breaks in
                 scan(text, maximumUTF16Length: 1600, chapterTitle: chapterTitle,
@@ -99,6 +131,27 @@ public enum ReadingSentenceAnchors {
         let value = scan(text, maximumUTF16Length: 1600, chapterTitle: chapterTitle, collectRanges: false)
         guard !Task.isCancelled else { return ReadingPassageBoundaryIndex(length: -1, boundaries: []) }
         return ReadingPassageBoundaryIndex(length: text.utf16.count, boundaries: value.boundaries)
+    }
+
+    /// Hard cuts are disposable presentation metadata. Walk Character boundaries
+    /// once so a malformed UTF16 offset cannot split a surrogate or grapheme, and
+    /// never seek from the source prefix separately for every proposed cut.
+    private static func fragments(in text: String, structuralBreaks: [Int]) -> [(offset: Int, text: String)]? {
+        let proposed = Set(structuralBreaks.filter { $0 > 0 })
+        guard !proposed.isEmpty else { return nil }
+        var result: [(offset: Int, text: String)] = []
+        var start = text.startIndex, startOffset = 0, offset = 0
+        for cursor in text.indices {
+            guard !Task.isCancelled else { return [] }
+            if proposed.contains(offset) {
+                result.append((startOffset, String(text[start..<cursor])))
+                start = cursor; startOffset = offset
+            }
+            offset += String(text[cursor]).utf16.count
+        }
+        guard !result.isEmpty else { return nil }
+        result.append((startOffset, String(text[start...])))
+        return result
     }
 
     private static func scan(_ text: String, maximumUTF16Length: Int, chapterTitle: String?, collectRanges: Bool = true,
@@ -346,11 +399,14 @@ public enum ReadingSentenceAnchors {
         return content.count
     }
 
-    public static func anchors(in unit: SourceUnit, project: BookProject, maximum: Int = 2000) -> [SourceAnchor] {
+    /// Legal source units contain at most 5,000 Characters; each nonempty
+    /// sentence consumes at least one. Cover their tail within that finite cap.
+    public static func anchors(in unit: SourceUnit, project: BookProject, maximum: Int = 5000, structuralBreaks: [Int] = []) -> [SourceAnchor] {
         guard maximum > 0, !Task.isCancelled,
               let creator = try? ReadingExperienceRuntime.anchorCreator(sourceHash: project.sourceHash, unitID: unit.id, in: project) else { return [] }
         var result: [SourceAnchor] = []
-        for value in ranges(in: unit.text, chapterTitle: unit.chapter, syntax: syntax(for: unit, in: project)).prefix(max(0, min(2000, maximum))) {
+        for value in ranges(in: unit.text, chapterTitle: unit.chapter, syntax: syntax(for: unit, in: project),
+                            structuralBreaks: structuralBreaks).prefix(max(0, min(5000, maximum))) {
             guard !Task.isCancelled, let range = Range(value, in: unit.text) else { break }
             // Keep the same stable identity and literal validation as saved
             // anchors. Ambiguous excerpts are skipped instead of guessed.

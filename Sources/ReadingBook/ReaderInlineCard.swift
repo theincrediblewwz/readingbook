@@ -14,7 +14,8 @@ struct ReaderInlineContent: Sendable {
     let context: ReadingContext
     let composition: ViewDefinition?
     let compositionCurrentScope: CompositionCurrentScope
-    static func freeze(_ id: String, book: BookProject, index: ReadingExperienceState, boundary: KnowledgeReadBoundary) -> Self? {
+    static func freeze(_ id: String, book: BookProject, index: ReadingExperienceState, boundary: KnowledgeReadBoundary,
+                       structuralBreaks: [Int] = []) -> Self? {
         guard !Task.isCancelled,
               let anchor = index.anchors.first(where: { $0.id == id }) ?? book.readingExperience?.anchors.first(where: { $0.id == id }),
               boundary.allowedUnitIDs?.contains(anchor.unitID) != false,
@@ -30,7 +31,7 @@ struct ReaderInlineContent: Sendable {
         } else { entity = nil; event = nil }
         guard !Task.isCancelled else { return nil }
         let syntax = ReadingSentenceAnchors.syntax(for: resolved.unit, in: book)
-        let passageBoundaries = target == nil ? ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter, syntax: syntax) : nil
+        let passageBoundaries = target == nil ? ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter, syntax: syntax, structuralBreaks: structuralBreaks) : nil
         guard passageBoundaries?.crossesStructuralBoundary(resolved.range) != true else { return nil }
         let evidence = entity?.evidence ?? event?.evidence ?? []
         var units: [String: SourceUnit] = [:]
@@ -60,7 +61,7 @@ struct ReaderInlineContent: Sendable {
                 guard !Task.isCancelled else { return nil }
                 if candidate.unitID == anchor.unitID, anchors[candidate.id] == nil { anchors[candidate.id] = candidate }
             }
-            let structuralBoundaries = passageBoundaries ?? ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter, syntax: syntax)
+            let structuralBoundaries = passageBoundaries ?? ReadingSentenceAnchors.boundaryIndex(in: resolved.unit.text, chapterTitle: resolved.unit.chapter, syntax: syntax, structuralBreaks: structuralBreaks)
             var localProject = book; localProject.units = [resolved.unit]
             let resolveLocal: ((SourceAnchor) throws -> ResolvedSourceAnchor)? = state.layers.isEmpty ? nil :
                 try? ReadingExperienceRuntime.anchorResolver(sourceHash: book.sourceHash, unitID: resolved.unit.id, in: localProject)
@@ -177,6 +178,7 @@ struct ReaderInlineContent: Sendable {
     private struct Input: Sendable {
         let scope: String; let serial: Int; let book: BookProject
         let index: ReadingExperienceState; let boundary: KnowledgeReadBoundary
+        let structuralBreaks: [Int]
     }
     @Published var hover: SourceReadingHover?
     @Published var content: ReaderInlineContent?
@@ -195,6 +197,7 @@ struct ReaderInlineContent: Sendable {
     private var closing = false
     var lastHover: SourceReadingHover?
     func receive(_ value: SourceReadingHover?, book: BookProject?, index: ReadingExperienceState, scope: String,
+                 structuralBreaks: (String) -> [Int] = { _ in [] },
                  boundary: (String) -> KnowledgeReadBoundary) {
         if self.scope != nil, self.scope != scope { clear() }
         if let value { lastHover = value }
@@ -216,7 +219,7 @@ struct ReaderInlineContent: Sendable {
         if pendingID == value.id && !value.activated { return }
         automaticTranslationActive = false
         cancelPending(); invalidateRefresh(); pendingID = value.id
-        updateInputs(book: book, index: index, scope: scope, boundary: boundary)
+        updateInputs(book: book, index: index, scope: scope, structuralBreaks: structuralBreaks, boundary: boundary)
         let generation = interactionGeneration
         task = Task { [weak self] in
             if !value.activated { do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return } }
@@ -225,7 +228,7 @@ struct ReaderInlineContent: Sendable {
             // its delay, but never finish with the old captured book snapshot.
             while !Task.isCancelled, self.interactionGeneration == generation, self.pendingID == value.id {
                 guard let input = self.inputs[value.id], input.scope == self.scope else { return }
-                let worker = Task.detached(priority: .userInitiated) { ReaderInlineContent.freeze(value.id, book: input.book, index: input.index, boundary: input.boundary) }
+                let worker = Task.detached(priority: .userInitiated) { ReaderInlineContent.freeze(value.id, book: input.book, index: input.index, boundary: input.boundary, structuralBreaks: input.structuralBreaks) }
                 let frozen = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
                 guard !Task.isCancelled, self.interactionGeneration == generation, self.pendingID == value.id,
                       self.scope == input.scope else { return }
@@ -248,17 +251,19 @@ struct ReaderInlineContent: Sendable {
     /// Called only for actual project/index publications, never from body-time
     /// array comparisons. This refresh cannot move, pin or reopen the popup.
     func refresh(book: BookProject?, index: ReadingExperienceState, scope: String,
+                 structuralBreaks: (String) -> [Int] = { _ in [] },
                  boundary: (String) -> KnowledgeReadBoundary) {
         guard hover != nil || pendingID != nil else { return }
         guard let book, self.scope == scope else { clear(); return }
-        updateInputs(book: book, index: index, scope: scope, boundary: boundary)
+        updateInputs(book: book, index: index, scope: scope, structuralBreaks: structuralBreaks, boundary: boundary)
         if pendingID == nil { refreshDisplayed() }
     }
     private func updateInputs(book: BookProject, index: ReadingExperienceState, scope: String,
+                              structuralBreaks: (String) -> [Int],
                               boundary: (String) -> KnowledgeReadBoundary) {
         self.scope = scope; serial &+= 1
         let ids = Set([hover?.id, pendingID].compactMap { $0 })
-        inputs = Dictionary(uniqueKeysWithValues: ids.map { ($0, Input(scope: scope, serial: serial, book: book, index: index, boundary: boundary($0))) })
+        inputs = Dictionary(uniqueKeysWithValues: ids.map { ($0, Input(scope: scope, serial: serial, book: book, index: index, boundary: boundary($0), structuralBreaks: structuralBreaks($0))) })
     }
     private func invalidateRefresh() {
         interactionGeneration &+= 1; refreshTask?.cancel(); refreshTask = nil
@@ -275,7 +280,7 @@ struct ReaderInlineContent: Sendable {
             guard let self else { return }
             while !Task.isCancelled, self.interactionGeneration == generation, self.pendingID == nil, self.hover?.id == id {
                 guard let input = self.inputs[id], input.scope == self.scope else { return }
-                let worker = Task.detached(priority: .userInitiated) { ReaderInlineContent.freeze(id, book: input.book, index: input.index, boundary: input.boundary) }
+                let worker = Task.detached(priority: .userInitiated) { ReaderInlineContent.freeze(id, book: input.book, index: input.index, boundary: input.boundary, structuralBreaks: input.structuralBreaks) }
                 let frozen = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
                 guard !Task.isCancelled, self.interactionGeneration == generation, self.pendingID == nil,
                       self.hover?.id == id, self.scope == input.scope else { return }

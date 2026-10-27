@@ -23,6 +23,8 @@ private struct CompanionScopePreparation: Sendable {
         let owner: String; let units: [SourceUnit]; let objects: [ObjectInput]
         let anchors: [SourceAnchor]; let mentions: [SourceMention]; let literalBytes: [Data]
         let markdownUnitIDs: Set<String>
+        /// Disposable PDF layout cuts, aligned with units and part of cache equality.
+        let sentenceBreaks: [[Int]]
         let sourceUnitsAreUnique: Bool
     }
     struct Snapshot: Sendable {
@@ -67,11 +69,13 @@ private struct CompanionScopePreparation: Sendable {
     var boundariesByPage: [Int: KnowledgeReadBoundary] = [:]
     var currentBoundary: KnowledgeReadBoundary?
     var anchorsByID: [String: SourceAnchor] = [:]
+    var sentenceBreaksByUnit: [String: [Int]] = [:]
     func reset() {
         pendingScope = nil; pendingRevision = nil; queued = nil; current = nil; currentBase = nil; entries = [:]; order = []
         historyEstimatedCost = 0
         window = []; presentationRevision &+= 1; visiblePDFPages = []; unitIndices = [:]; pageIndices = [:]; boundariesByPage = [:]
         currentBoundary = nil; anchorsByID = [:]
+        sentenceBreaksByUnit = [:]
     }
     func remember(_ value: Snapshot) {
         if let old = entries.removeValue(forKey: value.key) { historyEstimatedCost -= old.estimatedRetainedCost }
@@ -103,6 +107,23 @@ private struct CompanionScopePreparation: Sendable {
         let selectedUnit = book.units[position], base = book.readingExperience ?? ReadingExperienceState()
         let pages = selectedUnit.page.map { includeWindow ? ReadingSentenceAnchors.pageWindow(current: $0, visible: request.visiblePages, available: Set(pageIndices.keys)) : [$0] } ?? []
         let groups = pages.isEmpty ? [[selectedUnit]] : pages.map { (pageIndices[$0] ?? []).map { book.units[$0] } }
+        // Inspect only the presentation window and at most four neighboring
+        // pages on either side. This is worker work, never pointer work. OCR
+        // text has its own Markdown structure and cannot prove PDF edge lines.
+        let isPDF = URL(fileURLWithPath: book.originalName).pathExtension.lowercased() == "pdf"
+        var pageEdges: [Int: PDFReadingStructure.EdgeDescriptor] = [:], unavailableEdges = Set<Int>()
+        func pageEdge(_ page: Int) -> PDFReadingStructure.EdgeDescriptor? {
+            if let edge = pageEdges[page] { return edge }
+            guard isPDF, !unavailableEdges.contains(page), let indices = pageIndices[page],
+                  !indices.isEmpty, indices.allSatisfy({ ReadingSentenceAnchors.syntax(for: book.units[$0], in: book) == .plainText }) else {
+                unavailableEdges.insert(page); return nil
+            }
+            let text = indices.map { book.units[$0].text }.joined()
+            guard !Task.isCancelled, let edge = PDFReadingStructure.edgeDescriptor(in: text) else {
+                unavailableEdges.insert(page); return nil
+            }
+            pageEdges[page] = edge; return edge
+        }
         var anchorsByUnit: [String: [SourceAnchor]] = [:], mentionsByAnchor: [String: [SourceMention]] = [:]
         for anchor in base.anchors {
             guard !Task.isCancelled else { return nil }
@@ -154,11 +175,29 @@ private struct CompanionScopePreparation: Sendable {
                 guard !Task.isCancelled else { return nil }
                 literalBytes.append(contentsOf: [Data(anchor.quote.utf8), Data(anchor.prefix.utf8), Data(anchor.suffix.utf8)])
             }
+            var sentenceBreaks = Array(repeating: [Int](), count: units.count)
+            if let page = units.first?.page, let edge = pageEdge(page) {
+                var peers: [PDFReadingStructure.EdgeDescriptor] = []
+                for distance in 1...4 {
+                    for direction in [-1, 1] {
+                        let (neighbor, overflow) = page.addingReportingOverflow(distance * direction)
+                        if !overflow, neighbor > 0, let value = pageEdge(neighbor) { peers.append(value) }
+                    }
+                }
+                let cuts = PDFReadingStructure.boundaries(in: edge, peers: peers)
+                var start = 0
+                for (index, unit) in units.enumerated() {
+                    let end = start + unit.text.utf16.count
+                    sentenceBreaks[index] = cuts.filter { $0 > start && $0 < end }.map { $0 - start }
+                    start = end
+                }
+            }
             let input = Input(owner: request.owner, units: units, objects: objects, anchors: anchors,
                 mentions: anchors.flatMap { mentionsByAnchor[$0.id] ?? [] },
                 literalBytes: literalBytes, markdownUnitIDs: Set(units.filter {
                     ReadingSentenceAnchors.syntax(for: $0, in: book) == .markdown
-                }.map(\.id)), sourceUnitsAreUnique: units.allSatisfy { !duplicateUnitIDs.contains($0.id) })
+                }.map(\.id)), sentenceBreaks: sentenceBreaks,
+                sourceUnitsAreUnique: units.allSatisfy { !duplicateUnitIDs.contains($0.id) })
             guard !Task.isCancelled else { return nil }
             var hasher = Hasher(); input.hash(into: &hasher); let key = hasher.finalize()
             // Exact equality on the worker protects against a compact-key
@@ -219,9 +258,9 @@ private struct CompanionScopePreparation: Sendable {
         var index = ReadingExperienceRuntime.indexEvidence(in: compact, state: initial, unitIDs: Set(input.units.map(\.id)))
         guard !Task.isCancelled else { return nil }
         var existing = Set(index.anchors.map(\.id)), candidates = Set<String>()
-        for unit in input.units {
+        for (position, unit) in input.units.enumerated() {
             guard !Task.isCancelled else { return nil }
-            for anchor in ReadingSentenceAnchors.anchors(in: unit, project: compact) where existing.insert(anchor.id).inserted {
+            for anchor in ReadingSentenceAnchors.anchors(in: unit, project: compact, structuralBreaks: input.sentenceBreaks[position]) where existing.insert(anchor.id).inserted {
                 index.anchors.append(anchor); candidates.insert(anchor.id)
             }
         }
@@ -233,10 +272,10 @@ private struct CompanionScopePreparation: Sendable {
         let mentions = Dictionary(grouping: index.mentions, by: \.anchorID)
         let units = Dictionary(input.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var structuralBoundaries: [String: ReadingPassageBoundaryIndex] = [:]
-        for unit in units.values {
+        for (position, unit) in input.units.enumerated() {
             guard !Task.isCancelled else { return nil }
             structuralBoundaries[unit.id] = ReadingSentenceAnchors.boundaryIndex(in: unit.text, chapterTitle: unit.chapter,
-                syntax: ReadingSentenceAnchors.syntax(for: unit, in: project))
+                syntax: ReadingSentenceAnchors.syntax(for: unit, in: project), structuralBreaks: input.sentenceBreaks[position])
         }
         let storedIDs = Set(input.anchors.map(\.id))
         var resolvers: [String: (SourceAnchor) throws -> ResolvedSourceAnchor] = [:]
@@ -322,6 +361,8 @@ private struct CompanionScopePreparation: Sendable {
         for bytes in input.literalBytes { guard !Task.isCancelled else { return nil }; add(bytes.count); add(32) }
         storage(input.markdownUnitIDs.count, MemoryLayout<String>.stride + 32)
         for id in input.markdownUnitIDs { guard !Task.isCancelled else { return nil }; text(id) }
+        storage(input.sentenceBreaks.count, MemoryLayout<[Int]>.stride)
+        for cuts in input.sentenceBreaks { storage(cuts.count, MemoryLayout<Int>.stride) }
         storage(input.anchors.count, MemoryLayout<SourceAnchor>.stride)
         for value in input.anchors { guard !Task.isCancelled else { return nil }; anchor(value) }
         storage(input.mentions.count, MemoryLayout<SourceMention>.stride)
@@ -441,6 +482,9 @@ private struct CompanionScopePreparation: Sendable {
                         self.readingPageSnapshots.current = prepared.selected; self.readingPageSnapshots.currentBase = prepared.base
                         let windowChanged = self.readingPageSnapshots.window.map(\.key) != prepared.snapshots.map(\.key)
                         self.readingPageSnapshots.window = prepared.snapshots
+                        self.readingPageSnapshots.sentenceBreaksByUnit = Dictionary(prepared.snapshots.flatMap { snapshot in
+                            zip(snapshot.input.units, snapshot.input.sentenceBreaks).map { ($0.0.id, $0.1) }
+                        }, uniquingKeysWith: { first, _ in first })
                         if prepared.changed || windowChanged {
                             self.readingExperienceIndex = nextIndex; self.readingContextCacheKey = nil
                         }
@@ -568,6 +612,10 @@ private struct CompanionScopePreparation: Sendable {
             if let value = snapshot.pageSourceText { result[value.page] = value }
         }
         return result
+    }
+    func inlineSentenceBreaks(for id: String) -> [Int] {
+        guard let unitID = readingPageSnapshots.anchorsByID[id]?.unitID else { return [] }
+        return readingPageSnapshots.sentenceBreaksByUnit[unitID] ?? []
     }
     func inlineReadingBoundary(for id: String?) -> KnowledgeReadBoundary {
         guard let book, book.temporalKnowledge?.profile?.avoidsSpoilers ?? true,
