@@ -1,4 +1,6 @@
-# 0.23.7 · 冷态命中、页末与页眉（原生验证前，Mac 待验）
+# 0.23.7 · 冷态命中、页末与页眉（构建/包校验通过，Mac 待验）
+
+[直接安装0.23.7/build38](dist/ReadingBook-0.23.7-Mac.zip)。[Actions 40474775829](https://github.com/theincrediblewwz/readingbook/actions/runs/40474775829) 的574项Core零失败、无编译警告；双架构Release、签名、资源自检及下载包版本/源码/架构/0755/摘要/CRC和32资源比对通过。原生源码`f84fdecffe09aae79811000dddf977329cb7adef`。
 
 保留0.23.6供同场景比较。以下需用原先出问题的PDF复测；自动检查不代替现场效果：
 

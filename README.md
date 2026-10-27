@@ -1,3 +1,18 @@
+# 0.23.7 · 句首、页末与页眉定位（2026-10-27）
+
+[直接安装 Mac ZIP · 0.23.7/build38](dist/ReadingBook-0.23.7-Mac.zip)，支持 Apple 芯片和 Intel。
+
+- PDF悬停改用每页缓存的真实物理行与严格原文范围，避免多行字符几何索引错位或字形空隙查不到字符；同行超过8个候选时有限补查，不必靠移走再回来触发。
+- 有重复证据的页眉/页脚、独立页码与正文分句；补齐导入换行偏移证明和密集标记截尾。只调整展示元数据，原书、用户Markdown、旧分析和Key保存机制保留。
+
+[Actions 40474775829](https://github.com/theincrediblewwz/readingbook/actions/runs/40474775829) 成功：**574项Core零失败、无编译警告**，双架构Release、ad hoc签名和资源自检通过。原生源码`f84fdecffe09aae79811000dddf977329cb7adef`，分支`codex/reader-hit-boundaries-0.23.7`；此后仅更新交付文档。
+
+下载包摘要/CRC、版本/build、源码、Mach-O双架构/0755和32资源（含20字体）与构建提交已核验。ZIP **22,122,988字节**，SHA-256`f79d2391bdd19ba254ec4e614b9f21b65e78a56ad03da6576818b24544360943`。旧包保留；这是ad hoc测试包，真实PDF的悬停和流畅度仍待Mac复测；单页没有重复证据的页眉暂不保证自动分开。
+
+[本批Mac验收](MAC_TEST_CHECKLIST.md) · [原生诊断、失败修正与成本边界](CORE_REVIEW_PLAN.md)。未操作真实书库、读取真实Key或调用真实模型。
+
+---
+
 # 0.23.6 · 悬停与面板共存（2026-10-27）
 
 [直接安装 Mac ZIP · 0.23.6/build37](dist/ReadingBook-0.23.6-Mac.zip)，支持 Apple 芯片和 Intel。
