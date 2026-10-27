@@ -1,3 +1,21 @@
+# 0.23.8 · 新书阅读提示后台准备（2026-10-28）
+
+[直接安装 Mac ZIP · 0.23.8/build39](dist/ReadingBook-0.23.8-Mac.zip)，支持 Apple 芯片和 Intel。
+
+- PDF整页文字、物理行及提示几何由独立后台文档准备，可见页优先、邻页闲置分批；鼠标命中只查缓存。显示真实准备阶段/计数，不把未知总量编成百分比。
+- 修复新导入缺少临时发布标记导致的反复扫描；隐藏目录/伴读按需准备，重开复用仍核完整输入。后台标记更新保留当前引文定位，新的用户操作会取消旧意图。
+- 原书、用户Markdown、分析、Key及备份格式保持；没有迁移真实书库或调用真实模型。
+
+[Actions 40566008670](https://github.com/theincrediblewwz/readingbook/actions/runs/40566008670) 成功：**584项Core零失败、无编译警告**，双架构Release、ad hoc签名和资源自检通过。原生源码`eef55074f896aa69a10b420ae3f01a0b6377e264`，分支`codex/reader-background-preparation-0.23.8`；此后仅更新交付文档。
+
+安装包摘要/CRC、版本/build、源码、Mach-O双架构/0755和全部32资源（含20字体）已核验。ZIP **22,333,678字节**，SHA-256`ac5aca97c4b2b7629f822acc54c02103cf871ee601045fc13c8b052c87cf0514`。旧包保留，这是ad hoc测试包。
+
+原生单次PDFKit调用仍不可强制中断，独立文档增加一份后台文件backing；这些准备调用已移出界面线程。用户那本千页PDF的冷开、滚动和内存仍待Mac复测，不宣称已根治全部卡顿。
+
+[本批Mac验收](MAC_TEST_CHECKLIST.md) · [审查、原生诊断与成本边界](CORE_REVIEW_PLAN.md)。
+
+---
+
 # 0.23.7 · 句首、页末与页眉定位（2026-10-27）
 
 [直接安装 Mac ZIP · 0.23.7/build38](dist/ReadingBook-0.23.7-Mac.zip)，支持 Apple 芯片和 Intel。
