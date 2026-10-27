@@ -1,4 +1,6 @@
-# 0.23.6 · 悬停与两个面板共存（原生验证前，Mac 待验）
+# 0.23.6 · 悬停与两个面板共存（构建/包校验通过，Mac 待验）
+
+[直接安装0.23.6/build37](dist/ReadingBook-0.23.6-Mac.zip)。[Actions 40461243865](https://github.com/theincrediblewwz/readingbook/actions/runs/40461243865) 的543项Core零失败、无编译警告；双架构Release、签名和资源自检通过。下载包摘要/CRC、版本/源码/架构/0755和32资源已核验。原生源码`6c419d45f9489ee0be0d7d9dd66942bb8ace25d6`，分支`codex/reader-hover-coexistence-0.23.6`。
 
 本批沿用0.23.5的密钥保存方式，未实施加密，原书/笔记/分析不迁移。以下仅列需要Mac实际确认的行为；代码检查不能代替现场复现。请使用书库副本。
 

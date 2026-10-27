@@ -1,3 +1,19 @@
+# 0.23.6 · 悬停与面板共存（2026-10-27）
+
+[直接安装 Mac ZIP · 0.23.6/build37](dist/ReadingBook-0.23.6-Mac.zip)，支持 Apple 芯片和 Intel。
+
+- 可见页的句子先准备，之后再处理词条，避免已匹配句子等待无关工作；缩放、尺寸变化、解除遮挡和清空选段后补一次当前鼠标命中。同一句跨行时更新卡片坐标，保留固定和关闭行为。
+- 智能阅读进度与句卡改为单向避让，临时句卡不再把展开的进度面板挤成图标；手动拖放位置优先。
+- 本批不改书库格式、原书、用户笔记、分析或 Key 保存机制。Key 仍从本机私有文件读取，已有权限保护，尚未加密；仅主动“取回旧钥匙串密钥”访问旧钥匙串。
+
+[Actions 40461243865](https://github.com/theincrediblewwz/readingbook/actions/runs/40461243865) 成功：**543 项 Core 零失败、无编译警告**，双架构 Release、ad hoc 签名和资源自检通过。原生源码 `6c419d45f9489ee0be0d7d9dd66942bb8ace25d6`，分支 `codex/reader-hover-coexistence-0.23.6`；源码冻结后仅更新交付文档。
+
+已核 artifact 摘要、内外 ZIP CRC/SHA、版本/build、构建提交、Mach-O 双架构/0755，以及32资源与构建提交逐字节一致（含20个公式字体）。ZIP **22,035,639 字节**，SHA-256 `8443b83a2009fdcd1e0caeff2616607e440915cc67b96743f6290359e67278b6`。旧包保留；这是 ad hoc 测试包，静止悬停、面板共存与实际 Mac 流畅度仍待复测，不能据代码和构建宣称根治卡顿。
+
+[本批 Mac 验收](MAC_TEST_CHECKLIST.md) · [审查与成本边界](CORE_REVIEW_PLAN.md)。没有读取真实密钥、操作真实书库或调用真实模型。
+
+---
+
 # 0.23.5 · 本机密钥、阅读设置与悬停（2026-10-27）
 
 [直接安装 Mac ZIP · 0.23.5/build36](dist/ReadingBook-0.23.5-Mac.zip)，支持 Apple 芯片和 Intel。
