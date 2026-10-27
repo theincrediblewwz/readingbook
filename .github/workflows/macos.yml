@@ -43,7 +43,7 @@ jobs:
         if: ${{ inputs.pdf_probe }}
         timeout-minutes: 3
         run: |
-          xcrun swiftc -parse-as-library scripts/diagnose-pdf-hit.swift -o "$RUNNER_TEMP/pdf-hit-probe"
+          xcrun swiftc -parse-as-library Sources/ReadingCore/ReadingGeometryBands.swift Sources/ReadingCore/NativePDFTextLine.swift scripts/diagnose-pdf-hit.swift -o "$RUNNER_TEMP/pdf-hit-probe"
           "$RUNNER_TEMP/pdf-hit-probe"
       - name: Build universal app and package
         if: ${{ !inputs.pdf_probe }}

@@ -136,4 +136,61 @@ final class NativePDFTextLineTests: XCTestCase {
         XCTAssertEqual(hit.id, candidate.id)
         XCTAssertEqual(hit.rectangle, valid)
     }
+
+    func testDirectoryUsesPhysicalContainsAcrossBandEdgesAndColumns() throws {
+        let left = try XCTUnwrap(NativePDFTextLine.validate([NSRange(location: 0, length: 2)], lineText: "甲乙",
+                                                          pageText: "甲乙丙丁", nativeCharacterCount: 4))
+        let right = try XCTUnwrap(NativePDFTextLine.validate([NSRange(location: 2, length: 2)], lineText: "丙丁",
+                                                           pageText: "甲乙丙丁", nativeCharacterCount: 4))
+        var directory = NativePDFTextLine.Directory()
+        XCTAssertTrue(directory.lines(at: CGPoint(x: 20, y: 64)).isEmpty)
+        directory.append(.init(text: left, rectangle: CGRect(x: 10, y: 63, width: 30, height: 4)))
+        directory.append(.init(text: right, rectangle: CGRect(x: 100, y: 63, width: 30, height: 4)))
+        let positions: [CGFloat] = [63.5, 64, 66.5]
+        for y in positions {
+            XCTAssertEqual(directory.lines(at: CGPoint(x: 20, y: y)).map(\.ranges), [left.ranges])
+            XCTAssertEqual(directory.lines(at: CGPoint(x: 110, y: y)).map(\.ranges), [right.ranges])
+            XCTAssertTrue(directory.lines(at: CGPoint(x: 70, y: y)).isEmpty, "One row's enclosing horizontal gap is not a physical line hit.")
+        }
+        XCTAssertTrue(directory.lines(at: CGPoint(x: 20, y: 62)).isEmpty)
+        XCTAssertTrue(directory.lines(at: CGPoint(x: 20, y: 68)).isEmpty)
+        XCTAssertGreaterThan(directory.byteCount, left.ranges.count * MemoryLayout<NSRange>.stride + right.ranges.count * MemoryLayout<NSRange>.stride)
+    }
+
+    func testDirectoryRejectsInvalidRectanglesAndNonfinitePointsWithoutRetainingThem() throws {
+        let line = try XCTUnwrap(NativePDFTextLine.validate([NSRange(location: 0, length: 1)], lineText: "甲",
+                                                          pageText: "甲", nativeCharacterCount: 1))
+        var directory = NativePDFTextLine.Directory()
+        for rectangle in [CGRect.null, .infinite, .zero,
+                          CGRect(x: CGFloat.nan, y: 0, width: 40, height: 40),
+                          CGRect(x: 0, y: 0, width: CGFloat.infinity, height: 40)] {
+            directory.append(.init(text: line, rectangle: rectangle))
+        }
+        XCTAssertEqual(directory.byteCount, 0)
+        XCTAssertTrue(directory.lines(at: CGPoint(x: 20, y: 20)).isEmpty)
+        let physical = NativePDFTextLine.PhysicalLine(text: line, rectangle: CGRect(x: 10, y: 10, width: 30, height: 30))
+        directory.append(physical)
+        XCTAssertGreaterThanOrEqual(directory.byteCount, physical.byteCount)
+        XCTAssertEqual(directory.lines(at: CGPoint(x: 20, y: 20)).map(\.ranges), [line.ranges])
+        XCTAssertTrue(directory.lines(at: CGPoint(x: CGFloat.nan, y: 20)).isEmpty)
+        XCTAssertTrue(directory.lines(at: CGPoint(x: 20, y: CGFloat.infinity)).isEmpty)
+    }
+
+    func testDirectoryRetainsFiniteLinesOutsideAndAcrossTheBandCoordinateDomain() throws {
+        let page = "甲乙丙"
+        var directory = NativePDFTextLine.Directory()
+        let rectangles = [CGRect(x: 10, y: 1_000_000_010, width: 30, height: 20),
+                          CGRect(x: 100, y: -1_000_000_030, width: 30, height: 20),
+                          CGRect(x: 200, y: 999_999_995, width: 30, height: 20)]
+        for (index, rectangle) in rectangles.enumerated() {
+            let range = NSRange(location: index, length: 1)
+            let text = (page as NSString).substring(with: range)
+            let line = try XCTUnwrap(NativePDFTextLine.validate([range], lineText: text, pageText: page, nativeCharacterCount: 3))
+            directory.append(.init(text: line, rectangle: rectangle))
+            XCTAssertEqual(directory.lines(at: CGPoint(x: rectangle.midX, y: rectangle.midY)).map(\.ranges), [[range]])
+        }
+        XCTAssertEqual(directory.lines(at: CGPoint(x: 210, y: 999_999_999)).map(\.ranges), [[NSRange(location: 2, length: 1)]],
+                       "A line crossing the band limit also remains hittable on its in-domain side.")
+        XCTAssertTrue(directory.lines(at: CGPoint(x: 170, y: 1_000_000_012)).isEmpty)
+    }
 }

@@ -101,6 +101,11 @@ struct PDFReaderView: NSViewRepresentable {
         let byteCount: Int
         let nativeText: NSString
         let nativeTextBytes: Int
+        struct LineLayout: Equatable {
+            let crop: CGRect; let rotation: Int; let characterCount: Int
+        }
+        var nativeLines = NativePDFTextLine.Directory()
+        var nativeLineLayout: LineLayout?
         var ranges: [QuoteCacheKey: CachedQuoteRange] = [:]
         var rangeBytes = 0
         // Identity is the canonical page's raw-byte hash. A nil proof with a
@@ -118,7 +123,7 @@ struct PDFReaderView: NSViewRepresentable {
         private var passageIndexDirty = false
         var hitBands = ReadingGeometryBands<SourceLineKey>()
         var paintBands = ReadingGeometryBands<SourceLineKey>()
-        var cost: Int { byteCount + nativeTextBytes + rangeBytes + geometryBytes + passageBytes + (sourceTextProof?.byteCount ?? 0) + unresolvedIDs.count * 192 }
+        var cost: Int { byteCount + nativeTextBytes + nativeLines.byteCount + rangeBytes + geometryBytes + passageBytes + (sourceTextProof?.byteCount ?? 0) + unresolvedIDs.count * 192 }
         init(text: String, byteCount: Int) {
             self.text = text; self.byteCount = byteCount
             let bridged = text as NSString
@@ -1546,6 +1551,44 @@ struct PDFReaderView: NSViewRepresentable {
                         cache = SourceGeometryPage(text: text, byteCount: text.utf8.count)
                     }
                     self.sourceGeometryPageOrder.removeAll { $0 == number }; self.sourceGeometryPageOrder.append(number)
+                    if passages {
+                        let layout = SourceGeometryPage.LineLayout(crop: page.bounds(for: .cropBox), rotation: page.rotation,
+                                                                   characterCount: page.numberOfCharacters)
+                        if cache.nativeLineLayout != layout {
+                            // Native glyph indices need not match page.string's
+                            // UTF16 indices. Prepare real line ranges once, then
+                            // pointer work queries only their physical bands.
+                            var directory = NativePDFTextLine.Directory()
+                            let length = cache.nativeText.length
+                            if length > 0, length <= layout.characterCount,
+                               let full = page.selection(for: NSRange(location: 0, length: length)) {
+                                var began = ProcessInfo.processInfo.systemUptime, count = 0
+                                for selection in full.selectionsByLine() {
+                                    guard !Task.isCancelled, self.documentGeneration == documentID,
+                                          self.sourceDecorationGeneration == generation else { return }
+                                    if let line = NativePDFTextLine.physicalLine(selection, on: page, pageText: cache.nativeText) {
+                                        directory.append(line)
+                                    }
+                                    count += 1
+                                    if count >= 12 || ProcessInfo.processInfo.systemUptime - began >= 0.003 {
+                                        do { try await Task.sleep(nanoseconds: 1_000_000) } catch { return }
+                                        guard !Task.isCancelled, self.documentGeneration == documentID,
+                                              self.sourceDecorationGeneration == generation else { return }
+                                        began = ProcessInfo.processInfo.systemUptime; count = 0
+                                    }
+                                }
+                            }
+                            guard !Task.isCancelled, self.documentGeneration == documentID,
+                                  self.sourceDecorationGeneration == generation,
+                                  page.bounds(for: .cropBox) == layout.crop, page.rotation == layout.rotation,
+                                  page.numberOfCharacters == layout.characterCount else { return }
+                            // Commit only the complete local directory. A canceled
+                            // prefix must never masquerade as a ready page.
+                            cache.nativeLines = directory; cache.nativeLineLayout = layout
+                            self.sourceGeometryPages[number] = cache
+                            self.scheduleSourceHoverRefresh()
+                        }
+                    }
                     let values = grouped[number] ?? []
                     var additions: [SourceReadingDecoration] = []
                     let pageText = self.sourcePageTexts[number]
@@ -1768,69 +1811,50 @@ struct PDFReaderView: NSViewRepresentable {
         // sentence's character/line geometry first adds work that cannot alter
         // that winner, especially with many overlapping passive passages.
         if preferTerm, let term = cachedSourceHit(at: local, on: page, number: index + 1, cache: cache, preferTerm: true, onlyTerms: true) { return term }
-        // Find the sentence by native character offset before asking PDFKit
-        // for geometry. Never prepare every sentence merely to hover one.
-        let canPrepare = ProcessInfo.processInfo.systemUptime >= sourceScrollQuietUntil
-        var geometryBudget = 8
-        if canPrepare, !cache.passageIndex.isEmpty {
-            let character = page.characterIndex(at: local)
-            if character >= 0, character < page.numberOfCharacters {
-                let ids = cache.passageIndex.ids(containing: character).filter {
-                    validSourceDecorationIDsByPage[index + 1]?.contains($0) == true &&
-                        cache.passageValues[$0]?.interaction == .passage && cache.passageValues[$0] == sourceDecorationValuesByID[$0]
-                }
-                // Multiple evidence paragraphs may cover this character. Only
-                // materialize the most specific passage, not every overlap.
-                let nearest = ids.min {
-                    let left = cache.passageRanges[$0]?.length ?? Int.max, right = cache.passageRanges[$1]?.length ?? Int.max
-                    return left == right ? $0 < $1 : left < right
-                }
-                for id in nearest.map({ [$0] }) ?? [] {
-                    guard validSourceDecorationIDsByPage[index + 1]?.contains(id) == true,
-                          let value = cache.passageValues[id], value == sourceDecorationValuesByID[id],
-                          let range = cache.passageRanges[id] else { continue }
-                    if let geometry = prepareSourcePassage(value, range: range, on: page, number: index + 1,
-                                                           cache: cache, budget: &geometryBudget),
-                       let rectangle = geometry.lines.first(where: { $0.contains(local) }) {
-                        return PDFSourceDecorationHit(id: id, rect: pdfView.convert(rectangle, from: page))
-                    }
-                }
-            }
-        }
+        // Physical native line ranges are authoritative here. PDFKit's
+        // characterIndex can omit synthesized line breaks or count emoji
+        // differently, and a glyph gap may return no index at all.
         let prepared = cachedSourceHit(at: local, on: page, number: index + 1, cache: cache, preferTerm: preferTerm)
-        // A line rectangle can contain points between glyphs for which PDFKit
-        // returns no character index. Cold and already prepared sentences must
-        // use the same physical hit rule, without accepting a neighboring line.
-        guard canPrepare, !cache.passageIndex.isEmpty,
-              let line = NativePDFTextLine.at(local, on: page, pageText: cache.nativeText) else { return prepared }
+        guard ProcessInfo.processInfo.systemUptime >= sourceScrollQuietUntil, !cache.passageIndex.isEmpty else { return prepared }
+        let lines = cache.nativeLines.lines(at: local)
+        guard !lines.isEmpty else { return prepared }
+        var geometryBudget = 8
         var candidates: [NativePDFTextLine.Candidate<String>] = []
+        var deferred: NativePDFTextLine.Candidate<String>?
         var cached: (id: String, rectangle: CGRect, length: Int)?
         var visited = Set<String>()
-        for range in line.ranges {
-            cache.passageIndex.forEachEntry(intersecting: range) { entry in
-                guard visited.insert(entry.id).inserted, validSourceDecorationIDsByPage[index + 1]?.contains(entry.id) == true,
-                      let value = cache.passageValues[entry.id], value.interaction == .passage,
-                      value == sourceDecorationValuesByID[entry.id] else { return }
-                if let geometry = cache.geometry[entry.id], geometry.value == value {
-                    sourceGeometries[entry.id] = geometry
-                    if let rectangle = geometry.lines.first(where: { $0.contains(local) }) {
-                        let moreSpecific = cached.map {
-                            entry.range.length < $0.length || (entry.range.length == $0.length && entry.id < $0.id)
-                        } ?? true
-                        if moreSpecific { cached = (entry.id, rectangle, entry.range.length) }
+        for line in lines {
+            for range in line.ranges {
+                cache.passageIndex.forEachEntry(intersecting: range) { entry in
+                    guard visited.insert(entry.id).inserted, validSourceDecorationIDsByPage[index + 1]?.contains(entry.id) == true,
+                          let value = cache.passageValues[entry.id], value.interaction == .passage,
+                          value == sourceDecorationValuesByID[entry.id] else { return }
+                    if let geometry = cache.geometry[entry.id], geometry.value == value {
+                        sourceGeometries[entry.id] = geometry
+                        if let rectangle = geometry.lines.first(where: { $0.contains(local) }) {
+                            let moreSpecific = cached.map {
+                                entry.range.length < $0.length || (entry.range.length == $0.length && entry.id < $0.id)
+                            } ?? true
+                            if moreSpecific { cached = (entry.id, rectangle, entry.range.length) }
+                        }
+                        // Cached empty/non-containing geometry cannot occupy a slot
+                        // in the bounded pool of new native geometry requests.
+                        return
                     }
-                    // Cached empty/non-containing geometry cannot occupy a slot
-                    // in the bounded pool of new native geometry requests.
-                    return
-                }
-                guard geometryBudget > 0 else { return }
-                let candidate = NativePDFTextLine.Candidate(id: entry.id, range: entry.range)
-                let position = candidates.firstIndex {
-                    candidate.range.length < $0.range.length || (candidate.range.length == $0.range.length && candidate.id < $0.id)
-                } ?? candidates.count
-                if position < geometryBudget {
-                    candidates.insert(candidate, at: position)
-                    if candidates.count > geometryBudget { candidates.removeLast() }
+                    guard geometryBudget > 0 else { return }
+                    let candidate = NativePDFTextLine.Candidate(id: entry.id, range: entry.range)
+                    let position = candidates.firstIndex {
+                        candidate.range.length < $0.range.length || (candidate.range.length == $0.range.length && candidate.id < $0.id)
+                    } ?? candidates.count
+                    if position < geometryBudget {
+                        candidates.insert(candidate, at: position)
+                        if candidates.count <= geometryBudget { return }
+                    }
+                    let omitted = position < geometryBudget ? candidates.removeLast() : candidate
+                    if deferred.map({ omitted.range.length < $0.range.length ||
+                        (omitted.range.length == $0.range.length && omitted.id < $0.id) }) ?? true {
+                        deferred = omitted
+                    }
                 }
             }
         }
@@ -1846,6 +1870,14 @@ struct PDFReaderView: NSViewRepresentable {
                                         cache: cache, budget: &geometryBudget)?.lines ?? []
         }
         if let hit { return PDFSourceDecorationHit(id: hit.id, rect: pdfView.convert(hit.rectangle, from: page)) }
+        // A dense physical line can have more than one bounded batch. Only
+        // actual new geometry and an omitted candidate that could still win
+        // justify another fresh-pointer check; no progress means no polling.
+        if geometryBudget < 8, let deferred,
+           cached.map({ deferred.range.length < $0.length ||
+               (deferred.range.length == $0.length && deferred.id < $0.id) }) ?? true {
+            scheduleSourceHoverRefresh()
+        }
         if let cached { return PDFSourceDecorationHit(id: cached.id, rect: pdfView.convert(cached.rectangle, from: page)) }
         return prepared
     }

@@ -50,6 +50,21 @@ final class PDFSourceRangeTests: XCTestCase {
         return try XCTUnwrap(PDFDocument(data: data as Data))
     }
 
+    @MainActor private func lineDirectory(on page: PDFPage, text: String) throws -> NativePDFTextLine.Directory {
+        let source = text as NSString
+        XCTAssertEqual(source.length, page.numberOfCharacters)
+        let selection = try XCTUnwrap(page.selection(for: NSRange(location: 0, length: source.length)))
+        XCTAssertEqual(selection.string, text)
+        var directory = NativePDFTextLine.Directory()
+        for nativeLine in selection.selectionsByLine() {
+            let line = try XCTUnwrap(NativePDFTextLine.physicalLine(nativeLine, on: page, pageText: source),
+                                     "Every actual fixture line must retain a strict original-range proof.")
+            directory.append(line)
+        }
+        XCTAssertGreaterThan(directory.byteCount, 0)
+        return directory
+    }
+
     @MainActor func testNativeLineProofCoversMultilineKerningAndLastSentence() async throws {
         let sentences = ["首行😀正文。", "第二行有字距。", "页末最后一句。"]
         let document = try multilineDocument([
@@ -57,17 +72,34 @@ final class PDFSourceRangeTests: XCTestCase {
         ])
         let page = try XCTUnwrap(document.page(at: 0)), text = try XCTUnwrap(page.string)
         XCTAssertTrue(text.contains("\n"), "The fixture must contain real PDF text-line boundaries, not a newline inside one CTLine.")
+        let directory = try lineDirectory(on: page, text: text)
+        // Xcode 26.6's glyph-index APIs skip a surrogate unit and synthetic
+        // newlines here: characterBounds(at: 6) is already on the second line,
+        // although UTF16 offset 6 is the first line's punctuation. Obtain real
+        // sentence bounds from the verified native selection, not that index.
         for sentence in sentences {
             let range = NSRange(try XCTUnwrap(text.range(of: sentence, options: .literal)), in: text)
-            for offset in [range.location, NSMaxRange(range) - 1] {
-                let bounds = page.characterBounds(at: offset)
-                XCTAssertFalse(bounds.isEmpty)
-                let point = CGPoint(x: bounds.midX, y: bounds.midY)
-                let line = try XCTUnwrap(NativePDFTextLine.at(point, on: page, pageText: text), "Line proof must include the first and last glyph on every actual line.")
+            let selection = try XCTUnwrap(page.selection(for: range))
+            XCTAssertEqual(selection.string, sentence)
+            let actual = try XCTUnwrap(selection.selectionsByLine().first)
+            let bounds = actual.bounds(for: page).intersection(page.bounds(for: .cropBox))
+            XCTAssertFalse(bounds.isEmpty)
+            let inset = min(2, bounds.width / 4)
+            for x in [bounds.minX + inset, bounds.maxX - inset] {
+                let point = CGPoint(x: x, y: bounds.midY)
+                let lines = directory.lines(at: point)
+                let line = try XCTUnwrap(lines.first(where: { $0.intersects(range) }),
+                                         "The physical directory must cover both ends of every real line, including the last sentence.")
+                XCTAssertEqual(line.ranges, [range], "Only PDFKit's extra original line terminator is removed; the actual sentence range remains exact.")
                 XCTAssertTrue(line.intersects(range))
                 XCTAssertTrue(NativePDFTextLine.rectangles(for: range, on: page).contains { $0.contains(point) })
             }
         }
+        // Keep the direct API covered at an actual native glyph as well. The
+        // first physical glyph has no preceding synthetic line/Unicode offset.
+        let glyph = page.characterBounds(at: 0)
+        let direct = try XCTUnwrap(NativePDFTextLine.at(CGPoint(x: glyph.midX, y: glyph.midY), on: page, pageText: text))
+        XCTAssertEqual(direct.ranges, [NSRange(location: 0, length: (sentences[0] as NSString).length)])
     }
 
     @MainActor func testColdGlyphGapUsesTheSamePhysicalSentenceAsPreparedGeometry() async throws {
@@ -94,7 +126,12 @@ final class PDFSourceRangeTests: XCTestCase {
         }
         let point = try XCTUnwrap(gap, "The mixed-size, kerned line must exercise a point inside line geometry but outside every character hit.")
         XCTAssertTrue(prepared.contains(point))
-        let line = try XCTUnwrap(NativePDFTextLine.at(point, on: page, pageText: text), "The cold line lookup must work at the actual native glyph gap.")
+        XCTAssertTrue(page.characterIndex(at: point) < 0 || page.characterIndex(at: point) == NSNotFound)
+        // The real SDK returns an empty selectionForLine at this same point.
+        // Production builds this directory once, without relying on that hit.
+        let directory = try lineDirectory(on: page, text: text)
+        let line = try XCTUnwrap(directory.lines(at: point).first,
+                                 "The cold physical-line directory must work at the unchanged actual native glyph gap.")
         XCTAssertTrue(line.intersects(full))
         let hit = NativePDFTextLine.firstHit(at: point, candidates: [.init(id: "sentence", range: full)]) {
             NativePDFTextLine.rectangles(for: $0.range, on: page)

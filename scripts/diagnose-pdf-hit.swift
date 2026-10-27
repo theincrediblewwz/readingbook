@@ -132,16 +132,44 @@ struct PDFHitProbe {
         let pdf = try document([nativeText(sentences[0]), nativeText(sentences[1], kerning: 1.5), nativeText(""), nativeText(sentences[2])])
         let page = try require(pdf.page(at: 0), "multiline page"), text = try require(page.string, "multiline text")
         pageDump(page, text: text, label: "multiline kerning and last sentence")
+        let directory = try productionDirectory(on: page, text: text)
         for sentence in sentences {
             let swiftRange = try require(text.range(of: sentence, options: .literal), "sentence \(sentence)")
             let range = NSRange(swiftRange, in: text)
             print("expectedSentence=\(String(reflecting: sentence)) expectedUTF16Range=\(range)")
-            for offset in [range.location, NSMaxRange(range) - 1] {
-                let bounds = page.characterBounds(at: offset)
-                pointDump(CGPoint(x: bounds.midX, y: bounds.midY), page: page, text: text,
-                          label: "sentence \(sentence) offset \(offset) charBounds \(bounds)")
+            let selection = try require(page.selection(for: range), "sentence native selection")
+            guard selection.string == sentence else { throw FixtureFailure(message: "sentence selection text changed") }
+            let actual = try require(selection.selectionsByLine().first, "sentence actual line")
+            let bounds = actual.bounds(for: page).intersection(page.bounds(for: .cropBox))
+            guard usable(bounds) else { throw FixtureFailure(message: "sentence actual bounds invalid") }
+            let inset = min(2, bounds.width / 4)
+            for x in [bounds.minX + inset, bounds.maxX - inset] {
+                let point = CGPoint(x: x, y: bounds.midY)
+                let line = try require(directory.lines(at: point).first(where: { $0.intersects(range) }), "production directory sentence endpoint")
+                guard line.ranges == [range], NativePDFTextLine.rectangles(for: range, on: page).contains(where: { $0.contains(point) }) else {
+                    throw FixtureFailure(message: "production sentence endpoint proof differs")
+                }
+                print("PASS production directory endpoint \(sentence) \(point)")
             }
         }
+        let glyph = page.characterBounds(at: 0)
+        let direct = try require(NativePDFTextLine.at(CGPoint(x: glyph.midX, y: glyph.midY), on: page, pageText: text), "direct first glyph EOL adapter")
+        guard direct.ranges == [NSRange(location: 0, length: (sentences[0] as NSString).length)] else {
+            throw FixtureFailure(message: "direct EOL adapter changed original sentence range")
+        }
+        print("PASS production direct native EOL adapter")
+    }
+
+    @MainActor static func productionDirectory(on page: PDFPage, text: String) throws -> NativePDFTextLine.Directory {
+        let source = text as NSString
+        guard source.length > 0, source.length == page.numberOfCharacters else { throw FixtureFailure(message: "directory full native length") }
+        let selection = try require(page.selection(for: NSRange(location: 0, length: source.length)), "directory full selection")
+        guard selection.string == text else { throw FixtureFailure(message: "directory full native text") }
+        var directory = NativePDFTextLine.Directory()
+        for selection in selection.selectionsByLine() {
+            directory.append(try require(NativePDFTextLine.physicalLine(selection, on: page, pageText: source), "production physical line strict proof"))
+        }
+        return directory
     }
 
     @MainActor static func gap() throws {
@@ -171,6 +199,12 @@ struct PDFHitProbe {
         guard let gap else { throw FixtureFailure(message: "actual glyph gap not found") }
         print("gap selection method=\(method) preparedContains=\(prepared.contains(gap))")
         pointDump(gap, page: page, text: text, label: "actual no-character gap")
+        let directory = try productionDirectory(on: page, text: text)
+        let line = try require(directory.lines(at: gap).first, "production directory actual glyph gap")
+        guard line.intersects(full), NativePDFTextLine.firstHit(at: gap, candidates: [.init(id: "sentence", range: full)], geometry: {
+            NativePDFTextLine.rectangles(for: $0.range, on: page)
+        }) != nil else { throw FixtureFailure(message: "production actual glyph gap hit") }
+        print("PASS production directory actual no-character gap \(gap)")
     }
 
     @MainActor static func cropControl() throws {
