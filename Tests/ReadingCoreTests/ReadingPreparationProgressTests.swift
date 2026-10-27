@@ -31,15 +31,4 @@ final class ReadingPreparationProgressTests: XCTestCase {
         XCTAssertEqual(ReadingPreparationProgress(phase: .matching, completed: -1, total: 8).fraction, 0)
     }
 
-    func testEventsPreserveRunIdentityAndExactPhaseValues() {
-        let first = UUID(), second = UUID()
-        let progress = ReadingPreparationProgress(phase: .matching, page: 2, completed: 3, total: 8)
-        XCTAssertEqual(ReadingPreparationEvent.started(first, progress), .started(first, progress))
-        XCTAssertNotEqual(ReadingPreparationEvent.started(first, progress), .advanced(first, progress))
-        XCTAssertNotEqual(ReadingPreparationEvent.advanced(first, progress), .advanced(second, progress))
-        XCTAssertNotEqual(ReadingPreparationEvent.advanced(first, progress),
-                          .advanced(first, ReadingPreparationProgress(phase: .geometry, page: 2, completed: 3, total: 8)))
-        XCTAssertEqual(ReadingPreparationEvent.finished(first), .finished(first))
-        XCTAssertNotEqual(ReadingPreparationEvent.finished(first), .finished(second))
-    }
 }

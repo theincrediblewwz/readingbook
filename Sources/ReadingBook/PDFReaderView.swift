@@ -200,6 +200,7 @@ struct PDFReaderView: NSViewRepresentable {
     private var sourceGeometryRun: UUID?
     private var sourceQuoteTask: Task<Void, Never>?
     private var sourceQuoteRun: UUID?
+    private var sourceQuoteTarget: SourceReadingDecoration?
     private struct PendingSourceGeometry {
         let page: Int; let value: SourceReadingDecoration; let range: NSRange
     }
@@ -214,6 +215,7 @@ struct PDFReaderView: NSViewRepresentable {
     private var validSourceDecorationIDsByPage: [Int: Set<String>] = [:]
     private var sourceAvailablePages: Set<Int> = []
     private var renderedSourceWindow: [Int] = []
+    private var sourcePreparationNeedsRetry = false
     private let sourceCanvas = PDFSourceDecorationCanvas()
     private var sourcePointerMonitor: Any?
     private var sourcePress: (hit: PDFSourceDecorationHit, point: CGPoint, generation: Int)?
@@ -342,7 +344,7 @@ struct PDFReaderView: NSViewRepresentable {
     func setInteractionBlocked(_ blocked: Bool) {
         guard interactionBlocked != blocked else { return }
         interactionBlocked = blocked; pdfView.interactionBlocked = blocked
-        if blocked { resetPageGesture(); invalidateSourcePress() }
+        if blocked { resetPageGesture(); invalidateSourcePress(); cancelSourceQuotePreparation() }
         else { scheduleSourceHoverRefresh() }
         guard blocked, let owner = window, let responder = owner.firstResponder else { return }
         // Only resign a PDF-owned responder. A management card may already
@@ -580,6 +582,14 @@ struct PDFReaderView: NSViewRepresentable {
             }
             sourceAvailablePages = Set(groupedSourceDecorations.keys)
             sourceDecorationValuesByID = Dictionary(sourceDecorations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            // New unrelated presentation data does not cancel a reader's
+            // outstanding jump. If its actual target changed, retry only while
+            // that same explicit intent is still active, never after a scroll.
+            if let target = sourceQuoteTarget, sourceDecorationValuesByID[target.id] != target {
+                let retry = sourceQuoteRun != nil && input.focusedDecorationID == target.id && sourceDecorationValuesByID[target.id] != nil
+                cancelSourceQuotePreparation()
+                if retry { appliedSourceDecorationFocusID = nil; appliedSourceDecorationProofIdentity = nil }
+            }
         }
         sourceDecorationRevision = input.sourceDecorationRevision; sourceDecorationPage = requestedPage
         sourceHash = input.sourceHash; sessionPassword = input.password
@@ -618,6 +628,7 @@ struct PDFReaderView: NSViewRepresentable {
         if annotationsChanged { renderSavedAnnotations(); if showingAnnotationList { showAnnotations() } }
         if sourceDecorationsChanged || newProofMetadata || requestedPageChanged { renderSourceDecorations() }
         if sourceDecorationFocusID != input.focusedDecorationID {
+            cancelSourceQuotePreparation()
             sourceDecorationFocusID = input.focusedDecorationID
             clearQuoteFocusHighlight()
             appliedSourceDecorationFocusID = nil; appliedSourceDecorationProofIdentity = nil; pendingQuote = nil
@@ -718,6 +729,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     private func invalidateNavigation() {
         invalidateSourcePress()
+        cancelSourceQuotePreparation()
         clearQuoteFocusHighlight()
         awaitingSourceFocusProof = false
         navigationRequestID &+= 1; pageObservationID &+= 1; pendingNavigation = nil; pendingQuote = nil
@@ -983,6 +995,7 @@ struct PDFReaderView: NSViewRepresentable {
               let owner = window, owner.attachedSheet == nil, !editingAnnotationSheet,
               let responder = owner.firstResponder, ownsResponder(responder) else { return false }
         awaitingSourceFocusProof = false
+        cancelSourceQuotePreparation()
         if pendingNavigation != nil { return true }
         guard let edges = pageBoundaries() else { return false }
         let boundary = offset < 0 ? edges.start : edges.end
@@ -1361,7 +1374,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     @objc private func selectionChanged(_ notification: Notification) {
         refreshControls()
-        if pdfView.currentSelection?.pages.isEmpty == false { clearQuoteFocusHighlight() }
+        if pdfView.currentSelection?.pages.isEmpty == false { cancelSourceQuotePreparation(); clearQuoteFocusHighlight() }
         else { scheduleSourceHoverRefresh() }
         sourceSelectionObservation &+= 1
         let observation = sourceSelectionObservation, generation = documentGeneration
@@ -1432,16 +1445,17 @@ struct PDFReaderView: NSViewRepresentable {
         let savedUnique = quoteRangeCache[key], source = sourcePageTexts[number]
         let cached = sourceGeometryPages[number]
         let savedIdentity = cached?.sourceTextProofIdentity, savedProof = cached?.sourceTextProof
-        let documentID = documentGeneration, navigation = navigationRequestID, input = sourceInputGeneration
-        let interaction = sourceInteractionGeneration, generation = sourceDecorationGeneration, run = UUID()
+        let documentID = documentGeneration, navigation = navigationRequestID
+        let generation = sourceDecorationGeneration, run = UUID()
         sourceQuoteRun = run
+        sourceQuoteTarget = decoration
         onPreparationChanged?(.started(run, .init(phase: .pageText, page: number)))
         let progress = preparationProgress(run: run, generation: generation, documentID: documentID)
         sourceQuoteTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 if self.sourceQuoteRun == run {
-                    self.onPreparationChanged?(.finished(run)); self.sourceQuoteRun = nil; self.sourceQuoteTask = nil
+                    self.onPreparationChanged?(.finished(run)); self.sourceQuoteRun = nil; self.sourceQuoteTask = nil; self.sourceQuoteTarget = nil
                 }
             }
             do {
@@ -1450,9 +1464,9 @@ struct PDFReaderView: NSViewRepresentable {
                 else {
                     let prepared = try await self.nativePreparation.preparePage(session: session, page: number, onProgress: progress)
                     guard !Task.isCancelled, self.documentGeneration == documentID, self.navigationRequestID == navigation,
-                          self.sourceInputGeneration == input, self.sourceInteractionGeneration == interaction,
                           self.sourceQuoteRun == run, page.bounds(for: .cropBox) == prepared.crop,
-                          page.rotation == prepared.rotation else { return }
+                          page.rotation == prepared.rotation,
+                          decoration.map({ self.sourceDecorationValuesByID[$0.id] == $0 }) ?? true else { return }
                     let layout = SourceGeometryPage.LineLayout(crop: prepared.crop, rotation: prepared.rotation, characterCount: prepared.nativeCharacterCount)
                     cache = self.sourceGeometryPages[number].flatMap { $0.nativeLineLayout == layout ? $0 : nil } ?? SourceGeometryPage(prepared: prepared)
                     self.sourceGeometryPages[number] = cache
@@ -1476,10 +1490,18 @@ struct PDFReaderView: NSViewRepresentable {
                 }
                 let (range, proof, exact) = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
                 guard !Task.isCancelled, self.documentGeneration == documentID, self.navigationRequestID == navigation,
-                      self.sourceInputGeneration == input, self.sourceInteractionGeneration == interaction,
                       self.sourceQuoteRun == run,
-                      !exact || source?.identity == self.sourcePageTexts[number]?.identity,
                       decoration.map({ self.sourceDecorationValuesByID[$0.id] == $0 }) ?? true else { return }
+                guard !exact || source?.identity == self.sourcePageTexts[number]?.identity else {
+                    // Publication can briefly withhold the current page proof.
+                    // Keep rejecting the stale result, but let the next actual
+                    // metadata publication retry this still-current intent.
+                    if let decoration, self.sourceDecorationFocusID == decoration.id {
+                        self.awaitingSourceFocusProof = true
+                        self.appliedSourceDecorationProofIdentity = nil
+                    }
+                    return
+                }
                 if let source, self.sourcePageTexts[number]?.identity == source.identity, (proof?.byteCount ?? 0) <= 2_097_152 {
                     cache.sourceTextProofIdentity = source.identity; cache.sourceTextProof = proof
                 }
@@ -1491,7 +1513,10 @@ struct PDFReaderView: NSViewRepresentable {
                     }
                     self.quoteRangeCache[key] = CachedQuoteRange(range: range); self.quoteCacheBytes += key.byteCount
                 }
-                guard let range, let selection = page.selection(for: range) else {
+                guard let range, range.location >= 0, range.location != NSNotFound, range.length > 0,
+                      let count = cache.nativeLineLayout?.characterCount,
+                      range.location <= count, range.length <= count - range.location,
+                      let selection = page.selection(for: range) else {
                     self.setStatus("已定位到原页；原生文字无法唯一匹配此引文，未推测词位。扫描页请对照原页与识别稿。"); return
                 }
                 selection.color = NSColor.systemTeal.withAlphaComponent(0.3)
@@ -1509,13 +1534,16 @@ struct PDFReaderView: NSViewRepresentable {
     private func cancelSourceQuotePreparation() {
         sourceQuoteTask?.cancel(); sourceQuoteTask = nil
         if let run = sourceQuoteRun { onPreparationChanged?(.finished(run)) }; sourceQuoteRun = nil
+        sourceQuoteTarget = nil
     }
 
     private func clearSourceDecorations() {
         invalidateSourcePress()
+        cancelSourceQuotePreparation()
         sourceDecorationGeneration &+= 1; cancelSourcePreparation()
         sourceGeometries = [:]; sourceGeometryIDsByPage = [:]; sourceGeometryPages = [:]; sourceGeometryPageOrder = []
         renderedSourceInputGeneration = -1; renderedSourceWindow = []; lastVisiblePages = []
+        sourcePreparationNeedsRetry = false
         hoveredSourceID = nil; sourcePress = nil; onSourceDecorationHover?(nil); sourceCanvas.needsDisplay = true
     }
     @objc private func visiblePagesChanged(_ notification: Notification) { scheduleVisiblePages() }
@@ -1546,8 +1574,9 @@ struct PDFReaderView: NSViewRepresentable {
     private func preparationProgress(run: UUID, generation: Int, documentID: Int) -> @Sendable (ReadingPreparationProgress) -> Void {
         { [weak self] value in
             Task { @MainActor [weak self] in
-                guard let self, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation,
-                      self.sourcePreparationRun == run || self.sourceGeometryRun == run || self.sourceQuoteRun == run else { return }
+                guard let self, self.documentGeneration == documentID else { return }
+                let sourceRun = self.sourceDecorationGeneration == generation && (self.sourcePreparationRun == run || self.sourceGeometryRun == run)
+                guard sourceRun || self.sourceQuoteRun == run else { return }
                 self.onPreparationChanged?(.advanced(run, value))
             }
         }
@@ -1570,7 +1599,8 @@ struct PDFReaderView: NSViewRepresentable {
             guard number > 0, number <= document.pageCount, let cache = sourceGeometryPages[number], let identity = sourcePageTexts[number]?.identity else { return false }
             return cache.unresolvedIDs.contains { cache.needsProofRetry($0, identity: identity, currentValues: sourceDecorationValuesByID) }
         }
-        guard inputChanged || windowChanged || needsProofRetry else { return }
+        guard inputChanged || windowChanged || needsProofRetry || sourcePreparationNeedsRetry else { return }
+        sourcePreparationNeedsRetry = false
         sourceDecorationGeneration &+= 1; cancelSourcePreparation()
         if inputChanged {
             for (number, validIDs) in validSourceDecorationIDsByPage { sourceGeometryPages[number]?.retain(validIDs: validIDs) }
@@ -1740,6 +1770,9 @@ struct PDFReaderView: NSViewRepresentable {
             } catch is CancellationError { return }
             catch {
                 guard self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
+                // Only another explicit render trigger may retry this failure.
+                // Do not recurse or schedule timers after a native/file error.
+                self.sourcePreparationNeedsRetry = true
                 self.setStatus("阅读提示暂未准备好，原文仍可阅读。")
                 return
             }
@@ -1946,7 +1979,6 @@ struct PDFReaderView: NSViewRepresentable {
     }
     private func invalidateSourcePress() {
         cancelSourceHoverRefresh()
-        cancelSourceQuotePreparation()
         sourceInteractionGeneration &+= 1; sourcePress = nil
     }
     private func cancelSourceHoverRefresh() {
@@ -1993,7 +2025,10 @@ struct PDFReaderView: NSViewRepresentable {
         // A later click, drag or wheel expresses a newer reader intention.
         // Late acceleration metadata must not pull the viewport back to an
         // earlier sentence after that action (including scrollbar dragging).
-        if event.type != .mouseMoved, event.window === window { awaitingSourceFocusProof = false }
+        if event.type != .mouseMoved, event.window === window {
+            awaitingSourceFocusProof = false
+            cancelSourceQuotePreparation()
+        }
         if event.type == .mouseMoved {
             guard event.window === window, NSEvent.pressedMouseButtons == 0 else {
                 cancelSourceHoverRefresh(); reportSourceHover(nil); return
