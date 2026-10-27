@@ -80,7 +80,7 @@ public struct NativePDFTextLine: Sendable {
                !(0xDC00...0xDFFF).contains(source.character(at: offset))
     }
     private static func usable(_ rectangle: CGRect) -> Bool {
-        !rectangle.isNull && !rectangle.isEmpty &&
+        !rectangle.isNull && !rectangle.isInfinite && !rectangle.isEmpty &&
             [rectangle.minX, rectangle.minY, rectangle.maxX, rectangle.maxY].allSatisfy(\.isFinite)
     }
 
@@ -92,7 +92,9 @@ public struct NativePDFTextLine: Sendable {
     @MainActor public static func at(_ point: CGPoint, on page: PDFPage, pageText: NSString) -> Self? {
         guard let selection = page.selectionForLine(at: point), selection.pages.count == 1,
               selection.pages.first === page, let text = selection.string else { return nil }
-        let bounds = selection.bounds(for: page).intersection(page.bounds(for: .cropBox))
+        let rawBounds = selection.bounds(for: page)
+        guard usable(rawBounds) else { return nil }
+        let bounds = rawBounds.intersection(page.bounds(for: .cropBox))
         guard usable(bounds), bounds.contains(point) else { return nil }
         let count = selection.numberOfTextRanges(on: page)
         guard count > 0, count <= 64 else { return nil }
@@ -106,7 +108,9 @@ public struct NativePDFTextLine: Sendable {
         guard validEnd(range, limit: page.numberOfCharacters) != nil,
               let selection = page.selection(for: range) else { return [] }
         return selection.selectionsByLine().compactMap { line in
-            let rectangle = line.bounds(for: page).intersection(page.bounds(for: .cropBox))
+            let rawBounds = line.bounds(for: page)
+            guard usable(rawBounds) else { return nil }
+            let rectangle = rawBounds.intersection(page.bounds(for: .cropBox))
             return usable(rectangle) ? rectangle : nil
         }
     }
