@@ -19,6 +19,16 @@ def load(path):
     return json.loads(path.read_text())
 
 
+def validate_formal_eligibility(result, source_manifest, operator_exclusion=None):
+    if result.get("manualSetupRequired"):
+        raise ValueError("manual setup has variable pre-scroll dwell; establish a matched waiting protocol before formal matrices")
+    if (result.get("formalFPSBaselineExcluded") or result.get("diagnosticOnly")
+            or source_manifest.get("formalFPSBaselineExcluded") or source_manifest.get("diagnosticOnly")
+            or (operator_exclusion and (operator_exclusion.get("formalFPSBaselineExcluded")
+                                       or operator_exclusion.get("diagnosticComparisonExcluded")))):
+        raise ValueError("diagnostic or operator-excluded run cannot enter a formal FPS matrix")
+
+
 def group(tags, expected_window, expected_roi):
     runs, pooled_gaps, boundaries = [], [], []
     for tag in tags:
@@ -29,6 +39,9 @@ def group(tags, expected_window, expected_roi):
         trace = load(Path(result["heldRecord"]).parent / "scroll-control/scroll-trace.json")
         config = load(Path(result["heldRecord"]).parent / "config.json")
         source_manifest = load(Path(result["manifest"]))
+        exclusion_path = folder / "operator-exclusion.json"
+        validate_formal_eligibility(result, source_manifest,
+                                    load(exclusion_path) if exclusion_path.exists() else None)
         app_info = plistlib.loads((Path(source_manifest["app"]) / "Contents/Info.plist").read_bytes())
         fixture_manifest = load(ROOT / "logs" / Path(source_manifest["buildRoot"]).name / tag / "fixture-before.json")
         fixture_digest = hashlib.sha256(json.dumps(fixture_manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

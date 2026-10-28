@@ -63,6 +63,7 @@ LEGACY_PERF_TAGS = (
     "pilot-load", "baseline-narrow-qualified-run3", "pilot-load-visible",
     "formal-load-wide", "pilot-import-launchservices", "formal-load-narrow",
     "refinement-baseline-scroll-driver", "refinement-baseline-scroll-setup",
+    "current-session-old-control",
 )
 REFINEMENT_PERF_TAGS = (
     "final-f0eabf7-diagnostic-scroll-sample", "final-f0eabf7-latency-import-narrow",
@@ -72,10 +73,16 @@ REFINEMENT_PERF_TAGS = (
     "final-f0eabf7-narrow-run1", "final-f0eabf7-narrow-run2", "final-f0eabf7-narrow-run3",
     "final-f0eabf7-wide-roi-preview", "final-f0eabf7-wide-run1",
     "final-f0eabf7-wide-run2", "final-f0eabf7-wide-run3",
+    "opt1029-f0-clean-pointer-narrow-control",
 )
 PERF_COPY_ALLOWLISTS = {
     "perf-harness-20261028-release": LEGACY_PERF_TAGS,
     "perf-refinement-20261028-final": REFINEMENT_PERF_TAGS,
+    "perf-harness-20261028-thumbnails-off": (
+        "opt1029-old-thumbnails-off-narrow-control",
+        "opt1029-old-thumbnails-off-narrow-control2",
+        "opt1029-old-thumbnails-off-narrow-control4",
+    ),
 }
 PROTECTED = ("Sources", "Tests", "scripts", "Design", "logs", "private-books", "dist", ".git")
 

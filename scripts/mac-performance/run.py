@@ -8,6 +8,16 @@ SYSTEM = ctypes.CDLL('/usr/lib/libSystem.B.dylib')
 SYSTEM.mach_absolute_time.restype = ctypes.c_uint64
 PROC=ctypes.CDLL('/usr/lib/libproc.dylib')
 LAYOUT_WARNING_MARKERS=('being marked as needing layout','300 iterations')
+DIAGNOSTIC_ENV_KEYS=frozenset(('READINGBOOK_DIAG_PAUSE_DOT','READINGBOOK_DIAG_SKIP_HIDDEN_WIDTH','READINGBOOK_DIAG_BIND_HIDDEN_THUMBNAILS'))
+
+def diagnostic_environment(values):
+    result={}
+    for value in values:
+        key,separator,setting=value.partition('=')
+        if not separator or key not in DIAGNOSTIC_ENV_KEYS or setting not in ('0','1') or key in result:
+            raise ValueError('diagnostic environment requires unique allowlisted NAME=0/1 values')
+        result[key]=setting
+    return result
 
 def count_layout_warnings(value):
     # One warning line can contain both markers; count it once.
@@ -180,9 +190,13 @@ def main():
     parser.add_argument('--hold-final',action='store_true');parser.add_argument('--stop-held')
     parser.add_argument('--profile-startup',action='store_true',help='separate diagnostic sample; must never be included in performance baseline')
     parser.add_argument('--scroll-driver',help='workspace-built in-process diagnostic dylib; requires one held run, excluded from latency baselines')
+    parser.add_argument('--diagnostic-env',action='append',default=[],help='allowlisted scroll-diagnostic NAME=0/1; repeated values forbidden')
     args=parser.parse_args()
     if args.stop_held:return stop_held(args.stop_held)
     scroll_driver=local(args.scroll_driver) if args.scroll_driver else None
+    diagnostic_env=diagnostic_environment(args.diagnostic_env)
+    if diagnostic_env and not scroll_driver:
+        raise ValueError('experimental component switches require an isolated scroll diagnostic')
     if scroll_driver and (not scroll_driver.is_file() or not args.hold_final or args.rounds!=1):
         raise ValueError('scroll diagnostic requires an existing workspace library and one --hold-final run')
     if not args.tag.replace('-','').replace('_','').isalnum():raise ValueError('tag must be alphanumeric with hyphens/underscores')
@@ -222,10 +236,11 @@ def main():
         if scroll_driver:
             control=run/'scroll-control';control.mkdir()
             nonce=str(uuid.uuid4())
-            diagnostic_env={'DYLD_INSERT_LIBRARIES':str(scroll_driver),'READINGBOOK_SCROLL_WORKSPACE':str(ROOT),
+            driver_env={'DYLD_INSERT_LIBRARIES':str(scroll_driver),'READINGBOOK_SCROLL_WORKSPACE':str(ROOT),
                 'READINGBOOK_SCROLL_EXPECTED_EXECUTABLE':str(binary),'READINGBOOK_SCROLL_CONTROL':str(control),'READINGBOOK_SCROLL_NONCE':nonce}
-            for key,value in diagnostic_env.items():openargs[-1:-1]=['--env',key+'='+value]
-            scroll_metadata={'library':str(scroll_driver),'sha256':sha(scroll_driver),'control':str(control),'nonce':nonce,'latencyBaselineExcluded':True}
+            effective_switches={key:diagnostic_env.get(key,'0') for key in sorted(DIAGNOSTIC_ENV_KEYS)}
+            for key,value in {**driver_env,**effective_switches}.items():openargs[-1:-1]=['--env',key+'='+value]
+            scroll_metadata={'library':str(scroll_driver),'sha256':sha(scroll_driver),'control':str(control),'nonce':nonce,'latencyBaselineExcluded':True,'componentSwitches':effective_switches}
         launch=SYSTEM.mach_absolute_time();child=subprocess.Popen(openargs,cwd=run,env=env,stdout=launcherlog,stderr=subprocess.STDOUT)
         apppid=None;created=None;sampler=None;samplelog=None
         launchrecord={'launchRequestTicks':launch,'launcherPID':child.pid,'startedAt':start.isoformat(),'binarySHA256':manifest['binarySHA256'],'sourceCommit':manifest['sourceCommit'],'launchMethod':'LaunchServices open -n -W with per-process environment'}

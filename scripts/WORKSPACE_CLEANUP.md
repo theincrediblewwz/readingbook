@@ -22,6 +22,8 @@ python3 scripts/clean-workspace.py --apply --legacy-artifacts
 
 同一日期任务收尾追加了代码逐名列出的Debug13、导航小修与最终f0性能测试副本，仍须结束报告匹配。最终Release的app、源码、归档、编译目录与旧b164/关闭缩略图的对照app均保留，供尚未解决的FPS问题接续使用；只删每轮复制的书库/输入和原生测试app。
 
+2026-10-29第一轮滚动控制另追加逐名列出的旧版control与四个已启动的窄窗case。包括失败/人工排除case时，也必须有已结束的run报告及相符身份；不删除失败记录，preflight未启动的空目录不作为书库清理目标。
+
 每次运行都在工作区 `logs/workspace-cleanup/` 新建报告，列出绝对路径、分配字节数、理由、跳过项及删除结果。测试副本另存每文件 SHA-256、文件模式与符号链接元数据；可重建缓存不逐文件哈希。分配字节是估算，APFS 共享块使实际释放空间可能不同。报告不是书库内容备份，不能用于恢复已删测试副本。
 
 脚本不接受任意删除路径；拒绝符号链接目标/祖先、越出工作区的内部链接及特殊文件。执行删除前及每个目标前检查活跃 Swift/Clang/链接器、ReadingBook、原生测试和采集进程，再核对目标未变化。只对白名单内 `.build` 子目录执行删除，**不碰 `Sources`、`Tests`、`scripts`、`Design`、`logs`、`private-books`、`dist` 和 `.git`**，也保留旧性能 app/source/archive/manifest 及当前 `.build/mac-debug`。

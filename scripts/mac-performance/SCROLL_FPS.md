@@ -213,6 +213,16 @@ WindowServer display timestamps. No frame rate may be claimed from driver ticks.
 
 ## One-run orchestration
 
+Manual setup adds variable dwell time before capture. Record both
+`main.entry → scroll-start` and `run.completed → scroll-start` using the shared
+Mach clock; a manually confirmed warm case must not replace an early-scroll
+baseline. Compare early and settled states separately, keeping pointer/hover and
+the pre-scroll waiting policy fixed. A clean-pointer f0 pilot at57s reached58.90
+contentFPS, while historical f0 cases began around4.5–4.8s; this is a condition
+difference, not an optimization result. Manual-setup cases currently remain
+single diagnostic controls and are rejected by the formal matrix aggregator
+until a matched waiting protocol is established. See the phase-one control report.
+
 `capture-scroll-run.py` avoids a stale driver while a human inspects setup. It
 creates a fresh held run through `run.py --scroll-driver`, verifies the frozen
 binary and input library hashes, waits for that run's nonce/driver/window, starts
@@ -235,7 +245,57 @@ different panel layout requires a new own-window preview and explicit ROI choice
 Do not silently reuse it. Each comparative run must use the same driver/collector,
 ROI, threshold, grid, zoom, speed and requested input cadence.
 
-The collector optionally waits for the target to become frontmost **after** its
+For runs needing Cua activation or a fresh overlay/ROI inspection, add
+`--manual-setup`. The default remains immediate collector launch. After the held
+process and driver are ready, the wrapper emits `setup-required` to stdout and
+saves `setup-required.json` in the run's scroll-FPS output. This includes the
+owned PID/app/executable, window ID, control directory, fresh nonce and
+`setupConfirmationPath`. **Neither the collector nor `start.json` exists yet.**
+Complete all Cua activation, preview inspection, overlay dismissal and pointer
+movement now. Park the pointer outside the PDF content without leaving a tooltip
+visible. Check that the chosen PDF ROI is free of hover cards and other overlays,
+then stop manual interaction. From a nonactivating shell runner, write
+the nonce-bound confirmation atomically to the announced path:
+
+```sh
+python3 - logs/mac-refinement-20261028/scroll-fps/UNIQUE-TAG/setup-required.json <<'PY'
+import json, pathlib, sys
+request = json.loads(pathlib.Path(sys.argv[1]).read_text())
+path = pathlib.Path(request["setupConfirmationPath"])
+confirmation = dict(nonce=request["nonce"], roiConfirmed=True,
+                    noOverlayConfirmed=True, manualInteractionFinished=True)
+temporary = path.with_name(path.name + ".tmp")
+temporary.write_text(json.dumps(confirmation) + "\n")
+temporary.replace(path)
+PY
+```
+
+These booleans are operator assertions, not automatic overlay detection. Do not
+confirm until the checks are complete, and do not activate or operate UI during
+the ensuing capture. The wrapper waits at most90 seconds and requires an exact
+nonce match and actual JSON `true` for all three fields. It then rechecks the
+owned PID/executable, driver window identity, unconsumed/no-failure control and
+driver readiness age (at most110 seconds) before launching the collector. A
+timeout, invalid confirmation or failed recheck is `ineligible-manual-setup`
+(exit3): the held process and unconsumed control are retained for inspection;
+the wrapper starts neither collector nor input. Use `run.py --stop-held` with the announced held
+record when inspection is finished. An expired driver requires a fresh run and
+tag. Manual setup alone does not exclude an otherwise eligible FPS measurement.
+
+`--diagnostic-env NAME=0|1` may be repeated for distinct keys, limited to
+`READINGBOOK_DIAG_PAUSE_DOT`, `READINGBOOK_DIAG_SKIP_HIDDEN_WIDTH` and
+`READINGBOOK_DIAG_BIND_HIDDEN_THUMBNAILS`. Unknown names, duplicate names and
+nonbinary values are rejected before launch. The exact requested dictionary is
+kept as `diagnosticEnvironment` in setup/result and forwarded to `run.py`; the
+launch's `scrollDiagnostic.componentSwitches` records all effective values,
+explicitly defaulting omitted switches to0 to avoid inherited-environment
+contamination. These switches affect only a prepared diagnostic app that
+implements them. Result copies the manifest's `diagnosticOnly` and sets
+`formalFPSBaselineExcluded` with reasons when the manifest excludes it or any
+requested switch is1. Such runs are diagnostic experiments, not formal FPS
+matrix samples, even when their foreground/input/hash/log gates pass.
+
+Without `--manual-setup`, the collector optionally waits for the target to become frontmost **after** its
 nonactivating AppKit initialization and **before** starting the capture clock.
 If the wrapper prints `needs-cua-activation`, the input command has not been
 written; use Cua to activate the already held isolated app. The collector waits

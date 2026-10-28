@@ -43,6 +43,14 @@ Initial lifecycle states before the startup/import reader readiness boundary are
 kept separately: a newly created window may not yet have received an occlusion
 update. All subsequent reading actions and idle checkpoints are checked strictly.
 
+For captured scrolling FPS, see [SCROLL_FPS.md](SCROLL_FPS.md). Its one-run wrapper
+supports opt-in `--manual-setup`: finish all Cua/ROI/overlay preparation and write
+the announced nonce-bound confirmation before collector launch. Timeout preserves
+the held diagnostic app and unconsumed control. Repeatable, allowlisted
+`--diagnostic-env NAME=0|1` switches are forwarded and recorded; enabled switches
+or a diagnostic-only build's exclusion flag keep those experiments out of formal
+FPS matrices. Neither option changes the installed app or activates UI itself.
+
 The report boundaries have deliberately different meanings:
 
 * External `mach_absolute_time` immediately before `open -n -W` is the normal

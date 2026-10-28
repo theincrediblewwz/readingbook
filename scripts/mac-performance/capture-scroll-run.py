@@ -12,6 +12,35 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+DIAGNOSTIC_ENV_KEYS = frozenset(("READINGBOOK_DIAG_PAUSE_DOT", "READINGBOOK_DIAG_SKIP_HIDDEN_WIDTH",
+                               "READINGBOOK_DIAG_BIND_HIDDEN_THUMBNAILS"))
+MANUAL_SETUP_TIMEOUT_SECONDS = 90
+
+
+class ManualSetupError(RuntimeError):
+    """Setup was not confirmed; the held run/control must remain unconsumed."""
+
+
+def diagnostic_environment(values):
+    result = {}
+    for value in values:
+        key, separator, setting = value.partition("=")
+        if not separator or key not in DIAGNOSTIC_ENV_KEYS or setting not in ("0", "1") or key in result:
+            raise ValueError("diagnostic environment requires unique allowlisted NAME=0/1 values")
+        result[key] = setting
+    return result
+
+
+def fps_diagnostic_metadata(build, diagnostic_env, manual_setup=False):
+    reasons = []
+    if build.get("formalFPSBaselineExcluded", False) or build.get("diagnosticOnly", False):
+        reasons.append("diagnostic-build-manifest")
+    if any(value == "1" for value in diagnostic_env.values()):
+        reasons.append("experimental-component-switch")
+    if manual_setup:
+        reasons.append("variable-manual-setup-dwell; single control only")
+    return dict(diagnosticOnly=bool(build.get("diagnosticOnly", False)),
+                formalFPSBaselineExcluded=bool(reasons), formalFPSBaselineExclusionReasons=reasons)
 
 
 def local(value):
@@ -55,7 +84,65 @@ def wait_json(path, timeout=15, failure=None):
     raise RuntimeError("timed out waiting for " + str(path.relative_to(ROOT)))
 
 
-def main():
+def validate_fresh_control(control, held, nonce):
+    ready_path = control / "driver-ready.json"
+    ready = read(ready_path)
+    if ready["pid"] != held["pid"] or ready["nonce"] != nonce or not ready.get("workspacePDFVerified"):
+        raise RuntimeError("driver identity/nonce/fixture mismatch")
+    if (control / "start.json").exists() or (control / "driver-failure.json").exists():
+        raise RuntimeError("control is stale or failed before capture")
+    if time.time() - ready_path.stat().st_mtime > 110:
+        raise RuntimeError("driver-ready is too old for a fresh capture")
+    return ready
+
+
+def validate_manual_setup_confirmation(value, nonce):
+    if not isinstance(value, dict) or value.get("nonce") != nonce:
+        raise ManualSetupError("manual setup confirmation nonce mismatch")
+    for key in ("roiConfirmed", "noOverlayConfirmed", "manualInteractionFinished"):
+        if value.get(key) is not True:
+            raise ManualSetupError("manual setup confirmation requires " + key + "=true")
+    return value
+
+
+def wait_manual_setup(path, nonce, control, timeout=MANUAL_SETUP_TIMEOUT_SECONDS):
+    if not 0 <= timeout <= MANUAL_SETUP_TIMEOUT_SECONDS:
+        raise ValueError("manual setup timeout must be at most 90 seconds")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if (control / "driver-failure.json").exists() or (control / "start.json").exists():
+            raise ManualSetupError("manual setup control failed or was consumed before confirmation")
+        if path.exists():
+            try:
+                return validate_manual_setup_confirmation(read(path), nonce)
+            except (OSError, json.JSONDecodeError) as error:
+                raise ManualSetupError("manual setup confirmation is unreadable: " + str(error)) from error
+        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+    raise ManualSetupError("manual setup was not confirmed within 90 seconds; held run and control preserved")
+
+
+def validate_held_identity(held):
+    identity = subprocess.run(["/bin/ps", "-p", str(held["pid"]), "-o", "comm="],
+                              capture_output=True, text=True, timeout=5)
+    if identity.returncode or identity.stdout.strip() != held["executable"]:
+        raise ManualSetupError("held PID no longer matches owned probe executable")
+
+
+def pre_scroll_dwell(events_path, input_start_ticks):
+    rows = [json.loads(line) for line in events_path.read_text().splitlines() if line]
+    main = next(row for row in rows if row["event"] == "main.entry")
+    completed = next(row for row in rows if row["event"] == "run.completed")
+    if not main["timebaseNumer"] > 0 or not main["timebaseDenom"] > 0:
+        raise ValueError("invalid pre-scroll event timebase")
+    if input_start_ticks < completed["ticks"] or completed["ticks"] < main["ticks"]:
+        raise ValueError("pre-scroll events are outside their required order")
+    factor = main["timebaseNumer"] / main["timebaseDenom"] / 1e9
+    return dict(mainEntryToInputSeconds=(input_start_ticks - main["ticks"]) * factor,
+                runCompletedToInputSeconds=(input_start_ticks - completed["ticks"]) * factor,
+                measuredAfterInput=True, clock="shared Mach absolute ticks; no warmup inferred from FPS")
+
+
+def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", default=".build/perf-harness-20261028-release/build-manifest.json")
     parser.add_argument("--fixture", default="private-books/mac-refinement-20261028/library-before")
@@ -71,7 +158,16 @@ def main():
     parser.add_argument("--input-hz", type=float, default=60)
     parser.add_argument("--capture-seconds", type=float, default=24)
     parser.add_argument("--roi-confirmed", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument("--manual-setup", action="store_true",
+                        help="wait up to 90s for nonce-bound ROI/overlay/interaction confirmation before collector launch")
+    parser.add_argument("--diagnostic-env", action="append", default=[],
+                        help="allowlisted scroll-diagnostic NAME=0/1; repeat for distinct keys")
+    return parser
+
+
+def main():
+    args = argument_parser().parse_args()
+    diagnostic_env = diagnostic_environment(args.diagnostic_env)
     if not args.tag.replace("-", "").replace("_", "").isalnum():
         raise ValueError("tag must be alphanumeric with hyphens/underscores")
     if not args.roi_confirmed:
@@ -96,28 +192,51 @@ def main():
     result = dict(status="incomplete", tag=args.tag, manifest=str(source_manifest),
                   targetBinarySHA256=binary_before, driverSHA256=driver_before,
                   collectorSHA256=collector_before, fixtureFiles=len(before), inputMethod="programmatic-own-process-continuous-PDF-scroll",
-                  latencyBaselineExcluded=True, hardwareGesture=False)
+                  latencyBaselineExcluded=True, hardwareGesture=False,
+                  diagnosticEnvironment=diagnostic_env, manualSetupRequired=args.manual_setup,
+                  manualSetupStatus="pending" if args.manual_setup else "not-requested",
+                  **fps_diagnostic_metadata(build, diagnostic_env, args.manual_setup))
     write(output / "setup.json", result)
     try:
         launch_args = [sys.executable, str(ROOT / "scripts/mac-performance/run.py"), "--manifest", str(source_manifest),
                        "--library-copy", str(fixture), "--rounds", "1", "--width", str(args.width), "--height", str(args.height),
                        "--hold-final", "--scroll-driver", str(driver), "--tag", args.tag]
+        for key, value in diagnostic_env.items():
+            launch_args.extend(["--diagnostic-env", key + "=" + value])
         announce(status="launching-isolated-held-test", tag=args.tag)
         with (output / "run-driver.log").open("w") as log:
             launched = subprocess.run(launch_args, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, timeout=150)
-        held = wait_json(held_path, timeout=2)
-        result["heldPID"] = held["pid"]; result["heldRecord"] = str(held_path)
+        held = (read(held_path) if held_path.exists() else None) if launched.returncode else wait_json(held_path, timeout=2)
+        if held:
+            preserve_held = args.manual_setup
+            result["heldPID"] = held["pid"]; result["heldRecord"] = str(held_path)
         if launched.returncode:
             raise RuntimeError("held performance setup failed; see run-driver.log")
         launch = read(run / "launch.json")
         nonce = launch["scrollDiagnostic"]["nonce"]
-        ready = wait_json(control / "driver-ready.json", failure=control / "driver-failure.json")
-        if ready["pid"] != held["pid"] or ready["nonce"] != nonce or not ready.get("workspacePDFVerified"):
-            raise RuntimeError("driver identity/nonce/fixture mismatch")
-        if (control / "start.json").exists() or (control / "driver-failure.json").exists():
-            raise RuntimeError("control is stale or failed before capture")
-        if time.time() - (control / "driver-ready.json").stat().st_mtime > 110:
-            raise RuntimeError("driver-ready is too old for a fresh capture")
+        wait_json(control / "driver-ready.json", failure=control / "driver-failure.json")
+        ready = validate_fresh_control(control, held, nonce)
+        if args.manual_setup:
+            confirmation_path = control / "setup-confirmed.json"
+            setup_request = dict(status="setup-required", pid=held["pid"], app=str(local(build["app"])),
+                                 executable=held["executable"], heldRecord=str(held_path), control=str(control), nonce=nonce,
+                                 setupConfirmationPath=str(confirmation_path), maximumWaitSeconds=MANUAL_SETUP_TIMEOUT_SECONDS,
+                                 windowID=ready["windowID"], roi=args.roi,
+                                 requirements=dict(roiConfirmed=True, noOverlayConfirmed=True, manualInteractionFinished=True))
+            result["manualSetupConfirmationPath"] = str(confirmation_path)
+            write(output / "setup-required.json", setup_request)
+            announce(**setup_request)
+            confirmation = wait_manual_setup(confirmation_path, nonce, control)
+            # No collector or input exists yet. Recheck after the operator's UI
+            # work, rather than trusting the readiness/identity from before it.
+            renewed_ready = validate_fresh_control(control, held, nonce)
+            if (held["executable"] != str(binary) or renewed_ready.get("executable") != held["executable"]
+                    or renewed_ready["windowID"] != ready["windowID"]):
+                raise ManualSetupError("manual setup target executable/window identity changed")
+            validate_held_identity(held)
+            ready = renewed_ready
+            result.update(manualSetupStatus="confirmed", manualSetupConfirmation=confirmation)
+            announce(status="setup-confirmed", pid=held["pid"], control=str(control), nonce=nonce)
         capture = output / "capture"
         capture_args = [str(collector), "--workspace", str(ROOT), "--output", str(capture), "--pid", str(held["pid"]),
                         "--expected-executable", held["executable"], "--bundle", "org.readingbook.perf-harness",
@@ -171,6 +290,7 @@ def main():
         trace = wait_json(control / "scroll-trace.json", timeout=2, failure=control / "driver-failure.json")
         if trace["status"] != "completed":
             raise RuntimeError("scroll input ineligible: " + trace["status"])
+        result["preScrollDwell"] = pre_scroll_dwell(run / "events.jsonl", trace["startMachTicks"])
         ticks = trace["ticks"]
         all_foreground = ticks and all(all(t["foreground"].get(k) for k in ["appActive", "keyWindow", "windowVisible", "occlusionVisible"]) for t in ticks)
         displacement = abs(ticks[-1]["actualY"] - ticks[0]["actualY"]) if ticks else 0
@@ -207,7 +327,10 @@ def main():
         if system_log.returncode or result["layoutWarningLines"] or result["publishingWarnings"]:
             result["status"] = "ineligible-log-gate"
     except Exception as error:
-        if result["status"] == "incomplete":
+        if args.manual_setup and held and result["manualSetupStatus"] != "confirmed":
+            preserve_held = True
+            result.update(status="ineligible-manual-setup", manualSetupStatus="ineligible")
+        elif result["status"] == "incomplete":
             result["status"] = "failed-scroll-diagnostic"
         result["reason"] = str(error)
     finally:
@@ -232,7 +355,11 @@ def main():
                 result["status"] = "failed-stop-owned-held"
         else:
             result["ownedHeldStopped"] = False
-            result["heldPreservedForCuaActivation"] = bool(held and preserve_held)
+            result["heldPreservedForCuaActivation"] = bool(held and preserve_held
+                                                         and result["manualSetupStatus"] != "ineligible")
+            if args.manual_setup:
+                result["heldPreservedForManualSetup"] = bool(held and preserve_held)
+        result["commandWritten"] = command_written
         write(output / "result.json", result)
         announce(**result)
     return 0 if result["status"] == "qualified-captured-content-update-measurement" else 3 if preserve_held else 1
