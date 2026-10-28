@@ -11,7 +11,7 @@ Without `--bin-dir`, the builder performs a Debug build under `.build/native-ui-
 
 ## Timing attribution and budgets
 
-The timer queues a main-thread heartbeat every 50 ms. A pulse captures its phase and action when queued, before its waiting interval. A startup pulse delayed across the scenario boundary retains its startup attribution. Actions are labelled before the state/window mutation, including synchronous resize work.
+The timer queues a main-thread heartbeat every 50 ms. A pulse captures its phase and action when queued, before its waiting interval. A startup pulse delayed across the scenario boundary retains its queued-phase label and full lag. Its waiting-interval overlap after the first-open boundary also counts toward the interactive maximum, so a boundary-straddling first-open stall cannot lose the first 0–50 ms. Samples include delivered phase and overlap for audit. Actions are labelled before the state/window mutation, including synchronous resize work.
 
 - `starting` includes AppStore, content, NSHostingView/window initialization and the existing 500 ms settle interval.
 - `scenario` begins immediately before the very first companion open. There is no pre-open or additional warm-up.

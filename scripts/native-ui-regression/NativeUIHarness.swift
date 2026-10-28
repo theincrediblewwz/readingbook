@@ -14,6 +14,7 @@ final class Metrics: @unchecked Sendable {
     var maximumLag = 0.0
     var maximumStartupLag = 0.0
     var maximumInteractiveLag = 0.0
+    var interactiveStartedAt: Double?
     var maximumLagByPhase: [String: Double] = [:]
     var worstHeartbeat: [String: Any] = [:]
     var slowHeartbeats: [[String: Any]] = []
@@ -24,7 +25,11 @@ final class Metrics: @unchecked Sendable {
     var lastAction = "initialization"
     var phase = "starting"
     var watchdogFired = false
-    func scenario() { lock.lock(); phase = "scenario"; lock.unlock() }
+    func scenario() {
+        lock.lock(); defer { lock.unlock() }
+        if interactiveStartedAt == nil { interactiveStartedAt = ProcessInfo.processInfo.systemUptime }
+        phase = "scenario"
+    }
     func settling() { lock.lock(); phase = "settling"; lock.unlock() }
     func record(_ label: String) { lock.lock(); lastAction = label; completed += 1; lock.unlock() }
     func layout() { lock.lock(); layouts += 1; lock.unlock() }
@@ -37,13 +42,18 @@ final class Metrics: @unchecked Sendable {
         let delivered = ProcessInfo.processInfo.systemUptime
         let lag = delivered - pulse.queuedAt
         lock.lock(); defer { lock.unlock() }
+        // A pulse can straddle the first-open boundary. Charge only its
+        // waiting-interval overlap to interaction, without losing that overlap
+        // just because the pulse was originally queued during startup.
+        let interactiveOverlap = interactiveStartedAt.map { max(0, delivered - max(pulse.queuedAt, $0)) } ?? 0
         let sample: [String: Any] = ["queuedPhase": pulse.phase, "queuedAction": pulse.action,
+            "deliveredPhase": phase, "interactiveOverlapSeconds": interactiveOverlap,
             "lagSeconds": lag, "queuedSecondsSinceStart": pulse.queuedAt - startedAt,
             "deliveredSecondsSinceStart": delivered - startedAt]
         if lag > maximumLag { maximumLag = lag; worstHeartbeat = sample }
         maximumLagByPhase[pulse.phase] = max(maximumLagByPhase[pulse.phase] ?? 0, lag)
         if pulse.phase == "starting" { maximumStartupLag = max(maximumStartupLag, lag) }
-        else { maximumInteractiveLag = max(maximumInteractiveLag, lag) }
+        maximumInteractiveLag = max(maximumInteractiveLag, interactiveOverlap)
         if lag > 0.5 {
             slowHeartbeatCount += 1; slowHeartbeats.append(sample)
             if slowHeartbeats.count > 100 {
