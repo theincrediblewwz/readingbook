@@ -225,4 +225,41 @@ final class ReadingContinuationTests: XCTestCase {
         XCTAssertThrowsError(try SmartReadingRuntime.completeAnalysis(arguments: arguments, in: &p, allowedUnitIDs: ["u1"]))
         XCTAssertEqual(try encoder.encode(p), before)
     }
+    func testOverlapPreviewDescribesExactReusedAndFirstAnalysisPageIntervals() throws {
+        var p = try project(pages: 200)
+        for work in try SmartReadingRuntime.analysisChunks(in: p).prefix(100) { try save(work, in: &p) }
+        let view = try ReadingContinuationRuntime.preview(selection: selection(p, first: 50, last: 200), in: p)
+        XCTAssertEqual(view.reusedUnitCount, 51); XCTAssertEqual(view.newUnitCount, 100)
+        let reused = try XCTUnwrap(view.detailRows.first { $0.id == "range-reused" })
+        let first = try XCTUnwrap(view.detailRows.first { $0.id == "range-first" })
+        XCTAssertTrue(reused.detail.contains("涉及第50–100页"))
+        XCTAssertTrue(first.detail.contains("涉及第101–200页"))
+        XCTAssertFalse(reused.detail.contains("50–200"))
+        let disjoint = ReadingContinuationRuntime.rangeDescription(unitIDs: stride(from: 1, through: 199, by: 2).map { "u\($0)" }, in: p)
+        XCTAssertTrue(disjoint.contains("第1、3、5")); XCTAssertTrue(disjoint.contains("197、199页"))
+        XCTAssertFalse(disjoint.contains("1–199")); XCTAssertFalse(disjoint.contains("…"))
+    }
+    func testSplitPageCanAppearInReusedAndMissingWithoutWholePageCompletionClaim() throws {
+        var p = try project(pages: 2)
+        p.units[0].text = String(repeating: "甲阅读原文。", count: 1800)
+        p.units[1].text = String(repeating: "乙继续原文。", count: 1800)
+        p.units[1].page = 1
+        p.smartReading = try SmartReadingRuntime.freeze(.init(scope: .wholeBook, execution: p.smartReading?.selection.execution), in: p, currentUnitID: "u1")
+        let work = try SmartReadingRuntime.analysisChunks(in: p)
+        XCTAssertEqual(work.count, 2, "相同页内的长原始单元分别形成有界任务。")
+        try save(try XCTUnwrap(work.first), in: &p)
+        let view = try ReadingContinuationRuntime.preview(selection: selection(p, last: 1), in: p)
+        XCTAssertEqual(view.selectedUnitCount, 2); XCTAssertEqual(view.selectedPageCount, 1)
+        XCTAssertEqual(view.reusedUnitCount, 1); XCTAssertEqual(view.newUnitCount, 1)
+        for id in ["range-reused", "range-first"] {
+            let detail = try XCTUnwrap(view.detailRows.first { $0.id == id }).detail
+            XCTAssertTrue(detail.contains("涉及第1页（共1页，1个内容单元）"))
+            XCTAssertTrue(detail.contains("不代表整页已完成")); XCTAssertTrue(detail.contains("未选片段不计为完成"))
+        }
+        var unpaged = p; unpaged.units[0].page = nil; unpaged.units[1].page = nil
+        unpaged.units.reverse() // Ordinals follow whole-source order, not storage array order.
+        let description = ReadingContinuationRuntime.rangeDescription(unitIDs: ["u2", "u2", "unknown"], in: unpaged)
+        XCTAssertTrue(description.contains("全书内容单元2（共1个）"))
+        XCTAssertTrue(description.contains("另有1个来源单元未匹配")); XCTAssertFalse(description.contains("第1页"))
+    }
 }

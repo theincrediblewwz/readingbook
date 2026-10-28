@@ -193,6 +193,35 @@ extension SmartReadingRuntime {
 }
 
 extension ReadingContinuationRuntime {
+    /// Source locations only: page numbers do not prove whole-page coverage.
+    /// Unknown IDs are disclosed rather than assigned invented positions.
+    public static func rangeDescription(unitIDs: [String], in project: BookProject) -> String {
+        let requested = Set(unitIDs)
+        guard !requested.isEmpty else { return "没有对应的所选内容。" }
+        let ordered = project.units.sorted { $0.order == $1.order ? $0.id < $1.id : $0.order < $1.order }
+        let selected = ordered.enumerated().filter { requested.contains($0.element.id) }
+        let missing = requested.subtracting(selected.map { $0.element.id }).count
+        guard !selected.isEmpty else { return "\(missing)个来源单元未匹配当前原文，范围不可确认。" }
+        func intervals(_ values: [Int]) -> String {
+            guard let first = values.first else { return "" }
+            var result: [String] = [], start = first, end = first
+            for value in values.dropFirst() {
+                if value - end == 1 { end = value }
+                else { result.append(start == end ? "\(start)" : "\(start)–\(end)"); start = value; end = value }
+            }
+            result.append(start == end ? "\(start)" : "\(start)–\(end)")
+            return result.joined(separator: "、")
+        }
+        let location: String
+        if selected.allSatisfy({ ($0.element.page ?? 0) > 0 }) {
+            let pages = Array(Set(selected.compactMap { $0.element.page })).sorted()
+            location = "涉及第\(intervals(pages))页（共\(pages.count)页，\(selected.count)个内容单元）；页码仅定位所选内容，不代表整页已完成；未选片段不计为完成。"
+        } else {
+            location = "全书内容单元\(intervals(selected.map { $0.offset + 1 }))（共\(selected.count)个）；仅描述所选内容，未选片段不计为完成。"
+        }
+        return missing == 0 ? location : location + "另有\(missing)个来源单元未匹配当前原文，未推断其范围。"
+    }
+
     private static func makePreview(projected: BookProject, original: BookProject, intent: ReadingContinuationIntent) throws -> ReadingContinuationPreview {
         guard let s = projected.smartReading else { throw ReadingError.invalid("缺少原文范围。") }
         let units = try SmartReadingRuntime.selectedUnits(in: projected, allowedUnitIDs: Set(s.unitIDs))
@@ -208,11 +237,17 @@ extension ReadingContinuationRuntime {
         known.formUnion((original.readingStepResults ?? []).map(\.unitID)); known.formUnion((original.workflowRuns ?? []).map(\.unitID))
         let incompatible = Set(prior.flatMap { cp in cp.unitIDs.filter { s.unitHashes[$0] != nil && s.unitHashes[$0] != cp.unitHashes[$0] } })
         var reused = 0, added = 0, partial = 0, redo = 0
-        for u in units where !blockedIDs.contains(u.id) {
-            if blanks.contains(u.id) { reused += 1; continue }
+        var reusedUnits: [String] = [], firstUnits: [String] = [], partialUnits: [String] = [], redoUnits: [String] = []
+        var blockedUnits: [String] = [], blankUnits: [String] = []
+        for u in units {
+            if blockedIDs.contains(u.id) { blockedUnits.append(u.id); continue }
+            if blanks.contains(u.id) { reused += 1; blankUnits.append(u.id); continue }
             let own = byUnit[u.id] ?? []
             let complete = s.selection.execution != nil ? (!own.isEmpty && own.allSatisfy { p.completeIDs.contains($0.1) }) : p.items.contains { $0.unitIDs == [u.id] && $0.status == .reusable }
-            if intent == .reanalyze && known.contains(u.id) { redo += 1 } else if complete { reused += 1 } else if known.contains(u.id) { partial += 1 } else { added += 1 }
+            if intent == .reanalyze && known.contains(u.id) { redo += 1; redoUnits.append(u.id) }
+            else if complete { reused += 1; reusedUnits.append(u.id) }
+            else if known.contains(u.id) { partial += 1; partialUnits.append(u.id) }
+            else { added += 1; firstUnits.append(u.id) }
         }
         let scopes = Set(p.work.filter { $0.scopeJob != nil }.map(\.id)), doneScopes = Set(p.work.filter { $0.scopeJob != nil && p.completeIDs.contains($0.id) }.map(\.id)).count
         let pending = p.items.filter { $0.status != .reusable }
@@ -222,12 +257,22 @@ extension ReadingContinuationRuntime {
         var cfg = s.selection.execution; cfg?.maximumConcurrentRequests = 1
         let fp = try digest(PreviewIdentity(scope: scope, plan: try planFingerprint(in: projected), intent: intent, configuration: cfg, items: p.items, blockedUnitIDs: blockedIDs.sorted(), incompatibleUnitIDs: incompatible.sorted()))
         var rows = [ReadingContinuationDetailRow(id: "units", title: "内容单元", detail: "沿用\(reused)，新增\(added)，已有记录需补\(partial)，明确重做\(redo)。")]
+        let ranges: [(String, String, [String])] = [
+            ("range-reused", "沿用范围", reusedUnits), ("range-first", "首次分析范围", firstUnits),
+            ("range-partial", "已有记录需补范围", partialUnits), ("range-redo", "明确重做范围", redoUnits),
+            ("range-blocked", "尚未读取范围", blockedUnits), ("range-blank", "已确认空白范围", blankUnits)
+        ]
+        for (id, title, ids) in ranges where !ids.isEmpty {
+            var detail = rangeDescription(unitIDs: ids, in: projected)
+            if id == "range-blank" { detail += "仅沿用人工确认的空白状态，不计为AI分析完成。" }
+            rows.append(.init(id: id, title: title, detail: detail))
+        }
         if s.selection.execution == nil { rows.append(.init(id: "legacy", title: "沿用逐段账本", detail: "继续真实回执与方法步骤，不自动切换阅读方式或增加本轮回顾。")) }
         else if original.smartReading?.selection.execution == nil {
             rows.append(.init(id: "legacy-conversion", title: "明确启用配置阅读", detail: "旧逐段成果保留，但不能自动证明新增配置步骤已完成；不自动增加本轮回顾。"))
         }
         if !blanks.isEmpty { rows.append(.init(id: "blank", title: "已确认空白", detail: "\(blanks.count)个单元沿用人工确认的空白状态，不调用模型。")) }
-        if !scopes.isEmpty { rows.append(.init(id: "scope", title: "已选范围回顾", detail: "已保存\(doneScopes)，待保存\(scopes.count-doneScopes)；只执行启用的回顾步骤，等待本次前置成果齐全。")) }
+        if !scopes.isEmpty { rows.append(.init(id: "scope", title: "已启用的范围步骤", detail: "已保存\(doneScopes)，待保存\(scopes.count-doneScopes)；只执行已启用的章末或本轮结束步骤，等待本次前置成果齐全。")) }
         let boundary = pending.filter { $0.status == .boundaryReread }.count
         if boundary > 0 { rows.append(.init(id: "boundary", title: "边界补读", detail: "\(boundary)个旧复合范围无法精确拆分；保留旧成果并补读，不制造局部完成。")) }
         if !blockedIDs.isEmpty { rows.append(.init(id: "blocked", title: "尚未读取", detail: "\(blockedIDs.count)个单元未识别或暂缓，不计为完成；请先OCR或调整范围。")) }
@@ -267,7 +312,7 @@ extension ReadingContinuationRuntime {
                 intent == .reanalyze ? .requestedAgain : boundary ? .boundaryReread : .missing
             let reason: String
             if status == .reusable { reason = "由真实已保存检查点证明，不再次调用模型。" }
-            else if let scope = item.scopeJob { reason = scope.kind == .book ? "执行已选本轮回顾，等待本次前置成果保存齐全。" : "执行已选章末步骤，等待本章前置成果保存齐全。" }
+            else if let scope = item.scopeJob { reason = scope.kind == .book ? "执行已选本轮结束步骤，等待本次前置成果保存齐全。" : "执行已选章末步骤，等待本章前置成果保存齐全。" }
             else if status == .requestedAgain { reason = "明确请求重新分析；旧版本保留，新版本完成保存后才切换。" }
             else if boundary { reason = "旧复合范围无法精确拆成当前边界；保留旧成果，并透明补读此边界。" }
             else { reason = "仅执行此任务仍缺的步骤与组件；沿用的工作另列。" }

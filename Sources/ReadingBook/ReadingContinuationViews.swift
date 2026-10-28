@@ -214,14 +214,11 @@ struct ReadingContinuationSavedProgressView: View {
                     .font(.system(size: 11)).foregroundStyle(Palette.copper).fixedSize(horizontal: false, vertical: true)
             }
             HStack(alignment: .top, spacing: 6) {
-                if let wholeBookSummary, !wholeBookSummary.isEmpty {
-                    Text("全书 · " + wholeBookSummary).font(.system(size: 11)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text("已保存范围与进度").font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
-                ReadingContinuationInfoButton(title: "保存进度", detail: hasBaselineDetails ?
+                ReadingContinuationInfoButton(title: "已保存范围与进度", detail: (wholeBookSummary.map { $0 + "\n\n" } ?? "") + (hasBaselineDetails ?
                     "只统计已验证并保存的成果。本次范围的覆盖包含沿用成果；本轮新完成仅统计这次执行后真正完成全部本地要求的内容单元，不代表网络返回数或每个阶段的保存次数。模型返回不等于校验或保存完成。" :
-                    "这个旧任务没有记录开始时的完整基线，因此不追溯猜测沿用和本轮新完成的数量。这里只显示可以证明已保存的本次范围进度，模型返回不等于校验或保存完成。")
+                    "这个旧任务没有记录开始时的完整基线，因此不追溯猜测沿用和本轮新完成的数量。这里只显示可以证明已保存的本次范围进度，模型返回不等于校验或保存完成。"))
             }
         }.accessibilityElement(children: .contain).accessibilityIdentifier("reading-continuation-saved-progress")
     }

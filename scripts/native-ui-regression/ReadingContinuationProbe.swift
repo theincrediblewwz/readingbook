@@ -159,6 +159,9 @@ private actor ContinuationOfflineTransport {
         let b = try await store.previewReadingContinuation(selection(50, 200), intent: .continueMissing)
         try require(a == b && a.selectedUnitCount == 151 && a.selectedPageCount == 151 && a.reusedUnitCount == 51 && a.newUnitCount == 100,
             "AppStore重叠预览必须确定性显示151单元、沿用51及新增100。")
+        try require(a.detailRows.contains { $0.id == "range-reused" && $0.detail.contains("第50–100页") } &&
+            a.detailRows.contains { $0.id == "range-first" && $0.detail.contains("第101–200页") },
+            "AppStore预览必须保留实际沿用与缺口区间，不能只有总数。")
         let previewCalls = await transport.calls, afterPreview = try encoded(await canonical(fixture))
         try require(previewCalls == 0 && afterPreview == before, "只读预览不能提交或调用模型。")
         checks.append(["name": "readonly-deterministic-overlap", "status": "passed", "selected": 151, "reused": 51, "new": 100])

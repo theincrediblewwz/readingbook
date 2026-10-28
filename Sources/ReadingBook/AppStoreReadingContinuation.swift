@@ -61,7 +61,9 @@ struct ReadingContinuationDisplayProgress: Sendable {
                     let historical = Set(snapshot.insights.filter {
                         !$0.id.hasPrefix("deferred-") && !$0.id.hasPrefix("blank-")
                     }.flatMap(\.unitIDs)).intersection(knownUnits)
-                    let whole = "全书历史：\(historical.count)/\(knownUnits.count) 个内容单元曾保存 AI 内容，当前要求的完成情况另计。"
+                    let savedRanges = complete.isEmpty ? "本次范围尚无可证明已保存齐全的内容。" :
+                        "本次范围已保存内容：" + ReadingContinuationRuntime.rangeDescription(unitIDs: complete.sorted(), in: snapshot)
+                    let whole = savedRanges + "\n\n全书历史：\(historical.count)/\(knownUnits.count) 个内容单元曾保存 AI 内容，当前要求的完成情况另计。"
                     var summary = session.scopeTitle
                     if blank > 0 { summary += " · \(blank) 个单元已确认空白" }
                     if blocked > 0 { summary += " · \(blocked) 个单元待处理或暂缓" }
