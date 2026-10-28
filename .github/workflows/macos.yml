@@ -3,7 +3,17 @@ name: Build macOS App
 on:
   push:
     branches:
-      - codex/reader-audit-after-0.23.8
+      - main
+    paths:
+      - 'Sources/**'
+      - 'Tests/**'
+      - 'Package.swift'
+      - 'packaging/**'
+      - 'scripts/**'
+      - '.github/workflows/macos.yml'
+  pull_request:
+    branches:
+      - main
     paths:
       - 'Sources/**'
       - 'Tests/**'
@@ -52,6 +62,11 @@ jobs:
           python3 scripts/native-ui-regression/run.py --mode workspace --cycles 24 --tag ci-workspace
           python3 scripts/native-ui-regression/run.py --mode pdf --cycles 3 --tag ci-pdf
           python3 scripts/native-ui-regression/run.py --mode navigation --cycles 1 --tag ci-book-picker
+          python3 scripts/native-ui-regression/run.py --mode continuation --cycles 12 --tag ci-continuation
+      - name: Native reading continuation and preservation regression
+        run: |
+          python3 scripts/native-ui-regression/build-reading-continuation.py --bin-dir .build/tests/debug
+          .build/reading-continuation-probe/reading-continuation-probe --workspace "$PWD" --output "$PWD/logs/ci-reading-continuation"
       - name: Independent AI tasks and preservation regression
         run: |
           mkdir -p logs
@@ -75,4 +90,4 @@ jobs:
             dist/ReadingBook-macos-universal.zip.sha256
             dist/build-info.txt
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7

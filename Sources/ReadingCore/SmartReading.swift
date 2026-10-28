@@ -1,13 +1,14 @@
 import Foundation
 
 public enum SmartReadingScope: String, Codable, CaseIterable, Sendable {
-    case wholeBook, currentPage, currentChapter, pageRange
+    case wholeBook, currentPage, currentChapter, pageRange, chapterRange
     public var displayTitle: String {
         switch self {
         case .wholeBook: return "整本书"
         case .currentPage: return "当前页"
         case .currentChapter: return "当前章"
         case .pageRange: return "指定页码"
+        case .chapterRange: return "按章节"
         }
     }
 }
@@ -20,9 +21,12 @@ public struct SmartReadingSelection: Codable, Hashable, Sendable {
     public var preferredMethodIDs: [String]
     /// Absent in older sessions: their exact-receipt semantics remain unchanged.
     public var execution: ReadingExecutionConfiguration? = nil
-    public init(scope: SmartReadingScope = .wholeBook, pageStart: Int? = nil, pageEnd: Int? = nil, preferredMethodIDs: [String] = [], execution: ReadingExecutionConfiguration? = nil) {
+    public var chapterStartID: String? = nil
+    public var chapterEndID: String? = nil
+    public init(scope: SmartReadingScope = .wholeBook, pageStart: Int? = nil, pageEnd: Int? = nil, preferredMethodIDs: [String] = [], execution: ReadingExecutionConfiguration? = nil, chapterStartID: String? = nil, chapterEndID: String? = nil) {
         self.scope = scope; self.pageStart = pageStart; self.pageEnd = pageEnd; self.preferredMethodIDs = preferredMethodIDs
         self.execution = execution
+        self.chapterStartID = chapterStartID; self.chapterEndID = chapterEndID
     }
 }
 
@@ -64,6 +68,8 @@ public struct SmartReadingSession: Codable, Identifiable, Sendable {
     /// Proven completed whole-unit chunks retained when an older paused run adopts real chapters.
     public var retainedAnalysisChunks: [ReadingAnalysisChunk]? = nil
     public var retainedAnalysisWorkHash: String? = nil
+    /// Host-owned continuation/version metadata; absent in existing libraries.
+    public var continuation: ReadingContinuationMetadata? = nil
     public init(id: String = UUID().uuidString, selection: SmartReadingSelection, scopeTitle: String, unitIDs: [String],
                 unitHashes: [String: String], sourceHash: String, status: SmartReadingStatus = .ready,
                 isPlanConfirmed: Bool = false, currentUnitID: String? = nil, updatedAt: Date = Date(), lastMessage: String? = nil) {
@@ -146,7 +152,7 @@ public enum SmartReadingRuntime {
                 return chapter.ranges == ranges
             }
             return session.unitIDs.contains(currentUnitID)
-        case .wholeBook, .pageRange: return true
+        case .wholeBook, .pageRange, .chapterRange: return true
         }
     }
     public static func freeze(_ selection: SmartReadingSelection, in project: BookProject, currentUnitID: String?, currentOffsetUTF16: Int? = nil) throws -> SmartReadingSession {
@@ -160,7 +166,7 @@ public enum SmartReadingRuntime {
         var chapterIndex: BookChapterIndex?
         do { chapterIndex = try BookChapterRuntime.index(in: project) }
         catch {
-            guard selection.scope != .currentChapter, selection.execution?.granularity == .page else { throw error }
+            guard selection.scope != .currentChapter, selection.scope != .chapterRange, selection.execution?.granularity == .page else { throw error }
             chapterIndex = nil // An explicit page request never acquires unknown chapter meaning.
         }
         if chapterIndex == nil, selection.execution?.granularity == .chapter,
@@ -192,6 +198,14 @@ public enum SmartReadingRuntime {
                 chapterIndex = BookChapterIndex(sourceFingerprint: try BookOutlineRuntime.fingerprint(in: project), chapters: chapters, segments: chapters)
                 sourceRanges = chapter.ranges
             }
+        case .chapterRange:
+            guard let index = chapterIndex else { throw ReadingError.invalid("没有可信章节目录，暂不能选择章节范围；可以按页选择，不会自动调用AI生成目录。") }
+            let ranges = try selectedChapterRanges(selection, index: index, in: project)
+            let ids = Set(ranges.map(\.unitID))
+            selected = ordered.filter { ids.contains($0.id) }; sourceRanges = ranges
+            let first = index.chapters.first { $0.id == selection.chapterStartID }
+            let last = index.chapters.first { $0.id == selection.chapterEndID }
+            title = first?.id == last?.id ? (first?.title ?? "所选章节") : (first?.title ?? "起始章节") + "—" + (last?.title ?? "结束章节")
         case .pageRange:
             guard let start = selection.pageStart, let end = selection.pageEnd, start >= 1, end >= start,
                   let lastPage = ordered.compactMap(\.page).max(), end <= lastPage else { throw ReadingError.invalid("页码范围无效，请使用书中已有页码。") }
@@ -199,11 +213,11 @@ public enum SmartReadingRuntime {
             title = start == end ? "第 \(start) 页" : "第 \(start)–\(end) 页"
         }
         guard !selected.isEmpty else { throw ReadingError.invalid("所选范围没有可分析的原文。") }
-        if let index = chapterIndex, selection.scope != .currentChapter, !chapterIndexCovers(index, units: selected) {
+        if let index = chapterIndex, selection.scope != .currentChapter, selection.scope != .chapterRange, !chapterIndexCovers(index, units: selected) {
             guard selection.execution?.granularity == .page else { throw ReadingError.invalid("所选范围的目录尚未整理完整，请继续整理目录，或选择按页分析。") }
             chapterIndex = nil
         }
-        if let sourceRanges, selection.scope == .currentChapter,
+        if let sourceRanges, (selection.scope == .currentChapter || selection.scope == .chapterRange),
            selection.execution == nil || selection.execution?.precision == .close {
             let byID = Dictionary(selected.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             if sourceRanges.contains(where: { range in range.startUTF16 != 0 || range.endUTF16 != byID[range.unitID]?.text.utf16.count }) {
@@ -224,6 +238,7 @@ public enum SmartReadingRuntime {
 
     public static func validate(_ session: SmartReadingSession, in project: BookProject, prevalidatedUnitHashes: [String: String]? = nil) throws {
         try session.selection.execution?.validate()
+        try ReadingContinuationRuntime.validateStoredState(session, in: project)
         let checkpoints = session.analysisCheckpoints ?? []
         guard checkpoints.count <= 100_000, Set(checkpoints.map(\.id)).count == checkpoints.count else { throw ReadingError.invalid("分析检查点数量或标识无效。") }
         let allUnits = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -242,6 +257,7 @@ public enum SmartReadingRuntime {
                   Set(checkpoint.evidence.map(\.unitID)) == Set(checkpoint.unitIDs),
                   checkpoint.unitIDs.allSatisfy({ allUnits[$0] != nil && checkpoint.unitHashes[$0]?.count == 64 }),
                   checkpoint.evidence.allSatisfy({ !$0.quote.isEmpty && $0.quote.count <= 32_768 && allUnits[$0.unitID]?.text.contains($0.quote) == true }) else { throw ReadingError.invalid("标准阅读分析检查点无效，原有内容保留。") }
+            try validateAnalysisScopeMetadata(checkpoint, units: allUnits)
         }
         let positions = Dictionary(project.units.sorted { $0.order == $1.order ? $0.id < $1.id : $0.order < $1.order }.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
         for checkpoint in checkpoints {
@@ -314,10 +330,39 @@ public enum SmartReadingRuntime {
     /// Historical coverage alone never satisfies a new task or changed method.
     public static func isUnitComplete(_ unit: SourceUnit, in project: BookProject) -> Bool {
         if project.smartReading?.selection.execution != nil {
-            let chunks = ((try? analysisChunks(in: project)) ?? []).filter { $0.unitIDs.contains(unit.id) }
-            return !chunks.isEmpty && chunks.allSatisfy { isChunkComplete($0, in: project) }
+            let chunks = ((try? analysisChunks(in: project)) ?? []).filter { $0.scopeJob == nil && $0.unitIDs.contains(unit.id) }
+            let index = ReadingAnalysisCompletionIndex(in: project)
+            return !chunks.isEmpty && chunks.allSatisfy { index.isComplete($0) }
         }
         return isComplete(unit, in: UnitIndex(project).project(for: unit, original: project))
+    }
+
+    /// Completion of the current frozen local selection, never proof that an
+    /// unrequested remainder of a multi-chapter source unit has been analyzed.
+    /// Blank/deferred units remain separate from AI analysis completion.
+    public static func completedLocalUnitIDs(in project: BookProject) throws -> Set<String> {
+        if project.smartReading?.selection.execution != nil {
+            let local = try analysisChunks(in: project).filter { $0.scopeJob == nil }
+            let index = ReadingAnalysisCompletionIndex(in: project)
+            var done = Set<String>(), incomplete = Set<String>()
+            for chunk in local {
+                try Task.checkCancellation()
+                if index.isComplete(chunk) { done.formUnion(chunk.unitIDs) }
+                else { incomplete.formUnion(chunk.unitIDs) }
+            }
+            return done.subtracting(incomplete)
+        }
+        let index = UnitIndex(project)
+        let selected = try selectedUnits(in: project, allowedUnitIDs: project.smartReading.map { Set($0.unitIDs) })
+        var result = Set<String>()
+        for unit in selected {
+            try Task.checkCancellation()
+            let scoped = index.project(for: unit, original: project)
+            if !ReadingLedger.isDeferred(unitID: unit.id, in: scoped), !isConfirmedBlank(unit, in: scoped), isComplete(unit, in: scoped) {
+                result.insert(unit.id)
+            }
+        }
+        return result
     }
 
     private static func isComplete(_ unit: SourceUnit, in project: BookProject) -> Bool {
@@ -361,16 +406,11 @@ public enum SmartReadingRuntime {
         if validateSource { try validate(session, in: project) }
         if session.selection.execution != nil {
             let chunks = try analysisChunks(in: project)
-            let checkpoints = Dictionary((session.analysisCheckpoints ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
-            let completed = chunks.filter { chunk in
-                guard let checkpoint = checkpoints[chunk.id] else { return false }
-                return checkpoint.unitIDs == chunk.unitIDs && checkpoint.configurationHash == chunk.configurationHash &&
-                    checkpoint.sourceRanges == chunk.sourceRanges && checkpoint.chapterID == chunk.chapterID &&
-                    Set(checkpoint.completedStepIDs) == Set(chunk.stepIDs) && chunk.unitIDs.allSatisfy { checkpoint.unitHashes[$0] == session.unitHashes[$0] }
-            }
+            let completion = ReadingAnalysisCompletionIndex(in: project)
+            let completed = chunks.filter { completion.isComplete($0) }
             let completedChunkIDs = Set(completed.map(\.id)), scopeIDs = Set(session.unitIDs)
-            let incompleteUnitIDs = Set(chunks.filter { !completedChunkIDs.contains($0.id) }.flatMap(\.unitIDs))
-            let completedIDs = Set(completed.flatMap(\.unitIDs)).subtracting(incompleteUnitIDs)
+            let incompleteUnitIDs = Set(chunks.filter { $0.scopeJob == nil && !completedChunkIDs.contains($0.id) }.flatMap(\.unitIDs))
+            let completedIDs = Set(completed.filter { $0.scopeJob == nil }.flatMap(\.unitIDs)).subtracting(incompleteUnitIDs)
             let next = chunks.first { !completedChunkIDs.contains($0.id) }
             let configuration = session.selection.execution
             let rows = (configuration?.steps ?? []).filter { next?.stepIDs.contains($0.id) == true }.map { SmartReadingProgressStep(id: $0.id, title: $0.title, isCompleted: false) }
@@ -452,6 +492,8 @@ public enum SmartReadingRuntime {
             guard let start = selection.pageStart, let end = selection.pageEnd, start > 0, end >= start,
                   let last = units.compactMap(\.page).max(), end <= last else { throw ReadingError.invalid("智能阅读保存的页码范围无效。") }
             return units.filter { $0.page.map { (start...end).contains($0) } ?? false }
+        case .chapterRange:
+            throw ReadingError.invalid("章节范围缺少已冻结的可信目录。")
         }
     }
 

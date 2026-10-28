@@ -85,6 +85,8 @@ import ReadingCore
     let companionProgressState = AIProgressObservableState()
     var companionTask: Task<Void, Never>?
     var readingTask: Task<Void, Never>?
+    var readingRunID: UUID?
+    var bookSchemeWriteID: UUID?
     let sharedAIRequests: AIRequestCoordinator
     var canStartQuery: Bool { !isExclusiveBusy && !isQueryBusy && !isManagingQueryMemory && !isSavingDocument && !isRecognizingPDF && !storageState.working }
     var canStartReading: Bool { !isExclusiveBusy && !isSmartReadingRunning && !isSavingDocument && !storageState.working }
@@ -117,6 +119,9 @@ import ReadingCore
     var smartReadingProgressTask: Task<Void, Never>?
     var smartReadingProgressCache: SmartReadingProgress?
     var smartReadingUnitProgressCache = SmartReadingProgressCache()
+    var readingContinuationProgressCacheKey: String?
+    var readingContinuationProgressTask: Task<Void, Never>?
+    var readingContinuationProgressCache: ReadingContinuationDisplayProgress?
     @Published var search = ""
     @Published var selectedDocumentID: String? { didSet { rememberWorkspaceNavigation() } }
     @Published var editorTitle = "" { didSet { if editorDirty { persistDraft() } } }

@@ -17,6 +17,24 @@ private actor OriginalChapterOutlineCache {
     private struct Value { let key: Key; let outline: BookChapterOutline? }
     private var values: [Value] = []
 
+    /// A local preview may reuse metadata-matched extraction. It is never a
+    /// source admission proof: starting work still calls read and hashes bytes.
+    func preview(url: URL, project: BookProject, password: String?) throws -> BookChapterOutline? {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        try Task.checkCancellation()
+        let resource = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
+        guard resource.isRegularFile == true, resource.isSymbolicLink != true,
+              let size = resource.fileSize, size > 0, size <= 256 * 1_024 * 1_024 else {
+            throw ReadingError.invalid("原书文件无法安全读取。")
+        }
+        let candidate = Key(path: url.standardizedFileURL.path, sourceHash: project.sourceHash,
+                            fingerprint: try BookOutlineRuntime.fingerprint(in: project), size: size,
+                            modified: resource.contentModificationDate)
+        if let value = values.first(where: { $0.key == candidate }) { return value.outline }
+        return try read(url: url, project: project, password: password)
+    }
+
     func read(url: URL, project: BookProject, password: String?) throws -> BookChapterOutline? {
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
@@ -49,6 +67,29 @@ private actor OriginalChapterOutlineCache {
 }
 
 @MainActor extension AppStore {
+    /// Resolve chapter meaning for an execution preview without saving an
+    /// outline, changing the selected session, or starting a model request.
+    func readingContinuationSourceSnapshot(project: BookProject) async throws -> BookProject {
+        guard project.originalName.lowercased().hasSuffix(".pdf") else { return project }
+        guard bookID == project.id, let source = sourceFileURL else {
+            throw ReadingError.invalid("请先打开原书，再选择分析范围。")
+        }
+        let root = libraryRootURL, owner = repository.publicationOwner
+        let password = pdfPassword(for: project.id)
+        let worker = Task.detached(priority: .userInitiated) {
+            var snapshot = project
+            if let outline = try await OriginalChapterOutlineCache.shared.preview(url: source, project: project, password: password) {
+                snapshot.originalBookOutline = outline
+            }
+            return snapshot
+        }
+        let snapshot = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+        try Task.checkCancellation()
+        guard libraryRootURL == root, repository.publicationOwner == owner, bookID == project.id,
+              book?.sourceHash == project.sourceHash, sourceFileURL == source else { throw CancellationError() }
+        return snapshot
+    }
+
     /// This runs before chapter queries/tasks as well as the directory panel.
     /// A reader does not have to open the directory to authorize a real chapter.
     func ensureBookChapterOutline(project: BookProject) async throws -> BookProject {

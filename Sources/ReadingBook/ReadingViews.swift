@@ -220,6 +220,7 @@ struct ReadingProcessingDetailsView: View {
     @State private var showReview = false
     @State private var showAudit = false
     @State private var showSynthesis = false
+    @State private var showAnalysisHistory = false
     var body: some View {
         VStack(spacing: 0) {
             CompactWorkspaceHeader("处理详情") {
@@ -227,7 +228,7 @@ struct ReadingProcessingDetailsView: View {
                     HStack(spacing: 8) { preReadButton; executionButton }
                     Menu {
                         Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.disabled(!store.canStartReading)
-                        Button(store.isSmartReadingRunning ? "暂停分析" : "开始 / 继续分析") { store.isSmartReadingRunning ? store.pause() : store.startReading() }.disabled(cannotPause || (!store.isSmartReadingRunning && !store.canStartReading))
+                        Button(store.isSmartReadingRunning ? "暂停分析" : "设置范围并继续", action: executeOrConfigure).disabled(cannotPause || (!store.isSmartReadingRunning && !store.canStartReading))
                     } label: { Image(systemName: "play.circle") }.help("预读、精读与暂停")
                 }
             }
@@ -297,22 +298,51 @@ struct ReadingProcessingDetailsView: View {
                 }
             }
         }.background(Palette.canvas)
+            .sheet(isPresented: $showAnalysisHistory) { ReadingContinuationHistoryView().environmentObject(store) }
     }
     private var cannotPause: Bool { store.isSavingDocument || store.isExportingProject || store.isImportingBookCommit || store.isCommittingLocalWrite }
     private var preReadButton: some View { Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.buttonStyle(ReadingToolbarButtonStyle()).disabled(!store.canStartReading) }
     private var executionButton: some View {
-        Button { store.isSmartReadingRunning ? store.pause() : store.startReading() } label: {
-            Label(store.isSmartReadingRunning ? "暂停分析" : (store.book?.insights.isEmpty == false ? "继续分析" : "开始分析"), systemImage: store.isSmartReadingRunning ? "pause.fill" : "play.fill")
+        Button(action: executeOrConfigure) {
+            Label(store.isSmartReadingRunning ? "暂停分析" : "设置范围并继续", systemImage: store.isSmartReadingRunning ? "pause.fill" : "play.fill")
         }.buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44).disabled(cannotPause || (!store.isSmartReadingRunning && !store.canStartReading))
+            .help("先选择本次范围并查看沿用、缺项与重做安排；不会立即请求模型。")
+    }
+    private func executeOrConfigure() {
+        if store.isSmartReadingRunning { store.pause() }
+        else { dismiss(); store.requestedWorkspaceRoute = "workflow" }
     }
     private func overview(_ book: BookProject) -> some View {
         let analyzedIDs = Set(book.insights.filter { !$0.id.hasPrefix("deferred-") && !$0.id.hasPrefix("blank-") }.flatMap(\.unitIDs))
         let analyzed = book.units.filter { analyzedIDs.contains($0.id) }.count
         return VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("已保存的分析").font(.system(size: 14, weight: .semibold))
+                Spacer(minLength: 8)
+                Button { showAnalysisHistory = true } label: { Label("分析历史", systemImage: "clock.arrow.circlepath") }
+                    .buttonStyle(SettingsActionButtonStyle()).help("查看过去任务保留的正文；当前分析保持不变。")
+            }
+            if let continuation = store.readingContinuationProgress {
+                Text("本次分析 · 保存进度").font(.system(size: 14, weight: .semibold))
+                ReadingContinuationSavedProgressView(available: continuation.available, total: continuation.total,
+                    inherited: continuation.inherited, newlySaved: continuation.newlySaved, blocked: continuation.blocked,
+                    scopeSummary: continuation.scopeSummary, hasBaselineDetails: continuation.hasBaselineDetails)
+                Divider().opacity(0.35)
+            } else if let current = store.smartReadingProgress, let session = book.smartReading, session.isPlanConfirmed {
+                Text("本次范围 · " + session.scopeTitle).font(.system(size: 14, weight: .semibold))
+                Text("已保存 \(current.completed)/\(current.total) 个内容单元，包含沿用的已有成果。")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                Divider().opacity(0.35)
+            }
+            HStack {
+                Text("全书已有内容与核对状态").font(.system(size: 14, weight: .semibold))
+                Spacer(minLength: 8)
+                ReadingContinuationInfoButton(title: "全书与本次范围", detail: "已有 AI 内容统计历史分析涉及的内容单元，不表示当前所选组件和步骤已经全部完成。下方核对进度用于全书来源状态，与本次分析的保存进度分开。请求返回也不代表产物已保存。")
+            }
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 20) { metric("内容单元", value: book.units.count); metric("AI 分析", value: analyzed); metric("待核对", value: book.reviewCount); metric("逐段回执", value: book.paragraphReceipts?.count ?? 0) }
+                HStack(spacing: 20) { metric("内容单元", value: book.units.count); metric("已有 AI 内容", value: analyzed); metric("待核对", value: book.reviewCount); metric("逐段回执", value: book.paragraphReceipts?.count ?? 0) }
                 Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 6) {
-                    GridRow { metric("内容单元", value: book.units.count); metric("AI 分析", value: analyzed) }
+                    GridRow { metric("内容单元", value: book.units.count); metric("已有 AI 内容", value: analyzed) }
                     GridRow { metric("待核对", value: book.reviewCount); metric("逐段回执", value: book.paragraphReceipts?.count ?? 0) }
                 }
             }

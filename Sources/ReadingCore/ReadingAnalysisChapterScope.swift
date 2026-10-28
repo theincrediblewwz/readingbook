@@ -68,8 +68,13 @@ extension SmartReadingRuntime {
                 throw ReadingError.invalid("章节目录未完整覆盖所选原文。")
             }
         }
-        if session.scope == .currentChapter && session.retainedAnalysisChunks == nil {
-            guard (index.chapters + index.segments.filter { $0.id.hasPrefix("chapter-preface-") }).contains(where: { $0.isComplete && $0.ranges == ranges }) else { throw ReadingError.invalid("保存的当前章范围不完整。") }
+        if (session.scope == .currentChapter || session.scope == .chapterRange) && session.retainedAnalysisChunks == nil {
+            if session.scope == .chapterRange {
+                guard ranges == (try selectedChapterRanges(session.selection, index: index, in: project)),
+                      Set(ranges.map(\.unitID)) == ids else { throw ReadingError.invalid("保存的多章范围与冻结目录不一致。") }
+            } else {
+                guard (index.chapters + index.segments.filter { $0.id.hasPrefix("chapter-preface-") }).contains(where: { $0.isComplete && $0.ranges == ranges }) else { throw ReadingError.invalid("保存的当前章范围不完整。") }
+            }
         } else {
             let expected = try selectedUnits(in: project, allowedUnitIDs: ids)
             switch session.scope {
@@ -82,9 +87,11 @@ extension SmartReadingRuntime {
                 guard let first = session.selection.pageStart, let last = session.selection.pageEnd, first > 0, last >= first,
                       Set(expected.map(\.id)) == Set(project.units.filter { $0.page.map { (first...last).contains($0) } ?? false }.map(\.id)) else { throw ReadingError.invalid("保存的页码范围不一致。") }
             case .currentChapter: break
+            case .chapterRange:
+                guard ranges == (try selectedChapterRanges(session.selection, index: index, in: project)) else { throw ReadingError.invalid("保存的多章范围与冻结目录不一致。") }
             }
             let grouped = Dictionary(grouping: ranges, by: \.unitID)
-            for unit in expected where !unit.text.isEmpty {
+            for unit in expected where !unit.text.isEmpty && session.scope != .currentChapter && session.scope != .chapterRange {
                 let local = grouped[unit.id] ?? []
                 guard local.first?.startUTF16 == 0, local.last?.endUTF16 == (unit.text as NSString).length,
                       zip(local, local.dropFirst()).allSatisfy({ pair in pair.0.endUTF16 == pair.1.startUTF16 }) else { throw ReadingError.invalid("页码或全书范围缺少原文片段。") }
@@ -170,7 +177,8 @@ extension SmartReadingRuntime {
             let proof = ranges.map { "\($0.unitID):\(session.unitHashes[$0.unitID] ?? ""):\($0.startUTF16):\($0.endUTF16)" }.joined(separator: "|")
             let identity = try BookImporter.sha256(Data((base + "|" + group.chapter.id).utf8))
             let baseID = "chunk-" + String(try BookImporter.sha256(Data((project.sourceHash + "|" + identity + "|" + proof).utf8)).prefix(48))
-            let id = try analysisChunkID(baseID: baseID, stepIDs: steps, checkpointsByID: checkpointsByID)
+            let localSteps = configuration.enabledSteps.filter { $0.frequency == .chunk }.map(\.id)
+            let id = try analysisChunkID(baseID: baseID, stepIDs: localSteps, checkpointsByID: checkpointsByID)
             return ReadingAnalysisChunk(id: id, title: group.chapter.title, unitIDs: ids, configurationHash: identity, stepIDs: steps,
                 sourceRanges: ranges, chapterID: group.chapter.id)
         }
@@ -208,7 +216,7 @@ extension SmartReadingRuntime {
         if configuration.granularity != .adaptive { plan?.recommendedGranularity = nil }
         let directions = readingDirections(in: project)
         let directionData = directions.isEmpty ? Data() : try JSONSerialization.data(withJSONObject: directions, options: [.sortedKeys])
-        return try BookImporter.sha256(Data("reading-chapters-v1|".utf8) + Data(try work.fingerprint().utf8) + encoder.encode(plan) + directionData)
+        return try readingGenerationFingerprint(BookImporter.sha256(Data("reading-chapters-v1|".utf8) + Data(try work.fingerprint().utf8) + encoder.encode(plan) + directionData), in: project)
     }
 
     /// Source projection only: never save these copied units or hash them as originals.

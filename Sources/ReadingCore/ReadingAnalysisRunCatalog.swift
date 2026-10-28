@@ -33,7 +33,7 @@ public struct ReadingAnalysisRunCatalog: Sendable {
         self.chunks = chunks; self.steps = configuration.steps
         self.chapters = Dictionary(uniqueKeysWithValues: project.units.map { ($0.id, $0.chapter) })
         self.layout = try SmartReadingRuntime.selectedUnits(in: project, allowedUnitIDs: Set(session.unitIDs)).map(Layout.init)
-        self.initialCompletedIDs = try Self.completedIDs(chunks: chunks, session: session)
+        self.initialCompletedIDs = try Self.completedIDs(chunks: chunks, project: project)
         try Task.checkCancellation()
     }
 
@@ -63,13 +63,17 @@ public struct ReadingAnalysisRunCatalog: Sendable {
             values.count == chunks.count && zip(values, chunks).allSatisfy { value, original in
                 value.title.utf8.elementsEqual(original.title.utf8) && value.unitIDs == original.unitIDs &&
                     value.configurationHash == original.configurationHash && value.stepIDs == original.stepIDs &&
-                    value.sourceRanges == original.sourceRanges && value.chapterID == original.chapterID
+                    value.sourceRanges == original.sourceRanges && value.chapterID == original.chapterID &&
+                    value.requiredComponentKinds == original.requiredComponentKinds &&
+                    value.scopeJob?.kind == original.scopeJob?.kind &&
+                    value.scopeJob?.scopeUnitIDs == original.scopeJob?.scopeUnitIDs &&
+                    value.scopeJob?.sourceRanges == original.scopeJob?.sourceRanges
             }
         }
         guard currentLayout == layout, sameWork(currentChunks), sameWork(scheduled) else {
             throw ReadingError.invalid("分析块或阅读配置已经改变，请重新安排任务；已保存内容保留。")
         }
-        let complete = try Self.completedIDs(chunks: currentChunks, session: session)
+        let complete = try Self.completedIDs(chunks: currentChunks, project: project)
         let additions = complete.subtracting(previouslyCompleted)
         let addedInSourceOrder = currentChunks.compactMap { additions.contains($0.id) ? $0.id : nil }
         let replacement: ReadingAnalysisRunQueue?
@@ -96,19 +100,12 @@ public struct ReadingAnalysisRunCatalog: Sendable {
         return ReadingAnalysisRunUpdate(completedIDs: complete, newlyCompletedIDs: addedInSourceOrder, replacementQueue: replacement)
     }
 
-    private static func completedIDs(chunks: [ReadingAnalysisChunk], session: SmartReadingSession) throws -> Set<String> {
-        var checkpoints: [String: ReadingAnalysisCheckpoint] = [:]
-        for checkpoint in session.analysisCheckpoints ?? [] {
-            try Task.checkCancellation(); checkpoints[checkpoint.id] = checkpoint
-        }
+    private static func completedIDs(chunks: [ReadingAnalysisChunk], project: BookProject) throws -> Set<String> {
+        let index = ReadingAnalysisCompletionIndex(in: project)
         var complete = Set<String>()
         for chunk in chunks {
             try Task.checkCancellation()
-            guard let checkpoint = checkpoints[chunk.id], checkpoint.unitIDs == chunk.unitIDs,
-                  checkpoint.configurationHash == chunk.configurationHash,
-                  checkpoint.sourceRanges == chunk.sourceRanges, checkpoint.chapterID == chunk.chapterID,
-                  Set(checkpoint.completedStepIDs) == Set(chunk.stepIDs),
-                  chunk.unitIDs.allSatisfy({ checkpoint.unitHashes[$0] == session.unitHashes[$0] }) else { continue }
+            guard index.isComplete(chunk) else { continue }
             complete.insert(chunk.id)
         }
         return complete

@@ -59,6 +59,19 @@ public struct ReadingAnalysisRunQueue: Sendable {
                 memberships[index].append(barrier)
             }
         }
+        var scopeBarriers: [Int: Int] = [:]
+        for (index, chunk) in chunks.enumerated() {
+            guard let job = chunk.scopeJob else { continue }
+            let members = job.dependencyIDs.compactMap { indices[$0] }
+            guard !members.isEmpty, members.count == job.dependencyIDs.count,
+                  Set(members).count == members.count, members.allSatisfy({ $0 < index }) else {
+                throw ReadingError.invalid("范围回顾的依赖清单不完整或顺序无效，未安排请求。")
+            }
+            let barrier = barriers.count
+            barriers.append(Barrier(members: members.sorted()))
+            scopeBarriers[index] = barrier
+            for member in members { memberships[member].append(barrier) }
+        }
         var aliasIndices: [String: Int] = [:], aliasedIndices = Set<Int>()
         for (old, current) in runningAliases {
             guard running.contains(old), indices[old] == nil, let index = indices[current],
@@ -82,6 +95,7 @@ public struct ReadingAnalysisRunQueue: Sendable {
             try Task.checkCancellation()
             let actions = Set(chunk.stepIDs.compactMap { frequencies[$0] })
             var required: [Int] = actions.contains(.book) ? [0] : []
+            if let barrier = scopeBarriers[index] { required.append(barrier) }
             if actions.contains(.chapter) {
                 // Match the original scheduler exactly: missing own chapters
                 // are omitted, but a missing prior chapter belongs to "".

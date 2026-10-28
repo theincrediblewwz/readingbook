@@ -9,22 +9,59 @@ struct ReaderMethodView: View {
     @State private var scope: SmartReadingScope = .wholeBook
     @State private var pageStart = 1
     @State private var pageEnd = 1
+    @State private var chapterStartID: String?
+    @State private var chapterEndID: String?
+    @State private var chapters: [BookChapterRange] = []
+    @State private var loadedChapterRequest: ChapterListRequest?
+    @State private var chaptersError: String?
+    @State private var isLoadingChapters = false
     @State private var details = false
     @State private var guide = false
     @State private var requestHistory = false
+    @State private var analysisHistory = false
     @State private var profileDraft = BookProfile()
     @State private var customGenre = ""
     @State private var execution = ReadingExecutionConfiguration()
+    @State private var legacyExecutionBaseline: ReadingExecutionConfiguration?
+    @State private var continuationIntent: ReadingContinuationIntent = .continueMissing
+    @State private var continuationPreview: ReadingContinuationPreview?
+    @State private var previewRequest: ContinuationPreviewRequest?
+    @State private var previewError: String?
+    @State private var isPreviewing = false
+    @State private var redoConfirmation: ContinuationConfirmation?
+    private struct ContinuationPreviewRequest: Hashable {
+        var libraryRoot: URL
+        var bookID: String
+        var sourceHash: String
+        var revision: Int
+        var currentUnitID: String?
+        var currentOffsetUTF16: Int?
+        var selection: SmartReadingSelection
+        var intent: String
+    }
+    private struct ContinuationConfirmation: Identifiable {
+        let id = UUID()
+        let request: ContinuationPreviewRequest
+        let selection: SmartReadingSelection
+        let preview: ReadingContinuationPreview
+    }
+    private struct ChapterListRequest: Hashable {
+        var libraryRoot: URL
+        var bookID: String
+        var sourceHash: String
+        var revision: Int
+    }
     private var pending: Bool { store.book?.bookSchemes?.pending != nil }
     private var selection: SmartReadingSelection {
-        SmartReadingSelection(scope: scope, pageStart: scope == .pageRange ? pageStart : nil,
-                              pageEnd: scope == .pageRange ? pageEnd : nil,
-                              preferredMethodIDs: automatic ? [] : methodIDs.sorted(), execution: execution)
+        var result = SmartReadingSelection(scope: scope, pageStart: scope == .pageRange ? pageStart : nil,
+            pageEnd: scope == .pageRange ? pageEnd : nil,
+            preferredMethodIDs: automatic ? [] : methodIDs.sorted(), execution: selectedExecution)
+        if scope == .chapterRange { result.chapterStartID = chapterStartID; result.chapterEndID = chapterEndID }
+        return result
     }
-    private var selectionChanged: Bool {
-        guard let book = store.book else { return true }
-        return !SmartReadingRuntime.selectionMatchesFrozenContext(selection, in: book, currentUnitID: store.selectedUnitID,
-            currentOffsetUTF16: store.chapterReadingOffset(in: book, unitID: store.selectedUnitID))
+    private var selectedExecution: ReadingExecutionConfiguration? {
+        if continuationIntent == .continueMissing, let baseline = legacyExecutionBaseline, execution == baseline { return nil }
+        return execution
     }
     private var activeMethods: [ReadingMethod] {
         guard let book = store.book else { return [] }
@@ -35,11 +72,53 @@ struct ReaderMethodView: View {
         let defaults = Set(PluginEngine.recommendedMethods.map(\.id))
         return PluginEngine.recommendedMethods(in: book).filter { !defaults.contains($0.id) }
     }
+    private var needsNewPlan: Bool {
+        store.book?.plan == nil || selection.preferredMethodIDs != (store.book?.smartReading?.selection.preferredMethodIDs ?? [])
+    }
+    private var requestedPreview: ContinuationPreviewRequest? {
+        guard let book = store.book else { return nil }
+        guard chapterRangeReady else { return nil }
+        let usesPosition = scope == .currentPage || scope == .currentChapter
+        return ContinuationPreviewRequest(libraryRoot: store.libraryRootURL, bookID: book.id,
+            sourceHash: book.sourceHash, revision: store.projectRevision,
+            currentUnitID: usesPosition ? store.selectedUnitID : nil,
+            currentOffsetUTF16: scope == .currentChapter ? store.chapterReadingOffset(in: book, unitID: store.selectedUnitID) : nil,
+            selection: selection, intent: continuationIntent.rawValue)
+    }
+    private var currentPreview: ReadingContinuationPreview? {
+        previewRequest == requestedPreview ? continuationPreview : nil
+    }
+    private var requestedChapters: ChapterListRequest? {
+        guard scope == .chapterRange, let book = store.book else { return nil }
+        return ChapterListRequest(libraryRoot: store.libraryRootURL, bookID: book.id,
+            sourceHash: book.sourceHash, revision: store.projectRevision)
+    }
+    private var currentChapters: [BookChapterRange] {
+        loadedChapterRequest == requestedChapters ? chapters : []
+    }
+    private var endChapters: [BookChapterRange] {
+        guard let start = currentChapters.first(where: { $0.id == chapterStartID }) else { return [] }
+        return currentChapters.filter { $0.level == start.level }
+    }
+    private var chapterRangeReady: Bool {
+        guard scope == .chapterRange else { return true }
+        return currentChapters.contains { $0.id == chapterStartID && $0.isComplete } &&
+            endChapters.contains { $0.id == chapterEndID && $0.isComplete }
+    }
     var body: some View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
                     introduction
+                    if let wholeBookSummary = store.readingContinuationProgress?.wholeBookSummary {
+                        SettingsContentGroup {
+                            HStack(alignment: .center, spacing: 10) {
+                                Label("全书已有内容", systemImage: "checkmark.circle").font(.system(size: 13, weight: .medium))
+                                Spacer(minLength: 0)
+                                ReadingContinuationInfoButton(title: "已有内容与本次分析", detail: wholeBookSummary + "\n\n全书已有内容保留；下方预览会按本次范围、原文版本和分析要求判断哪些成果真正可以沿用。阅读位置和已有对象数量不代表本次要求已经完成。")
+                            }.padding(.horizontal, 14).padding(.vertical, 8)
+                        }
+                    }
                     stages
                     if geometry.size.width >= 1040 {
                         HStack(alignment: .top, spacing: 36) { setup.frame(maxWidth: .infinity); journey.frame(width: 280) }
@@ -57,8 +136,21 @@ struct ReaderMethodView: View {
             }.background(Palette.canvas)
         }
         .onAppear(perform: load).onChange(of: store.bookID) { _, _ in load() }
+        .onChange(of: store.libraryRootURL) { _, _ in load() }
+        .task(id: requestedPreview) { await refreshContinuationPreview() }
+        .task(id: requestedChapters) { await loadContinuationChapters() }
+        .onChange(of: chapterStartID) { _, _ in repairEndChapter() }
+        .sheet(item: $redoConfirmation) { confirmation in
+            ReadingContinuationConfirmationView(preview: confirmation.preview,
+                canConfirm: canConfirm(confirmation), onCancel: { redoConfirmation = nil }) {
+                    guard canConfirm(confirmation) else { return }
+                    redoConfirmation = nil
+                    store.startReadingContinuation(confirmation.selection, intent: .reanalyze, expectedPreview: confirmation.preview)
+                }.environmentObject(store)
+        }
         .sheet(isPresented: $guide) { ReadingGuideView(onClose: { guide = false }) }
         .sheet(isPresented: $requestHistory) { AIRequestHistoryView(state: store.aiProgressState).environmentObject(store) }
+        .sheet(isPresented: $analysisHistory) { ReadingContinuationHistoryView().environmentObject(store) }
         .sheet(isPresented: $details) {
             VStack(spacing: 0) {
                 HStack { Label("阅读处理详情", systemImage: "checklist").font(.headline); Spacer(); Button { details = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction).help("关闭处理详情") }.padding(14)
@@ -71,6 +163,9 @@ struct ReaderMethodView: View {
             HStack {
                 Label("智能阅读", systemImage: "sparkles").font(.system(size: 14, weight: .semibold)).foregroundStyle(Palette.accent)
                 Spacer(minLength: 8)
+                Button { analysisHistory = true } label: { Label("分析历史", systemImage: "clock.arrow.circlepath") }
+                    .buttonStyle(ReadingToolbarButtonStyle()).help("只读查看过去的任务与保留分析，不切换当前版本或调用模型。")
+                    .accessibilityIdentifier("reading-continuation-open-history")
                 Button { requestHistory = true } label: { Label("请求记录", systemImage: "clock.arrow.circlepath") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("查看本书当前与以前的请求和操作")
             }
@@ -124,14 +219,172 @@ struct ReaderMethodView: View {
                 }.font(.system(size: 14))
                 if store.book?.units.contains(where: { $0.page != nil }) != true { Text("这本书没有原书页码，请选择当前章或全书。").font(.caption).foregroundStyle(.secondary) }
             }
+            if scope == .chapterRange { chapterRangeFields }
+            sectionHeading("这次怎么处理", detail: "先看处理安排，再开始。切换选项不会请求模型。", icon: "arrow.triangle.branch")
+            ReadingContinuationIntentPicker(selection: $continuationIntent)
             executionOptions
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 14) { rangeHint; Spacer(minLength: 0); prepareButton }
-                VStack(alignment: .leading, spacing: 12) { rangeHint; prepareButton }
-            }
+            continuationControls
         }.padding(27).readingGlass(radius: 25).disabled(!store.canStartReading)
     }
     private var rangeHint: some View { Text("暂停后可改范围；已保存内容保留").font(.system(size: 12)).foregroundStyle(.secondary) }
+    private var chapterRangeFields: some View {
+        SettingsContentGroup {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text("起止章节").font(.system(size: 14, weight: .medium))
+                    Spacer(minLength: 0)
+                    ReadingContinuationInfoButton(title: "按真实章节选择", detail: "章节来自与当前原文版本一致的可信目录。开始章和结束章使用同一层级，章尾须已确定；范围以真实原文边界为准。这里不会按页数均分章节，也不会为了填充选项调用 AI。缺少边界时，可回原文读取或整理目录，或暂时使用页码与整书范围。")
+                }
+                if isLoadingChapters || loadedChapterRequest != requestedChapters {
+                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在读取真实章节…").font(.system(size: 12)).foregroundStyle(.secondary) }
+                } else if currentChapters.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("暂无可用的可信章节范围").font(.system(size: 13)).foregroundStyle(.secondary)
+                        if let chaptersError { ReadingContinuationInfoButton(title: "章节范围不可用", detail: chaptersError) }
+                    }
+                } else {
+                    SettingsPaneFieldGrid(minimumColumnWidth: 180, spacing: 12) {
+                        chapterPicker("从这一章", selection: $chapterStartID, choices: currentChapters)
+                        chapterPicker("到这一章", selection: $chapterEndID, choices: endChapters)
+                    }
+                    if !chapterRangeReady {
+                        Text("请选择同层级且章尾已确定的起止章节。").font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                }
+            }.padding(14)
+        }.accessibilityIdentifier("reading-continuation-chapter-range")
+    }
+    private func chapterPicker(_ title: String, selection: Binding<String?>, choices: [BookChapterRange]) -> some View {
+        let showsLevels = Set(currentChapters.map(\.level)).count > 1
+        return SettingsPaneField(title: title) {
+            Picker(title, selection: selection) {
+                if selection.wrappedValue == nil { Text("选择章节").tag(String?.none) }
+                ForEach(choices) { chapter in
+                    Text(chapterChoiceTitle(chapter, showsLevel: showsLevels)).tag(Optional(chapter.id)).disabled(!chapter.isComplete)
+                }
+            }.pickerStyle(.menu).labelsHidden().controlSize(.large)
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                .accessibilityLabel(title).help("选择可信目录中的真实章节；预览会校验起止顺序和原文范围。")
+        }
+    }
+    private func chapterChoiceTitle(_ chapter: BookChapterRange, showsLevel: Bool) -> String {
+        let level = showsLevel ? "第 \(chapter.level + 1) 层 · " : ""
+        return level + chapter.title + (chapter.isComplete ? "" : "（章尾未定）")
+    }
+    private var continuationControls: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if pending {
+                Text("先采纳或放弃待确认方案，再安排本次分析。原有成果保持可用。")
+                    .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else if !chapterRangeReady {
+                Text(isLoadingChapters ? "章节读取完成后可查看本次处理预览。" : "先选择有效的起止章节，或改用页码、当前章与整书范围。")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else if needsNewPlan {
+                SettingsResponsiveActionLayout {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(activeMethods.isEmpty ? "先确定阅读方案" : "阅读方法已改变")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("预读用于选择方法；确认方案后再查看覆盖和处理安排，不计入正文覆盖。")
+                            .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    prepareButton
+                }
+            } else {
+                SettingsGroupSection(title: "本次处理预览 · 仅本地计算") {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if let preview = currentPreview {
+                            ReadingContinuationPreviewView(preview: preview)
+                        } else if let previewError, !isPreviewing {
+                            Label(previewError, systemImage: "exclamationmark.circle")
+                                .font(.system(size: 13)).foregroundStyle(Palette.copper)
+                                .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("reading-continuation-preview-error")
+                        } else {
+                            HStack(spacing: 9) {
+                                ProgressView().controlSize(.small)
+                                Text("正在核对本地已有成果…").font(.system(size: 13)).foregroundStyle(.secondary)
+                            }.frame(minHeight: 40)
+                        }
+                        SettingsResponsiveActionLayout {
+                            Label("原书、笔记和已有分析保留", systemImage: "clock.arrow.circlepath")
+                                .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            Button(action: startContinuation) {
+                                Label(continuationButtonTitle, systemImage: continuationIntent == .reanalyze ? "arrow.clockwise" : "play.fill")
+                            }.buttonStyle(SettingsActionButtonStyle(prominent: true))
+                                .disabled(!store.canStartReading || currentPreview?.hasWork != true || isPreviewing)
+                                .help(continuationIntent == .reanalyze ? "先确认精确范围，再生成保留旧版的新分析。" : "按本地预览继续，跳过可证明完成的兼容成果。")
+                                .accessibilityIdentifier("reading-continuation-start")
+                        }
+                    }.padding(16)
+                }
+            }
+            rangeHint
+        }
+    }
+    private var continuationButtonTitle: String {
+        guard let preview = currentPreview else { return "等待处理预览" }
+        if !preview.hasWork { return "所选项目已齐，无需重复分析" }
+        switch continuationIntent {
+        case .continueMissing: return "开始继续补齐"
+        case .supplement: return "开始继续并补充"
+        case .reanalyze: return "检查重做范围…"
+        }
+    }
+    private func refreshContinuationPreview() async {
+        let requested = requestedPreview
+        let intent = continuationIntent
+        continuationPreview = nil; previewError = nil; previewRequest = nil; isPreviewing = false
+        guard let requested, !pending, !needsNewPlan, chapterRangeReady, !store.isSmartReadingRunning else { return }
+        isPreviewing = true
+        do {
+            // Coalesce page-field edits without doing source projection in body.
+            try await Task.sleep(for: .milliseconds(180))
+            let preview = try await store.previewReadingContinuation(requested.selection, intent: intent)
+            guard !Task.isCancelled, requested == requestedPreview else { return }
+            continuationPreview = preview; previewRequest = requested; isPreviewing = false
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled, requested == requestedPreview else { return }
+            previewError = error.localizedDescription; previewRequest = requested; isPreviewing = false
+        }
+    }
+    private func startContinuation() {
+        guard store.canStartReading, let preview = currentPreview, preview.hasWork,
+              let request = requestedPreview else { return }
+        if continuationIntent == .reanalyze {
+            redoConfirmation = ContinuationConfirmation(request: request, selection: selection, preview: preview)
+        } else {
+            store.startReadingContinuation(selection, intent: continuationIntent, expectedPreview: preview)
+        }
+    }
+    private func loadContinuationChapters() async {
+        guard let requested = requestedChapters else { return }
+        isLoadingChapters = true; chaptersError = nil
+        do {
+            let result = try await store.readingContinuationChapters()
+            guard !Task.isCancelled, requested == requestedChapters else { return }
+            chapters = result; loadedChapterRequest = requested; isLoadingChapters = false
+            if !result.contains(where: { $0.id == chapterStartID && $0.isComplete }) {
+                chapterStartID = result.first(where: \.isComplete)?.id
+            }
+            repairEndChapter()
+        } catch is CancellationError { return }
+        catch {
+            guard !Task.isCancelled, requested == requestedChapters else { return }
+            chapters = []; loadedChapterRequest = requested; chaptersError = error.localizedDescription; isLoadingChapters = false
+        }
+    }
+    private func repairEndChapter() {
+        guard let start = currentChapters.first(where: { $0.id == chapterStartID && $0.isComplete }) else {
+            if loadedChapterRequest == requestedChapters { chapterEndID = nil }
+            return
+        }
+        if !endChapters.contains(where: { $0.id == chapterEndID && $0.isComplete }) { chapterEndID = start.id }
+    }
+    private func canConfirm(_ confirmation: ContinuationConfirmation) -> Bool {
+        continuationIntent == .reanalyze && store.canStartReading && confirmation.request == requestedPreview &&
+            currentPreview?.fingerprint == confirmation.preview.fingerprint
+    }
     private var executionOptions: some View {
         VStack(alignment: .leading, spacing: 22) {
             Divider().opacity(0.35)
@@ -185,7 +438,7 @@ struct ReaderMethodView: View {
                             HStack {
                                 Picker("处理方式", selection: $step.actionID) {
                                     Text("内容讲解").tag("ai.analyze"); Text("整理要素").tag("facts.extract")
-                                    Text("译注与解释").tag("reading.enrich"); Text("回顾").tag("reading.review")
+                                Text("译注与解释").tag("reading.enrich"); Text("整体总结").tag("reading.review")
                                     Text("确认引文来源").tag("citations.verify")
                                 }.labelsHidden()
                                 Picker("执行频率", selection: $step.frequency) {
@@ -238,7 +491,7 @@ struct ReaderMethodView: View {
     }
     private var prepareButton: some View {
         Button { store.prepareSmartReading(selection) } label: { Label(activeMethods.isEmpty ? "预读并制定方案" : "预读新方案", systemImage: "sparkles") }
-            .buttonStyle(ReadingActionButtonStyle(prominent: true)).disabled(store.book == nil || (!automatic && methodIDs.isEmpty) || pending || (try? execution.validate()) == nil)
+            .buttonStyle(ReadingActionButtonStyle(prominent: true)).disabled(store.book == nil || (!automatic && methodIDs.isEmpty) || pending || !chapterRangeReady || (try? execution.validate()) == nil)
     }
     private func methodChoice(_ method: ReadingMethod) -> some View {
         let label = ["genre.history": "历史", "genre.war": "战争", "genre.fiction": "小说", "genre.argument": "论述", "genre.textbook": "教材"][method.id] ?? method.name
@@ -275,32 +528,33 @@ struct ReaderMethodView: View {
     }
     private var activePlan: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack { Label("正在使用的阅读方案", systemImage: "checkmark.seal").font(.system(size: 17, weight: .semibold)); Spacer(); Button { store.openBookScheme() } label: { Image(systemName: "slider.horizontal.3") }.buttonStyle(ReadingToolbarButtonStyle()).help("查看完整方案") }
-            Text(store.book?.plan?.rationale ?? "").font(.system(size: 15)).foregroundStyle(.secondary).lineSpacing(5)
-            Text("以下是方法参考；本轮实际步骤以上方可调整的步骤为准。").font(.system(size: 12)).foregroundStyle(.secondary)
-            ForEach(activeMethods) { method in
-                DisclosureGroup("方法参考 · " + method.name) {
-                    Text(method.goal).font(.system(size: 14)).foregroundStyle(.secondary).padding(.top, 8)
-                    ForEach(Array(method.steps.enumerated()), id: \.offset) { _, step in Text("· " + step).font(.system(size: 14)).foregroundStyle(.secondary).padding(.top, 5) }
-                }.font(.system(size: 15, weight: .medium))
-            }
             HStack {
-                Text(store.book?.smartReading?.scopeTitle ?? "继续前，先确认本轮分析范围。").font(.system(size: 12)).foregroundStyle(.secondary)
+                Label("正在使用的阅读方案", systemImage: "checkmark.seal").font(.system(size: 17, weight: .semibold))
+                Spacer(minLength: 8)
+                ReadingContinuationInfoButton(title: "阅读方案与方法参考", detail: activePlanDetail)
+                Button { store.openBookScheme() } label: { Image(systemName: "slider.horizontal.3") }
+                    .buttonStyle(ReadingToolbarButtonStyle()).help("查看完整方案")
+            }
+            Text(activeMethods.map(\.name).joined(separator: " · ")).font(.system(size: 14)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Text("上次任务范围 · " + (store.book?.smartReading?.scopeTitle ?? "尚未开始"))
+                    .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 if store.isSmartReadingRunning { Button { store.pauseReading() } label: { Label("暂停分析", systemImage: "pause") }.buttonStyle(ReadingToolbarButtonStyle()) }
-                else if selection.preferredMethodIDs != (store.book?.smartReading?.selection.preferredMethodIDs ?? []) {
-                    prepareButton.disabled(!store.canStartReading)
-                }
-                else if selectionChanged {
-                    Button { store.startSmartReadingWithExistingPlan(selection) } label: { Label("沿用方案，按新设置分析", systemImage: "play") }
-                        .buttonStyle(ReadingActionButtonStyle(prominent: true)).disabled(!store.canStartReading || (try? execution.validate()) == nil)
-                        .help("更新范围、组件和步骤；更换读书方法请先预读新方案。")
-                } else {
-                    Button { store.startReading() } label: { Label("继续分析", systemImage: "play") }
-                        .buttonStyle(ReadingActionButtonStyle(prominent: true)).disabled(!store.canStartReading)
+                else {
+                    Text("在上方选择范围和处理方式，核对预览后开始。")
+                        .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }.padding(26).readingGlass(radius: 24)
+    }
+    private var activePlanDetail: String {
+        let methods = activeMethods.map { method in
+            ([method.name, method.goal] + method.steps.map { "· " + $0 }).joined(separator: "\n")
+        }.joined(separator: "\n\n")
+        return [store.book?.plan?.rationale ?? "", "以下是方法参考；本次实际步骤以上方选择及处理预览为准。", methods]
+            .filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
     private var readingPreferences: some View {
         DisclosureGroup("阅读偏好与自定义书型") {
@@ -340,15 +594,26 @@ struct ReaderMethodView: View {
         profileDraft.customGenres.append(value); customGenre = ""
     }
     private func load() {
+        continuationIntent = .continueMissing; continuationPreview = nil; previewRequest = nil
+        previewError = nil; isPreviewing = false; redoConfirmation = nil; analysisHistory = false
+        chapters = []; loadedChapterRequest = nil; chaptersError = nil; isLoadingChapters = false
         profileDraft = store.book?.temporalKnowledge?.profile ?? BookProfile(); customGenre = ""
         if let saved = store.book?.smartReading?.selection {
             scope = saved.scope; pageStart = saved.pageStart ?? 1; pageEnd = saved.pageEnd ?? pageStart
+            chapterStartID = saved.chapterStartID; chapterEndID = saved.chapterEndID
             methodIDs = Set(saved.preferredMethodIDs); automatic = methodIDs.isEmpty
-            execution = saved.execution ?? ReadingExecutionConfiguration()
+            if let configured = saved.execution {
+                execution = configured; legacyExecutionBaseline = nil
+            } else {
+                var baseline = ReadingExecutionConfiguration()
+                baseline.steps.removeAll { $0.actionID == "reading.review" || $0.frequency == .book }
+                execution = baseline; legacyExecutionBaseline = baseline
+            }
         } else {
             scope = .wholeBook; methodIDs = []; automatic = true; pageStart = store.selectedUnit?.page ?? 1
+            chapterStartID = nil; chapterEndID = nil
             pageEnd = min(pageStart + 9, store.book?.units.compactMap(\.page).max() ?? pageStart)
-            execution = ReadingExecutionConfiguration()
+            execution = ReadingExecutionConfiguration(); legacyExecutionBaseline = nil
         }
     }
 }

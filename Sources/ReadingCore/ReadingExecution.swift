@@ -74,6 +74,10 @@ public struct ReadingAnalysisChunk: Codable, Hashable, Identifiable, Sendable {
     /// Nil in historical whole-unit work. Exact source offsets never replace original unit identities.
     public var sourceRanges: [ReadingSourceRange]? = nil
     public var chapterID: String? = nil
+    public var scopeJob: ReadingAnalysisScopeJob? = nil
+    /// Nil keeps the historical whole-configuration contract; [] explicitly
+    /// means this work item does not request component generation.
+    public var requiredComponentKinds: [ComponentKind]? = nil
 }
 public struct ReadingAnalysisCheckpoint: Codable, Hashable, Identifiable, Sendable {
     public var id: String
@@ -89,6 +93,8 @@ public struct ReadingAnalysisCheckpoint: Codable, Hashable, Identifiable, Sendab
     public var noChangesReasons: [String: String]? = nil
     /// Computed by the host; never accepted from model tool arguments.
     public var hostCitationSummary: String? = nil
+    public var scopeJob: ReadingAnalysisScopeJob? = nil
+    public var requiredComponentKinds: [ComponentKind]? = nil
 }
 
 /// A task-local host capability, never a JSON field or a persisted active chunk.
@@ -103,8 +109,21 @@ enum ReadingAnalysisAuthority {
 
 extension SmartReadingRuntime {
     public static func analysisChunks(in project: BookProject, allowedUnitIDs: Set<String>? = nil) throws -> [ReadingAnalysisChunk] {
+        let raw = try rawAnalysisChunks(in: project, allowedUnitIDs: allowedUnitIDs)
+        let locals = localAnalysisChunks(raw, in: project)
+        let projected = try ReadingContinuationRuntime.projectLocalWork(locals, in: project)
+        return try scopeAnalysisJobs(raw: raw, localGroups: projected, in: project)
+    }
+    static func rawAnalysisChunks(in project: BookProject, allowedUnitIDs: Set<String>?) throws -> [ReadingAnalysisChunk] {
         if project.smartReading?.chapterIndex != nil { return try chapterAnalysisChunks(in: project, allowedUnitIDs: allowedUnitIDs) }
         return try legacyAnalysisChunks(in: project, allowedUnitIDs: allowedUnitIDs)
+    }
+    public static func unprojectedLocalAnalysisChunks(in project: BookProject, allowedUnitIDs: Set<String>? = nil) throws -> [ReadingAnalysisChunk] {
+        localAnalysisChunks(try rawAnalysisChunks(in: project, allowedUnitIDs: allowedUnitIDs), in: project)
+    }
+    private static func localAnalysisChunks(_ chunks: [ReadingAnalysisChunk], in project: BookProject) -> [ReadingAnalysisChunk] {
+        let localIDs = Set(project.smartReading?.selection.execution?.enabledSteps.filter { $0.frequency == .chunk }.map(\.id) ?? [])
+        return chunks.map { chunk in var local = chunk; local.stepIDs = chunk.stepIDs.filter { localIDs.contains($0) }; return local }
     }
     static func legacyAnalysisChunks(in project: BookProject, allowedUnitIDs: Set<String>? = nil) throws -> [ReadingAnalysisChunk] {
         guard let session = project.smartReading, let configuration = session.selection.execution else { return [] }
@@ -123,7 +142,7 @@ extension SmartReadingRuntime {
         if configuration.granularity != .adaptive { workPlan?.recommendedGranularity = nil }
         let directions = readingDirections(in: project)
         let directionData = directions.isEmpty ? Data() : try JSONSerialization.data(withJSONObject: directions, options: [.sortedKeys])
-        let fingerprint = try BookImporter.sha256(Data("reading-work-v2|".utf8) + Data(try workConfiguration.fingerprint().utf8) + encoder.encode(workPlan) + directionData)
+        let fingerprint = try readingGenerationFingerprint(BookImporter.sha256(Data("reading-work-v2|".utf8) + Data(try workConfiguration.fingerprint().utf8) + encoder.encode(workPlan) + directionData), in: project)
         // 0.20 originally hashed the scheduling knobs too. Recognize only exact
         // known old configurations, once per whole-book projection, keeping all
         // source/steps/focus checks. Unknown historical rationale is not guessed.
@@ -131,7 +150,7 @@ extension SmartReadingRuntime {
         // Earlier 0.20 did not send confirmed method goals/focus to analysis.
         // Its products survive, but cannot count as work using a new direction.
         let newProductContract = !configuration.componentKinds.isEmpty || configuration.enabledSteps.contains { ["facts.extract", "reading.enrich", "citations.verify"].contains($0.actionID) }
-        if directions.isEmpty && (project.plan?.focus.isEmpty ?? true) && !newProductContract && !(session.analysisCheckpoints ?? []).isEmpty {
+        if session.continuation?.generationID == nil && directions.isEmpty && (project.plan?.focus.isEmpty ?? true) && !newProductContract && !(session.analysisCheckpoints ?? []).isEmpty {
             let hashes = try (1...5).map { count -> String in
                 var legacy = configuration; legacy.maximumConcurrentRequests = count
                 return try legacy.fingerprint()
@@ -165,16 +184,17 @@ extension SmartReadingRuntime {
             let chapters = Set(group.map(\.chapter))
             let isChapterEnd = groups.dropFirst(index + 1).first.map { !chapters.contains($0.first?.chapter ?? "") } ?? true
             let stepIDs = configuration.enabledSteps.filter { $0.frequency == .chunk || ($0.frequency == .chapter && isChapterEnd) || ($0.frequency == .book && index == groups.count - 1) }.map(\.id)
+            let localStepIDs = configuration.enabledSteps.filter { $0.frequency == .chunk }.map(\.id)
             var identity = fingerprint
             if let previous = try checkpoints[ids]?.first(where: { checkpoint in
-                guard legacyFingerprints.contains(checkpoint.configurationHash), Set(checkpoint.completedStepIDs) == Set(stepIDs),
+                guard legacyFingerprints.contains(checkpoint.configurationHash), Set(localStepIDs).isSubset(of: Set(checkpoint.completedStepIDs)),
                       ids.allSatisfy({ checkpoint.unitHashes[$0] == session.unitHashes[$0] }) else { return false }
                 let expected = "chunk-" + String(try BookImporter.sha256(Data((project.sourceHash + "|" + checkpoint.configurationHash + "|" + sourceKey).utf8)).prefix(48))
                 return checkpoint.id == expected
             }) { id = previous.id; identity = previous.configurationHash }
             let pages = Array(Set(group.compactMap(\.page))).sorted()
             let title = pages.first.map { start in pages.last == start ? "第 \(start) 页" : "第 \(start)–\(pages.last ?? start) 页" } ?? group.first?.chapter ?? "本部分"
-            id = try analysisChunkID(baseID: id, stepIDs: stepIDs, checkpointsByID: checkpointsByID)
+            id = try analysisChunkID(baseID: id, stepIDs: localStepIDs, checkpointsByID: checkpointsByID)
             return ReadingAnalysisChunk(id: id, title: title, unitIDs: ids, configurationHash: identity, stepIDs: stepIDs)
         }
     }
@@ -182,17 +202,15 @@ extension SmartReadingRuntime {
     /// this block's source. Preserve the old checkpoint and use a stable identity
     /// for the new step contract rather than colliding with its immutable record.
     static func analysisChunkID(baseID: String, stepIDs: [String], checkpointsByID: [String: ReadingAnalysisCheckpoint]) throws -> String {
-        guard let previous = checkpointsByID[baseID], Set(previous.completedStepIDs) != Set(stepIDs) else { return baseID }
+        guard let previous = checkpointsByID[baseID], !Set(stepIDs).isSubset(of: Set(previous.completedStepIDs)) else { return baseID }
         let payload: [String: Any] = ["version": "reading-chunk-steps-v1", "baseID": baseID, "stepIDs": stepIDs.sorted()]
         return "chunk-" + String(try BookImporter.sha256(JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])).prefix(48))
     }
     public static func isChunkComplete(_ chunk: ReadingAnalysisChunk, in project: BookProject) -> Bool {
-        guard let session = project.smartReading else { return false }
-        return (session.analysisCheckpoints ?? []).contains { checkpoint in
-            checkpoint.id == chunk.id && checkpoint.unitIDs == chunk.unitIDs && checkpoint.configurationHash == chunk.configurationHash &&
-                checkpoint.sourceRanges == chunk.sourceRanges && checkpoint.chapterID == chunk.chapterID &&
-                Set(checkpoint.completedStepIDs) == Set(chunk.stepIDs) && chunk.unitIDs.allSatisfy { checkpoint.unitHashes[$0] == session.unitHashes[$0] }
-        }
+        ReadingAnalysisCompletionIndex(in: project).isComplete(chunk)
+    }
+    public static func compatibleCompletionCheckpointIDs(for chunk: ReadingAnalysisChunk, in project: BookProject) -> [String] {
+        ReadingAnalysisCompletionIndex(in: project).checkpointIDs(for: chunk)
     }
     public static func nextAnalysisChunk(in project: BookProject, allowedUnitIDs: Set<String>? = nil) throws -> ReadingAnalysisChunk? {
         try analysisChunks(in: project, allowedUnitIDs: allowedUnitIDs).first { !isChunkComplete($0, in: project) }
@@ -219,7 +237,8 @@ extension SmartReadingRuntime {
                                                reasons: [String: String], submissionEvidence: [Evidence]) throws -> String? {
         guard let configuration = project.smartReading?.selection.execution else { throw ReadingError.invalid("阅读方式已改变。") }
         let steps = configuration.enabledSteps.filter { grant.chunk.stepIDs.contains($0.id) }, allowed = Set(grant.chunk.unitIDs)
-        let keys = Set(steps.map { "step:" + $0.id } + configuration.componentKinds.map { "component:" + $0.rawValue })
+        let components = grant.chunk.requiredComponentKinds ?? configuration.componentKinds
+        let keys = Set(steps.map { "step:" + $0.id } + components.map { "component:" + $0.rawValue })
         guard reasons.count <= 30, Set(reasons.keys).isSubset(of: keys), reasons.values.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 400 }) else {
             throw ReadingError.invalid("无新增说明须逐项对应当前步骤或组件，每项不超过400字。")
         }
@@ -251,7 +270,7 @@ extension SmartReadingRuntime {
                 throw ReadingError.invalid("“\(step.title)”尚无可核验产物或复用内容；不适用时请单独说明原因。")
             }
         }
-        for kind in configuration.componentKinds {
+        for kind in components {
             let available: Bool
             switch kind {
             case .cards, .knowledge: available = hasFacts
@@ -292,6 +311,14 @@ extension SmartReadingRuntime {
               Set(grant.chunk.unitIDs) == unitIDs, !unitIDs.isEmpty, unitIDs.isSubset(of: Set(session.unitIDs)) else {
             throw ReadingError.invalid("本次分析没有当前原文块的宿主权限。")
         }
+        guard Set(grant.chunk.stepIDs).isSubset(of: Set(configuration.enabledSteps.map(\.id))),
+              Set(grant.chunk.requiredComponentKinds ?? configuration.componentKinds).isSubset(of: Set(configuration.componentKinds)) else {
+            throw ReadingError.invalid("分析工作的步骤或组件已不属于当前请求。")
+        }
+        if grant.chunk.scopeJob == nil,
+           configuration.enabledSteps.contains(where: { grant.chunk.stepIDs.contains($0.id) && $0.frequency != .chunk }) {
+            throw ReadingError.invalid("章末或本轮回顾必须作为有依赖的独立工作执行。")
+        }
         for id in unitIDs {
             guard let unit = project.units.first(where: { $0.id == id }), let expected = grant.unitHashes[id],
                   session.unitHashes[id] == expected, try BookImporter.sha256(Data(unit.text.utf8)) == expected else { throw ReadingError.invalid("当前分析块的原文已变化，未保存结果。") }
@@ -304,6 +331,11 @@ extension SmartReadingRuntime {
             for range in ranges { _ = try range.text(in: project) }
         }
         if configuration.precision == .close { try ReadingLedger.requireComplete(unitIDs: unitIDs, in: project) }
+        if grant.chunk.scopeJob != nil {
+            guard try analysisDependenciesComplete(grant.chunk, in: project) else {
+                throw ReadingError.invalid("范围回顾的前序分析尚未成功保存，或输入版本已改变；未标记完成。")
+            }
+        }
     }
     static func completeAnalysis(arguments: Data, in project: inout BookProject, allowedUnitIDs: Set<String>) throws -> String {
         struct Submission: Decodable { var unitIDs: [String]; var markdown: String; var evidence: [Evidence]; var completedStepIDs: [String]; var noChangesReasons: [String: String]? }
@@ -327,6 +359,8 @@ extension SmartReadingRuntime {
         checkpoint.sourceRanges = grant.chunk.sourceRanges; checkpoint.chapterID = grant.chunk.chapterID
         checkpoint.noChangesReasons = reasons.isEmpty ? nil : reasons
         checkpoint.hostCitationSummary = hostSummary
+        checkpoint.scopeJob = grant.chunk.scopeJob
+        checkpoint.requiredComponentKinds = grant.chunk.requiredComponentKinds
         var records = project.smartReading?.analysisCheckpoints ?? []
         if records.contains(where: { $0.id == checkpoint.id }) { return "本部分的分析已保存，保留已有结果。" }
         guard records.count < 100_000 else { throw ReadingError.invalid("分析检查点数量达到上限。") }
@@ -412,9 +446,11 @@ enum ReadingAnalysisReviewTools {
         guard let first = current.first, let last = current.last, current.count == grant.chunk.unitIDs.count else { throw ReadingError.invalid("当前分析块原文缺失。") }
         let scopeIDs = Set(session.unitIDs)
         let currentStart = grant.chunk.sourceRanges?.first?.startUTF16 ?? 0
+        let requiredDependencies = grant.chunk.scopeJob.map { Set($0.dependencyIDs) }
         var hashes: [String: String] = [:], result: [Candidate] = []
         for checkpoint in session.analysisCheckpoints ?? [] {
             try Task.checkCancellation()
+            if let requiredDependencies, !requiredDependencies.contains(checkpoint.id) { continue }
             let ids = Set(checkpoint.unitIDs)
             guard !ids.isEmpty, ids.count == checkpoint.unitIDs.count, ids.isSubset(of: scopeIDs),
                   Set(checkpoint.unitHashes.keys) == ids else { continue }
@@ -446,7 +482,7 @@ enum ReadingAnalysisReviewTools {
             let pages = Array(Set(sources.compactMap(\.page))).sorted()
             let title = pages.first.map { page in pages.last == page ? "第 \(page) 页" : "第 \(page)–\(pages.last ?? page) 页" } ?? String(start.chapter.prefix(100))
             var metadata = Metadata(id: checkpoint.id, title: title, unitCount: sources.count, firstOrder: start.order, lastOrder: end.order,
-                configurationMatchesCurrent: checkpoint.configurationHash == grant.chunk.configurationHash)
+                configurationMatchesCurrent: checkpoint.configurationHash == (grant.chunk.scopeJob?.localConfigurationHash ?? grant.chunk.configurationHash))
             metadata.firstUTF16 = checkpoint.sourceRanges?.first?.startUTF16
             metadata.lastUTF16 = checkpoint.sourceRanges?.last?.endUTF16
             result.append(Candidate(checkpoint: checkpoint, metadata: metadata))

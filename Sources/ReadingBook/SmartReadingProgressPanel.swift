@@ -53,14 +53,17 @@ struct SmartReadingProgressPanel: View {
     }
     private var countText: String? {
         guard let progress, session?.isPlanConfirmed == true else { return nil }
-        return "\(progress.completed)/\(progress.total)"
+        if let continuation = store.readingContinuationProgress {
+            return "已存 \(continuation.available)/\(continuation.total)"
+        }
+        return "已存 \(progress.completed)/\(progress.total)"
     }
     private var progressAccessibilityValue: String {
         var values: [String] = []
         if hasCompanion { values.append("伴读：" + companionState.value.phaseTitle) }
         if hasQuery { values.append("对话：" + queryState.value.phaseTitle) }
         if hasReading { values.append(hasActivity ? readingTitle + "：" + activityState.value.phaseTitle : readingTitle) }
-        if let countText, hasReading { values.append("阅读已处理 " + countText) }
+        if let countText, hasReading { values.append("本次范围 " + countText + " 个内容单元，包含沿用") }
         return values.joined(separator: "，")
     }
     var body: some View {
@@ -106,10 +109,17 @@ struct SmartReadingProgressPanel: View {
         if owns(activityState.value), activityState.value.hasActivity { AIProgressStatusView(state: activityState) }
         if let progress, session?.isPlanConfirmed == true {
             VStack(alignment: .leading, spacing: 12) {
-                if let scope = session?.scopeTitle { Text(scope).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                if let continuation = store.readingContinuationProgress {
+                    ReadingContinuationSavedProgressView(available: continuation.available, total: continuation.total,
+                        inherited: continuation.inherited, newlySaved: continuation.newlySaved, blocked: continuation.blocked,
+                        scopeSummary: continuation.scopeSummary, wholeBookSummary: continuation.wholeBookSummary,
+                        hasBaselineDetails: continuation.hasBaselineDetails, compact: true)
+                } else {
+                    if let scope = session?.scopeTitle { Text(scope).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                    statusRow("本次范围已保存 · \(progress.completed)/\(progress.total) 个内容单元", completed: progress.completed == progress.total)
+                }
                 statusRow("预读并确定阅读方案", completed: store.book?.plan != nil && !awaiting)
-                if progress.isStandardAnalysis { statusRow("已分析 · \(progress.completed)/\(progress.total)", completed: progress.completed == progress.total) }
-                else { statusRow("逐段细读 · \(progress.receiptCount)/\(progress.receiptTotal)", completed: progress.receiptTotal > 0 && progress.receiptCount == progress.receiptTotal) }
+                if !progress.isStandardAnalysis { statusRow("逐段回执 · \(progress.receiptCount)/\(progress.receiptTotal)", completed: progress.receiptTotal > 0 && progress.receiptCount == progress.receiptTotal) }
                 if progress.excludedCount > 0 || progress.blankCount > 0 {
                     Text("\(progress.excludedCount) 个片段暂缓未读，\(progress.blankCount) 个片段由你确认空白。")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -123,14 +133,13 @@ struct SmartReadingProgressPanel: View {
                 }
                 ForEach(progress.steps) { step in statusRow(step.title, completed: step.isCompleted) }
                 if let message = session?.lastMessage { Text(message).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled) }
-                Text("已保存的处理状态；你仍可翻页阅读。").font(.system(size: 11)).foregroundStyle(.secondary)
                 HStack(spacing: 10) {
                     Button { store.requestedWorkspaceRoute = awaiting ? "book.scheme" : "workflow" } label: { Text(awaiting ? "确认方案" : "阅读方案") }
                         .buttonStyle(ReadingToolbarButtonStyle()).help("打开阅读方案和已保存的分析进度，不重新请求模型。")
                     Spacer(minLength: 0)
-                    if store.canStartReading && !awaiting && session?.status != .completed {
-                        Button { store.startReading() } label: { Label("继续", systemImage: "play.fill") }
-                            .buttonStyle(ReadingToolbarButtonStyle(selected: true)).help("从已保存的检查点继续智能阅读，已有分析保留。")
+                    if store.canStartReading && !awaiting {
+                        Button { store.requestedWorkspaceRoute = "workflow"; expanded = false } label: { Label("继续 / 调整", systemImage: "play.fill") }
+                            .buttonStyle(ReadingToolbarButtonStyle(selected: true)).help("选择范围，查看沿用与缺项安排后继续；已有分析保留。")
                     }
                     resultMenu
                 }

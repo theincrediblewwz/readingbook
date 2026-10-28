@@ -6,7 +6,7 @@ import PDFKit
 import WebKit
 import Darwin
 @testable import ReadingBook
-import ReadingCore
+@testable import ReadingCore
 
 final class Metrics: @unchecked Sendable {
     struct Pulse: Sendable { let queuedAt: Double; let phase: String; let action: String }
@@ -169,6 +169,7 @@ struct PanelHarnessRoot: View {
         store.settings = ProviderSettings(baseURL: "http://127.0.0.1:1/disabled", model: "")
         if mode == "pdf" { await runPDFScenario(); return }
         if mode == "navigation" { await runBookPickerScenario(); return }
+        if mode == "continuation" { await runContinuationScenario(); return }
         if synthetic {
             store.books = [syntheticBook()]
             store.bookID = store.books[0].id
@@ -579,6 +580,81 @@ struct PanelHarnessRoot: View {
         assertions["testScope"] = "real ReaderWorkspaceView/PDFKit, public native object binding, window-local thumbnail click, canonical workspace persistence; correctness, not FPS"
         writeJSON("result.json", assertions)
         timer?.cancel(); window?.orderOut(nil); NSApp.terminate(nil)
+    }
+}
+
+/// Real workflow views, local deterministic data; no configured model or socket.
+@MainActor extension Runner {
+    func runContinuationScenario() async {
+        var assertions: [String: Any] = ["realNetworkRequests": 0, "mode": mode]
+        do {
+            let units = (1...200).map { page in
+                SourceUnit(id: "continuation-u\(page)", order: page-1, chapter: "第\((page-1)/20+1)章", page: page,
+                    text: "第\(page)页的合成原文。刘备在此，以下内容仅用于离线续读界面测试。")
+            }
+            let bytes = Data(units.map(\.text).joined(separator: "\n\n").utf8)
+            let source = library.deletingLastPathComponent().appendingPathComponent("continuation-fixture.txt")
+            try bytes.write(to: source)
+            var project = BookProject(id: "22222222-2222-4222-8222-222222222222", title: "续读交互 · 合成200页", originalName: source.lastPathComponent,
+                sourceHash: try BookImporter.sha256(bytes), units: units)
+            PluginEngine.seed(&project)
+            project.methods.append(ReadingMethod(id: "continuation-method", name: "理解原文", goal: "保留已完成讲解并处理缺口", steps: ["说明原文"] ))
+            project.plan = ReadingPlan(methodIDs: ["continuation-method"])
+            let configuration = ReadingExecutionConfiguration(granularity: .page, steps: [.init(id: "understand", title: "说明原文")])
+            project.smartReading = try SmartReadingRuntime.freeze(.init(scope: .pageRange, pageStart: 1, pageEnd: 100, execution: configuration), in: project, currentUnitID: nil)
+            project.smartReading?.isPlanConfirmed = true
+            let hashes = project.smartReading!.unitHashes
+            for work in try SmartReadingRuntime.analysisChunks(in: project) {
+                let checkpoint = ReadingAnalysisCheckpoint(id: work.id, unitIDs: work.unitIDs,
+                    unitHashes: Dictionary(uniqueKeysWithValues: work.unitIDs.map { ($0, hashes[$0]!) }),
+                    configurationHash: work.configurationHash, completedStepIDs: work.stepIDs,
+                    markdown: "## 已保存的讲解\n\n这段原文讲的是刘备在此。保留公式 $x^2$，不重新生成。",
+                    evidence: work.unitIDs.map { id in Evidence(unitID: id, quote: units.first { $0.id == id }!.text) }, updatedAt: Date())
+                project.smartReading!.analysisCheckpoints = (project.smartReading!.analysisCheckpoints ?? []) + [checkpoint]
+                project.insights.append(ReadingInsight(id: "analysis-"+work.id, unitIDs: work.unitIDs, markdown: checkpoint.markdown))
+            }
+            project.smartReading?.status = .completed
+            let previous = project
+            project.smartReading = try SmartReadingRuntime.freeze(.init(scope: .pageRange, pageStart: 50, pageEnd: 200, execution: configuration), in: project, currentUnitID: nil)
+            project.smartReading?.isPlanConfirmed = true
+            try ReadingContinuationRuntime.preserveHistory(from: previous, in: &project)
+            let owner = LibraryRepository(rootURL: library)
+            project = try await owner.create(project, sourceURL: source)
+            store.repository = owner; store.libraryRootURL = library; store.books = [project]
+            store.bookID = project.id; store.selectedUnitID = units[49].id
+            store.route = "workflow"; store.queryComposerDraft.text = draft
+            let before = try Data(contentsOf: source)
+            let preview = try await store.previewReadingContinuation(project.smartReading!.selection, intent: .continueMissing)
+            guard preview.reusedUnitCount == 51, preview.newUnitCount == 100 else { throw ReadingError.invalid("真实原生预览的重叠计数不正确。") }
+            let root = AnyView(WorkspaceView().environmentObject(store).environmentObject(ReadingTypographySettings()).modifier(ReadingPreferencesEnvironment()).background(FrostWindowAppearance()))
+            let host = CountingHost(rootView: root)
+            window = NSWindow(contentRect: NSRect(x: 0, y: 50, width: 1180, height: 900), styleMask: [.titled,.closable,.resizable,.miniaturizable,.fullSizeContentView], backing: .buffered, defer: false)
+            window.title = "ReadingBook Continuation UI · Offline fixture"; window.contentView = host
+            window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            metrics.scenario()
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            let sizes = [CGSize(width: 1180, height: 900), CGSize(width: 660, height: 780), CGSize(width: 860, height: 820)]
+            for cycle in 0..<cycles {
+                metrics.record("continuation-resize-\(cycle)")
+                window.setContentSize(sizes[cycle % sizes.count])
+                try await Task.sleep(nanoseconds: 180_000_000)
+                if cycle < sizes.count { try capturePDFView("continuation-size-\(cycle).png") }
+            }
+            let hold = min(300, max(0, Int(ProcessInfo.processInfo.environment["HARNESS_HOLD_SECONDS"] ?? "0") ?? 0))
+            if hold > 0 {
+                writeJSON("ready.json", ["status": "ready", "holdSeconds": hold, "windowTitle": window.title])
+                try await Task.sleep(nanoseconds: UInt64(hold)*1_000_000_000)
+            }
+            guard !store.isSmartReadingRunning, !store.isQueryBusy, store.queryComposerDraft.text == draft,
+                  try Data(contentsOf: source) == before else { throw ReadingError.invalid("离线界面测试改动了原文、草稿或启动了AI。") }
+            assertions["status"] = "passed"; assertions["reusedUnits"] = preview.reusedUnitCount
+            assertions["newUnits"] = preview.newUnitCount; assertions["nativeWindowVisible"] = window.isVisible
+            assertions["manualVisualQAHoldSeconds"] = hold; assertions["resizeCycles"] = cycles
+            assertions["originalSourceAndDraftPreserved"] = true
+        } catch { assertions["status"] = "failed"; assertions["reason"] = error.localizedDescription }
+        metrics.settling(); try? await Task.sleep(nanoseconds: 250_000_000)
+        assertions["metrics"] = metrics.snapshot()
+        writeJSON("result.json", assertions); timer?.cancel(); window?.orderOut(nil); NSApp.terminate(nil)
     }
 }
 

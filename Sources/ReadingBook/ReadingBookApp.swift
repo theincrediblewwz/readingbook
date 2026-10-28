@@ -23,7 +23,7 @@ struct ReadingBookApp: App {
             }
             CommandMenu("阅读") {
                 Button("预读并制定计划") { store.makePlan() }.disabled(store.book == nil || !store.canStartReading)
-                Button("开始 / 继续分析") { store.startReading() }.disabled(store.book == nil || !store.canStartReading)
+                Button("设置范围并继续分析") { store.requestedWorkspaceRoute = "workflow" }.disabled(store.book == nil || !store.canStartReading)
                 Button("暂停任务") { store.pause() }.keyboardShortcut(".").disabled(!store.isBusy || store.storageState.working)
             }
             CommandMenu("工作台") {

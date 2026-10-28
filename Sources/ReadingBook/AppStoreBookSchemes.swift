@@ -94,12 +94,26 @@ import ReadingCore
 
     private func mutateBookScheme(_ message: String, onSaved: (() -> Void)? = nil, change: (inout BookProject) throws -> Void) {
         guard var current = book, !isBusy, !isSavingDocument else { return }
+        let owner = repository, root = libraryRootURL, sourceHash = current.sourceHash, writeID = UUID()
         do {
-            try change(&current); isBusy = true; isCommittingLocalWrite = true
+            try change(&current); bookSchemeWriteID = writeID; isBusy = true; isCommittingLocalWrite = true
             Task {
-                defer { isBusy = false; isCommittingLocalWrite = false }
-                do { publish(try await repository.save(current)); activity = message; onSaved?() }
-                catch { errorMessage = error.localizedDescription }
+                defer {
+                    if bookSchemeWriteID == writeID {
+                        bookSchemeWriteID = nil; isBusy = false; isCommittingLocalWrite = false
+                    }
+                }
+                @MainActor func ownsPresentation() -> Bool {
+                    bookSchemeWriteID == writeID && libraryRootURL == root
+                        && repository.publicationOwner == owner.publicationOwner
+                        && bookID == current.id && book?.sourceHash == sourceHash
+                }
+                do {
+                    guard ownsPresentation() else { return }
+                    let saved = try await owner.save(current)
+                    guard ownsPresentation() else { return }
+                    publish(saved); activity = message; onSaved?()
+                } catch { if ownsPresentation() { errorMessage = error.localizedDescription } }
             }
         } catch { errorMessage = error.localizedDescription }
     }

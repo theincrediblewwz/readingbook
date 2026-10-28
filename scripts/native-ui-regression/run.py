@@ -6,16 +6,18 @@ SOURCE=pathlib.Path(__file__).resolve().parent
 HARNESS=ROOT/'.build/native-ui-harness'
 p=argparse.ArgumentParser()
 p.add_argument('--library-copy',type=pathlib.Path)
-p.add_argument('--mode',choices=['panel','workspace','pdf','navigation'],default='workspace')
+p.add_argument('--mode',choices=['panel','workspace','pdf','navigation','continuation'],default='workspace')
+p.add_argument('--hold-seconds',type=int,default=0,help='Keep the isolated continuation fixture open for manual visual QA (0-300 seconds)')
 p.add_argument('--cycles',type=int,default=24)
 p.add_argument('--tag',default='run')
 a=p.parse_args()
 assert 1<=a.cycles<=1000
+assert 0<=a.hold_seconds<=300 and (not a.hold_seconds or a.mode=='continuation')
 assert a.tag.replace('-','').replace('_','').isalnum()
 if a.library_copy:
  a.library_copy=a.library_copy.resolve()
  assert a.library_copy.is_relative_to(ROOT) and a.library_copy.is_dir(), 'Only workspace-local test library copies are allowed'
-assert a.mode not in {'pdf','navigation'} or not a.library_copy, 'Fixture correctness modes generate their own nonprivate libraries'
+assert a.mode not in {'pdf','navigation','continuation'} or not a.library_copy, 'Fixture correctness modes generate their own nonprivate libraries'
 stamp=datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
 out=ROOT/'logs'/f'native-ui-harness-{stamp}-{a.tag}'
 out.mkdir(parents=True,exist_ok=False)
@@ -41,7 +43,7 @@ domain='org.readingbook.native-ui-harness'
 (contents/'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':domain,'CFBundleExecutable':binary.name,'CFBundleName':'Native UI Regression','CFBundlePackageType':'APPL','NSHighResolutionCapable':True,'LSUIElement':False}))
 subprocess.run(['codesign','--force','--sign','-','--timestamp=none',str(app)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 env=os.environ.copy()
-env.update(HARNESS_WORKSPACE=str(ROOT),HARNESS_OUTPUT=str(out),HARNESS_LIBRARY=str(library),HARNESS_MODE=a.mode,HARNESS_CYCLES=str(a.cycles),HARNESS_SYNTHETIC='0' if a.library_copy else '1',CFFIXED_USER_HOME=str(work/'home'),TMPDIR=str(HARNESS/'tmp'))
+env.update(HARNESS_WORKSPACE=str(ROOT),HARNESS_OUTPUT=str(out),HARNESS_LIBRARY=str(library),HARNESS_MODE=a.mode,HARNESS_CYCLES=str(a.cycles),HARNESS_HOLD_SECONDS=str(a.hold_seconds),HARNESS_SYNTHETIC='0' if a.library_copy else '1',CFFIXED_USER_HOME=str(work/'home'),TMPDIR=str(HARNESS/'tmp'))
 (work/'home').mkdir()
 metadata={'mode':a.mode,'cycles':a.cycles,'synthetic':not bool(a.library_copy),'harnessSourceSHA256':canonical_source_sha,'harnessBinarySHA256':hashlib.sha256(binary.read_bytes()).hexdigest(),'sourceHead':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'productDiffSHA256':hashlib.sha256(subprocess.check_output(['git','diff','--','Sources/ReadingBook'],cwd=ROOT)).hexdigest()}
 (out/'manifest.json').write_text(json.dumps(metadata,indent=2)+'\n')
@@ -52,7 +54,7 @@ with (out/'console.log').open('w') as f:
  child=subprocess.Popen([str(binary)],cwd=ROOT,env=env,stdout=f,stderr=subprocess.STDOUT)
  (out/'pid.txt').write_text(str(child.pid)+'\n')
  try:
-  child.wait(timeout=max(45,a.cycles*1.5+25))
+  child.wait(timeout=max(45,a.cycles*1.5+25)+a.hold_seconds)
  except subprocess.TimeoutExpired:
   try:
    subprocess.run(['/usr/bin/sample',str(child.pid),'5','10','-file',str(out/'timeout.sample.txt')],timeout=15,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)

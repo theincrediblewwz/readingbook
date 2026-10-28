@@ -285,8 +285,9 @@ private struct BookSchemeWorkspaceContent: View {
             .buttonStyle(ReadingToolbarButtonStyle(selected: true)).disabled(draft.conflict)
     }
     private var confirmAndStartAction: some View {
-        Button { if let selection { store.confirmSmartReading(selection) } } label: { Label("确认并开始分析", systemImage: "sparkles") }
+        Button { if let selection { store.confirmSmartReading(selection) } } label: { Label("确认并查看处理安排", systemImage: "checkmark") }
             .buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44).disabled(draft.conflict)
+            .help("保存已确认的方案，然后查看本次范围与已有成果；此时尚不开始正文分析。")
     }
     private var templateEditor: some View {
         VStack(spacing: 0) {

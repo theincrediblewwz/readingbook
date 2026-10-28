@@ -50,11 +50,12 @@ final class ReadingExecutionTests: XCTestCase {
         ])
         var value = try project(configuration)
         let chunks = try SmartReadingRuntime.analysisChunks(in: value)
-        XCTAssertEqual(chunks.map(\.unitIDs), [["u1", "u2"], ["u3"], ["u4"]])
-        XCTAssertEqual(chunks.map(\.stepIDs), [["part"], ["part", "chapter"], ["part", "chapter", "book"]])
+        XCTAssertEqual(chunks.filter { $0.scopeJob == nil }.map(\.unitIDs), [["u1", "u2"], ["u3"], ["u4"]])
+        XCTAssertEqual(chunks.filter { $0.scopeJob == nil }.map(\.stepIDs), [["part"], ["part"], ["part"]])
+        XCTAssertEqual(chunks.filter { $0.scopeJob != nil }.map(\.stepIDs), [["chapter"], ["chapter"], ["book"]])
         configuration.granularity = .chapter
         value.smartReading = try SmartReadingRuntime.freeze(SmartReadingSelection(execution: configuration), in: value, currentUnitID: "u1")
-        XCTAssertEqual(try SmartReadingRuntime.analysisChunks(in: value).map(\.unitIDs), [["u1", "u2", "u3"], ["u4"]])
+        XCTAssertEqual(try SmartReadingRuntime.analysisChunks(in: value).filter { $0.scopeJob == nil }.map(\.unitIDs), [["u1", "u2", "u3"], ["u4"]])
         XCTAssertEqual(value.units.map(\.id), ["u1", "u2", "u3", "u4"])
     }
 
@@ -65,7 +66,7 @@ final class ReadingExecutionTests: XCTestCase {
         let chunks = try SmartReadingRuntime.analysisChunks(in: value)
         XCTAssertTrue(chunks.allSatisfy { $0.unitIDs.count <= 12 })
         XCTAssertTrue(chunks.allSatisfy { chunk in value.units.filter { chunk.unitIDs.contains($0.id) }.reduce(0, { $0 + $1.text.count }) <= 20_000 })
-        XCTAssertEqual(chunks.flatMap(\.unitIDs), value.units.map(\.id))
+        XCTAssertEqual(chunks.filter { $0.scopeJob == nil }.flatMap(\.unitIDs), value.units.map(\.id))
     }
 
     func testStandardCompletionAddsOnlyAnalysisAndKeepsReceiptCoverageSeparate() throws {
@@ -210,19 +211,33 @@ final class ReadingExecutionTests: XCTestCase {
             ReadingExecutionStep(id: "book", title: "本轮回顾", frequency: .book)
         ])
         var value = try project(configuration)
+        try fillReviewCheckpoints(in: &value)
         let chunks = try SmartReadingRuntime.analysisChunks(in: value)
-        let hashes = value.smartReading!.unitHashes, units = value.units
-        value.smartReading?.analysisCheckpoints = chunks.map { chunk in
-            ReadingAnalysisCheckpoint(id: chunk.id, unitIDs: chunk.unitIDs,
-                unitHashes: hashes.filter { chunk.unitIDs.contains($0.key) },
+        return (value, [try XCTUnwrap(chunks.first { $0.scopeJob == nil }),
+                        try XCTUnwrap(chunks.first { $0.scopeJob?.kind == .chapter }),
+                        try XCTUnwrap(chunks.first { $0.scopeJob?.kind == .book })])
+    }
+    private func fillReviewCheckpoints(in value: inout BookProject) throws {
+        while true {
+            let chunks = try SmartReadingRuntime.analysisChunks(in: value)
+            let index = ReadingAnalysisCompletionIndex(in: value)
+            guard let chunk = chunks.first(where: { !index.isComplete($0) }) else { return }
+            XCTAssertTrue(try SmartReadingRuntime.analysisDependenciesComplete(chunk, in: value))
+            let session = try XCTUnwrap(value.smartReading)
+            var checkpoint = ReadingAnalysisCheckpoint(id: chunk.id, unitIDs: chunk.unitIDs,
+                unitHashes: session.unitHashes.filter { chunk.unitIDs.contains($0.key) },
                 configurationHash: chunk.configurationHash, completedStepIDs: chunk.stepIDs,
                 markdown: "这部分已保存的分析：" + chunk.title,
-                evidence: chunk.unitIDs.map { id in Evidence(unitID: id, quote: units.first { $0.id == id }!.text) }, updatedAt: Date())
+                evidence: chunk.unitIDs.map { id in Evidence(unitID: id, quote: value.units.first { $0.id == id }!.text) }, updatedAt: Date())
+            checkpoint.scopeJob = chunk.scopeJob; checkpoint.requiredComponentKinds = chunk.requiredComponentKinds
+            value.smartReading?.analysisCheckpoints = (session.analysisCheckpoints ?? []) + [checkpoint]
         }
-        return (value, chunks)
     }
     private func reviewCall(_ name: String, _ arguments: [String: Any], chunk: ReadingAnalysisChunk, project: inout BookProject) throws -> Data {
-        let authorization = try grant(chunk, in: project)
+        let canonical = try SmartReadingRuntime.analysisChunks(in: project).first {
+            $0.unitIDs == chunk.unitIDs && $0.scopeJob?.kind == chunk.scopeJob?.kind && $0.stepIDs == chunk.stepIDs
+        } ?? chunk
+        let authorization = try grant(canonical, in: project)
         let data = try JSONSerialization.data(withJSONObject: arguments)
         let output = try ReadingAnalysisAuthority.$current.withValue(authorization) {
             try PluginEngine.registry.apply(name: name, arguments: data, to: &project, allowedUnitIDs: Set(chunk.unitIDs), phase: .reading)
@@ -267,6 +282,7 @@ final class ReadingExecutionTests: XCTestCase {
     func testReviewRetrievalCapsPageCountAndTotalReadBytes() throws {
         var (value, chunks) = try reviewProject()
         value.smartReading?.analysisCheckpoints?[0].markdown = String(repeating: "已有分析内容。", count: 2000)
+        try fillReviewCheckpoints(in: &value)
         let output = try reviewCall("analysis_read", ["scope": "book", "checkpointIDs": [chunks[0].id]], chunk: chunks[2], project: &value)
         XCTAssertLessThanOrEqual(output.count, 12 * 1024)
         let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: output) as? [String: Any])

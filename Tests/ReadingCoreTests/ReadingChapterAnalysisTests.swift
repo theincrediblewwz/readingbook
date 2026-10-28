@@ -35,6 +35,14 @@ final class ReadingChapterAnalysisTests: XCTestCase {
         let original = value
         try authorize(chunk, in: original) { _ = try SmartReadingRuntime.completeAnalysis(arguments: input, in: &value, allowedUnitIDs: Set(chunk.unitIDs)) }
     }
+    private func finishWork(in value: inout BookProject) throws {
+        while true {
+            let chunks = try SmartReadingRuntime.analysisChunks(in: value)
+            let index = ReadingAnalysisCompletionIndex(in: value)
+            guard let next = chunks.first(where: { !index.isComplete($0) }) else { return }
+            try complete(next, in: &value)
+        }
+    }
 
     func testSameUnitChaptersUseExactFrozenSlicesAndAllSlicesMustComplete() throws {
         var value = try book(); try installOutline(in: &value)
@@ -42,7 +50,7 @@ final class ReadingChapterAnalysisTests: XCTestCase {
         value.smartReading = try SmartReadingRuntime.freeze(.init(execution: configuration), in: value, currentUnitID: "u")
         let planning = try SmartReadingRuntime.analysisSourceUnits(in: value, allowedUnitIDs: ["u"])
         XCTAssertEqual(planning[0].text.utf8.map { $0 }, original[0].text.utf8.map { $0 }, "章界不能给预读原文插入额外换行。")
-        let chunks = try SmartReadingRuntime.analysisChunks(in: value)
+        let chunks = try SmartReadingRuntime.analysisChunks(in: value).filter { $0.scopeJob == nil }
         XCTAssertEqual(chunks.count, 3, "前言和同页两章分别分析，不重写原单位。")
         let texts = try chunks.map { try SmartReadingRuntime.analysisSourceUnits(in: value, allowedUnitIDs: Set($0.unitIDs), ranges: $0.sourceRanges).map(\.text).joined() }
         XCTAssertEqual(texts.joined(), original[0].text)
@@ -51,7 +59,7 @@ final class ReadingChapterAnalysisTests: XCTestCase {
         try complete(chunks[0], in: &value)
         XCTAssertFalse(SmartReadingRuntime.isUnitComplete(original[0], in: value))
         XCTAssertEqual(try SmartReadingRuntime.progress(in: value)?.completed, 0)
-        for chunk in chunks.dropFirst() { try complete(chunk, in: &value) }
+        try finishWork(in: &value)
         XCTAssertTrue(SmartReadingRuntime.isUnitComplete(original[0], in: value))
         XCTAssertEqual(try SmartReadingRuntime.progress(in: value)?.completed, 1)
         XCTAssertEqual(value.units, original)
@@ -60,7 +68,7 @@ final class ReadingChapterAnalysisTests: XCTestCase {
         XCTAssertNil(value.paragraphReceipts)
         XCTAssertNoThrow(try SmartReadingRuntime.validateStoredState(in: value))
         let roundTrip = try JSONDecoder().decode(BookProject.self, from: JSONEncoder().encode(value))
-        XCTAssertEqual(try SmartReadingRuntime.analysisChunks(in: roundTrip), chunks)
+        XCTAssertEqual(try SmartReadingRuntime.analysisChunks(in: roundTrip), try SmartReadingRuntime.analysisChunks(in: value))
     }
 
     func testCurrentChapterPlanningAndNewEvidenceCannotEscapeSameUnitBoundary() throws {
@@ -110,7 +118,7 @@ final class ReadingChapterAnalysisTests: XCTestCase {
         value.generatedOutline = GeneratedBookOutline(sourceHash: value.sourceHash, sourceFingerprint: try BookOutlineRuntime.fingerprint(in: value), scannedUnitCount: 2, totalUnitCount: 2,
             entries: [BookOutlineEntry(id: first.id, title: "第一章", page: 1, anchor: first), BookOutlineEntry(id: second.id, title: "第二章", page: 1, anchor: second), BookOutlineEntry(id: third.id, title: "第三章", page: 2, anchor: third)])
         XCTAssertTrue(try SmartReadingRuntime.freezeChapterBoundaries(in: &value))
-        let chunks = try SmartReadingRuntime.analysisChunks(in: value)
+        let chunks = try SmartReadingRuntime.analysisChunks(in: value).filter { $0.scopeJob == nil }
         XCTAssertEqual(chunks.first, old.first)
         XCTAssertTrue(SmartReadingRuntime.isChunkComplete(chunks[0], in: value))
         XCTAssertEqual(chunks.count, 2)
@@ -159,7 +167,7 @@ final class ReadingChapterAnalysisTests: XCTestCase {
         value.generatedOutline = GeneratedBookOutline(sourceHash: value.sourceHash, sourceFingerprint: try BookOutlineRuntime.fingerprint(in: value), scannedUnitCount: 1, totalUnitCount: 1,
             entries: [BookOutlineEntry(id: anchor.id, title: "第一章", page: 1, anchor: anchor)])
         value.smartReading = try SmartReadingRuntime.freeze(.init(execution: configuration), in: value, currentUnitID: "u")
-        let chunks = try SmartReadingRuntime.analysisChunks(in: value)
+        let chunks = try SmartReadingRuntime.analysisChunks(in: value).filter { $0.scopeJob == nil }
         XCTAssertEqual(chunks.count, 3)
         var rendered = ""
         for chunk in chunks {
@@ -170,10 +178,9 @@ final class ReadingChapterAnalysisTests: XCTestCase {
         }
         XCTAssertEqual(rendered, value.units[0].text)
         XCTAssertFalse(chunks[0].stepIDs.contains("chapter"))
-        XCTAssertTrue(chunks.last?.stepIDs.contains("chapter") == true)
-        try complete(chunks[0], in: &value)
-        try complete(chunks[1], in: &value)
-        let last = try XCTUnwrap(chunks.last), snapshot = value
+        XCTAssertTrue(try SmartReadingRuntime.analysisChunks(in: value).contains { $0.scopeJob?.kind == .chapter })
+        for chunk in chunks { try complete(chunk, in: &value) }
+        let last = try XCTUnwrap(SmartReadingRuntime.analysisChunks(in: value).first { $0.scopeJob?.kind == .chapter }), snapshot = value
         try authorize(last, in: snapshot) {
             var candidate = snapshot
             let result = try PluginEngine.registry.apply(name: "analysis_outline", arguments: Data(#"{"scope":"chapter"}"#.utf8), to: &candidate, allowedUnitIDs: ["u"], phase: .reading)
@@ -202,11 +209,10 @@ final class ReadingChapterAnalysisTests: XCTestCase {
         value.coverage["blank"] = confirmed
         value.insights.append(ReadingInsight(id: "blank-blank", unitIDs: ["blank"], markdown: "用户对照原书确认此单元为空白，无需 AI 提取文字。"))
         value.smartReading = try SmartReadingRuntime.freeze(.init(execution: configuration), in: value, currentUnitID: "u")
-        let chunks = try SmartReadingRuntime.analysisChunks(in: value)
+        let chunks = try SmartReadingRuntime.analysisChunks(in: value).filter { $0.scopeJob == nil }
         XCTAssertEqual(chunks.map(\.unitIDs), [["u"], ["w"]])
-        XCTAssertTrue(chunks[0].stepIDs.contains("chapter"), "已核对的空白尾页无需另发模型请求，也不能使章末步骤消失。")
-        XCTAssertFalse(chunks[0].stepIDs.contains("book"))
-        XCTAssertTrue(chunks[1].stepIDs.contains("chapter"))
+        XCTAssertTrue(try SmartReadingRuntime.analysisChunks(in: value).contains { $0.unitIDs == ["u"] && $0.scopeJob?.kind == .chapter }, "已核对的空白尾页不使章末步骤消失。")
+        XCTAssertTrue(try SmartReadingRuntime.analysisChunks(in: value).contains { $0.unitIDs == ["w"] && $0.scopeJob?.kind == .chapter })
         try complete(chunks[0], in: &value)
         XCTAssertTrue(SmartReadingRuntime.isChunkComplete(chunks[0], in: value))
         XCTAssertEqual(value.units, originalUnits)
@@ -219,9 +225,9 @@ final class ReadingChapterAnalysisTests: XCTestCase {
         deferred.insights.append(ReadingInsight(id: "deferred-blank", unitIDs: ["blank"], markdown: "【未读取，待识别】\(originalUnits[1].locator)。该单元尚无可靠文本，不得推断其中的事实。"))
         deferred.smartReading = try SmartReadingRuntime.freeze(.init(execution: configuration), in: deferred, currentUnitID: "u")
         let deferredChunks = try SmartReadingRuntime.analysisChunks(in: deferred)
-        XCTAssertEqual(deferredChunks.map(\.unitIDs), [["u"], ["w"]])
-        XCTAssertFalse(deferredChunks[0].stepIDs.contains("chapter"), "待识别尾页仍是未读，不能借空白路径提前进行章末回顾。")
-        XCTAssertTrue(deferredChunks[1].stepIDs.contains("chapter"))
+        XCTAssertEqual(deferredChunks.filter { $0.scopeJob == nil }.map(\.unitIDs), [["u"], ["w"]])
+        XCTAssertFalse(deferredChunks.contains { $0.unitIDs == ["u"] && $0.scopeJob?.kind == .chapter }, "待识别尾页仍是未读，不能借空白路径提前进行章末回顾。")
+        XCTAssertTrue(deferredChunks.contains { $0.unitIDs == ["w"] && $0.scopeJob?.kind == .chapter })
         XCTAssertEqual(deferred.units, originalUnits)
         XCTAssertNoThrow(try SmartReadingRuntime.validateStoredState(in: deferred))
     }
@@ -246,10 +252,10 @@ final class ReadingChapterAnalysisTests: XCTestCase {
             value.insights.append(marker)
             var execution = configuration; execution.granularity = .page
             value.smartReading = try SmartReadingRuntime.freeze(.init(execution: execution), in: value, currentUnitID: "u")
+            try finishWork(in: &value)
             let old = try XCTUnwrap(SmartReadingRuntime.analysisChunks(in: value).last)
             XCTAssertEqual(old.unitIDs, ["v"])
             XCTAssertTrue(old.stepIDs.contains("book"))
-            try complete(old, in: &value)
             let oldCheckpoint = try XCTUnwrap(value.smartReading?.analysisCheckpoints?.first { $0.id == old.id })
             let oldInsight = try XCTUnwrap(value.insights.first { $0.id == "analysis-" + old.id })
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -257,14 +263,12 @@ final class ReadingChapterAnalysisTests: XCTestCase {
 
             value.coverage["w"] = CoverageEntry()
             value.insights.removeAll { $0.id == marker.id }
-            let restored = try XCTUnwrap(SmartReadingRuntime.analysisChunks(in: value).first { $0.unitIDs == ["v"] })
-            XCTAssertFalse(restored.stepIDs.contains("book"))
-            XCTAssertNotEqual(restored.id, old.id, "同一原文块的完成步骤变更时，不能撞上不可覆盖的旧检查点。")
-            XCTAssertNotNil(restored.id.range(of: "^chunk-[a-f0-9]{48}$", options: .regularExpression))
-            XCTAssertFalse(SmartReadingRuntime.isChunkComplete(restored, in: value))
-            try complete(restored, in: &value)
-            XCTAssertTrue(SmartReadingRuntime.isChunkComplete(restored, in: value))
-            XCTAssertEqual(value.smartReading?.analysisCheckpoints?.count, 2)
+            let restored = try XCTUnwrap(SmartReadingRuntime.analysisChunks(in: value).first { $0.unitIDs == ["v"] && $0.scopeJob == nil })
+            XCTAssertTrue(SmartReadingRuntime.isChunkComplete(restored, in: value), "范围尾端变化仍保留已完成的局部分析。")
+            let changedReview = try XCTUnwrap(SmartReadingRuntime.analysisChunks(in: value).last)
+            XCTAssertNotEqual(changedReview.id, old.id)
+            XCTAssertFalse(SmartReadingRuntime.isChunkComplete(changedReview, in: value))
+            try finishWork(in: &value)
             let retainedCheckpoint = try XCTUnwrap(value.smartReading?.analysisCheckpoints?.first { $0.id == old.id })
             let retainedInsight = try XCTUnwrap(value.insights.first { $0.id == oldInsight.id })
             XCTAssertEqual(try encoder.encode(retainedCheckpoint), oldCheckpointBytes)
@@ -277,7 +281,7 @@ final class ReadingChapterAnalysisTests: XCTestCase {
             let returned = try XCTUnwrap(SmartReadingRuntime.analysisChunks(in: value).last)
             XCTAssertEqual(returned.id, old.id, "回到原步骤组合时，直接复用原完成记录。")
             XCTAssertTrue(SmartReadingRuntime.isChunkComplete(returned, in: value))
-            XCTAssertEqual(value.smartReading?.analysisCheckpoints?.count, 2)
+            XCTAssertGreaterThan(value.smartReading?.analysisCheckpoints?.count ?? 0, 2)
             XCTAssertEqual(value.units, originalUnits)
             XCTAssertNoThrow(try SmartReadingRuntime.validateStoredState(in: value))
         }
