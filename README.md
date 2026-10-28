@@ -1,8 +1,14 @@
-# 0.23.9 · 伴读布局循环修复（验证中）
+# 0.23.9 · 伴读布局循环修复（Mac 验证与安装完成）
 
 本轮已用真实产品界面和不含原书内容的最小程序复现：伴读菜单的 `ViewThatFits` 在开关/尺寸变化时重复创建原生菜单，主线程进入连续布局。现在用同一套控件原位换行，保留窄窗两行、草稿及已固定范围；同时修正 PDF 悬停通知的视图更新期发布。
 
-版本 0.23.9/build40。完整 Core、原生布局回归和双架构安装包正在验证；构建结果与实际书库副本验证通过后再交付。原书、笔记、分析和存储格式不迁移。现场与前后对照见[Mac 调查记录](Design/2026-10-28-mac-hang-diagnosis.md)。
+[最终测试与安装包](https://github.com/theincrediblewwz/readingbook/actions/runs/40637361713)全部成功：**589 项 Core 零失败、无编译警告**，玻璃/不透明原生布局及真实工作区 24 轮回归通过；交互最大主队列等待 0.521 秒，布局/发布期警告为零。同一 1,484 页 PDF 副本的 120 轮、720 动作压力及 Release 冷导入首开通过；这是心跳响应检查，不是 FPS 测量。
+
+0.23.9/build40 已替换本机 `/Applications/ReadingBook.app`，原书第 182 页打开伴读正常。原 PDF、project、导航、笔记、分析及服务配置核对保留；正常使用仅保存伴读面板状态与 PDF 视口位置。旧应用、原库和偏好备份在本仓库 `private-books/mac-release-20261028/`，原始书籍、密钥、采样和备份不推送。
+
+构建源码 `b164f6c2b1e4c70b393fe17705fdb11b376b12ed`，分支 `codex/reader-audit-after-0.23.8`；本机包 `dist/ReadingBook-0.23.9-Mac.zip`，22,352,111 字节，SHA-256 `442e899772e9afb49db6eae2b4a8cbfc6fdcb61ca55c1fdf6b4a9c624daee5c3`。已核 artifact 摘要、内外 ZIP CRC、版本/源码、arm64/x86_64、0755、ad hoc 签名、资源自检及全部 32 资源与构建提交一致。后续交付文档提交不改变包内源码。
+
+[完整证据与限制](Design/2026-10-28-mac-hang-diagnosis.md) · [下一阶段 Mac 性能与界面检查计划](Design/2026-10-28-mac-performance-plan.md)。付费模型、OCR、加密 PDF 和全部指针手势没有在本轮逐项实测，既有验收记录仍保留。
 
 ---
 

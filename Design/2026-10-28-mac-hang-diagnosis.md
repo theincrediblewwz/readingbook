@@ -11,11 +11,21 @@
 - 最小原生回归：真实 `ReadingAdaptiveRows` 的玻璃/不透明两种场景均完成 100 步，24 次原生标记构造、12 次拆除，无布局或发布期警告；仅保留旧伴读工具栏的负对照仍卡住。脚本为 `scripts/ui-layout-regression/run.py`，旧结构只在主动传入 `--baseline` 时运行。
 - 真实产品对象回归：直接链接 AppStore、ReaderFloatingPanel、ReaderAIPanel 和 WorkspaceView。未修版本在第一次打开伴读便断主线程心跳并出现 300 轮布局；修复版浮窗和完整工作区各 24 轮通过。
 - 同一 1,484 页 PDF 的书库副本：24 轮常规和 120 轮压力通过。压力组完成 720 个开关、切标签、缩窗及跳页动作，最大主队列响应延迟 1.225 秒；草稿保留，布局及发布期警告为零。此数字是主队列心跳延迟，不是帧率。
-- 新增 5 项 Core 几何测试；实际几何源码的 1,230 组确定性探针、17 项悬停交付边界检查通过。本机缺 XCTest，完整 Core 由 GitHub 的 Xcode 环境验证；本条不是完整 Core 通过声明。
+- 新增 5 项 Core 几何测试；实际几何源码的 1,230 组确定性探针、17 项悬停交付边界检查通过。本机缺 XCTest，完整 Core 已在下述最终 GitHub Xcode 环境完成 589 项零失败。
 
-本机证据位于 `logs/ui-layout-regression/`、`logs/native-ui-harness-20261028-125318-fixed-pdf-stress/` 和 `logs/mac-release-20261028/`，全部忽略提交。用于构建的版本为 0.23.9/build40；完整 Core、双架构 Release、包校验和实际安装核验尚在后续交付流程中。
+本机证据位于 `logs/ui-layout-regression/`、`logs/native-ui-harness-20261028-125318-fixed-pdf-stress/` 和 `logs/mac-release-20261028/`，全部忽略提交。最终交付为 0.23.9/build40，构建源码 `b164f6c2b1e4c70b393fe17705fdb11b376b12ed`。
 
 旧安装版、原书库和偏好已备份到本项目 `private-books/mac-release-20261028/`；只在测试副本验证。以下为同一天前两轮的历史记录，不能把其中“未确认”当成当前复现状态。
+
+## 最终交付验证
+
+- [Actions 40637361713](https://github.com/theincrediblewwz/readingbook/actions/runs/40637361713)全部成功：589 项 Core 零失败、无编译警告；玻璃/不透明菜单回归及真实工作区 24 轮/144 动作通过。交互峰值 0.521 秒，启动峰值 1.971 秒，草稿保留、布局/发布期警告零。全局峰值和分阶段慢样本均保存；首次打开仍用 1.5 秒交互门，跨阶段脉冲按等待区间交集计时，全阶段 5 秒 watchdog 保留。
+- 首次 CI `40635956572` 的全局峰值 1.7156 秒超过旧 1.5 秒门，结果保留为失败；旧输出无法归因，不能事后认定其一定是启动。随后增加阶段/动作证据，边界探针确认跨首次打开的 1.52 秒仍会失败；`40637138569` 被最终提交取代而主动取消，没有作为交付证据。
+- 本机 Release 在空测试库重导同一 PDF（SHA 相同），182 页/343% 首次伴读、范围菜单、放大还原、742/1484/182 跳页、切标签/收起/重开及草稿保留通过。30 秒样本主线程主要为事件等待；无布局或发布期警告。这是首开与交互检查，不是精确启动耗时/FPS 基线。
+- artifact `12795095783`，外包 SHA-256 `2c7c6e09d41ae0beaec90c5545ff3e42b29b12c4ef3fbd0f84ba06cf4302a9e2`；内包 22,352,111 字节，SHA-256 `442e899772e9afb49db6eae2b4a8cbfc6fdcb61ca55c1fdf6b4a9c624daee5c3`。内外 CRC、源码/版本/build、arm64/x86_64、0755、严格 ad hoc 签名和资源自检通过；32 资源逐字节匹配指定源码 Git blobs。
+- 已把同一核验包安装到 `/Applications/ReadingBook.app`，旧版完整保存在本仓库。正式进程版本 0.23.9/build40、原书 182 页伴读正常；10 秒样本主线程等待事件、CPU 观察值 0%、无相关运行期警告。安装前原库 19 文件与备份一致；启动后仅工作区 `panels/reader.companion`、PDF 视口 x/y 正常保存，其他原 PDF/project/Markdown/分析字节保留，书库路径和服务配置一致。
+
+本机版本包为 `dist/ReadingBook-0.23.9-Mac.zip`，核验记录为 `dist/ci-40637361713/verification.json`、`logs/mac-release-20261028/installed-verification.json` 与 `installed-after-launch-check.json`。源码冻结后只更新交付文档。本轮未逐项测付费模型、OCR、加密 PDF 或所有指针手势，不用本轮检查替代它们。下一阶段见[Mac 性能与界面检查计划](2026-10-28-mac-performance-plan.md)。
 
 ---
 
