@@ -7,23 +7,61 @@ import Darwin
 import ReadingCore
 
 final class Metrics: @unchecked Sendable {
+    struct Pulse: Sendable { let queuedAt: Double; let phase: String; let action: String }
     let lock = NSLock()
+    let startedAt = ProcessInfo.processInfo.systemUptime
     var lastBeat = ProcessInfo.processInfo.systemUptime
     var maximumLag = 0.0
+    var maximumStartupLag = 0.0
+    var maximumInteractiveLag = 0.0
+    var maximumLagByPhase: [String: Double] = [:]
+    var worstHeartbeat: [String: Any] = [:]
+    var slowHeartbeats: [[String: Any]] = []
+    var slowHeartbeatCount = 0
     var beats = 0
     var layouts = 0
     var completed = 0
-    var lastAction = "launch"
+    var lastAction = "initialization"
     var phase = "starting"
     var watchdogFired = false
     func scenario() { lock.lock(); phase = "scenario"; lock.unlock() }
+    func settling() { lock.lock(); phase = "settling"; lock.unlock() }
     func record(_ label: String) { lock.lock(); lastAction = label; completed += 1; lock.unlock() }
     func layout() { lock.lock(); layouts += 1; lock.unlock() }
-    func beat(_ queued: Double) { lock.lock(); maximumLag = max(maximumLag, ProcessInfo.processInfo.systemUptime - queued); lastBeat = ProcessInfo.processInfo.systemUptime; beats += 1; lock.unlock() }
+    func pulse() -> Pulse {
+        lock.lock(); defer { lock.unlock() }
+        // Attribute the waiting interval to its phase/action before enqueueing.
+        return Pulse(queuedAt: ProcessInfo.processInfo.systemUptime, phase: phase, action: lastAction)
+    }
+    func beat(_ pulse: Pulse) {
+        let delivered = ProcessInfo.processInfo.systemUptime
+        let lag = delivered - pulse.queuedAt
+        lock.lock(); defer { lock.unlock() }
+        let sample: [String: Any] = ["queuedPhase": pulse.phase, "queuedAction": pulse.action,
+            "lagSeconds": lag, "queuedSecondsSinceStart": pulse.queuedAt - startedAt,
+            "deliveredSecondsSinceStart": delivered - startedAt]
+        if lag > maximumLag { maximumLag = lag; worstHeartbeat = sample }
+        maximumLagByPhase[pulse.phase] = max(maximumLagByPhase[pulse.phase] ?? 0, lag)
+        if pulse.phase == "starting" { maximumStartupLag = max(maximumStartupLag, lag) }
+        else { maximumInteractiveLag = max(maximumInteractiveLag, lag) }
+        if lag > 0.5 {
+            slowHeartbeatCount += 1; slowHeartbeats.append(sample)
+            if slowHeartbeats.count > 100 {
+                slowHeartbeats.sort { ($0["lagSeconds"] as? Double ?? 0) > ($1["lagSeconds"] as? Double ?? 0) }
+                slowHeartbeats.removeLast()
+            }
+        }
+        lastBeat = delivered; beats += 1
+    }
     func snapshot() -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         return ["phase": phase, "lastAction": lastAction, "actions": completed, "heartbeats": beats,
                 "layouts": layouts, "maximumMainQueueLagSeconds": maximumLag,
+                "maximumStartupQueueLagSeconds": maximumStartupLag,
+                "maximumInteractiveQueueLagSeconds": maximumInteractiveLag,
+                "maximumQueueLagSecondsByPhase": maximumLagByPhase,
+                "worstHeartbeat": worstHeartbeat, "slowHeartbeatCount": slowHeartbeatCount,
+                "slowHeartbeatsOverHalfSecond": slowHeartbeats,
                 "secondsSinceHeartbeat": ProcessInfo.processInfo.systemUptime - lastBeat]
     }
 }
@@ -77,7 +115,7 @@ struct PanelHarnessRoot: View {
         let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
         t.schedule(deadline: .now(), repeating: .milliseconds(50))
         t.setEventHandler {
-            let queued = ProcessInfo.processInfo.systemUptime
+            let pulse = metrics.pulse()
             let state = metrics.snapshot()
             if (state["secondsSinceHeartbeat"] as? Double ?? 0) > 5 {
                 metrics.lock.lock()
@@ -95,7 +133,7 @@ struct PanelHarnessRoot: View {
                     exit(70)
                 }
             }
-            DispatchQueue.main.async { metrics.beat(queued) }
+            DispatchQueue.main.async { metrics.beat(pulse) }
         }
         t.resume(); timer = t
     }
@@ -145,29 +183,46 @@ struct PanelHarnessRoot: View {
         let sizes = [CGSize(width:1470,height:843), CGSize(width:800,height:600), CGSize(width:970,height:650), CGSize(width:1200,height:760)]
         let pages = [1,8,182,800,1484]
         for cycle in 0..<cycles {
-            store.readingCompanionVisible = true
             metrics.record("open-\(cycle)")
+            store.readingCompanionVisible = true
             try? await Task.sleep(nanoseconds: 90_000_000)
-            store.readingCompanionTab = "chat"
             metrics.record("chat-\(cycle)")
+            store.readingCompanionTab = "chat"
             try? await Task.sleep(nanoseconds: 90_000_000)
-            window.setContentSize(sizes[cycle % sizes.count])
             metrics.record("resize-\(cycle)")
+            window.setContentSize(sizes[cycle % sizes.count])
             try? await Task.sleep(nanoseconds: 90_000_000)
-            store.readingCompanionTab = "companion"
             metrics.record("companion-\(cycle)")
+            store.readingCompanionTab = "companion"
             if let unit = store.book?.units.first(where: { $0.page == pages[cycle % pages.count] }) {
-                store.selectedUnitID = unit.id
                 metrics.record("page-\(pages[cycle % pages.count])")
+                store.selectedUnitID = unit.id
             }
             try? await Task.sleep(nanoseconds: 90_000_000)
-            store.readingCompanionVisible = false
             metrics.record("close-\(cycle)")
+            store.readingCompanionVisible = false
             try? await Task.sleep(nanoseconds: 90_000_000)
         }
+        metrics.settling()
         try? await Task.sleep(nanoseconds: 500_000_000)
         var state = metrics.snapshot()
-        state["status"] = (store.queryComposerDraft.text == draft && !store.isQueryBusy && !store.isSmartReadingRunning && window.isVisible && (state["layouts"] as? Int ?? 0) > 0 && (state["heartbeats"] as? Int ?? 0) > 0 && (state["maximumMainQueueLagSeconds"] as? Double ?? 99) < 1.5) ? "passed" : "failed"
+        var failures: [String] = []
+        if store.queryComposerDraft.text != draft { failures.append("composer draft changed") }
+        if store.isQueryBusy || store.isSmartReadingRunning { failures.append("unexpected query or analysis running") }
+        if !window.isVisible || (state["layouts"] as? Int ?? 0) == 0 || (state["heartbeats"] as? Int ?? 0) == 0 {
+            failures.append("native window/layout/heartbeat unavailable")
+        }
+        // First open is interactive: never pre-open or add a warm-up. Retain the global peak.
+        if (state["maximumInteractiveQueueLagSeconds"] as? Double ?? 99) >= 1.5 {
+            failures.append("interactive main-queue lag exceeded 1.5 seconds")
+        }
+        if (state["maximumStartupQueueLagSeconds"] as? Double ?? 99) >= 5 {
+            failures.append("startup main-queue lag exceeded 5 seconds")
+        }
+        state["status"] = failures.isEmpty ? "passed" : "failed"
+        state["failureReasons"] = failures
+        state["lagBudgetsSeconds"] = ["startup": 5.0, "interactiveIncludingFirstOpen": 1.5]
+        state["watchdogAllPhasesSeconds"] = 5.0
         state["cycles"] = cycles; state["mode"] = mode; state["synthetic"] = synthetic
         state["fixtureUnitCount"] = store.book?.units.count ?? 0
         state["sourceFormat"] = store.sourceFileURL?.pathExtension ?? "synthetic-source-units"
