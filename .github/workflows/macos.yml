@@ -81,8 +81,10 @@ jobs:
           python3 scripts/mac-performance/test-scroll-capture-analysis.py
           python3 scripts/mac-performance/test-performance-tool-contracts.py
       - name: Build universal app and package
+        if: github.event_name != 'pull_request'
         run: bash scripts/build-macos.sh
       - uses: actions/upload-artifact@v7
+        if: github.event_name != 'pull_request'
         with:
           name: ReadingBook-macos-universal
           path: |
