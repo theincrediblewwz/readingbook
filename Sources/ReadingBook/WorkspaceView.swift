@@ -3,6 +3,21 @@ import AppKit
 import UniformTypeIdentifiers
 import ReadingCore
 
+/// Explicit title-menu navigation shares the library card's reader intent.
+/// Ordinary AppStore selection still restores a book's saved workspace route.
+@MainActor enum WorkspaceBookPickerNavigation {
+    static func action(for book: BookProject, store: AppStore) -> () -> Void {
+        let root = store.libraryRootURL, bookID = book.id, sourceHash = book.sourceHash
+        return {
+            Task { @MainActor in
+                guard store.libraryRootURL == root, !store.isBusy, !store.editorDirty,
+                      store.books.contains(where: { $0.id == bookID && $0.sourceHash == sourceHash }) else { return }
+                await store.selectBook(bookID, preferredRoute: "reader")
+            }
+        }
+    }
+}
+
 struct WorkspaceView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.readingReduceMotion) private var reduceMotion
@@ -546,16 +561,21 @@ struct WorkspaceView: View {
                 ScrollView {
                     LazyVStack(spacing: 2) {
                         ForEach(store.books) { book in
-                            DockMenuRow(title: book.title, icon: "book.closed", selected: store.bookID == book.id) {
-                                bookPopover = false; Task { await store.selectBook(book.id) }
+                            let isReading = store.bookID == book.id && store.route == "reader" && managementRoute == nil
+                            let continueReading = WorkspaceBookPickerNavigation.action(for: book, store: store)
+                            DockMenuRow(title: book.title, icon: "book.closed", selected: isReading) {
+                                bookPopover = false
+                                continueReading()
                             }.disabled(store.isBusy || store.editorDirty)
+                                .help("打开《\(book.title)》的原文，继续阅读")
+                                .accessibilityIdentifier("workspace-book-picker-" + book.id)
+                                .accessibilityValue(isReading ? "阅读中" : "继续阅读")
                         }
                     }
                 }.frame(height: min(188, CGFloat(store.books.count) * 46))
                 Divider().padding(.horizontal, 10).padding(.vertical, 4)
             }
             DockMenuRow(title: "书库", icon: "books.vertical") { bookPopover = false; navigate("library") }
-            DockMenuRow(title: "导入图书", icon: "book.badge.plus") { bookPopover = false; store.chooseBook() }.disabled(store.isBusy)
             Divider().padding(.horizontal, 10).padding(.vertical, 4)
             DockMenuRow(title: "AI 服务", icon: "slider.horizontal.3", detail: store.serviceName.isEmpty ? "尚未配置" : store.serviceName) { servicePopover = true }
             if store.book != nil {

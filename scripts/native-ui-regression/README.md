@@ -59,6 +59,31 @@ test, or full annotation/search test. `--library-copy` is intentionally rejected
 for this fixture-only mode. Run it separately from any performance capture or
 interactive UI session.
 
+## Title book-picker navigation correctness
+
+After building the changed product and relinking the harness, run separately
+from interactive QA or performance capture:
+
+```sh
+python3 scripts/native-ui-regression/run.py --mode navigation --cycles 1 --tag book-picker-navigation
+```
+
+This fixture-only mode creates two synthetic books and a saved Markdown note.
+Both books have a persisted `library` workspace route. An ordinary AppStore
+selection first confirms that normal session restoration retains that route.
+The probe invokes the exact production `WorkspaceBookPickerNavigation.action`
+closure that the title row uses; it does not mirror the closure in test code.
+Selecting with no active book, the current book or the other book must finish in
+`reader`, matching a library-card open action. Busy/dirty state, a changed target
+source, a removed book and a changed library must reject the action. Same-book
+question draft, original sources, canonical projects and the saved Markdown must
+remain intact. This mode creates no window or host view, does not activate the
+application, and uses no accessibility bridge, external input, provider key or
+network request. It validates the shared action and real persistence; actual
+popover wiring, reading-selection appearance and removal of the duplicate import
+entry require separate UI QA. Earlier local AX-discovery failures are retained as
+probe failures and must not be labelled a product regression or a passing UI test.
+
 ## Offline AppStore AI concurrency
 
 `AIConcurrencyProbe.swift` runs the real AppStore, independent production AIReaders,

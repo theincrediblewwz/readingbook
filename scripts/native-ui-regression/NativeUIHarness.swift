@@ -168,6 +168,7 @@ struct PanelHarnessRoot: View {
         guard store.apiKey.isEmpty, store.savedServices.isEmpty else { fatalError("Harness service isolation failed") }
         store.settings = ProviderSettings(baseURL: "http://127.0.0.1:1/disabled", model: "")
         if mode == "pdf" { await runPDFScenario(); return }
+        if mode == "navigation" { await runBookPickerScenario(); return }
         if synthetic {
             store.books = [syntheticBook()]
             store.bookID = store.books[0].id
@@ -249,6 +250,120 @@ struct PanelHarnessRoot: View {
         timer?.cancel()
         window.orderOut(nil)
         NSApp.terminate(nil)
+    }
+}
+
+/// Invoke the same production closure used by the title popover. This is a
+/// headless AppStore/repository regression; actual view wiring is separate QA.
+@MainActor extension Runner {
+    private func bookPickerWait(_ description: String, _ condition: () -> Bool) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        throw ReadingError.invalid("Book-picker regression timeout: " + description)
+    }
+    func runBookPickerScenario() async {
+        var assertions: [String: Any] = [:]
+        do {
+            var projects: [BookProject] = []
+            var sourceBytes: [String: Data] = [:]
+            for suffix in ["A", "B"] {
+                let source = output.appendingPathComponent("navigation-\(suffix).txt")
+                let bytes = Data("Navigation fixture \(suffix). Original text stays unchanged.\n".utf8)
+                try bytes.write(to: source)
+                let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+                var project = BookProject(title: "Book-picker fixture \(suffix)", originalName: source.lastPathComponent, sourceHash: hash,
+                    units: [SourceUnit(id: "navigation-\(suffix)-u1", order: 0, chapter: "Fixture", page: 1, text: String(decoding: bytes, as: UTF8.self))])
+                PluginEngine.seed(&project)
+                project = try await store.repository.create(project, sourceURL: source)
+                projects.append(project); sourceBytes[project.id] = bytes
+            }
+            let note = DocumentRecord(id: "navigation-note", title: "Navigation preserves notes")
+            let noteBody = "# Navigation note\n\nPreserve e\u{301}, 🙂 and $x^2$.\n"
+            projects[0] = try await store.repository.saveDocument(project: projects[0], document: note, markdown: noteBody)
+            let canonicalBefore = try Dictionary(uniqueKeysWithValues: projects.map { project in
+                (project.id, try Data(contentsOf: library.appendingPathComponent("books/\(project.id)/project.json")))
+            })
+            store.books = projects; store.bookID = projects[0].id; store.selectedUnitID = projects[0].units[0].id
+            store.workspaceMemory = BookWorkspaceMemory(bookID: projects[0].id, sourceHash: projects[0].sourceHash)
+            store.route = "library"; store.flushWorkspaceMemory()
+            var secondMemory = BookWorkspaceMemory(bookID: projects[1].id, sourceHash: projects[1].sourceHash)
+            secondMemory.route = "library"
+            let secondKey = projects[1].id + "|" + projects[1].sourceHash
+            let secondName = SHA256.hash(data: Data(secondKey.utf8)).map { String(format: "%02x", $0) }.joined()
+            try JSONEncoder().encode(secondMemory).write(to: library.appendingPathComponent("Workspace/\(secondName).json"), options: .atomic)
+            await store.selectBook(projects[0].id)
+            try pdfRequire(store.route == "library", "Ordinary selection must still restore its persisted library route")
+            assertions["ordinarySelectionRestoresLibraryRoute"] = true
+            store.bookID = nil
+            metrics.scenario(); metrics.record("book-action-without-active-book")
+            WorkspaceBookPickerNavigation.action(for: projects[0], store: store)()
+            try await bookPickerWait("no active book enters reader") { self.store.bookID == projects[0].id && self.store.route == "reader" && !self.store.isBusy }
+            assertions["bookSelectionWithoutActiveBookWorks"] = true
+            store.route = "library"; store.flushWorkspaceMemory()
+            let currentAction = WorkspaceBookPickerNavigation.action(for: projects[0], store: store)
+            let generation = store.navigationGeneration
+            store.isBusy = true; currentAction()
+            try await Task.sleep(nanoseconds: 30_000_000)
+            try pdfRequire(store.navigationGeneration == generation && store.route == "library", "Busy navigation must not start selection")
+            store.isBusy = false
+            store.editorTitle = "Unsaved navigation draft"; store.editorMarkdown = "# Keep this dirty draft\n"; store.editorDirty = true
+            currentAction(); try await Task.sleep(nanoseconds: 30_000_000)
+            try pdfRequire(store.navigationGeneration == generation && store.route == "library" && store.editorDirty
+                && store.editorMarkdown == "# Keep this dirty draft\n", "Dirty navigation must preserve the draft and route")
+            store.discardDraftForWorkspaceNavigation()
+            assertions["busyAndDirtySelectionGatesPreserved"] = true
+            let questionDraft = "Preserve this same-book question draft."
+            store.queryComposerDraft.text = questionDraft
+            metrics.record("book-action-current-from-library")
+            currentAction()
+            try await bookPickerWait("current book finishes in reader") { self.store.bookID == projects[0].id && self.store.route == "reader" && !self.store.isBusy }
+            try pdfRequire(store.sourceFileURL != nil && store.queryComposerDraft.text == questionDraft, "Same-book navigation must keep its source and question draft")
+            assertions["currentBookActionOverridesLibraryRoute"] = true
+            assertions["sameBookQuestionDraftPreserved"] = true
+            metrics.record("book-action-other-from-reader")
+            WorkspaceBookPickerNavigation.action(for: projects[1], store: store)()
+            try await bookPickerWait("other book finishes in reader") { self.store.bookID == projects[1].id && self.store.route == "reader" && !self.store.isBusy }
+            try pdfRequire(store.selectedUnitID == projects[1].units[0].id && store.sourceFileURL != nil, "Other book must open its own source and unit")
+            try pdfRequire(try Data(contentsOf: store.sourceFileURL!) == sourceBytes[projects[1].id], "Other book must show its own original bytes")
+            assertions["otherBookActionOverridesItsLibraryRoute"] = true
+            let staleAction = WorkspaceBookPickerNavigation.action(for: projects[0], store: store)
+            let settledGeneration = store.navigationGeneration
+            store.books[0].sourceHash = "changed-fixture-source"; staleAction()
+            try await Task.sleep(nanoseconds: 30_000_000)
+            try pdfRequire(store.navigationGeneration == settledGeneration && store.bookID == projects[1].id, "Changed target source must reject a stale action")
+            store.books = projects
+            store.books.removeAll { $0.id == projects[0].id }; staleAction()
+            try await Task.sleep(nanoseconds: 30_000_000)
+            try pdfRequire(store.navigationGeneration == settledGeneration && store.bookID == projects[1].id, "Removed target book must reject a stale action")
+            store.books = projects
+            let root = store.libraryRootURL
+            store.libraryRootURL = output.appendingPathComponent("unopened-other-library")
+            staleAction(); try await Task.sleep(nanoseconds: 30_000_000)
+            try pdfRequire(store.navigationGeneration == settledGeneration && store.bookID == projects[1].id, "Changed library must reject a stale action")
+            store.libraryRootURL = root
+            assertions["changedSourceRemovedBookAndOtherLibraryRejected"] = true
+            for project in projects {
+                let canonical = await store.repository.sourceURL(for: project)
+                try pdfRequire(try Data(contentsOf: canonical) == sourceBytes[project.id], "Navigation changed a canonical original")
+                try pdfRequire(try Data(contentsOf: library.appendingPathComponent("books/\(project.id)/project.json")) == canonicalBefore[project.id], "Navigation rewrote the canonical project")
+            }
+            try pdfRequire(try await store.repository.readDocument(bookID: projects[0].id, document: note) == noteBody, "Navigation changed the saved note")
+            assertions["originalsProjectsAndMarkdownBytesPreserved"] = true
+            assertions["realNetworkRequests"] = 0
+            assertions["status"] = "passed"
+        } catch {
+            assertions["status"] = "failed"; assertions["reason"] = error.localizedDescription
+        }
+        metrics.settling(); try? await Task.sleep(nanoseconds: 250_000_000)
+        assertions["mode"] = mode; assertions["synthetic"] = true
+        assertions["metrics"] = metrics.snapshot()
+        assertions["windowCreated"] = window != nil
+        assertions["testScope"] = "headless real production WorkspaceBookPickerNavigation action, AppStore/repository and saved workspace restoration; view wiring/selection/import affordances require separate UI QA"
+        writeJSON("result.json", assertions)
+        timer?.cancel(); NSApp.terminate(nil)
     }
 }
 
@@ -477,7 +592,7 @@ struct PanelHarnessRoot: View {
         try! FileManager.default.createDirectory(at: output, withIntermediateDirectories:true)
         try! FileManager.default.createDirectory(at: library, withIntermediateDirectories:true)
         let app = NSApplication.shared
-        app.setActivationPolicy(.regular)
+        app.setActivationPolicy(env["HARNESS_MODE"] == "navigation" ? .prohibited : .regular)
         let runner = Runner(output:output,library:library,mode:env["HARNESS_MODE"] ?? "workspace",cycles:Int(env["HARNESS_CYCLES"] ?? "24") ?? 24,synthetic:env["HARNESS_SYNTHETIC"] != "0")
         app.delegate = runner
         withExtendedLifetime(runner) { app.run() }

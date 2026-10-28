@@ -51,6 +51,7 @@ jobs:
           python3 scripts/native-ui-regression/build.py --bin-dir .build/tests/debug
           python3 scripts/native-ui-regression/run.py --mode workspace --cycles 24 --tag ci-workspace
           python3 scripts/native-ui-regression/run.py --mode pdf --cycles 3 --tag ci-pdf
+          python3 scripts/native-ui-regression/run.py --mode navigation --cycles 1 --tag ci-book-picker
       - name: Independent AI tasks and preservation regression
         run: |
           mkdir -p logs
