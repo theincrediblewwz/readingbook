@@ -2,6 +2,8 @@ import AppKit
 import SwiftUI
 import Foundation
 import CryptoKit
+import PDFKit
+import WebKit
 import Darwin
 @testable import ReadingBook
 import ReadingCore
@@ -87,9 +89,10 @@ struct PanelHarnessRoot: View {
         GeometryReader { geometry in
             ZStack {
                 Color.white
-                ReaderFloatingPanel(title: "伴读与对话", icon: "sparkles", width: 376, height: 620,
+                ReaderFloatingPanel(title: "伴读与对话", icon: "sparkles", width: max(376, ReadingCompanionToolbarMetrics.minimumPanelWidth), height: 620,
+                    minimumWidth: ReadingCompanionToolbarMetrics.minimumPanelWidth,
                     isPresented: $store.readingCompanionVisible, viewport: geometry.size,
-                    showsRestoreButton: false, unifiedDismiss: true, resizable: true) {
+                    showsRestoreButton: false, unifiedDismiss: true, resizable: true, showsCompanionTabs: true) {
                     ReaderAIPanel()
                 }
             }
@@ -164,6 +167,7 @@ struct PanelHarnessRoot: View {
         store = AppStore()
         guard store.apiKey.isEmpty, store.savedServices.isEmpty else { fatalError("Harness service isolation failed") }
         store.settings = ProviderSettings(baseURL: "http://127.0.0.1:1/disabled", model: "")
+        if mode == "pdf" { await runPDFScenario(); return }
         if synthetic {
             store.books = [syntheticBook()]
             store.bookID = store.books[0].id
@@ -245,6 +249,221 @@ struct PanelHarnessRoot: View {
         timer?.cancel()
         window.orderOut(nil)
         NSApp.terminate(nil)
+    }
+}
+
+/// A separate correctness scenario in the same isolated runner. It inspects
+/// public native PDFKit objects; there is no private KVC or product test hook.
+@MainActor extension Runner {
+    private func pdfRequire(_ value: Bool, _ message: String) throws {
+        guard value else { throw ReadingError.invalid(message) }
+    }
+    private func pdfWait(_ description: String, _ condition: () -> Bool) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 8
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            window?.contentView?.layoutSubtreeIfNeeded()
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        throw ReadingError.invalid("PDF regression timeout: " + description)
+    }
+    private func descendants<T: NSView>(_ root: NSView, _ type: T.Type) -> [T] {
+        ([root as? T].compactMap { $0 }) + root.subviews.flatMap { descendants($0, type) }
+    }
+    private func capturePDFView(_ name: String) throws {
+        guard let window, let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            throw ReadingError.invalid("Native screenshot unavailable")
+        }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        guard let data = bitmap.representation(using: .png, properties: [:]) else { throw ReadingError.invalid("PNG encoding failed") }
+        try data.write(to: output.appendingPathComponent(name))
+    }
+    private func pdfObjects() -> (PDFReaderContainerView, PDFThumbnailView, PDFView)? {
+        guard let root = window?.contentView,
+              let container = descendants(root, PDFReaderContainerView.self).first,
+              let thumbnail = descendants(container, PDFThumbnailView.self).first,
+              let pdf = descendants(container, PDFView.self).first else { return nil }
+        return (container, thumbnail, pdf)
+    }
+    private func clickThumbnail(_ thumbnail: PDFThumbnailView, page: Int) async throws {
+        // PDFKit uses a native collection view. Its public layout supplies the
+        // target rectangle; normal local NSApplication events perform selection.
+        // Never send a global event to the installed app or another window.
+        var collection: NSCollectionView?
+        try await pdfWait("PDFKit thumbnail collection") {
+            collection = self.descendants(thumbnail, NSCollectionView.self).first {
+                $0.numberOfSections > 0 && $0.numberOfItems(inSection: 0) >= page
+            }
+            return collection != nil
+        }
+        guard let collection else { throw ReadingError.invalid("PDFKit collection unavailable") }
+        let path = IndexPath(item: page - 1, section: 0)
+        collection.scrollToItems(at: [path], scrollPosition: .centeredVertically)
+        collection.layoutSubtreeIfNeeded()
+        try await Task.sleep(nanoseconds: 70_000_000)
+        guard let attributes = collection.layoutAttributesForItem(at: path) else { throw ReadingError.invalid("Thumbnail item has no layout") }
+        // PDFThumbnailView is nonflipped while its collection is flipped on
+        // current macOS. Scroll its public outer clip using converted geometry.
+        let target = collection.convert(attributes.frame, to: thumbnail)
+        if let scroll = thumbnail.enclosingScrollView {
+            let clip = scroll.contentView
+            let y = min(max(0, target.midY - clip.bounds.height / 2), max(0, thumbnail.bounds.height - clip.bounds.height))
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y)); scroll.reflectScrolledClipView(clip)
+        } else { thumbnail.scrollToVisible(target) }
+        try await Task.sleep(nanoseconds: 70_000_000)
+        let point = collection.convert(NSPoint(x: attributes.frame.midX, y: attributes.frame.midY), to: nil)
+        writeJSON("thumbnail-native-layout.json", ["page": page, "itemFrame": NSStringFromRect(attributes.frame),
+            "collectionFrame": NSStringFromRect(collection.frame), "collectionVisibleRect": NSStringFromRect(collection.visibleRect),
+            "thumbnailFrame": NSStringFromRect(thumbnail.frame), "thumbnailVisibleRect": NSStringFromRect(thumbnail.visibleRect),
+            "windowPoint": NSStringFromPoint(point), "contentBounds": NSStringFromRect(window.contentView!.bounds)])
+        try pdfRequire(window.contentView?.bounds.contains(window.contentView!.convert(point, from: nil)) == true,
+            "Thumbnail click must stay within its own test window")
+        let now = ProcessInfo.processInfo.systemUptime
+        guard let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: now,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1),
+              let up = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [], timestamp: now + 0.01,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0) else {
+            throw ReadingError.invalid("Unable to construct window-local thumbnail click")
+        }
+        NSApp.postEvent(down, atStart: false); NSApp.postEvent(up, atStart: false)
+    }
+    func runPDFScenario() async {
+        var assertions: [String: Any] = [:]
+        do {
+            let source = output.appendingPathComponent("native-8-pages.pdf")
+            var media = CGRect(x: 0, y: 0, width: 420, height: 595)
+            guard let graphics = CGContext(source as CFURL, mediaBox: &media, nil) else { throw ReadingError.invalid("Unable to create fixture PDF") }
+            for number in 1...8 {
+                graphics.beginPDFPage(nil)
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(cgContext: graphics, flipped: false)
+                NSString(string: "Native PDF fixture - page \(number)").draw(at: NSPoint(x: 35, y: 500),
+                    withAttributes: [.font: NSFont.systemFont(ofSize: 20), .foregroundColor: NSColor.black])
+                NSString(string: "Synthetic source only; no private text.").draw(at: NSPoint(x: 35, y: 460),
+                    withAttributes: [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.black])
+                NSGraphicsContext.restoreGraphicsState()
+                graphics.endPDFPage()
+            }
+            graphics.closePDF()
+            let sourceBytes = try Data(contentsOf: source)
+            let sourceHash = SHA256.hash(data: sourceBytes).map { String(format: "%02x", $0) }.joined()
+            var project = BookProject(title: "Native PDF correctness fixture", originalName: source.lastPathComponent, sourceHash: sourceHash,
+                units: (1...8).map { SourceUnit(id: "pdf-page-\($0)", order: $0 - 1, chapter: "Fixture", page: $0, text: "Native PDF fixture - page \($0)") })
+            PluginEngine.seed(&project)
+            project = try await store.repository.create(project, sourceURL: source)
+            let note = DocumentRecord(id: "pdf-regression-note", title: "Preserved fixture note"), noteBody = "# Preserve me\n\nPDF navigation must not rewrite user notes.\n"
+            project = try await store.repository.saveDocument(project: project, document: note, markdown: noteBody)
+            store.books = [project]; store.bookID = project.id; store.selectedUnitID = project.units[0].id
+            store.workspaceMemory = BookWorkspaceMemory(bookID: project.id, sourceHash: project.sourceHash)
+            store.sourceFileURL = nil; store.readingCompanionVisible = false
+            let controller = PDFReaderController()
+            let root = ReaderWorkspaceView(showPDF: .constant(true), showOutline: .constant(false), bookmarksOnly: .constant(false))
+                .environmentObject(store).environmentObject(controller).environmentObject(ReadingTypographySettings())
+                .modifier(ReadingPreferencesEnvironment())
+            let host = CountingHost(rootView: AnyView(root))
+            window = NSWindow(contentRect: NSRect(x: 70, y: 70, width: 1100, height: 760), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.title = "ReadingBook isolated native PDF correctness regression"
+            window.contentView = host; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            metrics.scenario(); metrics.record("pdf-source-url-deliberately-withheld")
+            var waitingSamples = 0
+            let waitingDeadline = ProcessInfo.processInfo.systemUptime + 0.35
+            repeat {
+                host.layoutSubtreeIfNeeded(); waitingSamples += 1
+                try pdfRequire(descendants(host, WKWebView.self).isEmpty, "Waiting for a PDF URL must not mount the extracted-text WebKit reader")
+                try pdfRequire(descendants(host, PDFReaderContainerView.self).isEmpty, "Missing PDF URL must not mount a stale PDF container")
+                try await Task.sleep(nanoseconds: 10_000_000)
+            } while ProcessInfo.processInfo.systemUptime < waitingDeadline
+            try capturePDFView("pdf-waiting-for-source.png")
+            assertions["waitingURLSamplesWithoutTemporaryTextReader"] = waitingSamples
+            store.sourceFileURL = await store.repository.sourceURL(for: project)
+            try await pdfWait("physical PDF mounted and ready") { self.pdfObjects() != nil && controller.isReady && controller.pageCount == 8 }
+            guard let initial = pdfObjects(), let initialDocument = initial.2.document else { throw ReadingError.invalid("Native PDF objects unavailable") }
+            try pdfRequire(initial.1.pdfView == nil && !controller.thumbnailsVisible, "Closed thumbnails must not bind PDFView on initial physical-PDF load")
+            assertions["initialClosedThumbnailsUnbound"] = true
+            metrics.record("pdf-open-thumbnails-and-native-click")
+            controller.command(.setThumbnails(true))
+            try await pdfWait("visible thumbnails bind native PDFView") { initial.1.pdfView === initial.2 && controller.thumbnailsVisible && !controller.thumbnailFrame.isEmpty }
+            try await clickThumbnail(initial.1, page: 3)
+            try await pdfWait("native thumbnail selection navigates the actual PDF") { controller.page == 3 && initial.2.currentPage === initialDocument.page(at: 2) }
+            try pdfRequire(initial.1.selectedPages?.contains(where: { $0 === initialDocument.page(at: 2) }) == true, "Thumbnail selection must follow the displayed PDF page")
+            try capturePDFView("pdf-thumbnail-selected-page-3.png")
+            assertions["openThumbnailsBoundToActualPDFView"] = true
+            assertions["nativeThumbnailClickNavigatedPage3"] = true
+            for cycle in 0..<cycles {
+                metrics.record("pdf-thumbnail-close-reopen-\(cycle)")
+                controller.command(.setThumbnails(false))
+                try await pdfWait("close detaches thumbnails") { initial.1.pdfView == nil && !controller.thumbnailsVisible }
+                controller.command(.setThumbnails(true))
+                try await pdfWait("reopen rebinds thumbnails") { initial.1.pdfView === initial.2 && controller.thumbnailsVisible }
+                controller.command(.jump((cycle % 8) + 1))
+                try await pdfWait("navigation after rebind") { controller.page == (cycle % 8) + 1 }
+            }
+            assertions["closeReopenNavigationCycles"] = cycles
+            controller.command(.setThumbnails(false))
+            try await pdfWait("final close detaches thumbnails") { initial.1.pdfView == nil && !controller.thumbnailsVisible }
+            store.pdfNavigationToken += 1
+            try await Task.sleep(nanoseconds: 80_000_000)
+            try pdfRequire(pdfObjects()?.2.document === initialDocument && initial.1.pdfView == nil,
+                "An ordinary same-URL SwiftUI update must reuse its document and keep closed thumbnails detached")
+            assertions["sameURLUpdateKeptClosedThumbnailsDetached"] = true
+
+            let restored = WorkspacePDFMemory(page: 6, scale: 1, fitMode: "page", continuous: false, thumbnails: true, direction: .horizontal)
+            store.updateWorkspaceMemory { $0.pdf = restored }
+            store.selectedUnitID = project.units[5].id; store.workspaceMemoryRevision += 1
+            try await pdfWait("same-URL saved visible preferences") {
+                initial.1.pdfView === initial.2 && controller.thumbnailsVisible && controller.page == 6
+                    && !controller.isContinuous && controller.direction == .horizontal && controller.fitMode == "page"
+            }
+            assertions["sameURLMemoryRevisionRestoredVisibleBindingAndPreferences"] = true
+            var hidden = restored; hidden.thumbnails = false
+            store.updateWorkspaceMemory { $0.pdf = hidden }; store.workspaceMemoryRevision += 1
+            try await pdfWait("same-URL saved hidden preferences") { initial.1.pdfView == nil && !controller.thumbnailsVisible }
+            assertions["sameURLMemoryRevisionRestoredHiddenUnbinding"] = true
+            store.updateWorkspaceMemory { $0.pdf = restored }; store.workspaceMemoryRevision += 1
+            try await pdfWait("saved visible preferences before reload") { initial.1.pdfView === initial.2 && controller.thumbnailsVisible }
+            NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
+            store.flushWorkspaceMemory()
+            store.sourceFileURL = nil
+            try await pdfWait("old reader dismantled for same-book reload") { self.pdfObjects() == nil }
+            try pdfRequire(initial.1.pdfView == nil, "Dismantling the old reader must unbind its thumbnail view")
+            await store.selectBook(project.id)
+            try await pdfWait("same-book reload restores visible thumbnail workspace") {
+                guard let current = self.pdfObjects() else { return false }
+                return current.0 !== initial.0 && current.1.pdfView === current.2 && controller.isReady
+                    && controller.page == 6 && controller.thumbnailsVisible && !controller.isContinuous
+                    && controller.direction == .horizontal && controller.fitMode == "page"
+            }
+            assertions["sameBookReloadRestoredVisibleThumbnailsAndPreferences"] = true
+            guard let reloaded = pdfObjects() else { throw ReadingError.invalid("Reloaded native reader missing") }
+            controller.command(.setThumbnails(false))
+            try await pdfWait("reloaded thumbnails close") { reloaded.1.pdfView == nil && !controller.thumbnailsVisible }
+            NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
+            store.flushWorkspaceMemory(); store.sourceFileURL = nil
+            try await pdfWait("hidden reader dismantled") { self.pdfObjects() == nil }
+            await store.selectBook(project.id)
+            try await pdfWait("same-book reload retains hidden thumbnails") {
+                self.pdfObjects()?.1.pdfView == nil && self.pdfObjects() != nil && controller.isReady && !controller.thumbnailsVisible && controller.page == 6
+            }
+            assertions["sameBookReloadKeptHiddenThumbnailsUnbound"] = true
+            try capturePDFView("pdf-restored-hidden-thumbnails-page-6.png")
+            try pdfRequire(try Data(contentsOf: source) == sourceBytes, "PDF fixture bytes changed")
+            try pdfRequire(try Data(contentsOf: store.sourceFileURL!) == sourceBytes, "Canonical source PDF bytes changed")
+            try pdfRequire(try await store.repository.readDocument(bookID: project.id, document: note) == noteBody, "User Markdown changed during PDF navigation")
+            assertions["sourceAndMarkdownBytesPreserved"] = true
+            assertions["realNetworkRequests"] = 0
+            assertions["status"] = "passed"
+        } catch {
+            assertions["status"] = "failed"; assertions["reason"] = error.localizedDescription
+            try? capturePDFView("pdf-failure.png")
+        }
+        metrics.settling()
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        assertions["mode"] = mode; assertions["synthetic"] = true; assertions["physicalPDFPageCount"] = 8
+        assertions["windowVisible"] = window?.isVisible ?? false
+        assertions["metrics"] = metrics.snapshot()
+        assertions["testScope"] = "real ReaderWorkspaceView/PDFKit, public native object binding, window-local thumbnail click, canonical workspace persistence; correctness, not FPS"
+        writeJSON("result.json", assertions)
+        timer?.cancel(); window?.orderOut(nil); NSApp.terminate(nil)
     }
 }
 

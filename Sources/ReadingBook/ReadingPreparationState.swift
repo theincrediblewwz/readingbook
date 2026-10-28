@@ -115,3 +115,63 @@ struct ReadingPreparationIndicator: View {
         }
     }
 }
+
+/// Stable reading-edge status. Brief page preparations change a small color,
+/// not the size or presence of a text panel while the reader is scrolling.
+struct ReadingPreparationStatusDot: View {
+    @ObservedObject var state: ReadingPreparationState
+    @Environment(\.readingReduceMotion) private var reduceMotion
+    @State private var active = false
+    @State private var lastProgress: ReadingPreparationProgress?
+    @State private var showingDetails = false
+
+    private var detail: String {
+        guard active, let progress = state.current ?? lastProgress else { return "空闲中" }
+        let phase: String
+        switch progress.phase {
+        case .sourceIndex: phase = "正在准备原文"
+        case .pageText: phase = "正在读取页面"
+        case .nativeLines: phase = "正在定位原文"
+        case .matching: phase = "正在对齐原句"
+        case .geometry: phase = "正在准备划线"
+        case .companion: phase = "正在整理伴读"
+        case .outline: phase = "正在读取目录"
+        }
+        return progress.page.map { "\(phase) · 第 \($0) 页" } ?? phase
+    }
+
+    var body: some View {
+        Button { showingDetails.toggle() } label: {
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !active || reduceMotion)) { context in
+                let breath = active && !reduceMotion ? (sin(context.date.timeIntervalSinceReferenceDate * .pi / 1.4) + 1) / 2 : 0.5
+                Circle()
+                    .fill(active ? Color(red: 0.27, green: 0.59, blue: 0.43) : Color(red: 0.30, green: 0.49, blue: 0.72))
+                    .opacity(active ? 0.62 + breath * 0.18 : 0.65)
+                    .frame(width: 6, height: 6)
+                    .scaleEffect(active && !reduceMotion ? 0.96 + breath * 0.12 : 1)
+                    .frame(width: 22, height: 24).contentShape(Rectangle())
+            }
+        }
+        .buttonStyle(.plain)
+        .help(detail)
+        .accessibilityLabel("页面读取状态")
+        .accessibilityValue(Text(detail))
+        .popover(isPresented: $showingDetails, arrowEdge: .top) {
+            Text(detail).font(.system(size: 12)).padding(12)
+                .frame(minWidth: 100, maxWidth: 240, alignment: .leading)
+        }
+        .animation(.easeInOut(duration: reduceMotion ? 0.25 : 0.7), value: active)
+        .onChange(of: state.current) { _, progress in if let progress { lastProgress = progress } }
+        .task(id: state.current != nil) {
+            if let progress = state.current {
+                lastProgress = progress; active = true
+            } else {
+                // Coalesce the short gaps between preparation lanes, so one
+                // scroll does not repeatedly toggle green/blue at full speed.
+                do { try await Task.sleep(nanoseconds: 450_000_000) } catch { return }
+                guard !Task.isCancelled, state.current == nil else { return }
+                active = false; lastProgress = nil
+            }
+        }
+    }
+}

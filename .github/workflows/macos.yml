@@ -50,6 +50,20 @@ jobs:
         run: |
           python3 scripts/native-ui-regression/build.py --bin-dir .build/tests/debug
           python3 scripts/native-ui-regression/run.py --mode workspace --cycles 24 --tag ci-workspace
+          python3 scripts/native-ui-regression/run.py --mode pdf --cycles 3 --tag ci-pdf
+      - name: Independent AI tasks and preservation regression
+        run: |
+          mkdir -p logs
+          python3 scripts/native-ui-regression/build-ai-concurrency.py --bin-dir .build/tests/debug
+          .build/ai-concurrency-probe/ai-concurrency-probe "$PWD" "$PWD/logs/ci-ai-concurrency"
+      - name: Native note editor preservation and input regression
+        run: |
+          python3 scripts/mac-note-editor/run-native-probe.py --build-dir .build/tests/debug --output logs/ci-note-editor/native-probe.json
+          python3 scripts/mac-note-editor/run-hosted-undo-probe.py --build-dir .build/tests/debug --output logs/ci-note-editor/hosted-undo.json
+      - name: Performance evidence tool contracts
+        run: |
+          python3 scripts/mac-performance/test-scroll-capture-analysis.py
+          python3 scripts/mac-performance/test-performance-tool-contracts.py
       - name: Build universal app and package
         run: bash scripts/build-macos.sh
       - uses: actions/upload-artifact@v7

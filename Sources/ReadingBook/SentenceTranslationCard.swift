@@ -211,8 +211,10 @@ private struct SentenceTranslationCardBody: View {
                 HStack(spacing: 18) {
                     Button("解读") { dwell.suppress(key: key); tabWasChosen = true; selectedTab = "analysis" }
                         .foregroundStyle(selectedTab == "analysis" ? Palette.accent : .secondary)
+                        .help("查看与这句话范围完全对应的已保存解读")
                     Button("译文") { showTranslation() }
                         .foregroundStyle(selectedTab == "translation" ? Palette.accent : .secondary)
+                        .help("优先读取这句话的已存译文；没有译文时才生成，不覆盖已有内容")
                     Spacer(minLength: 0)
                 }.font(.system(size: 13, weight: .medium)).buttonStyle(.plain)
             }

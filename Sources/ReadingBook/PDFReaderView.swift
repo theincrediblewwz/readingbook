@@ -395,7 +395,6 @@ struct PDFReaderView: NSViewRepresentable {
         NotificationCenter.default.addObserver(self, selector: #selector(pdfViewportScrolled(_:)), name: NSView.boundsDidChangeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(captureWorkspaceMemoryNow(_:)), name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
 
-        thumbnails.pdfView = pdfView
         thumbnails.thumbnailSize = NSSize(width: 86, height: 112)
         thumbnails.maximumNumberOfColumns = 1
         thumbnails.allowsDragging = false
@@ -604,6 +603,7 @@ struct PDFReaderView: NSViewRepresentable {
             appliedMemoryRevision = input.memoryRevision
             pendingWorkspaceMemory = input.workspaceMemory?.isValid == true ? input.workspaceMemory : nil
             applyWorkspaceDisplayPreferences()
+            if canonical == loadedURL && !sourceChanged { synchronizeThumbnails() }
         }
         memoryCallback = input.onWorkspaceMemory
         if canonical != loadedURL || sourceChanged {
@@ -648,6 +648,7 @@ struct PDFReaderView: NSViewRepresentable {
         allowsSearchAutoNavigation = false; lastCallback = nil
         dismissSearch(restoreFocus: false)
         document?.delegate = nil
+        thumbnails.pdfView = nil
         pdfView.document = nil; document = nil
         if securityScoped { loadedURL?.stopAccessingSecurityScopedResource() }
         securityScoped = false; loadedURL = url
@@ -675,8 +676,7 @@ struct PDFReaderView: NSViewRepresentable {
         pdfView.document = document
         renderSavedAnnotations()
         renderSourceDecorations()
-        thumbnails.pdfView = pdfView
-        layoutThumbnails()
+        synchronizeThumbnails()
         let desired = sourcePage ?? 1
         navigate(to: (1...document.pageCount).contains(desired) ? desired : 1, notifyParent: false)
         installingDocument = false
@@ -798,6 +798,7 @@ struct PDFReaderView: NSViewRepresentable {
     private func setThumbnailsVisible(_ visible: Bool) {
         guard !visible || (document != nil && document?.isLocked == false) else { return }
         thumbnailPanel.isHidden = !visible
+        synchronizeThumbnails()
         needsLayout = true; layoutSubtreeIfNeeded(); layoutThumbnails(); refreshControls()
     }
 
@@ -1053,7 +1054,20 @@ struct PDFReaderView: NSViewRepresentable {
         refreshControls()
     }
 
+    private func synchronizeThumbnails() {
+        // PDFThumbnailView eagerly creates native collection cells even while
+        // an ancestor panel is hidden. Keep it detached until the user opens
+        // thumbnails (including a saved visible workspace).
+        guard !thumbnailPanel.isHidden, let document, !document.isLocked else {
+            if thumbnails.pdfView != nil { thumbnails.pdfView = nil }
+            return
+        }
+        if thumbnails.pdfView !== pdfView { thumbnails.pdfView = pdfView }
+        layoutThumbnails()
+    }
+
     private func layoutThumbnails() {
+        guard !thumbnailPanel.isHidden, thumbnails.pdfView != nil else { return }
         let height = max(thumbnailScroll.contentSize.height, CGFloat(document?.pageCount ?? 0) * 146 + 20)
         thumbnails.frame = NSRect(x: 0, y: 0, width: max(100, thumbnailScroll.contentSize.width), height: height)
     }

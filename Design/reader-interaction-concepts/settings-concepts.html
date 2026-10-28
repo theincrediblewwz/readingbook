@@ -1,0 +1,386 @@
+<style>
+#rb-settings-concepts {
+  --rb-bg: light-dark(#f4f5f7, #1c1e22);
+  --rb-panel: light-dark(#ffffff, #272a30);
+  --rb-soft: light-dark(#f7f8fa, #22252a);
+  --rb-text: light-dark(#20242b, #f0f2f6);
+  --rb-subtle: light-dark(#626a76, #b3bac6);
+  --rb-line: light-dark(#dce0e7, #454b56);
+  --rb-blue: light-dark(#2f64d6, #96b8ff);
+  --rb-blue-fill: light-dark(#3268db, #9abaff);
+  --rb-blue-text: light-dark(#ffffff, #172238);
+  --rb-tint: light-dark(#edf3ff, #303c52);
+  --rb-press: light-dark(#e8ecf3, #363d47);
+  --rb-shadow: light-dark(#202e461c, #00000045);
+  --rb-overlay: light-dark(#1d263d38, #00000070);
+  color: var(--rb-text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+}
+#rb-settings-concepts * { box-sizing: border-box; }
+#rb-settings-concepts [hidden] { display: none !important; }
+#rb-settings-concepts .rb-stage { min-height: 810px; padding: 10px 0 20px; }
+#rb-settings-concepts .rb-product {
+  --rb-space: 22px;
+  position: relative;
+  width: 100%;
+  min-height: 762px;
+  overflow: hidden;
+  border: 1px solid var(--rb-line);
+  border-radius: 20px;
+  background: var(--rb-bg);
+  color: var(--rb-text);
+  box-shadow: 0 12px 35px var(--rb-shadow);
+}
+#rb-settings-concepts .rb-chrome {
+  min-height: 48px;
+  padding: 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--rb-line);
+  background: var(--rb-soft);
+}
+#rb-settings-concepts .rb-chrome-start { display: flex; align-items: center; gap: 13px; min-width: 0; }
+#rb-settings-concepts .rb-lights { display: flex; gap: 6px; flex: none; }
+#rb-settings-concepts .rb-lights span { width: 9px; height: 9px; border: 1px solid var(--rb-line); background: var(--rb-panel); border-radius: 50%; }
+#rb-settings-concepts .rb-chrome-title { font-size: 13px; font-weight: 500; }
+#rb-settings-concepts .rb-demo { color: var(--rb-subtle); font-size: 12px; white-space: nowrap; }
+#rb-settings-concepts .rb-content { padding: 26px 30px 16px; }
+#rb-settings-concepts .rb-heading { margin-bottom: 23px; }
+#rb-settings-concepts .rb-heading h2 { margin: 0 0 5px; font-size: 23px; font-weight: 500; letter-spacing: -0.4px; }
+#rb-settings-concepts .rb-heading p { margin: 0; color: var(--rb-subtle); font-size: 13px; }
+#rb-settings-concepts .rb-section-title { margin: 19px 0 9px 3px; font-size: 13px; font-weight: 500; color: var(--rb-subtle); }
+#rb-settings-concepts .rb-group { border: 1px solid var(--rb-line); border-radius: 13px; background: var(--rb-panel); overflow: hidden; }
+#rb-settings-concepts .rb-row { padding: 17px 18px; display: flex; align-items: center; gap: 20px; }
+#rb-settings-concepts .rb-row + .rb-row { border-top: 1px solid var(--rb-line); }
+#rb-settings-concepts .rb-row-copy { min-width: 0; flex: 1; }
+#rb-settings-concepts .rb-row-title { display: flex; align-items: center; gap: 9px; font-weight: 500; }
+#rb-settings-concepts .rb-row-title i, #rb-settings-concepts .rb-row-title svg { width: 17px; height: 17px; color: var(--rb-subtle); flex: none; }
+#rb-settings-concepts .rb-detail { margin-top: 4px; color: var(--rb-subtle); font-size: 12px; }
+#rb-settings-concepts .rb-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid var(--rb-line);
+  border-radius: 7px;
+  background: var(--rb-panel);
+  color: var(--rb-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px var(--rb-shadow);
+  transition: background .15s, border-color .15s, transform .15s;
+}
+#rb-settings-concepts .rb-button:hover { background: var(--rb-soft); border-color: var(--rb-subtle); }
+#rb-settings-concepts .rb-button:active { background: var(--rb-press); transform: translateY(1px); }
+#rb-settings-concepts .rb-button i, #rb-settings-concepts .rb-button svg { width: 15px; height: 15px; flex: none; }
+#rb-settings-concepts .rb-button.rb-primary { background: var(--rb-blue-fill); color: var(--rb-blue-text); border-color: var(--rb-blue-fill); box-shadow: none; }
+#rb-settings-concepts .rb-button.rb-primary:hover { filter: brightness(.96); }
+#rb-settings-concepts .rb-button.rb-soft-button { background: var(--rb-tint); color: var(--rb-blue); border-color: transparent; box-shadow: none; }
+#rb-settings-concepts .rb-button.rb-soft-button:hover { border-color: var(--rb-blue); }
+#rb-settings-concepts .rb-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+#rb-settings-concepts .rb-path-block { padding: 18px; }
+#rb-settings-concepts .rb-path-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
+#rb-settings-concepts .rb-path-label .rb-row-title { font-size: 14px; }
+#rb-settings-concepts .rb-path-shell { display: flex; align-items: center; gap: 10px; min-width: 0; border: 1px solid var(--rb-line); border-radius: 8px; padding: 10px 11px; background: var(--rb-soft); }
+#rb-settings-concepts .rb-path-shell > i, #rb-settings-concepts .rb-path-shell > svg { color: var(--rb-subtle); width: 17px; height: 17px; flex: none; }
+#rb-settings-concepts .rb-path { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+#rb-settings-concepts .rb-icon-button { min-height: 26px; width: 27px; flex: none; padding: 3px; box-shadow: none; }
+#rb-settings-concepts .rb-full-path { margin: 9px 0 0; padding: 10px 12px; border-radius: 7px; background: var(--rb-soft); overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, "SFMono-Regular", Menlo, monospace; color: var(--rb-subtle); }
+#rb-settings-concepts .rb-path-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
+#rb-settings-concepts .rb-safety { display: flex; align-items: flex-start; gap: 8px; margin: 15px 3px 0; color: var(--rb-subtle); font-size: 12px; }
+#rb-settings-concepts .rb-safety i, #rb-settings-concepts .rb-safety svg { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+#rb-settings-concepts .rb-feedback { min-height: 46px; display: flex; align-items: center; padding: 12px 3px 0; color: var(--rb-blue); font-size: 12px; overflow-wrap: anywhere; }
+#rb-settings-concepts .rb-workbench .rb-content { padding: 28px 30px 18px; }
+#rb-settings-concepts .rb-eyebrow { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: var(--rb-subtle); font-size: 12px; }
+#rb-settings-concepts .rb-eyebrow i, #rb-settings-concepts .rb-eyebrow svg { width: 14px; height: 14px; }
+#rb-settings-concepts .rb-library-hero { padding: var(--rb-space); border: 1px solid var(--rb-line); border-radius: 14px; background: var(--rb-panel); }
+#rb-settings-concepts .rb-hero-top { display: flex; align-items: center; gap: 13px; margin-bottom: 16px; }
+#rb-settings-concepts .rb-folder-mark { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 10px; color: var(--rb-blue); background: var(--rb-tint); flex: none; }
+#rb-settings-concepts .rb-folder-mark i, #rb-settings-concepts .rb-folder-mark svg { width: 23px; height: 23px; }
+#rb-settings-concepts .rb-hero-title { font-size: 17px; font-weight: 500; }
+#rb-settings-concepts .rb-hero-access { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 14px; }
+#rb-settings-concepts .rb-workbench .rb-hero-access .rb-button { min-height: 39px; }
+#rb-settings-concepts .rb-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0 20px; }
+#rb-settings-concepts .rb-workbench .rb-section-title { margin-top: 5px; }
+#rb-settings-concepts .rb-backup-main { display: flex; align-items: center; gap: 16px; padding: 20px; background: var(--rb-panel); border: 1px solid var(--rb-line); border-radius: 13px; }
+#rb-settings-concepts .rb-backup-main .rb-row-copy { min-width: 100px; }
+#rb-settings-concepts .rb-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+#rb-settings-concepts .rb-action-tile { min-width: 0; padding: 18px; background: var(--rb-panel); border: 1px solid var(--rb-line); border-radius: 13px; }
+#rb-settings-concepts .rb-action-tile .rb-detail { min-height: 40px; margin: 7px 0 15px; }
+#rb-settings-concepts .rb-overlay { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: 20px; background: var(--rb-overlay); backdrop-filter: blur(3px); }
+#rb-settings-concepts .rb-dialog { width: min(100%, 430px); padding: 23px; border: 1px solid var(--rb-line); border-radius: 15px; background: var(--rb-panel); color: var(--rb-text); box-shadow: 0 18px 45px var(--rb-shadow); }
+#rb-settings-concepts .rb-dialog h3 { margin: 0 0 9px; font-size: 19px; font-weight: 500; }
+#rb-settings-concepts .rb-dialog p { margin: 0 0 17px; color: var(--rb-subtle); font-size: 13px; }
+#rb-settings-concepts .rb-dialog label { display: block; margin: 0 0 6px; font-size: 13px; font-weight: 500; }
+#rb-settings-concepts .rb-dialog input { width: 100%; min-height: 38px; border: 1px solid var(--rb-line); border-radius: 7px; padding: 7px 9px; background: var(--rb-soft); color: var(--rb-text); font: 13px/1.5 ui-monospace, "SFMono-Regular", Menlo, monospace; }
+#rb-settings-concepts .rb-dialog .rb-dialog-note { margin: 9px 0 20px; font-size: 12px; }
+#rb-settings-concepts .rb-dialog .rb-actions { justify-content: flex-end; }
+#rb-settings-concepts .rb-dialog .rb-error { color: var(--rb-blue); font-size: 12px; min-height: 22px; margin-top: 7px; }
+@media (max-width: 640px) {
+  #rb-settings-concepts .rb-stage { min-height: 990px; }
+  #rb-settings-concepts .rb-product { min-height: 940px; border-radius: 14px; }
+  #rb-settings-concepts .rb-content, #rb-settings-concepts .rb-workbench .rb-content { padding: 22px 18px 14px; }
+  #rb-settings-concepts .rb-row { gap: 12px; padding: 16px; }
+  #rb-settings-concepts .rb-path-actions { align-items: stretch; flex-direction: column; }
+  #rb-settings-concepts .rb-path-actions > .rb-button { align-self: flex-end; }
+  #rb-settings-concepts .rb-pair { grid-template-columns: 1fr; }
+  #rb-settings-concepts .rb-action-tile { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 6px 12px; padding: 16px; }
+  #rb-settings-concepts .rb-action-tile .rb-detail { min-height: 0; grid-column: 1; margin: 0; }
+  #rb-settings-concepts .rb-action-tile .rb-button { grid-column: 2; grid-row: 1 / 3; }
+}
+@media (max-width: 430px) {
+  #rb-settings-concepts .rb-stage { min-height: 1160px; }
+  #rb-settings-concepts .rb-product { min-height: 1110px; }
+  #rb-settings-concepts .rb-chrome { padding: 0 13px; }
+  #rb-settings-concepts .rb-content, #rb-settings-concepts .rb-workbench .rb-content { padding: 20px 13px 12px; }
+  #rb-settings-concepts .rb-row { flex-wrap: wrap; gap: 12px; }
+  #rb-settings-concepts .rb-row-copy { flex-basis: 100%; }
+  #rb-settings-concepts .rb-row > .rb-button { margin-left: auto; }
+  #rb-settings-concepts .rb-path-block { padding: 15px; }
+  #rb-settings-concepts .rb-path-actions .rb-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  #rb-settings-concepts .rb-button { min-height: 40px; padding: 7px 9px; }
+  #rb-settings-concepts .rb-icon-button { min-height: 30px; }
+  #rb-settings-concepts .rb-switch-row, #rb-settings-concepts .rb-backup-main { align-items: stretch; flex-direction: column; gap: 12px; }
+  #rb-settings-concepts .rb-switch-row > .rb-button, #rb-settings-concepts .rb-backup-main > .rb-button { align-self: flex-end; }
+  #rb-settings-concepts .rb-action-tile { display: block; }
+  #rb-settings-concepts .rb-action-tile .rb-detail { margin: 6px 0 12px; }
+  #rb-settings-concepts .rb-action-tile .rb-button { float: none; }
+  #rb-settings-concepts .rb-dialog { padding: 19px; }
+}
+@media (pointer: coarse) {
+  #rb-settings-concepts .rb-button { min-height: 44px; }
+  #rb-settings-concepts .rb-icon-button { width: 44px; }
+  #rb-settings-concepts .rb-dialog input { min-height: 44px; font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { #rb-settings-concepts .rb-button { transition: none; } }
+</style>
+
+<div id="rb-settings-concepts" class="viz-carousel viz-dotted-background" aria-label="ReadingBook 设置界面方案" data-previous-label="上一方案" data-next-label="下一方案">
+  <section data-variant="系统分组" aria-label="系统分组设置方案">
+    <div class="rb-stage">
+      <div class="rb-product rb-system" data-concept="system" aria-label="系统分组：书库与备份">
+        <div class="rb-chrome">
+          <div class="rb-chrome-start"><div class="rb-lights" aria-hidden="true"><span></span><span></span><span></span></div><span class="rb-chrome-title">ReadingBook · 设置</span></div>
+          <span class="rb-demo">交互草图</span>
+        </div>
+        <div class="rb-content">
+          <div class="rb-heading"><h2>书库与备份</h2><p>管理本地书库，保留每一份阅读积累。</p></div>
+          <div class="rb-section-title">本地书库</div>
+          <div class="rb-group">
+            <div class="rb-path-block">
+              <div class="rb-path-label"><div class="rb-row-title"><i data-lucide="folder-open" aria-hidden="true"></i>书库位置</div><span class="rb-detail">当前书库</span></div>
+              <div class="rb-path-shell"><i data-lucide="folder" aria-hidden="true"></i><span class="rb-path" data-path>~/Documents/ReadingBook</span><button class="rb-button rb-icon-button cursor-interaction" type="button" data-action="path" aria-label="展开完整书库路径" aria-expanded="false" data-tooltip="查看完整路径"><i data-lucide="chevron-down" aria-hidden="true"></i></button></div>
+              <div class="rb-full-path" data-full-path hidden>~/Documents/ReadingBook</div>
+              <div class="rb-path-actions"><div class="rb-actions"><button class="rb-button cursor-interaction" type="button" data-action="finder"><i data-lucide="folder-search" aria-hidden="true"></i>在 Finder 显示</button><button class="rb-button cursor-interaction" type="button" data-action="copy"><i data-lucide="copy" aria-hidden="true"></i>复制路径</button></div><button class="rb-button cursor-interaction" type="button" data-action="move">更改位置…</button></div>
+            </div>
+            <div class="rb-row"><div class="rb-row-copy"><div class="rb-row-title">打开已有书库</div><div class="rb-detail">切换到另一份书库，当前内容保留。</div></div><button class="rb-button cursor-interaction" type="button" data-action="open">选择书库…</button></div>
+          </div>
+          <div class="rb-section-title">备份与导出</div>
+          <div class="rb-group">
+            <div class="rb-row"><div class="rb-row-copy"><div class="rb-row-title"><i data-lucide="archive" aria-hidden="true"></i>完整备份</div><div class="rb-detail">原书、笔记、分析与回收内容一同保存。</div></div><button class="rb-button rb-primary cursor-interaction" type="button" data-action="backup">导出完整备份…</button></div>
+            <div class="rb-row"><div class="rb-row-copy"><div class="rb-row-title"><i data-lucide="rotate-ccw" aria-hidden="true"></i>从备份恢复</div><div class="rb-detail">恢复到新目录，原书库保留。</div></div><button class="rb-button cursor-interaction" type="button" data-action="restore">选择备份…</button></div>
+            <div class="rb-row"><div class="rb-row-copy"><div class="rb-row-title"><i data-lucide="file-text" aria-hidden="true"></i>阅读导览</div><div class="rb-detail">导出便于浏览的书籍目录与阅读记录。</div></div><button class="rb-button cursor-interaction" type="button" data-action="guide">导出阅读导览…</button></div>
+          </div>
+          <div class="rb-safety"><i data-lucide="shield-check" aria-hidden="true"></i><span>连接设置与密钥留在本机，不随完整备份导出。</span></div>
+          <div class="rb-feedback" role="status" aria-live="polite" data-feedback>所有操作均为演示，不读取或修改实际文件。</div>
+        </div>
+        <div class="rb-overlay" data-overlay hidden></div>
+      </div>
+    </div>
+  </section>
+
+  <section data-variant="轻量工作台" aria-label="轻量工作台设置方案" hidden>
+    <div class="rb-stage">
+      <div class="rb-product rb-workbench" data-concept="workbench" aria-label="轻量工作台：书库与备份">
+        <div class="rb-chrome">
+          <div class="rb-chrome-start"><div class="rb-lights" aria-hidden="true"><span></span><span></span><span></span></div><span class="rb-chrome-title">ReadingBook · 设置</span></div>
+          <span class="rb-demo">交互草图</span>
+        </div>
+        <div class="rb-content">
+          <div class="rb-heading"><div class="rb-eyebrow"><i data-lucide="settings-2" aria-hidden="true"></i>书库与备份</div><h2>你的书库，都在这里。</h2></div>
+          <div class="rb-library-hero">
+            <div class="rb-hero-top"><div class="rb-folder-mark"><i data-lucide="folder-open" aria-hidden="true"></i></div><div class="rb-row-copy"><div class="rb-hero-title">当前书库</div><div class="rb-detail">原书 · 笔记 · 分析</div></div><button class="rb-button cursor-interaction" type="button" data-action="move">更改位置…</button></div>
+            <div class="rb-path-shell"><span class="rb-path" data-path>~/Documents/ReadingBook</span><button class="rb-button rb-icon-button cursor-interaction" type="button" data-action="path" aria-label="展开完整书库路径" aria-expanded="false" data-tooltip="查看完整路径"><i data-lucide="chevron-down" aria-hidden="true"></i></button></div>
+            <div class="rb-full-path" data-full-path hidden>~/Documents/ReadingBook</div>
+            <div class="rb-hero-access"><button class="rb-button rb-soft-button cursor-interaction" type="button" data-action="finder"><i data-lucide="folder-search" aria-hidden="true"></i>在 Finder 显示</button><button class="rb-button cursor-interaction" type="button" data-action="copy"><i data-lucide="copy" aria-hidden="true"></i>复制路径</button></div>
+          </div>
+          <div class="rb-switch-row"><div class="rb-row-copy"><div class="rb-row-title">想打开另一份书库？</div><div class="rb-detail">当前书库与阅读记录会保留。</div></div><button class="rb-button cursor-interaction" type="button" data-action="open"><i data-lucide="folder-input" aria-hidden="true"></i>打开已有书库…</button></div>
+          <div class="rb-section-title">备份与分享</div>
+          <div class="rb-backup-main"><div class="rb-row-copy"><div class="rb-row-title"><i data-lucide="archive" aria-hidden="true"></i>完整备份</div><div class="rb-detail">把原书、笔记、分析与回收内容，留一份完整副本。</div></div><button class="rb-button rb-primary cursor-interaction" type="button" data-action="backup">导出完整备份…</button></div>
+          <div class="rb-pair">
+            <div class="rb-action-tile"><div class="rb-row-title"><i data-lucide="rotate-ccw" aria-hidden="true"></i>从备份恢复</div><div class="rb-detail">恢复到新目录，<br>原书库保持原样。</div><button class="rb-button cursor-interaction" type="button" data-action="restore">选择备份…</button></div>
+            <div class="rb-action-tile"><div class="rb-row-title"><i data-lucide="file-text" aria-hidden="true"></i>阅读导览</div><div class="rb-detail">整理成方便浏览的<br>书籍目录与阅读记录。</div><button class="rb-button cursor-interaction" type="button" data-action="guide">导出阅读导览…</button></div>
+          </div>
+          <div class="rb-safety"><i data-lucide="shield-check" aria-hidden="true"></i><span>连接设置与密钥留在本机，不随完整备份导出。</span></div>
+          <div class="rb-feedback" role="status" aria-live="polite" data-feedback>所有操作均为演示，不读取或修改实际文件。</div>
+        </div>
+        <div class="rb-overlay" data-overlay hidden></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const root = document.getElementById('rb-settings-concepts');
+  if (!root) return;
+  const states = {};
+  const products = Array.from(root.querySelectorAll('.rb-product[data-concept]'));
+  const longTail = '/长期阅读与研究资料/中国古典小说与相关文献/个人阅读档案';
+  const basePath = '~/Documents/ReadingBook';
+  const saved = window.openai?.widgetState?.privateContent?.settingsConcepts || {};
+  const escape = value => String(value).replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+  let measuring = false, measuredWidth = 0;
+  function equalizeStages() {
+    if (measuring) return;
+    const width = root.getBoundingClientRect().width;
+    if (width < 1) return;
+    measuring = true;
+    let tallest = 0;
+    const stage = products[0].parentElement;
+    products.forEach(product => {
+      const measurement = product.cloneNode(true);
+      measurement.removeAttribute('data-concept');
+      measurement.setAttribute('aria-hidden', 'true');
+      Object.assign(measurement.style, { position: 'absolute', top: '0', left: '0', width: width + 'px', minHeight: '0', height: 'auto', visibility: 'hidden', pointerEvents: 'none' });
+      measurement.querySelector('[data-overlay]').hidden = true;
+      stage.appendChild(measurement);
+      tallest = Math.max(tallest, measurement.getBoundingClientRect().height);
+      measurement.remove();
+    });
+    products.forEach(product => {
+      product.style.minHeight = Math.ceil(tallest) + 'px';
+      product.parentElement.style.minHeight = (Math.ceil(tallest) + 30) + 'px';
+    });
+    measuredWidth = width; measuring = false;
+  }
+  function pathFor(state) { return state.path + (state.longPath ? longTail : ''); }
+  function persist() {
+    if (!window.openai?.setWidgetState) return;
+    const privateState = {}, modelState = {};
+    Object.entries(states).forEach(([key, state]) => {
+      privateState[key] = { path: state.path, expanded: state.expanded, longPath: state.longPath, spacious: state.spacious, lastAction: state.lastAction };
+      modelState[key] = { lastAction: state.lastAction, expandedPath: state.expanded };
+    });
+    window.openai.setWidgetState({ modelContent: { settingsConcepts: modelState }, privateContent: { settingsConcepts: privateState } }).catch(() => {});
+  }
+  function render(product) {
+    const state = states[product.dataset.concept];
+    product.style.setProperty('--rb-space', state.spacious ? '22px' : '16px');
+    product.querySelectorAll('[data-path]').forEach(element => {
+      element.textContent = pathFor(state);
+      element.setAttribute('data-tooltip', pathFor(state));
+    });
+    const expanded = product.querySelector('[data-full-path]');
+    expanded.textContent = pathFor(state); expanded.hidden = !state.expanded;
+    const button = product.querySelector('[data-action="path"]');
+    button.setAttribute('aria-expanded', String(state.expanded));
+    button.setAttribute('aria-label', state.expanded ? '收起完整书库路径' : '展开完整书库路径');
+    button.setAttribute('data-tooltip', state.expanded ? '收起完整路径' : '查看完整路径');
+    requestAnimationFrame(equalizeStages);
+  }
+  function feedback(product, text, action) {
+    product.querySelector('[data-feedback]').textContent = text;
+    requestAnimationFrame(equalizeStages);
+    states[product.dataset.concept].lastAction = action; persist();
+  }
+  const dialogs = {
+    move: { title: '更改书库位置', body: '选择新的位置后迁移书库。原书、笔记和分析一同保留。', label: '新的书库位置', value: '~/Documents/ReadingBook Archive', confirm: '确认更改（演示）', note: '这里只改变草图中的路径，不会移动任何实际文件。' },
+    open: { title: '打开已有书库', body: '切换到选择的书库。当前书库保持原样，不合并、不覆盖。', label: '已有书库位置', value: '~/Documents/ReadingBook Archive', confirm: '打开书库（演示）', note: '这里只演示切换后的路径，不会访问实际目录。' },
+    backup: { title: '导出完整备份', body: '包含原书、笔记、分析与回收内容。连接设置和密钥留在本机。', label: '备份保存位置', value: '~/Documents/ReadingBook Backup', confirm: '导出备份（演示）', note: '这里只演示导出反馈，不会创建实际备份文件。' },
+    restore: { title: '从备份恢复', body: '将备份恢复到一个新目录，当前书库保留。', label: '恢复副本的位置', value: '~/Documents/ReadingBook Restored', confirm: '恢复到新目录（演示）', note: '这里只演示恢复反馈，不会读取备份或写入目录。' },
+    guide: { title: '导出阅读导览', body: '整理书籍目录与阅读记录，方便在书库以外浏览。', label: '导览保存位置', value: '~/Documents/ReadingBook Reading Guide', confirm: '导出导览（演示）', note: '这里只演示导出反馈，不会生成实际文件。' }
+  };
+  function closeDialog(product) {
+    const state = states[product.dataset.concept];
+    const overlay = product.querySelector('[data-overlay]');
+    overlay.hidden = true; overlay.innerHTML = '';
+    state.trigger?.focus(); state.trigger = null; state.dialog = null;
+  }
+  function openDialog(product, action, trigger) {
+    const state = states[product.dataset.concept], data = dialogs[action];
+    if (!data) return;
+    state.dialog = action; state.trigger = trigger;
+    const prefix = 'rb-settings-' + product.dataset.concept;
+    const overlay = product.querySelector('[data-overlay]');
+    overlay.innerHTML = `<form class="rb-dialog" role="dialog" aria-modal="true" aria-labelledby="${prefix}-dialog-title">
+      <h3 id="${prefix}-dialog-title">${data.title}</h3><p>${data.body}</p>
+      <label for="${prefix}-destination">${data.label}</label><input id="${prefix}-destination" name="destination" value="${escape(data.value)}" spellcheck="false" autocomplete="off">
+      <div class="rb-error" role="alert" data-error></div><p class="rb-dialog-note">${data.note}</p>
+      <div class="rb-actions"><button class="rb-button cursor-interaction" type="button" data-action="cancel">取消</button><button class="rb-button rb-primary cursor-interaction" type="submit">${data.confirm}</button></div>
+    </form>`;
+    overlay.hidden = false;
+    overlay.querySelector('input').focus();
+  }
+  products.forEach(product => {
+    const key = product.dataset.concept, old = saved[key] || {};
+    states[key] = { path: typeof old.path === 'string' && old.path.startsWith('~/Documents/') ? old.path.slice(0, 250) : basePath,
+      expanded: Boolean(old.expanded), longPath: Boolean(old.longPath), spacious: old.spacious !== false, lastAction: old.lastAction || null, dialog: null, trigger: null };
+    render(product);
+    product.addEventListener('click', event => {
+      const button = event.target.closest('button[data-action]');
+      if (!button || !product.contains(button)) return;
+      const state = states[key], action = button.dataset.action;
+      if (action === 'cancel') { closeDialog(product); return; }
+      if (action === 'path') { state.expanded = !state.expanded; render(product); persist(); return; }
+      if (action === 'finder') { feedback(product, 'Finder 演示：将显示 ' + pathFor(state) + '，没有打开实际窗口。', action); return; }
+      if (action === 'copy') { feedback(product, '复制路径演示：' + pathFor(state) + '。实际剪贴板未改变。', action); return; }
+      openDialog(product, action, button);
+    });
+    product.addEventListener('submit', event => {
+      const form = event.target.closest('form.rb-dialog');
+      if (!form) return;
+      event.preventDefault();
+      const state = states[key], action = state.dialog;
+      const path = form.elements.destination.value.trim();
+      if (!path.startsWith('~/Documents/') || path.length > 250) {
+        form.querySelector('[data-error]').textContent = '演示路径请以 ~/Documents/ 开头，且不超过 250 个字符。'; return;
+      }
+      if (action === 'restore' && path === state.path) {
+        form.querySelector('[data-error]').textContent = '请使用一个新的目录；当前书库保持原样。'; return;
+      }
+      if (action === 'move' || action === 'open') { state.path = path; state.longPath = false; render(product); }
+      const messages = { move: '位置更改演示完成：', open: '打开书库演示完成：', backup: '完整备份导出演示完成：', restore: '恢复演示完成，当前书库保留：', guide: '阅读导览导出演示完成：' };
+      closeDialog(product); feedback(product, messages[action] + path + '。没有读写实际文件。', action);
+    });
+    product.addEventListener('keydown', event => {
+      const state = states[key];
+      if (!state.dialog) return;
+      if (event.key === 'Escape') { event.preventDefault(); closeDialog(product); return; }
+      if (event.key === 'Tab') {
+        const controls = Array.from(product.querySelector('[data-overlay]').querySelectorAll('input,button'));
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    });
+    if (globalThis.Tweak) {
+      const state = states[key];
+      const tweak = new Tweak({ container: product, onChange: () => render(product) });
+      tweak.addToggle(state, 'longPath', { label: '长路径示例', reference: 'settings.longPath' });
+      if (key === 'workbench') tweak.addToggle(state, 'spacious', { label: '宽松间距', reference: 'settings.spacious' });
+    }
+  });
+  window.addEventListener('openai:set_globals', event => {
+    const next = event.detail?.globals?.widgetState?.privateContent?.settingsConcepts;
+    if (!next) return;
+    products.forEach(product => {
+      const key = product.dataset.concept, old = next[key];
+      if (!old || states[key].dialog) return;
+      if (typeof old.path === 'string' && old.path.startsWith('~/Documents/')) states[key].path = old.path.slice(0, 250);
+      states[key].expanded = Boolean(old.expanded); states[key].longPath = Boolean(old.longPath); states[key].spacious = old.spacious !== false;
+      render(product);
+    });
+  });
+  new ResizeObserver(() => {
+    if (Math.abs(root.getBoundingClientRect().width - measuredWidth) > 1) requestAnimationFrame(equalizeStages);
+  }).observe(root);
+  requestAnimationFrame(equalizeStages);
+})();
+</script>

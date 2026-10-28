@@ -44,12 +44,12 @@ extension AppStore {
     }
 
     func selectService(_ id: String) {
-        guard !isBusy, !isRecoveringLegacyKey, id != selectedServiceID, savedServices.contains(where: { $0.id == id }) else { return }
+        guard canEditAISettings, !isRecoveringLegacyKey, id != selectedServiceID, savedServices.contains(where: { $0.id == id }) else { return }
         requestServiceChange(.select(id))
     }
 
     func newService(_ preset: ProviderPreset? = nil) {
-        guard !isBusy, !isRecoveringLegacyKey else { return }
+        guard canEditAISettings, !isRecoveringLegacyKey else { return }
         requestServiceChange(.create(preset))
     }
 
@@ -63,7 +63,7 @@ extension AppStore {
     }
 
     func resolveServiceChange(save: Bool) {
-        guard !isBusy, !isRecoveringLegacyKey, let change = serviceProfileDraft.pendingChange else { return }
+        guard canEditAISettings, !isRecoveringLegacyKey, let change = serviceProfileDraft.pendingChange else { return }
         serviceProfileDraft.pendingChange = nil
         do {
             if save { try persistServiceProfile() }
@@ -101,7 +101,7 @@ extension AppStore {
         catch { serviceProfileDraft.errorMessage = error.localizedDescription }
     }
     func discardServiceDraftForNavigation() -> Bool {
-        guard !isBusy, !isRecoveringLegacyKey else { return false }
+        guard canEditAISettings, !isRecoveringLegacyKey else { return false }
         serviceProfileDraft.errorMessage = ""
         if let id = selectedServiceID ?? savedServices.first?.id {
             performServiceChange(.select(id))
@@ -113,7 +113,7 @@ extension AppStore {
     }
 
     func chooseModel(_ model: ModelPreset) {
-        guard !isBusy else { return }
+        guard canEditAISettings else { return }
         settings.model = model.id; settings.contextWindowTokens = model.contextTokens
         settings.tokenLimitParameter = model.tokenParameter
         settings.maxOutputTokens = min(model.maxOutputTokens ?? 6000, 8192)
@@ -121,13 +121,13 @@ extension AppStore {
     }
 
     func useMaximumOutput() {
-        guard !isBusy, let model = matchingModel, let maximum = model.maxOutputTokens else { return }
+        guard canEditAISettings, let model = matchingModel, let maximum = model.maxOutputTokens else { return }
         settings.maxOutputTokens = maximum; settings.contextWindowTokens = model.contextTokens
         settings.tokenLimitParameter = model.tokenParameter
     }
 
     func persistServiceProfile() throws {
-        guard !isBusy, !isRecoveringLegacyKey, !serviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard canEditAISettings, !isRecoveringLegacyKey, !serviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               (1...2000).contains(settings.maxRequestsPerRun), (64...1_048_576).contains(settings.maxOutputTokens),
               settings.contextWindowTokens.map({ (1024...4_194_304).contains($0) }) ?? true else { throw ReadingError.invalid("请填写配置名称、模型与有效的请求/token 上限。") }
@@ -155,7 +155,7 @@ extension AppStore {
     }
 
     func removeService(_ id: String) {
-        guard !isBusy, !isRecoveringLegacyKey else { return }
+        guard canEditAISettings, !isRecoveringLegacyKey else { return }
         do {
             try localCredentials.remove(for: id)
             savedServices.removeAll { $0.id == id }
@@ -169,13 +169,23 @@ extension AppStore {
     }
 
     func testConnection() {
-        guard !isBusy else { return }
-        let configuration = settings, key = apiKey
-        isBusy = true; connectionStatus = "正在发送一条短文本测试请求…"
-        task = Task {
-            defer { isBusy = false }
-            do { connectionStatus = try await ProviderProbe.test(settings: configuration, apiKey: key) }
-            catch { connectionStatus = error.localizedDescription }
+        guard canTestAIConnection else { return }
+        let configuration = settings, key = apiKey, profile = selectedServiceID, root = libraryRootURL
+        let waitingMessage = "正在发送一条短文本测试请求…"
+        isTestingConnection = true; connectionStatus = waitingMessage
+        connectionTestTask = Task {
+            defer { isTestingConnection = false; connectionTestTask = nil }
+            let result: String
+            do { result = try await connectionProbe(configuration, key) }
+            catch { result = error.localizedDescription }
+            // The editor remains usable. A response for the old endpoint must
+            // not label a newly selected/edited connection as tested.
+            guard libraryRootURL == root, selectedServiceID == profile,
+                  settings.baseURL == configuration.baseURL, settings.model == configuration.model, apiKey == key else {
+                if connectionStatus == waitingMessage { connectionStatus = "配置已更改，请重新测试当前配置。" }
+                return
+            }
+            connectionStatus = result
         }
     }
 
@@ -200,7 +210,7 @@ extension AppStore {
         let runSettings = configuration, runKey = key
         isBusy = true; isRecognizingPDF = true; showingOCR = false
         task = Task {
-            let aiRunID = await beginAIProgress(title: "识别 PDF", ocr: true)
+            let aiRunID = await beginAIProgress(title: "识别 PDF", ocr: true, settings: runSettings)
             defer { finishAIProgress(aiRunID); isBusy = false; isRecognizingPDF = false }
             await pdfOCRReader.resetBudget()
             do {
@@ -236,7 +246,7 @@ extension AppStore {
     /// The sole Keychain entry point is an explicit reader action. Recovery is
     /// additive: it neither deletes the old item nor overwrites a local key.
     func recoverLegacyServiceKey() {
-        guard !isBusy, !isRecoveringLegacyKey else { return }
+        guard canEditAISettings, !isRecoveringLegacyKey else { return }
         guard let id = selectedServiceID, savedServices.contains(where: { $0.id == id }) else {
             legacyKeyRecoveryStatus = "请先选择已有配置。"; return
         }
@@ -278,12 +288,12 @@ struct AIServiceBar: View {
                 Picker("使用", selection: Binding(get: { store.selectedServiceID ?? "" }, set: { store.selectService($0) })) {
                     if store.selectedServiceID == nil { Text("未保存配置").tag("") }
                     ForEach(store.savedServices) { service in Text(service.name).tag(service.id) }
-                }.labelsHidden().lineLimit(1).frame(maxWidth: .infinity).disabled(store.isBusy)
+                }.labelsHidden().lineLimit(1).frame(maxWidth: .infinity).disabled(!store.canEditAISettings)
                 Text(store.settings.model.isEmpty ? "尚未配置模型" : store.settings.model).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
                 HStack(spacing: 8) {
                     Button("服务设置") { store.showingSettings = true }
                     Spacer(minLength: 0)
-                    Button("测试") { store.testConnection() }.disabled(store.isBusy || store.settings.model.isEmpty)
+                    Button("测试") { store.testConnection() }.disabled(!store.canTestAIConnection || store.settings.model.isEmpty)
                 }.buttonStyle(ReadingToolbarButtonStyle())
                 if !store.connectionStatus.isEmpty { Text(store.connectionStatus).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(3).help(store.connectionStatus) }
                 ServiceProfileLocalError(draft: store.serviceProfileDraft)

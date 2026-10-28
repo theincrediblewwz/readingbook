@@ -22,6 +22,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     let icon: String
     var width: CGFloat = 410
     var height: CGFloat = 520
+    var minimumWidth: CGFloat = 240
     var trailing = true
     @Binding var isPresented: Bool
     var viewport: CGSize
@@ -33,6 +34,7 @@ struct ReaderFloatingPanel<Content: View>: View {
     var showsRestoreButton = true
     var unifiedDismiss = false
     var resizable = false
+    var showsCompanionTabs = false
     var onExpansionChange: (Bool) -> Void = { _ in }
     var onFrameChange: (CGRect) -> Void = { _ in }
     @ViewBuilder var content: () -> Content
@@ -54,10 +56,16 @@ struct ReaderFloatingPanel<Content: View>: View {
     @State private var expandedReading = false
     @State private var beforeExpansionSize: CGSize?
     @State private var beforeExpansionOrigin: CGPoint?
+    @State private var intrinsicContentWidth: CGFloat = 0
     private struct PanelPresentation: Equatable { var presented: Bool; var collapsed: Bool }
     private var memoryID: String { memoryIDOverride ?? (trailing ? "reader.companion" : "reader.outline") }
 
-    private var panelWidth: CGFloat { resizeFrame?.width ?? min(preferredSize?.width ?? width, max(240, viewport.width - 48)) }
+    private var effectiveMinimumWidth: CGFloat {
+        max(max(resizable ? 320 : 240, minimumWidth), intrinsicContentWidth)
+    }
+    private var panelWidth: CGFloat {
+        min(max(resizeFrame?.width ?? preferredSize?.width ?? width, effectiveMinimumWidth), max(0, viewport.width - 48))
+    }
     private var headerHeight: CGFloat { ReadingLayout.panelHeaderHeight }
     private var wantedHeight: CGFloat { collapsed ? headerHeight : min(preferredSize?.height ?? height, max(headerHeight, viewport.height - 88 - bottomReserve)) }
     private var panelHeight: CGFloat { presentationPlacement().height }
@@ -187,6 +195,13 @@ struct ReaderFloatingPanel<Content: View>: View {
                                 }, cancel: { dragStart = nil; dragOrigin = nil; dragHeight = nil; reportStableFrame() }).accessibilityHidden(true)
                             }
                             .help("拖动标题移动\(title)面板").accessibilityLabel(title).accessibilityHint("拖动标题可移动面板；右侧可收起或关闭")
+                        if showsCompanionTabs {
+                            ReaderAIPanelTabs().fixedSize(horizontal: true, vertical: false)
+                            Button { NotificationCenter.default.post(name: Notification.Name("ReadingBookExpandCompanion"), object: nil) } label: {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 12)).frame(width: ReadingCompanionToolbarMetrics.compactHeaderControlWidth, height: 32)
+                            }.buttonStyle(.plain).foregroundStyle(.secondary)
+                                .help("放大或还原伴读与对话窗口").accessibilityLabel("放大或还原伴读与对话窗口")
+                        }
                         if unifiedDismiss {
                             DockIconButton(title: collapsed ? "展开\(title)" : "收起\(title)", icon: collapsed ? "plus" : "minus") {
                                 transientPresentation = nil
@@ -258,6 +273,16 @@ struct ReaderFloatingPanel<Content: View>: View {
             }
             .onChange(of: savedOrigin) { _, _ in saveMemory(); reportStableFrame() }
             .onChange(of: avoidRects) { _, _ in reportStableFrame() }
+            .onPreferenceChange(ReaderPanelIntrinsicWidthPreference.self) { groups in
+                let required = groups.values.filter { $0.isFinite && $0 > 0 }.reduce(0, +)
+                guard abs(required - intrinsicContentWidth) > 0.5 else { return }
+                intrinsicContentWidth = required
+                // Measurement is independent of the available panel width.
+                // Re-clamp a remembered/narrow size in place, retaining one
+                // set of native controls and preserving the saved user origin.
+                if resizeStart != nil { cancelPointerInteraction() }
+                reportStableFrame()
+            }
             .onDisappear { cancelResize(); saveMemory(); lastReportedFrame = nil; onFrameChange(.zero) }
             .onChange(of: viewport) { old, value in
                 cancelPointerInteraction()
@@ -318,7 +343,8 @@ struct ReaderFloatingPanel<Content: View>: View {
     }
     private func resize(by delta: CGSize, direction: FloatingPanelResizeDirection, ended: Bool) {
         guard let start = resizeStart else { return }
-        let frame = FloatingPanelResizeGeometry.resizedFrame(from: start, delta: delta, direction: direction, in: resizeBounds)
+        let frame = FloatingPanelResizeGeometry.resizedFrame(from: start, delta: delta, direction: direction, in: resizeBounds,
+            minimum: CGSize(width: effectiveMinimumWidth, height: 260))
         if ended {
             preferredSize = frame.size; savedOrigin = frame.origin
             resizeStart = nil; resizeFrame = nil; resizePreferredStart = nil

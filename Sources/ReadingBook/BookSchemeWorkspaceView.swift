@@ -78,9 +78,11 @@ private struct BookSchemeWorkspaceContent: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 Divider().opacity(0.4)
-                Picker("方案内容", selection: $draft.tab) {
-                    Text("方案预览").tag("scheme"); Text("模板 · \(state.templates.count)").tag("templates"); Text("版本 · \(state.history.count)").tag("history")
-                }.pickerStyle(.segmented).frame(maxWidth: 450).labelsHidden().padding(16)
+                ManagementSegmentedControl(selection: $draft.tab, options: [
+                    ManagementSegmentOption(id: "scheme", title: "方案预览", detail: "查看当前生效或待确认的书本方案。"),
+                    ManagementSegmentOption(id: "templates", title: "模板 · \(state.templates.count)", detail: "保存、预览、导出或删除本书的方案模板。"),
+                    ManagementSegmentOption(id: "history", title: "版本 · \(state.history.count)", detail: "查看已采纳的配置版本与可安全撤销的最近更新。")
+                ]).frame(maxWidth: 450).padding(16).accessibilityIdentifier("book-scheme-tabs")
                 if store.book == nil {
                     ContentUnavailableView("先选择一本书", systemImage: "book.closed", description: Text("书本方案按书保存，不改写用户知识和笔记。"))
                 } else {
@@ -127,9 +129,10 @@ private struct BookSchemeWorkspaceContent: View {
         Menu {
             Button { store.importBookSchemeTemplate() } label: { Label("导入模板", systemImage: "square.and.arrow.down") }
             Button { store.makePlan() } label: { Label("AI 预读方案", systemImage: "sparkles") }
-        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .help("书本方案操作").accessibilityLabel("书本方案操作")
+        } label: { ManagementMenuLabel(title: "更多", icon: "ellipsis") }
+            .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize()
+            .help("导入方案模板，或用 AI 预读方案。待确认方案处理后可继续操作。")
+            .accessibilityLabel("书本方案更多操作")
             .disabled(store.isBusy || pending != nil || store.book == nil)
     }
     private func close() {

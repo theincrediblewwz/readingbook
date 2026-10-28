@@ -33,6 +33,9 @@ struct WorkspaceView: View {
     @State private var lastSheet: WorkspaceSheet?
     @State private var sheetClosing = false
     @State private var navigationExpanded = false
+    @State private var componentPickerOwner: WorkspacePickerOwner?
+    @State private var transferPickerOwner: WorkspacePickerOwner?
+    @State private var pendingTransferOwner: WorkspacePickerOwner?
     @State private var pendingRoute: String?
     @State private var opensCompanionAfterNavigation = false
     @State private var pendingModelRoute: String?
@@ -67,10 +70,10 @@ struct WorkspaceView: View {
                 topIslands(width: geometry.size.width).padding(.top, 14).padding(.leading, 104).padding(.trailing, 24)
                     .allowsHitTesting(managementRoute == nil)
                     .opacity(managementRoute == nil ? 1 : 0).accessibilityHidden(managementRoute != nil)
-                if (store.book?.smartReading != nil || (store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID && store.route != "query" && !(store.route == "reader" && store.readingCompanionVisible))) && !store.storageState.working && managementRoute == nil && !navigationExpanded && store.route != "library" {
+                if (store.book?.smartReading != nil || (store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID && store.aiProgress.libraryRoot == store.libraryRootURL) || (store.isCompanionGenerating && store.companionProgress.bookID == store.bookID && store.companionProgress.libraryRoot == store.libraryRootURL) || (store.isQueryBusy && store.queryProgressState.value.bookID == store.bookID && store.queryProgressState.value.libraryRoot == store.libraryRootURL)) && !store.storageState.working && managementRoute == nil && !navigationExpanded && store.route != "library" {
                     floatingProgress(in: geometry).zIndex(6)
                 }
-                if showReadingPosition && store.route == "reader" && store.book != nil && managementRoute == nil {
+                if store.route == "reader" && store.book != nil && managementRoute == nil {
                     readingPosition(in: geometry).zIndex(5)
                 }
                 if let managementRoute {
@@ -114,8 +117,8 @@ struct WorkspaceView: View {
             Button("继续编辑", role: .cancel) { pendingRoute = nil; opensCompanionAfterNavigation = false; showsRouteConfirmation = false }
         } message: { _ in Text("已保存正文保留；本次未保存修改可保存或放弃。") }
         .confirmationDialog("当前模型配置尚未保存", isPresented: $showsModelRouteConfirmation, presenting: pendingModelRoute) { destination in
-            Button("保存并继续") { resolveModelNavigation(to: destination, save: true) }.disabled(store.isBusy)
-            Button("放弃更改并继续", role: .destructive) { resolveModelNavigation(to: destination, save: false) }.disabled(store.isBusy)
+            Button("保存并继续") { resolveModelNavigation(to: destination, save: true) }.disabled(!store.canEditAISettings)
+            Button("放弃更改并继续", role: .destructive) { resolveModelNavigation(to: destination, save: false) }.disabled(!store.canEditAISettings)
             Button("继续编辑", role: .cancel) { pendingModelRoute = nil; opensCompanionAfterNavigation = false; showsModelRouteConfirmation = false }
         } message: { _ in Text("保存到本机配置；取消可继续编辑。") }
         .onChange(of: showsRouteConfirmation) { _, visible in
@@ -139,10 +142,10 @@ struct WorkspaceView: View {
         }
         .onChange(of: modalSignature) { _, _ in reconcileSheet() }
         .onChange(of: managementRoute) { _, route in
-            if route != nil { readerPopover = nil; navigationExpanded = false; bookPopover = false; servicePopover = false; store.queryAllowsOrganizing = false }
+            if route != nil { dismissNavigationPickers(); readerPopover = nil; navigationExpanded = false; bookPopover = false; servicePopover = false; store.queryAllowsOrganizing = false }
         }
         .onChange(of: activeSheet?.id) { _, id in
-            if id != nil { readerPopover = nil; navigationExpanded = false; bookPopover = false; servicePopover = false }
+            if id != nil { dismissNavigationPickers(); readerPopover = nil; navigationExpanded = false; bookPopover = false; servicePopover = false }
         }
         .onChange(of: viewingPDF) { _, visible in
             if !visible, readerPopover != .navigation { readerPopover = nil }
@@ -168,6 +171,14 @@ struct WorkspaceView: View {
             Button(request.actionTitle, role: request.kind == .book ? nil : .destructive) { store.confirmDeletion(request) }
             Button("取消", role: .cancel) { store.deletionRequest = nil }
         } message: { request in Text("“\(request.title)”\n" + request.detail) }
+        .confirmationDialog("这本书已有阅读方案，重新预读？", isPresented: Binding(
+            get: { store.pendingPlanRegeneration != nil },
+            set: { if !$0 { store.cancelPlanRegeneration() } }), presenting: store.pendingPlanRegeneration) { _ in
+            Button("重新预读") { store.confirmPlanRegeneration() }
+            Button("保留原方案", role: .cancel) { store.cancelPlanRegeneration() }
+        } message: { review in
+            Text("《\(review.bookTitle)》的新方案准备成功后更新；原书、笔记和已有分析保留。此操作会再次请求AI。")
+        }
         .alert("需要处理", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("知道了", role: .cancel) { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
@@ -181,7 +192,9 @@ struct WorkspaceView: View {
     }
     var body: some View {
         guardedWorkspace
-        .onChange(of: store.bookID) { _, _ in showsInspector = false; compactInspector = false; readerPopover = nil; readerBookmarks = false; progressSize = CGSize(width: 260, height: 52); refreshReadingPageCount() }
+        .onChange(of: store.bookID) { _, _ in dismissNavigationPickers(); showsInspector = false; compactInspector = false; readerPopover = nil; readerBookmarks = false; progressSize = CGSize(width: 260, height: 52); refreshReadingPageCount() }
+        .onChange(of: store.libraryRootURL) { _, _ in dismissNavigationPickers() }
+        .onChange(of: navigationExpanded) { _, visible in if !visible { dismissNavigationPickers() } }
         .onChange(of: store.route) { old, next in
             readerPopover = nil
             if ["models", "plugins", "book.scheme", "preferences"].contains(next) {
@@ -201,9 +214,15 @@ struct WorkspaceView: View {
         let global = geometry.frame(in: .global)
         let obstacles = chromeBounds.filter { $0.key != "reading-position" && $0.key != "window-drag" }.values.map { $0.offsetBy(dx: -global.minX, dy: -global.minY) }
         let area = CGRect(x: 16, y: 88, width: max(0, geometry.size.width - 32), height: max(0, geometry.size.height - 104))
-        if let frame = FloatingChromeGeometry.place(size: CGSize(width: 56, height: 24), preferredOrigin: CGPoint(x: 20, y: geometry.size.height - 42), within: area, avoiding: obstacles) {
-            Text("\(positionPercent)%").font(.system(size: 12, weight: .regular, design: .monospaced)).foregroundStyle(.secondary).opacity(0.6)
-                .frame(width: 56, height: 24).allowsHitTesting(false).accessibilityLabel("阅读位置 \(positionPercent)%")
+        let size = CGSize(width: showReadingPosition ? 78 : 24, height: 24)
+        if let frame = FloatingChromeGeometry.place(size: size, preferredOrigin: CGPoint(x: 20, y: geometry.size.height - 42), within: area, avoiding: obstacles) {
+            HStack(spacing: 0) {
+                if showReadingPosition {
+                    Text("\(positionPercent)%").font(.system(size: 12, weight: .regular, design: .monospaced)).foregroundStyle(.secondary).opacity(0.6)
+                        .frame(width: 50, height: 24).allowsHitTesting(false).accessibilityLabel("阅读位置 \(positionPercent)%")
+                }
+                ReadingPreparationStatusDot(state: store.readingPreparationState)
+            }.frame(width: size.width, height: size.height)
                 .workspaceChromeBounds("reading-position").position(x: frame.midX, y: frame.midY)
         }
     }
@@ -250,7 +269,8 @@ struct WorkspaceView: View {
             }, cancel: cancelDrag)
         }
         return ZStack(alignment: .topLeading) {
-          SmartReadingProgressPanel(maximumExpandedHeight: max(100, min(430, geometry.size.height - 220)),
+          SmartReadingProgressPanel(activityState: store.aiProgressState, companionState: store.companionProgressState, queryState: store.queryProgressState,
+              maximumExpandedHeight: max(100, min(430, geometry.size.height - 220)),
               compactInteraction: interaction(at: CGPoint(x: frame.midX, y: frame.midY), fallback: false), resetCompactPosition: resetPosition).environmentObject(store)
             .background {
                 GeometryReader { panel in Color.clear.preference(key: WorkspaceProgressSizePreference.self, value: panel.size) }
@@ -265,16 +285,18 @@ struct WorkspaceView: View {
             .opacity(usesFallback ? 0 : 1).allowsHitTesting(!usesFallback).accessibilityHidden(usesFallback)
             .position(x: frame.midX, y: frame.midY)
           if usesFallback {
-            Button { navigate("workflow") } label: {
-                Image(systemName: store.isSmartReadingRunning ? "sparkles" : "book.pages")
+            Button { openActiveProgress() } label: {
+                Image(systemName: store.isSmartReadingRunning || store.isCompanionGenerating || store.isQueryBusy ? "sparkles" : "book.pages")
                     .font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
                     .frame(width: 52, height: 52).contentShape(Circle())
             }.buttonStyle(.plain).readingGlass(radius: 26, interactive: true)
-                .overlay { FloatingLauncherPointerInput(interaction: interaction(at: compactCenter, fallback: true)) { navigate("workflow") } }
-                .help("点击查看智能阅读进度与结果；拖动调整位置")
-                .accessibilityLabel("查看智能阅读进度")
+                .overlay { FloatingLauncherPointerInput(interaction: interaction(at: compactCenter, fallback: true), activate: openActiveProgress) }
+                .help("点击查看当前AI任务进度与结果；拖动调整位置")
+                .accessibilityLabel("查看AI任务进度")
                 .contextMenu {
-                    if store.isSmartReadingRunning { Button("暂停分析，保留已读内容") { store.pause() } }
+                    if store.isCompanionGenerating { Button("停止本次伴读，其他任务继续") { store.cancelAIActivity(store.companionProgress.runID) } }
+                    if store.isQueryBusy { Button("停止本次对话，其他任务继续") { store.cancelAIActivity(store.queryProgressState.value.runID) } }
+                    if store.isSmartReadingRunning { Button("暂停分析，保留已读内容") { store.pauseReading() } }
                     Button("还原浮钮位置", action: resetPosition)
                 }
                 .workspaceChromeBounds("smart-progress")
@@ -283,6 +305,13 @@ struct WorkspaceView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .onChange(of: geometry.size) { _, _ in progressLauncherDragEpoch += 1; cancelDrag() }
             .onChange(of: store.bookID) { _, _ in progressLauncherDragEpoch += 1; cancelDrag() }
+    }
+    private func openActiveProgress() {
+        if store.isCompanionGenerating {
+            store.readingCompanionVisible = true; store.readingCompanionTab = "companion"
+        } else if store.isQueryBusy {
+            store.readingCompanionVisible = true; store.readingCompanionTab = "chat"
+        } else { navigate("workflow") }
     }
     private func restoreReaderMemory() {
         readerShowsPDF = store.workspaceMemory.readerShowsPDF
@@ -310,47 +339,103 @@ struct WorkspaceView: View {
                         routeButton("智能阅读", icon: "sparkles", route: "workflow")
                         routeButton("与书对话", icon: "bubble.left.and.bubble.right", route: "query")
                         routeButton("我的笔记", icon: "square.and.pencil", route: "editor")
-                        if !componentViews.isEmpty {
-                            Text("本书组件").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.top, 16).padding(.bottom, 5)
-                            ForEach(componentViews) { view in
-                                routeButton(view.title, icon: WorkspaceComponentRegistry.shared.component(for: view)?.icon ?? "puzzlepiece.extension", route: view.id)
-                                    .contextMenu {
-                                        let count = WorkspaceComponentRegistry.shared.removalIDs(for: view, in: store.book?.views ?? []).count
-                                        Button(count > 1 ? "将组件及 \(count - 1) 个重复入口移入回收站" : "将组件移入回收站", role: .destructive) {
-                                            let sourceBookID = store.bookID
-                                            Task { guard store.bookID == sourceBookID else { return }; await store.removeView(view.id) }
-                                        }.disabled(store.isBusy || store.editorDirty)
-                                    }
-                            }
-                        }
-                        if !addableComponents.isEmpty {
-                            Menu {
-                                ForEach(addableComponents) { component in
-                                    Button { store.activate(component) } label: { Label(component.title, systemImage: component.icon) }
+                        Divider().padding(.vertical, 8)
+                        Text("本书组件").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.top, 2).padding(.bottom, 5)
+                        ForEach(componentViews) { view in
+                            routeButton(view.title, icon: WorkspaceComponentRegistry.shared.component(for: view)?.icon ?? "puzzlepiece.extension", route: view.id)
+                                .contextMenu {
+                                    let count = WorkspaceComponentRegistry.shared.removalIDs(for: view, in: store.book?.views ?? []).count
+                                    Button(count > 1 ? "将组件及 \(count - 1) 个重复入口移入回收站" : "将组件移入回收站", role: .destructive) {
+                                        let sourceBookID = store.bookID
+                                        Task { guard store.bookID == sourceBookID else { return }; await store.removeView(view.id) }
+                                    }.disabled(store.isBusy || store.editorDirty)
                                 }
-                            } label: { Label("添加组件", systemImage: "plus.square.on.square").frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }
-                                .menuStyle(.borderlessButton).padding(.horizontal, 14).disabled(store.isBusy)
                         }
+                        componentPickerButton.padding(.horizontal, 4).padding(.top, 6)
                     }
                     Divider().padding(.vertical, 8)
                     routeButton("插件与组件", icon: "puzzlepiece.extension", route: "plugins")
                     routeButton("设置", icon: "gearshape", route: "preferences")
                     routeButton("搜索", icon: "magnifyingglass", route: "librarySearch").help("搜索本书与书库")
                     routeButton("回收站", icon: "trash", route: "trash")
-                    Menu {
-                        Button { store.chooseBook() } label: { Label("导入书籍…", systemImage: "book.badge.plus") }
-                        Button { store.importProject() } label: { Label("导入书项目…", systemImage: "square.and.arrow.down") }
-                        Button { store.exportProject() } label: { Label("导出完整书项目…", systemImage: "square.and.arrow.up") }.disabled(store.book == nil)
-                    } label: { Label("导入与导出", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.menuStyle(.borderlessButton).padding(.horizontal, 14).disabled(store.isBusy)
+                    transferPickerButton.padding(.horizontal, 4).padding(.top, 6)
                 }.padding(.horizontal, 10).padding(.bottom, 14)
+            }
+        }.onDisappear { dismissNavigationPickers() }
+    }
+    private var navigationPickerWidth: CGFloat { min(340, max(240, detailWidth - 48)) }
+    private var navigationPickerHeight: CGFloat { max(160, workspaceHeight - 120) }
+    private var navigationPickerEnabled: Bool { !store.isBusy && !store.editorDirty && !store.isSavingDocument && !resolvingNavigation }
+    private var componentPickerButton: some View {
+        Button {
+            guard navigationPickerEnabled, store.book != nil, !addableComponents.isEmpty else { return }
+            transferPickerOwner = nil; pendingTransferOwner = nil
+            componentPickerOwner = WorkspacePickerOwner(store: store)
+        } label: { WorkspacePickerEntryLabel(title: "添加组件", icon: "plus.square.on.square", expanded: componentPickerOwner != nil) }
+            .buttonStyle(.plain).disabled(!navigationPickerEnabled || addableComponents.isEmpty)
+            .help(store.editorDirty ? "先保存当前笔记草稿，再添加组件。" : addableComponents.isEmpty ? "本书可添加的组件均已保存；可从导航或插件与组件中管理。" : "选择要加入本书导航的组件")
+            .popover(item: $componentPickerOwner, arrowEdge: .trailing) { owner in
+                WorkspaceComponentPicker(components: addableComponents, width: navigationPickerWidth, maximumHeight: navigationPickerHeight,
+                    enabled: navigationPickerEnabled, close: { closeComponentPicker(owner) }, select: { selectComponent($0, owner: owner) })
+            }
+    }
+    private var transferPickerButton: some View {
+        Button {
+            guard navigationPickerEnabled else { return }
+            componentPickerOwner = nil; pendingTransferOwner = nil
+            transferPickerOwner = WorkspacePickerOwner(store: store)
+        } label: { WorkspacePickerEntryLabel(title: "导入与导出", icon: "square.and.arrow.up", expanded: transferPickerOwner != nil) }
+            .buttonStyle(.plain).disabled(!navigationPickerEnabled)
+            .help(store.editorDirty ? "先保存当前笔记草稿，再导入或导出。" : "导入书籍、导入书项目，或导出完整书项目")
+            .popover(item: $transferPickerOwner, arrowEdge: .trailing) { owner in
+                WorkspaceTransferPicker(width: navigationPickerWidth, maximumHeight: navigationPickerHeight, enabled: navigationPickerEnabled,
+                    hasBook: store.book != nil, close: { closeTransferPicker(owner) }, select: { selectTransfer($0, owner: owner) })
+            }
+    }
+    private func dismissNavigationPickers() {
+        componentPickerOwner = nil; transferPickerOwner = nil; pendingTransferOwner = nil
+    }
+    private func closeComponentPicker(_ owner: WorkspacePickerOwner) {
+        if componentPickerOwner?.id == owner.id { componentPickerOwner = nil }
+    }
+    private func closeTransferPicker(_ owner: WorkspacePickerOwner) {
+        if transferPickerOwner?.id == owner.id { transferPickerOwner = nil }
+        if pendingTransferOwner?.id == owner.id { pendingTransferOwner = nil }
+    }
+    private func pickerOwnerIsCurrent(_ owner: WorkspacePickerOwner) -> Bool {
+        owner.matches(store) && navigationExpanded && managementRoute == nil && activeSheet == nil && !sheetClosing && navigationPickerEnabled
+    }
+    private func selectComponent(_ descriptor: WorkspaceComponentDescriptor, owner: WorkspacePickerOwner) {
+        guard componentPickerOwner?.id == owner.id else { return }
+        guard pickerOwnerIsCurrent(owner), let current = addableComponents.first(where: { $0.id == descriptor.id }) else {
+            componentPickerOwner = nil; return
+        }
+        componentPickerOwner = nil; navigationExpanded = false
+        store.activate(current)
+    }
+    private func selectTransfer(_ action: WorkspaceTransferAction, owner: WorkspacePickerOwner) {
+        guard transferPickerOwner?.id == owner.id else { return }
+        guard pickerOwnerIsCurrent(owner), action != .exportProject || store.book != nil else { transferPickerOwner = nil; return }
+        transferPickerOwner = nil; pendingTransferOwner = owner
+        // Let the popover close before entering a native file panel's modal
+        // loop. Revalidate ownership and navigation after that event boundary.
+        DispatchQueue.main.async {
+            guard pendingTransferOwner?.id == owner.id else { return }
+            pendingTransferOwner = nil
+            guard pickerOwnerIsCurrent(owner) else { return }
+            navigationExpanded = false
+            switch action {
+            case .importBook: store.chooseBook()
+            case .importProject: store.importProject()
+            case .exportProject: store.exportProject()
             }
         }
     }
     private var componentViews: [ViewDefinition] { WorkspaceComponentRegistry.shared.navigationViews(store.enabledViews) }
     private var navigationContentHeight: CGFloat {
         let rows = store.book == nil ? 6 : 10
-        let components = componentViews.isEmpty ? 0 : CGFloat(componentViews.count) * 53 + 42
-        let add = !addableComponents.isEmpty && store.book != nil ? CGFloat(53) : 0
+        let components = store.book == nil ? 0 : CGFloat(componentViews.count) * 53 + 42
+        let add = store.book != nil ? CGFloat(53) : 0
         return 56 + CGFloat(rows) * 53 + (store.book == nil ? 26 : 52) + components + add
     }
     private var addableComponents: [WorkspaceComponentDescriptor] {

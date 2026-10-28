@@ -56,9 +56,9 @@ struct GraphNodeBrowser: View {
         }.padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 6).frame(height: 56).layoutPriority(1)
     }
     private var searchField: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("搜索节点…", text: $query).textFieldStyle(.plain).font(.system(size: 15))
+        HStack(alignment: .center, spacing: 9) {
+            Image(systemName: "magnifyingglass").readingSearchIcon()
+            TextField("搜索节点…", text: $query).readingSearchInput()
             if !query.isEmpty {
                 Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).help("清除节点搜索").accessibilityLabel("清除节点搜索")
             }

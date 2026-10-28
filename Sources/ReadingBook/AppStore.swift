@@ -10,6 +10,8 @@ import ReadingCore
     @Published var bookID: String? {
         didSet {
             if oldValue != bookID {
+                queryTask?.cancel(); companionTask?.cancel()
+                pendingPlanRegeneration = nil
                 readingPreparationState.reset()
                 readerChapterAnchor = nil
                 teacherBackground.cancelAll(); sentenceTranslation.cancelAll()
@@ -77,10 +79,23 @@ import ReadingCore
     @Published var isQueryBusy = false
     let queryProgressState = AIProgressObservableState()
     var queryTask: Task<Void, Never>?
+    var queryRunID: UUID?
+    @Published var isCompanionGenerating = false
+    @Published var activeCompanionUnitID: String?
+    let companionProgressState = AIProgressObservableState()
+    var companionTask: Task<Void, Never>?
     var readingTask: Task<Void, Never>?
-    let sharedAIRequests = AIRequestCoordinator()
+    let sharedAIRequests: AIRequestCoordinator
     var canStartQuery: Bool { !isExclusiveBusy && !isQueryBusy && !isManagingQueryMemory && !isSavingDocument && !isRecognizingPDF && !storageState.working }
     var canStartReading: Bool { !isExclusiveBusy && !isSmartReadingRunning && !isSavingDocument && !storageState.working }
+    var canStartCompanion: Bool { !isExclusiveBusy && !isCompanionGenerating && !isSavingDocument && !isRecognizingPDF && !storageState.working }
+    // Each AI lane freezes its connection before its first suspension. Editing
+    // the next request's configuration need not lock a running model response.
+    var canEditAISettings: Bool { !isExclusiveBusy && !isRecognizingPDF && !storageState.working }
+    @Published var isTestingConnection = false
+    var connectionTestTask: Task<Void, Never>?
+    let connectionProbe: @Sendable (ProviderSettings, String) async throws -> String
+    var canTestAIConnection: Bool { canEditAISettings && !isTestingConnection }
     @Published var pendingAIChanges: [PendingAIChange] = []
     @Published var renderedWorkspaceVisibility: ReadingVisibleObjectsSnapshot?
     @Published var renderedSelectedNodeIDs: [String] = []
@@ -97,6 +112,7 @@ import ReadingCore
     @Published var activeReadingUnitID: String?
     @Published var isSmartReadingRunning = false
     @Published var smartReadingPlanReady = false
+    @Published var pendingPlanRegeneration: SmartReadingPlanRegeneration?
     var smartReadingProgressCacheKey: String?
     var smartReadingProgressTask: Task<Void, Never>?
     var smartReadingProgressCache: SmartReadingProgress?
@@ -117,9 +133,10 @@ import ReadingCore
     @Published var pdfUnlockedBookIDs: Set<String> = []
     @Published private var isExclusiveBusy = false
     /// Existing manual editing/import/delete surfaces keep their exclusivity.
-    /// Only the explicitly separate read-only question lane bypasses a reading run.
+    /// AI entry points use their own admission gates; this aggregate continues
+    /// protecting whole-project manual writes, import, deletion and transfer.
     var isBusy: Bool {
-        get { isExclusiveBusy || isSmartReadingRunning || isQueryBusy }
+        get { isExclusiveBusy || isSmartReadingRunning || isQueryBusy || isCompanionGenerating }
         set { isExclusiveBusy = newValue }
     }
     @Published var isSavingDocument = false
@@ -149,9 +166,17 @@ import ReadingCore
             aiProgressState.value = newValue
         }
     }
+    var companionProgress: AIProgressPresentationState {
+        get { companionProgressState.value }
+        set {
+            let old = companionProgressState.value
+            if old.runID != newValue.runID || old.bookID != newValue.bookID || old.status != newValue.status || old.phase != newValue.phase || old.toolName != newValue.toolName { objectWillChange.send() }
+            companionProgressState.value = newValue
+        }
+    }
     @Published var catalogOperations = 0
     @Published var libraryRootURL: URL {
-        didSet { if oldValue != libraryRootURL { teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); queryTask?.cancel(); readingPreparationState.reset() } }
+        didSet { if oldValue != libraryRootURL { teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
     }
     @Published var lastTrashedProjectURL: URL?
     let storageState = StorageSettingsState()
@@ -181,6 +206,7 @@ import ReadingCore
     let reader: AIReader
     let readingReader: AIReader
     let queryReader: AIReader
+    let companionReader: AIReader
     let pdfOCRReader = PDFOCRReader()
     private var loaded = false
     var navigationGeneration = 0
@@ -196,10 +222,16 @@ import ReadingCore
             return Double($0.endYear ?? year) >= timeFrom && Double(year) <= timeTo
         }.sorted { ($0.startYear ?? Int.max) < ($1.startYear ?? Int.max) }
     }
-    init() {
+    init(sharedAIRequests: AIRequestCoordinator = AIRequestCoordinator(),
+         connectionProbe: @escaping @Sendable (ProviderSettings, String) async throws -> String = {
+             try await ProviderProbe.test(settings: $0, apiKey: $1)
+         }) {
+        self.sharedAIRequests = sharedAIRequests
+        self.connectionProbe = connectionProbe
         reader = AIReader(coordinator: sharedAIRequests)
         readingReader = AIReader(coordinator: sharedAIRequests)
         queryReader = AIReader(coordinator: sharedAIRequests, lane: .foreground)
+        companionReader = AIReader(coordinator: sharedAIRequests, lane: .foreground)
         let root = AppDataLocations.rootURL
         libraryRootURL = root
         repository = LibraryRepository(rootURL: root)
@@ -209,6 +241,11 @@ import ReadingCore
     }
     func load() async {
         guard !loaded else { return }; loaded = true
+        var completed = false
+        // `loaded` also prevents overlapping loads while this call suspends.
+        // A missing disk/read failure must remain retryable in this instance.
+        defer { if !completed { loaded = false } }
+        errorMessage = nil
         guard AppDataLocations.configuredRootAvailable else {
             errorMessage = "书库位置暂不可用。请连接原磁盘，或在设置中打开已有书库。"; route = "library"; return
         }
@@ -221,6 +258,7 @@ import ReadingCore
             if let first = books.first(where: { $0.id == lastID }) ?? books.first { await selectBook(first.id) }
             refreshMissingReadableFiles()
             if !report.issues.isEmpty { errorMessage = libraryLoadIssueSummary(report.issues) }
+            completed = true
         }
         catch { errorMessage = "书库读取失败，原文件已保留：\(error.localizedDescription)" }
     }
@@ -353,6 +391,10 @@ import ReadingCore
     }
     func saveCurrentDocument(asNew: Bool = false) async {
         guard var current = book, !isBusy, editorDirty else { return }
+        guard NoteMarkdownEditorSession.finishActiveEditing(libraryRoot: libraryRootURL, bookID: current.id) else {
+            documentError = "请先完成当前文字输入，再保存；草稿已保留。"
+            return
+        }
         documentError = nil
         let savingBookID = current.id, savingDocumentID = selectedDocumentID
         let savingTitle = editorTitle, savingMarkdown = editorMarkdown, savingEvidence = draftEvidence
@@ -367,7 +409,10 @@ import ReadingCore
             }
             current = try await repository.saveDocument(project: current, document: document, markdown: savingMarkdown, expectedContentHash: asNew ? nil : documentBaseHash)
             publish(current)
-            let unchanged = bookID == savingBookID && selectedDocumentID == savingDocumentID && editorTitle == savingTitle && editorMarkdown == savingMarkdown && draftEvidence == savingEvidence
+            let unchanged = bookID == savingBookID && selectedDocumentID == savingDocumentID
+                && ReadingNoteEditorContinuity.identicalSource(editorTitle, savingTitle)
+                && ReadingNoteEditorContinuity.identicalSource(editorMarkdown, savingMarkdown)
+                && draftEvidence == savingEvidence
             if bookID == savingBookID && selectedDocumentID == savingDocumentID { selectedDocumentID = document.id; documentBaseHash = savingContentHash }
             if unchanged {
                 editorDirty = false; UserDefaults.standard.removeObject(forKey: "draft-\(current.id)"); activity = "Markdown 文档已保存。"
@@ -414,19 +459,26 @@ import ReadingCore
         let viewTools = preferences.interaction == .functional ? readingViewToolAccess(bookID: current.id, sourceHash: current.sourceHash) : nil
         let mayOrganize = allowsOrganizing && preferences.interaction == .functional
         queryAllowsOrganizing = false
+        let requestRunID = UUID()
+        queryRunID = requestRunID
         isQueryBusy = true
         lastQuestionContext = queryScopePreview; queryDisclosure = "正在准备阅读内容…"; queryRetryQuestion = nil
         let previousChangeIDs = Set(current.controlledChanges?.receipts.map(\.operationID) ?? [])
         queryTask = Task {
-            let aiRunID = await beginQueryProgress(title: "与书对话")
+            let aiRunID = await beginQueryProgress(title: "与书对话", settings: requestSettings)
             var writeGrant: ControlledWriteGrant?
-            defer { finishAIProgress(aiRunID); isQueryBusy = false; queryTask = nil }
+            defer {
+                finishAIProgress(aiRunID)
+                if queryRunID == requestRunID { isQueryBusy = false; queryTask = nil; queryRunID = nil }
+            }
             defer {
                 if let grant = writeGrant, !pendingAIChanges.contains(where: { $0.grant.id == grant.id }) {
                     Task { await repository.revokeChangeGrant(grant.id) }
                 }
             }
             do {
+                try Task.checkCancellation()
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
                 let requestProject = scope == .chapter ? try await ensureBookChapterOutline(project: current) : current
                 let worker = Task.detached(priority: .userInitiated) {
                     try ReadingPreparedAnswer.freeze(project: requestProject, scope: scope, context: context,
@@ -436,16 +488,20 @@ import ReadingCore
                 let prepared = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
                 let snapshot = prepared.snapshot, chatContext = prepared.chatContext, history = prepared.history
                 try Task.checkCancellation()
-                guard bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot,
+                      book?.sourceHash == current.sourceHash else { throw CancellationError() }
                 let memory = memoryEnabled ? await loadPreparedQueryMemory(snapshot: snapshot, history: history, root: requestRoot) : nil
                 try Task.checkCancellation()
-                guard bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot,
+                      book?.sourceHash == current.sourceHash else { throw CancellationError() }
                 lastQuestionContext = snapshot.displayTitle; queryDisclosure = ""
                 var sentMessage = ChatMessage(role: "user", content: question)
                 sentMessage.conversationMode = preferences.interaction; sentMessage.answerStyle = preferences.style
                 sentMessage.readingContext = chatContext
                 var pending = requestProject; pending.chats.append(sentMessage)
                 let questionBase = try await repository.commitAIResult(base: requestProject, result: pending, operationID: "question-" + sentMessage.id)
+                try Task.checkCancellation()
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
                 publish(questionBase)
                 try Task.checkCancellation()
                 if mayOrganize {
@@ -461,11 +517,14 @@ import ReadingCore
                         return try await repository.readDocument(bookID: current.id, document: document)
                     }, hostOperationContext: hostOperationContext, workspace: workspaceSnapshot, hostTools: viewTools, proposalAccess: proposalTools)
                 try Task.checkCancellation()
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot,
+                      book?.sourceHash == current.sourceHash else { throw CancellationError() }
                 answer.message.conversationMode = preferences.interaction; answer.message.answerStyle = preferences.style
                 answer.message.readingContext = chatContext
                 var result = questionBase; result.chats.append(answer.message)
                 markAIProgressSaving(aiRunID)
                 let committed = try await repository.commitAIResult(base: questionBase, result: result, operationID: "answer-" + answer.message.id)
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
                 publish(committed); requestsUsed = await sharedAIRequests.requestsUsed
                 queryDisclosure = ([answer.diagnostics.disclosure] + answer.diagnostics.notices).joined(separator: "\n")
                 if memoryEnabled { await saveQueryMemory(answer.memory, for: snapshot, root: requestRoot) }
@@ -473,6 +532,7 @@ import ReadingCore
             } catch {
                 let cancelled = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
                 finishAIProgress(aiRunID, error: cancelled ? CancellationError() : error)
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { return }
                 queryRetryQuestion = question
                 if cancelled { queryDisclosure = "已停止回答，已发送的问题保留。" }
                 else { errorMessage = error.localizedDescription }

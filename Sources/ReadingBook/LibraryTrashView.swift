@@ -51,7 +51,7 @@ import ReadingCore
                 Text("回收站").font(.system(size: 25, weight: .semibold))
                 Spacer(minLength: 0)
                 Button { close() } label: { Image(systemName: "xmark") }
-                    .buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction).accessibilityLabel("关闭回收站")
+                    .buttonStyle(SettingsActionButtonStyle()).keyboardShortcut(.cancelAction).accessibilityLabel("关闭回收站").help("关闭回收站")
             }
             Text("按书保留回收内容及关联。恢复前会核对当前版本；另行回收的笔记需要单独恢复。")
                 .font(.system(size: 14)).foregroundStyle(.secondary).lineSpacing(4)
@@ -66,7 +66,8 @@ import ReadingCore
                                 Image(systemName: "books.vertical").foregroundStyle(Palette.accent)
                                 Text(book.title).font(.system(size: 15, weight: .medium)).lineLimit(2)
                                 Spacer(minLength: 8)
-                                Button("重新加入") { Task { await store.restoreRemovedBook(book.id) } }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy || store.editorDirty)
+                                Button("重新加入") { Task { await store.restoreRemovedBook(book.id) } }.buttonStyle(SettingsActionButtonStyle()).disabled(store.isBusy || store.editorDirty)
+                                    .help(store.editorDirty ? "请先保存正在编辑的 Markdown" : "将保留在本机的《\(book.title)》重新加入书库")
                             }.padding(14).readingGlass(radius: 16)
                         }
                     }
@@ -96,18 +97,22 @@ import ReadingCore
     }
 
     private var searchBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("搜索标题、书名…", text: $query).textFieldStyle(.plain).font(.system(size: 15))
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "magnifyingglass").readingSearchIcon()
+            TextField("搜索标题、书名…", text: $query).readingSearchInput()
                 .frame(minWidth: 60)
             if !query.isEmpty {
                 Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("清空回收站搜索")
+                    .buttonStyle(SettingsActionButtonStyle()).accessibilityLabel("清空回收站搜索").help("清空回收站搜索")
             }
             Divider().frame(height: 20)
-            Picker("类型", selection: $filter) {
-                ForEach(TrashFilter.allCases) { value in Label(value.title, systemImage: value.icon).tag(value) }
-            }.labelsHidden().pickerStyle(.menu).frame(width: 126).accessibilityLabel("筛选回收内容类型")
+            Menu {
+                Picker("类型", selection: $filter) {
+                    ForEach(TrashFilter.allCases) { value in Label(value.title, systemImage: value.icon).tag(value) }
+                }.pickerStyle(.inline).labelsHidden()
+            } label: { ManagementMenuLabel(title: filter.title) }
+                .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).frame(width: 126)
+                .accessibilityLabel("筛选回收内容类型").help("按书籍、笔记、对象、连线或组件筛选回收内容")
         }.padding(.leading, 14).padding(.trailing, 8).frame(minHeight: 48).readingGlass(radius: 14)
     }
     private func sectionHeading(_ title: String, count: Int) -> some View {
@@ -131,7 +136,7 @@ import ReadingCore
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
             Button { beginRestore(item.action) } label: { Label("恢复", systemImage: "arrow.uturn.backward") }
-                .buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy || restoring || checking || store.editorDirty)
+                .buttonStyle(SettingsActionButtonStyle()).disabled(store.isBusy || restoring || checking || store.editorDirty)
                 .help(store.editorDirty ? "请先保存正在编辑的 Markdown" : "恢复\(item.title)")
         }.padding(14).frame(maxWidth: .infinity, minHeight: 88)
             .background(Palette.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: 16))
@@ -143,7 +148,7 @@ import ReadingCore
             Text(text).font(.system(size: 13)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             Button { localError = nil } label: { Image(systemName: "xmark") }
-                .buttonStyle(.plain).accessibilityLabel("关闭恢复提示")
+                .buttonStyle(SettingsActionButtonStyle()).accessibilityLabel("关闭恢复提示").help("收起这条恢复提示")
         }.padding(12).background(Palette.copper.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
     }
     private func restorationSheet(_ preview: ManualRestorePreview) -> some View {
@@ -153,8 +158,8 @@ import ReadingCore
                     .font(.system(size: 21, weight: .semibold))
                 Spacer(minLength: 0)
                 Button { restorePreview = nil } label: { Image(systemName: "xmark") }
-                    .buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction).disabled(restoring)
-                    .accessibilityLabel("关闭恢复预览")
+                    .buttonStyle(SettingsActionButtonStyle()).keyboardShortcut(.cancelAction).disabled(restoring)
+                    .accessibilityLabel("关闭恢复预览").help("关闭恢复预览，回收内容保留")
             }
             Text("以下项目属于必要的恢复关联。确认后一起恢复；另行回收的 Markdown 笔记不会自动恢复，需在回收站中单独恢复。")
                 .font(.system(size: 14)).foregroundStyle(.secondary).lineSpacing(4)
@@ -179,10 +184,11 @@ import ReadingCore
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack(spacing: 12) {
-                Button("取消") { restorePreview = nil }.buttonStyle(ReadingToolbarButtonStyle()).disabled(restoring)
+                Button("取消") { restorePreview = nil }.buttonStyle(SettingsActionButtonStyle()).disabled(restoring).help("取消本次恢复，回收内容保留")
                 Spacer(minLength: 0)
                 Button(restoring ? "恢复中…" : "恢复这 \(preview.plan.itemIDs.count) 项") { restore(preview) }
-                    .buttonStyle(.borderedProminent).disabled(restoring || store.isBusy || store.editorDirty || !preview.plan.conflicts.isEmpty)
+                    .buttonStyle(SettingsActionButtonStyle(prominent: true)).disabled(restoring || store.isBusy || store.editorDirty || !preview.plan.conflicts.isEmpty)
+                    .help("按预览恢复所列项目及必要关联；另行回收的笔记需要单独恢复")
             }
         }.padding(24).frame(width: 520, height: 440).background(Palette.canvas)
             .interactiveDismissDisabled(restoring)

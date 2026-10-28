@@ -117,7 +117,7 @@ struct ReaderQuestionComposer: View {
                 Button(action: send) {
                     Image(systemName: "arrow.up").font(.system(size: 16, weight: .semibold)).frame(width: 26, height: 28)
                 }.buttonStyle(.borderedProminent).controlSize(.large)
-                    .disabled(store.isBusy || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canUseQueryScope(store.queryScope))
+                    .disabled(!store.canStartQuery || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canUseQueryScope(store.queryScope))
                     .help("按所选范围提问").accessibilityLabel("发送问题")
             }.frame(minHeight: 44, maxHeight: .infinity, alignment: .topLeading)
                 .padding(.leading, resizeCorner == .bottomLeading ? 30 : 16)
@@ -196,9 +196,9 @@ struct ReaderQuestionComposer: View {
         store.updateWorkspaceMemory({ $0.panels[memoryID] = memory }, expectedKey: memoryScope)
     }
     private func send() {
-        guard !store.isBusy, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard store.canStartQuery, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         // ask synchronously freezes the boundary before this view can navigate.
         store.ask(question)
-        if store.isBusy { question = ""; store.requestedWorkspaceRoute = "query" }
+        if store.isQueryBusy { question = ""; store.requestedWorkspaceRoute = "query" }
     }
 }

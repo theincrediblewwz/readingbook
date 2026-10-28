@@ -54,7 +54,13 @@ struct ReaderInlineContent: Sendable {
         let hasSummary = !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         guard !Task.isCancelled else { return nil }
         var localLayers: [ReadingLayer] = []
-        if !hasSummary {
+        if !hasSummary, target == nil {
+            // A page/paragraph layer may cite this sentence without being an
+            // explanation of it. Keep that broader analysis in the companion;
+            // the sentence card falls back to its exact translation instead.
+            localLayers = ReadingSentenceLayerProjection.exactLayers(for: anchor, in: book,
+                structuralBreaks: structuralBreaks)
+        } else if !hasSummary {
             let state = book.readingExperience ?? ReadingExperienceState()
             var anchors: [String: SourceAnchor] = [:]
             for candidate in state.anchors {
@@ -380,9 +386,10 @@ struct ReaderInlineCard: View {
                             Button("继续聊聊") {
                                 let question = content.objectID == nil ? "给我讲讲这句话的意思。" : "给我讲讲\(content.title)，像一起读书时那样。"
                                 if store.openReadingConversation(anchor: content.anchor, objectID: content.objectID, question: question) { state.clear() }
-                            }.buttonStyle(ReadingToolbarButtonStyle())
+                            }.buttonStyle(ReadingToolbarButtonStyle()).help("把这处原文带入对话，先填入问题，确认后才发送")
                             Spacer()
-                            Button("在伴读中打开") { store.sourceDecorationTapped(content.anchor.id); state.clear() }.buttonStyle(ReadingToolbarButtonStyle())
+                            Button("在伴读中打开") { store.sourceDecorationTapped(content.anchor.id); state.clear() }
+                                .buttonStyle(ReadingToolbarButtonStyle()).help("在伴读面板查看这处原文及相关的已保存内容，不发起生成")
                         }
                     }.padding(18)
                 }

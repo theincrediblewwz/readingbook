@@ -81,9 +81,9 @@ struct FrostLibraryView: View {
         }.fixedSize()
     }
     private var searchControl: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("搜索书名", text: $search).textFieldStyle(.plain).font(.system(size: 15)).frame(minWidth: 80)
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "magnifyingglass").readingSearchIcon()
+            TextField("搜索书名", text: $search).readingSearchInput().frame(minWidth: 80)
             if !search.isEmpty {
                 Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.secondary).frame(width: 44, height: 44).accessibilityLabel("清空书库搜索")

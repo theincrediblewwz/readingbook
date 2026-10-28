@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Measure the archived, instrumented Release app; never operate the installed app."""
-import argparse, ctypes, datetime, hashlib, json, os, pathlib, re, shutil, signal, statistics, struct, subprocess, sys, time
+import argparse, ctypes, datetime, hashlib, json, os, pathlib, re, shutil, signal, statistics, struct, subprocess, sys, time, uuid
 
 TOOLS = pathlib.Path(__file__).resolve().parent
 ROOT = pathlib.Path(subprocess.check_output(['git','-C',str(TOOLS),'rev-parse','--show-toplevel'],text=True).strip()).resolve()
@@ -12,6 +12,16 @@ LAYOUT_WARNING_MARKERS=('being marked as needing layout','300 iterations')
 def count_layout_warnings(value):
     # One warning line can contain both markers; count it once.
     return sum(any(marker in line for marker in LAYOUT_WARNING_MARKERS) for line in value.splitlines())
+
+def diagnostic_metadata(profiled=False, scroll_metadata=None):
+    # Keep the provenance on each result/summary, not only launch.json. Timing
+    # aggregates remain available for diagnostics but are ineligible as ordinary
+    # startup/action baselines when a sampler or injected scroll driver is present.
+    reasons=[]
+    if profiled:reasons.append('startup-sample')
+    if scroll_metadata is not None:reasons.append('in-process-scroll-driver')
+    return {'profiled':bool(profiled),'scrollDiagnostic':scroll_metadata,
+        'latencyBaselineExcluded':bool(reasons),'latencyBaselineExclusionReasons':reasons}
 
 def process_start(pid):
     buffer=ctypes.create_string_buffer(1024)
@@ -169,8 +179,12 @@ def main():
     parser.add_argument('--memory-offsets',default='');parser.add_argument('--tag',default=datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
     parser.add_argument('--hold-final',action='store_true');parser.add_argument('--stop-held')
     parser.add_argument('--profile-startup',action='store_true',help='separate diagnostic sample; must never be included in performance baseline')
+    parser.add_argument('--scroll-driver',help='workspace-built in-process diagnostic dylib; requires one held run, excluded from latency baselines')
     args=parser.parse_args()
     if args.stop_held:return stop_held(args.stop_held)
+    scroll_driver=local(args.scroll_driver) if args.scroll_driver else None
+    if scroll_driver and (not scroll_driver.is_file() or not args.hold_final or args.rounds!=1):
+        raise ValueError('scroll diagnostic requires an existing workspace library and one --hold-final run')
     if not args.tag.replace('-','').replace('_','').isalnum():raise ValueError('tag must be alphanumeric with hyphens/underscores')
     manifest=json.loads(local(args.manifest).read_text());base=local(manifest['buildRoot']);app=local(manifest['app']);binary=app/'Contents/MacOS/ReadingBook'
     if manifest.get('configuration')!='release' or not manifest.get('buildSucceeded') or sha(binary)!=manifest['binarySHA256']:raise RuntimeError('successful unmodified Release build required')
@@ -204,9 +218,18 @@ def main():
         start=datetime.datetime.now().astimezone();launcherlog=(run/'launcher.log').open('w')
         openargs=['/usr/bin/open','-n','-W','--env','READINGBOOK_PERF_CONFIG='+str(run/'config.json'),'--env','TMPDIR='+str(base/'tmp'),
             '--stdout',str(run/'stdout.log'),'--stderr',str(run/'stderr.log'),str(app)]
+        scroll_metadata=None
+        if scroll_driver:
+            control=run/'scroll-control';control.mkdir()
+            nonce=str(uuid.uuid4())
+            diagnostic_env={'DYLD_INSERT_LIBRARIES':str(scroll_driver),'READINGBOOK_SCROLL_WORKSPACE':str(ROOT),
+                'READINGBOOK_SCROLL_EXPECTED_EXECUTABLE':str(binary),'READINGBOOK_SCROLL_CONTROL':str(control),'READINGBOOK_SCROLL_NONCE':nonce}
+            for key,value in diagnostic_env.items():openargs[-1:-1]=['--env',key+'='+value]
+            scroll_metadata={'library':str(scroll_driver),'sha256':sha(scroll_driver),'control':str(control),'nonce':nonce,'latencyBaselineExcluded':True}
         launch=SYSTEM.mach_absolute_time();child=subprocess.Popen(openargs,cwd=run,env=env,stdout=launcherlog,stderr=subprocess.STDOUT)
         apppid=None;created=None;sampler=None;samplelog=None
         launchrecord={'launchRequestTicks':launch,'launcherPID':child.pid,'startedAt':start.isoformat(),'binarySHA256':manifest['binarySHA256'],'sourceCommit':manifest['sourceCommit'],'launchMethod':'LaunchServices open -n -W with per-process environment'}
+        if scroll_metadata:launchrecord['scrollDiagnostic']=scroll_metadata
         write(run/'launch.json',launchrecord)
         deadline=time.monotonic()+max(360,240+max(config['memoryOffsets'],default=0))
         held=False
@@ -235,7 +258,7 @@ def main():
             samplelog.close()
         launcherlog.close();rows=events(run/'events.jsonl');result=summarize(rows,launch,created)
         result.update(run=str(run),exitCode=child.poll(),held=held)
-        result['profiled']=args.profile_startup
+        result.update(diagnostic_metadata(args.profile_startup,scroll_metadata))
         if sampler:
             result['startupSampleReturnCode']=sampler.returncode
             if sampler.returncode!=0 or not (run/'startup.sample.txt').exists():result['status']='failed-startup-sample'
@@ -266,7 +289,7 @@ def main():
     summary={'status':'passed' if len(results)==args.rounds and all(r['status']=='passed' for r in results) and after==original and pdf_before==pdf_after else 'failed',
         'sourceLibraryUnchanged':after==original if fixture else None,'sourcePDFSHA256':pdf_before,'sourcePDFUnchanged':pdf_before==pdf_after if pdf else None,'mode':args.mode,'roundsRequested':args.rounds,'roundsCompleted':len(results),
         'window':[args.width,args.height],'aggregate':aggregate(results),'runs':[r['run'] for r in results],
-        'profiled':args.profile_startup,
+        **diagnostic_metadata(args.profile_startup,next((r.get('scrollDiagnostic') for r in results if r.get('scrollDiagnostic') is not None),None)),
         'launchBoundary':'external mach_absolute_time before LaunchServices request; libproc ri_proc_start_abstime is separate process-create boundary; main.entry excludes pre-main',
         'diskColdCache':False,'pixelFirstScreenMeasured':False}
     write(logroot/'summary.json',summary);print('Summary:',logroot/'summary.json',flush=True)

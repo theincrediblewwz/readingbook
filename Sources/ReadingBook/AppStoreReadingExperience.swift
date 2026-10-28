@@ -737,6 +737,7 @@ private struct CompanionScopePreparation: Sendable {
         if !readingExperienceIndex.anchors.contains(where: { $0.id == anchor.id }) { readingExperienceIndex.anchors.append(anchor) }
         newReadingNote(title: "关于\(selectedUnit?.chapter ?? "原文")的理解", markdown: "", anchorIDs: [anchor.id])
     }
+    func cancelCompanion() { companionTask?.cancel() }
     func enhanceCurrentSource() {
         Task { _ = await enhanceSourceScope(scope: .page) }
     }
@@ -744,7 +745,7 @@ private struct CompanionScopePreparation: Sendable {
     /// the viewport, never the in-flight generation scope or its receipt gate.
     @discardableResult
     func enhanceSourceScope(scope: ReadingQueryScope) async -> ReadingQuerySnapshot? {
-        guard !Task.isCancelled, [.page, .chapter].contains(scope), let initial = book, let unit = selectedUnit, !isBusy else { return nil }
+        guard !Task.isCancelled, [.page, .chapter].contains(scope), let initial = book, let unit = selectedUnit, canStartCompanion else { return nil }
         let root = libraryRootURL, runID = UUID(), ownerRepository = repository
         var context = ReadingContext(sourceHash: initial.sourceHash, unitID: unit.id, page: unit.page)
         if scope == .chapter { context.selectedSourceAnchor = chapterReadingAnchor(in: initial, unitID: unit.id) }
@@ -753,16 +754,16 @@ private struct CompanionScopePreparation: Sendable {
         frozenSettings.transportSessionID = "readingbook-\(initial.id)-companion"
         let frozenKey = apiKey
         companionScopeRunID = runID
-        isBusy = true; readingExperienceError = nil; readingCompanionVisible = true; readingCompanionTab = "companion"
+        isCompanionGenerating = true; readingExperienceError = nil; readingCompanionVisible = true; readingCompanionTab = "companion"
         activity = "正在准备伴读范围…"
         return await withCheckedContinuation { continuation in
-        task = Task {
+        companionTask = Task {
             var returnedScope = false
-            let aiRunID = await beginAIProgress(title: "准备伴读范围")
+            let aiRunID = await beginCompanionProgress(title: "准备伴读范围", settings: frozenSettings)
             defer {
                 if !returnedScope { continuation.resume(returning: nil) }
                 finishAIProgress(aiRunID)
-                if companionScopeRunID == runID { activeReadingUnitID = nil; isBusy = false; task = nil; companionScopeRunID = nil }
+                if companionScopeRunID == runID { activeCompanionUnitID = nil; isCompanionGenerating = false; companionTask = nil; companionScopeRunID = nil }
             }
             do {
                 try Task.checkCancellation()
@@ -803,9 +804,13 @@ private struct CompanionScopePreparation: Sendable {
                 }
                 let snapshot = prepared.snapshot, actionableIDs = prepared.actionableIDs, remainingIDs = prepared.remainingIDs, progress = prepared.progress
                 guard !actionableIDs.isEmpty else { readingExperienceError = "这部分已由你对照原书确认为空白，无需生成伴读。"; return }
-                guard remainingIDs.isEmpty || providerReady else { return }
+                if !remainingIDs.isEmpty && frozenSettings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    errorMessage = "请先在模型设置中填写模型名称与服务地址。"
+                    showingSettings = true
+                    return
+                }
                 returnedScope = true; continuation.resume(returning: snapshot)
-                if aiProgress.runID == aiRunID { aiProgress.title = "生成伴读 · " + snapshot.displayTitle }
+                updateAIProgressTitle(aiRunID, title: "生成伴读 · " + snapshot.displayTitle)
                 updateAIProgressDetail(aiRunID, detail: snapshot.displayTitle)
                 if !prepared.isContinuation {
                     try Task.checkCancellation()
@@ -819,7 +824,7 @@ private struct CompanionScopePreparation: Sendable {
                     guard companionScopeRunID == runID, libraryRootURL == root, bookID == snapshot.bookID else { throw CancellationError() }
                     publish(saved)
                 }
-                await reader.resetBudget()
+                await companionReader.resetBudget()
                 for (index, unitID) in remainingIDs.enumerated() {
                     guard companionScopeRunID == runID, libraryRootURL == root, let starting = book,
                           starting.id == snapshot.bookID, starting.sourceHash == snapshot.sourceHash else { throw CancellationError() }
@@ -829,7 +834,7 @@ private struct CompanionScopePreparation: Sendable {
                         guard companionScopeRunID == runID, libraryRootURL == root, let current = book,
                               current.id == snapshot.bookID, current.sourceHash == snapshot.sourceHash,
                               let source = current.units.first(where: { $0.id == unitID }) else { throw CancellationError() }
-                        activeReadingUnitID = unitID
+                        activeCompanionUnitID = unitID
                         updateAIProgressDetail(aiRunID, detail: source.page.map { "第 \($0) 页" } ?? source.chapter)
                         activity = "正在准备伴读 · \(actionableIDs.count - remainingIDs.count + index + 1)/\(actionableIDs.count) · \(source.locator)"
                         let previousReceipts = try ReadingLedger.receipts(for: source, in: current).count
@@ -841,7 +846,7 @@ private struct CompanionScopePreparation: Sendable {
                         // Whole units keep the existing bounded receipt path.
                         // A unit shared by chapters uses the host's exact slice
                         // capability instead of widening a chapter to the page.
-                        var result = try await reader.enrichCurrent(project: current, unitID: unitID, settings: frozenSettings, apiKey: frozenKey,
+                        var result = try await companionReader.enrichCurrent(project: current, unitID: unitID, settings: frozenSettings, apiKey: frozenKey,
                             sourceRanges: wholeUnit ? nil : ranges)
                         try Task.checkCancellation()
                         guard companionScopeRunID == runID, libraryRootURL == root, bookID == snapshot.bookID else { throw CancellationError() }
@@ -853,7 +858,7 @@ private struct CompanionScopePreparation: Sendable {
                         let saved = try await ownerRepository.commitAIResult(base: current, result: result, operationID: "companion-batch-" + UUID().uuidString)
                         guard companionScopeRunID == runID, libraryRootURL == root, bookID == snapshot.bookID else { throw CancellationError() }
                         publish(saved)
-                        requestsUsed = await reader.requestCount
+                        requestsUsed = await sharedAIRequests.requestsUsed
                         if completed { break }
                     }
                 }

@@ -7,8 +7,10 @@ WORK=ROOT/'.build/native-ui-harness'
 p=argparse.ArgumentParser()
 p.add_argument('--bin-dir',type=pathlib.Path,help='Reuse an already completed Debug ReadingBook build')
 a=p.parse_args()
-for name in ['tmp','cache','swiftpm-cache']:(WORK/name).mkdir(parents=True,exist_ok=True)
-env=os.environ.copy();env.update(TMPDIR=str(WORK/'tmp'),CLANG_MODULE_CACHE_PATH=str(WORK/'cache'),SWIFTPM_MODULECACHE_OVERRIDE=str(WORK/'cache'))
+for name in ['tmp','swiftpm-cache']:(WORK/name).mkdir(parents=True,exist_ok=True)
+shared=ROOT/'.build/shared-module-cache'; swift_cache=shared/'swift'; clang_cache=shared/'clang'
+for cache in [swift_cache,clang_cache]:cache.mkdir(parents=True,exist_ok=True)
+env=os.environ.copy();env.update(TMPDIR=str(WORK/'tmp'),CLANG_MODULE_CACHE_PATH=str(clang_cache),SWIFTPM_MODULECACHE_OVERRIDE=str(swift_cache),SWIFT_MODULE_CACHE_PATH=str(swift_cache))
 if a.bin_dir:
  bindir=(ROOT/a.bin_dir).resolve() if not a.bin_dir.is_absolute() else a.bin_dir.resolve()
  assert bindir.is_relative_to(ROOT)
@@ -25,7 +27,7 @@ assert (bindir/'Modules/ReadingBook.swiftmodule').exists()
 source=SOURCE/'NativeUIHarness.swift'
 source_bytes=source.read_bytes()
 (WORK/'compiled-harness-source.swift').write_bytes(source_bytes)
-args=['swiftc','-parse-as-library','-enable-testing','-g','-I',str(bindir/'Modules'),'-module-name','NativeUIHarness',str(source)]+objects+['-o',str(WORK/'native-ui-harness')]
+args=['swiftc','-parse-as-library','-enable-testing','-g','-I',str(bindir/'Modules'),'-module-cache-path',str(swift_cache),'-Xcc','-fmodules-cache-path='+str(clang_cache),'-module-name','NativeUIHarness',str(source)]+objects+['-o',str(WORK/'native-ui-harness')]
 with (WORK/'compile.log').open('w') as log:subprocess.run(args,cwd=ROOT,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
 metadata={'sourceSHA256':hashlib.sha256(source_bytes).hexdigest(),'binarySHA256':hashlib.sha256((WORK/'native-ui-harness').read_bytes()).hexdigest(),'productBinDir':str(bindir),'productObjects':[{'file':str(pathlib.Path(x).relative_to(ROOT)),'sha256':hashlib.sha256(pathlib.Path(x).read_bytes()).hexdigest()} for x in objects]}
 (WORK/'build-manifest.json').write_text(json.dumps(metadata,indent=2)+'\n')

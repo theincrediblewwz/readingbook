@@ -57,6 +57,7 @@ struct AIProgressPresentationState: Equatable {
     var runID: UUID?
     fileprivate var mailbox: AIProgressMailbox?
     var bookID: String?
+    var libraryRoot: URL?
     var title = ""
     var detail = ""
     var startedAt: Date?
@@ -188,48 +189,70 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
 
 @MainActor extension AppStore {
     var aiConcurrencyLimit: Int {
-        min(5, max(1, min(book?.smartReading?.selection.execution?.maximumConcurrentRequests ?? 2,
-            book?.plan?.recommendedParallelism ?? 5)))
+        // A model's plan may recommend sequential book analysis; that is not
+        // permission to serialize every independent reader interaction. Keep
+        // the host/user's explicit global cap, including an intentional cap1.
+        min(5, max(1, book?.smartReading?.selection.execution?.maximumConcurrentRequests ?? 2))
     }
-    @discardableResult func beginAIProgress(title: String, ocr: Bool = false, backgroundReading: Bool = false) async -> UUID {
+    @discardableResult func beginAIProgress(title: String, ocr: Bool = false, backgroundReading: Bool = false, settings frozenSettings: ProviderSettings? = nil) async -> UUID {
+        let sourceBookID = bookID, sourceRoot = libraryRootURL, owner = repository
         var run: AIRequestRun?
-        if !ocr { run = try? await sharedAIRequests.beginManagedRun(settings: settings, maximumConcurrency: aiConcurrencyLimit) }
-        return await prepareProgress(title: title, query: false, ocr: ocr, worker: backgroundReading ? readingReader : reader, requestRun: run)
+        if !ocr { run = try? await sharedAIRequests.beginManagedRun(settings: frozenSettings ?? settings, maximumConcurrency: aiConcurrencyLimit) }
+        return await prepareProgress(title: title, destination: .general, ocr: ocr, worker: backgroundReading ? readingReader : reader, requestRun: run,
+            sourceBookID: sourceBookID, sourceRoot: sourceRoot, owner: owner)
     }
-    @discardableResult func beginQueryProgress(title: String) async -> UUID {
-        let run = try? await sharedAIRequests.beginManagedRun(settings: settings, maximumConcurrency: aiConcurrencyLimit)
-        return await prepareProgress(title: title, query: true, ocr: false, worker: queryReader, requestRun: run)
+    @discardableResult func beginQueryProgress(title: String, settings frozenSettings: ProviderSettings? = nil) async -> UUID {
+        let sourceBookID = bookID, sourceRoot = libraryRootURL, owner = repository
+        let run = try? await sharedAIRequests.beginManagedRun(settings: frozenSettings ?? settings, maximumConcurrency: aiConcurrencyLimit)
+        return await prepareProgress(title: title, destination: .query, ocr: false, worker: queryReader, requestRun: run,
+            sourceBookID: sourceBookID, sourceRoot: sourceRoot, owner: owner)
+    }
+    @discardableResult func beginCompanionProgress(title: String, settings frozenSettings: ProviderSettings? = nil) async -> UUID {
+        let sourceBookID = bookID, sourceRoot = libraryRootURL, owner = repository
+        let run = try? await sharedAIRequests.beginManagedRun(settings: frozenSettings ?? settings, maximumConcurrency: aiConcurrencyLimit)
+        return await prepareProgress(title: title, destination: .companion, ocr: false, worker: companionReader, requestRun: run,
+            sourceBookID: sourceBookID, sourceRoot: sourceRoot, owner: owner)
     }
     private func progressValue(_ runID: UUID) -> AIProgressPresentationState? {
         if aiProgress.runID == runID { return aiProgress }
         if queryProgressState.value.runID == runID { return queryProgressState.value }
+        if companionProgress.runID == runID { return companionProgress }
         return nil
     }
     private func setProgress(_ value: AIProgressPresentationState) {
         if value.runID == queryProgressState.value.runID { queryProgressState.value = value }
+        else if value.runID == companionProgress.runID { companionProgress = value }
         else { aiProgress = value }
     }
-    private func prepareProgress(title: String, query: Bool, ocr: Bool, worker: AIReader, requestRun: AIRequestRun?) async -> UUID {
-        let runID = UUID(), sourceBookID = bookID, frozenRepository = repository
-        _ = (query ? queryProgressState.value : aiProgress).mailbox?.take(close: true)
+    private enum ProgressDestination: Equatable { case general, query, companion }
+    private func prepareProgress(title: String, destination: ProgressDestination, ocr: Bool, worker: AIReader, requestRun: AIRequestRun?,
+                                 sourceBookID: String?, sourceRoot: URL, owner: LibraryRepository) async -> UUID {
+        let runID = UUID()
+        let old = destination == .query ? queryProgressState.value : destination == .companion ? companionProgress : aiProgress
+        _ = old.mailbox?.take(close: true)
         let mailbox = AIProgressMailbox(requestRun: requestRun) {
-            if let sourceBookID { _ = try? await frozenRepository.refreshReadableViews(id: sourceBookID, archived: false) }
+            if let sourceBookID { _ = try? await owner.refreshReadableViews(id: sourceBookID, archived: false) }
         }
         var value = AIProgressPresentationState()
-        value.mailbox = mailbox; value.runID = runID; value.bookID = sourceBookID
+        value.mailbox = mailbox; value.runID = runID; value.bookID = sourceBookID; value.libraryRoot = sourceRoot
         value.title = title; value.startedAt = Date(); value.status = .running
-        if query { queryProgressState.value = value } else { aiProgress = value }
+        switch destination {
+        case .query: queryProgressState.value = value
+        case .companion: companionProgress = value
+        case .general: aiProgress = value
+        }
         let handler = workerProgressHandler(runID)
         if ocr { await pdfOCRReader.setProgressHandler(handler) } else { await worker.setProgressHandler(handler) }
         return runID
     }
     func workerProgressHandler(_ runID: UUID) -> AIProgressHandler {
         let relay = AIWorkerProgressRelay()
-        let mailbox = progressValue(runID)?.mailbox, sourceBookID = bookID
+        let value = progressValue(runID), mailbox = value?.mailbox, sourceBookID = value?.bookID, sourceRoot = value?.libraryRoot
         return { [weak self] event in
             guard let mailbox, mailbox.append(relay.tag(event)) else { return }
             Task { @MainActor [weak self] in
-                guard let self, self.bookID == sourceBookID, self.progressValue(runID)?.isRunning == true else { return }
+                guard let self, self.bookID == sourceBookID, self.libraryRootURL == sourceRoot,
+                      self.progressValue(runID)?.isRunning == true else { return }
                 self.flushAIProgress(runID)
             }
         }
@@ -242,6 +265,22 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
     func updateAIProgressDetail(_ runID: UUID, detail: String) {
         guard var value = progressValue(runID), value.isRunning else { return }
         value.detail = String(detail.prefix(160)); setProgress(value)
+    }
+    func updateAIProgressTitle(_ runID: UUID, title: String) {
+        guard var value = progressValue(runID), value.isRunning else { return }
+        value.title = title; setProgress(value)
+    }
+    /// A progress surface cancels exactly the run it displays, never whichever
+    /// other lane happens to be busy when the click reaches the main actor.
+    func cancelAIActivity(_ runID: UUID?) {
+        guard let runID, let value = progressValue(runID), value.isRunning,
+              value.bookID == bookID, value.libraryRoot == libraryRootURL else { return }
+        if companionProgress.runID == runID { cancelCompanion() }
+        else if queryProgressState.value.runID == runID { cancelQuery() }
+        else if aiProgress.runID == runID {
+            if isSmartReadingRunning { pauseReading() }
+            else { task?.cancel(); activity = "正在停止本次任务，已保存内容保留。" }
+        }
     }
     func finishAIProgress(_ runID: UUID, error: Error? = nil) {
         guard progressValue(runID)?.isRunning == true else { return }
@@ -259,7 +298,7 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
             value.status = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled || error is ReadingWorkflowBudgetPause ? .paused : .failed
         } else { value.status = .completed }
         setProgress(value)
-        if let bookID = value.bookID, let sourceHash = book?.sourceHash, self.bookID == bookID {
+        if let bookID = value.bookID, let sourceHash = book?.sourceHash, self.bookID == bookID, value.libraryRoot == libraryRootURL {
             let records = value.requests.map { request in
                 AIRequestHistoryRecord(id: request.id.uuidString, title: value.title, number: request.number,
                     startedAt: request.startedAt, finishedAt: request.finishedAt ?? value.finishedAt ?? Date(),

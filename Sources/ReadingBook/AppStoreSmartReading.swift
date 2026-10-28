@@ -1,5 +1,21 @@
 import Foundation
+import CryptoKit
 import ReadingCore
+
+struct SmartReadingPlanRegeneration: Identifiable, Sendable {
+    let id = UUID()
+    let root: URL
+    let bookID: String
+    let sourceHash: String
+    let bookTitle: String
+    let selection: SmartReadingSelection
+    let existingPlanFingerprint: String
+
+    static func fingerprint(_ plan: ReadingPlan?) throws -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return try SHA256.hash(data: encoder.encode(plan)).map { String(format: "%02x", $0) }.joined()
+    }
+}
 
 @MainActor extension AppStore {
     var smartReadingSession: SmartReadingSession? { book?.smartReading }
@@ -27,17 +43,41 @@ import ReadingCore
 
     func makePlan() { prepareSmartReading(book?.smartReading?.selection ?? SmartReadingSelection(execution: .init())) }
 
-    func prepareSmartReading(_ selection: SmartReadingSelection) {
+    func cancelPlanRegeneration() { pendingPlanRegeneration = nil }
+
+    func confirmPlanRegeneration() {
+        guard let request = pendingPlanRegeneration else { return }
+        pendingPlanRegeneration = nil
+        guard let current = book, current.id == request.bookID, current.sourceHash == request.sourceHash,
+              libraryRootURL == request.root, canStartReading else { return }
+        do {
+            guard try SmartReadingPlanRegeneration.fingerprint(current.plan) == request.existingPlanFingerprint else {
+                errorMessage = "阅读方案已在确认期间改变，请重新检查后再生成；已有内容保留。"; return
+            }
+            prepareSmartReading(request.selection, confirmingExisting: true)
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func prepareSmartReading(_ selection: SmartReadingSelection, confirmingExisting: Bool = false) {
         guard let original = book, canStartReading, providerReady else { return }
         guard original.bookSchemes?.pending == nil else { openBookScheme(); return }
+        if original.plan != nil, !confirmingExisting {
+            do {
+                pendingPlanRegeneration = SmartReadingPlanRegeneration(root: libraryRootURL, bookID: original.id,
+                    sourceHash: original.sourceHash, bookTitle: original.title, selection: selection,
+                    existingPlanFingerprint: try SmartReadingPlanRegeneration.fingerprint(original.plan))
+            } catch { errorMessage = error.localizedDescription }
+            return
+        }
         let selectedID = selectedUnitID
         var requestSettings = settings
         requestSettings.transportSessionID = "readingbook-" + original.id + "-reading"
         let requestKey = apiKey
+        let owner = repository, requestRoot = libraryRootURL
         isSmartReadingRunning = true; smartReadingPlanReady = false
         activity = "正在准备阅读范围…"
         readingTask = Task {
-            let aiRunID = await beginAIProgress(title: "制定阅读方案", backgroundReading: true)
+            let aiRunID = await beginAIProgress(title: "制定阅读方案", backgroundReading: true, settings: requestSettings)
             var committedSessionID: String?
             do {
                 let original = try await ensureBookChapterOutline(project: original)
@@ -57,18 +97,22 @@ import ReadingCore
                 var candidate = original; candidate.smartReading = session
                 selection.execution?.configureRequestedViews(in: &candidate)
                 try Task.checkCancellation()
-                let frozen = try await repository.commitAIResult(base: original, result: candidate, operationID: "reading-scope-" + session.id)
-                committedSessionID = session.id
-                publish(frozen)
+                guard libraryRootURL == requestRoot, bookID == original.id, book?.sourceHash == original.sourceHash else { throw CancellationError() }
                 updateAIProgressDetail(aiRunID, detail: session.scopeTitle)
                 await readingReader.resetBudget()
-                var planned = try await readingReader.plan(project: frozen, settings: requestSettings, apiKey: requestKey,
+                // The candidate range, session and requested views remain local
+                // until a complete, valid plan returns. Failure/cancellation must
+                // leave the previously confirmed session usable as it was.
+                var planned = try await readingReader.plan(project: candidate, settings: requestSettings, apiKey: requestKey,
                     allowedUnitIDs: analysisIDs, preferredMethodIDs: selection.preferredMethodIDs)
                 try Task.checkCancellation()
+                guard libraryRootURL == requestRoot, bookID == original.id, book?.sourceHash == original.sourceHash else { throw CancellationError() }
                 planned.smartReading?.status = .awaitingConfirmation
                 planned.smartReading?.updatedAt = Date(); planned.smartReading?.lastMessage = "方案准备好了，确认后开始分析。"
                 markAIProgressSaving(aiRunID)
-                let saved = try await repository.commitAIResult(base: frozen, result: planned, operationID: "reading-plan-" + session.id)
+                let saved = try await owner.commitAIResult(base: original, result: planned, operationID: "reading-plan-" + session.id)
+                committedSessionID = session.id
+                guard libraryRootURL == requestRoot, bookID == original.id, book?.sourceHash == original.sourceHash else { throw CancellationError() }
                 publish(saved); smartReadingPlanReady = true
                 activity = "阅读方案已生成，请确认方法与组件。"
                 finishAIProgress(aiRunID)
@@ -146,7 +190,7 @@ import ReadingCore
         let requestKey = apiKey, sessionID = existing.id, readingBookID = original.id
         isSmartReadingRunning = true; activity = "正在准备本轮阅读…"
         readingTask = Task {
-            let aiRunID = await beginAIProgress(title: "智能阅读 · " + existing.scopeTitle, backgroundReading: true)
+            let aiRunID = await beginAIProgress(title: "智能阅读 · " + existing.scopeTitle, backgroundReading: true, settings: requestSettings)
             do {
                 let original = try await ensureBookChapterOutline(project: original)
                 let worker = Task.detached(priority: .userInitiated) {
@@ -221,7 +265,8 @@ import ReadingCore
     func pause() {
         guard !restoringWorkspaceMemory, !isSavingDocument, !isExportingProject, !isImportingBookCommit, !isCommittingLocalWrite else { return }
         if isSmartReadingRunning { pauseReading() }
-        else { queryTask?.cancel(); task?.cancel(); activity = "正在停止，已保存内容保留。" }
+        else if isCompanionGenerating { cancelCompanion(); activity = "正在停止伴读，已保存内容保留。" }
+        else { queryTask?.cancel(); task?.cancel(); connectionTestTask?.cancel(); activity = "正在停止，已保存内容保留。" }
     }
 
     private func freezeReadingSelection(_ selection: SmartReadingSelection, project: BookProject, currentUnitID: String?) async throws -> SmartReadingSession {

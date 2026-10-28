@@ -15,7 +15,7 @@ if not a.resume:
 changes=[]
 def patch(rel,before,after):
  if a.resume:return
- target=source/rel;old=target.read_text();assert before in old,(rel,before)
+ target=source/rel;old=target.read_text();assert old.count(before)==1,(rel,'hook preimage must occur exactly once',old.count(before),before)
  new=old.replace(before,after,1);target.write_text(new)
  changes.extend(difflib.unified_diff(old.splitlines(True),new.splitlines(True),fromfile='a/'+rel,tofile='b/'+rel))
 patch('Sources/ReadingBook/ReadingBookLauncher.swift','    @MainActor static func main() {','    @MainActor static func main() {\n        let perfMainEntry = PerfTrace.ticks()')
@@ -24,7 +24,12 @@ patch('Sources/ReadingBook/ReadingBookApp.swift','import AppKit','import AppKit\
 patch('Sources/ReadingBook/ReadingBookApp.swift','.background(FrostWindowAppearance())','.background(FrostWindowAppearance())\n                .background(PerfWindowProbe())')
 patch('Sources/ReadingBook/ReadingBookApp.swift','.task { await store.load() }','.task {\n                    PerfTrace.event("store.load.request")\n                    await store.load()\n                    PerfTrace.event("store.load.completed")\n                    PerfProbe.storeLoaded(store)\n                }')
 patch('Sources/ReadingBook/ReadingBookApp.swift','.defaultSize(width: 1480, height: 940)','.defaultSize(width: PerfProbe.config.width, height: PerfProbe.config.height)')
-patch('Sources/ReadingBook/AppStore.swift','    init() {','    init() {\n        PerfTrace.event("appstore.init.begin")\n        defer { PerfTrace.event("appstore.init.end") }')
+store_source = (source/'Sources/ReadingBook/AppStore.swift').read_text()
+if '        self.sharedAIRequests = sharedAIRequests' in store_source:
+    patch('Sources/ReadingBook/AppStore.swift','        self.sharedAIRequests = sharedAIRequests',
+          '        PerfTrace.event("appstore.init.begin")\n        defer { PerfTrace.event("appstore.init.end") }\n        self.sharedAIRequests = sharedAIRequests')
+else:
+    patch('Sources/ReadingBook/AppStore.swift','    init() {','    init() {\n        PerfTrace.event("appstore.init.begin")\n        defer { PerfTrace.event("appstore.init.end") }')
 patch('Sources/ReadingBook/AppStore.swift','            let report = try await repository.loadReport()','            PerfTrace.event("library.load-report.begin")\n            let report = try await repository.loadReport()\n            PerfTrace.event("library.load-report.end", ["bookCount": report.projects.count])')
 patch('Sources/ReadingBook/AppStore.swift','    func selectBook(_ id: String, preferredRoute: String? = nil) async {','    func selectBook(_ id: String, preferredRoute: String? = nil) async {\n        PerfTrace.event("book.select.begin")\n        defer { PerfTrace.event("book.select.end") }')
 patch('Sources/ReadingBook/WorkspaceMemory.swift','        UserDefaults.standard.set(book.id, forKey: "workspace-last-book-v1")','        PerfProbe.normalizeMemory(self)\n        UserDefaults.standard.set(book.id, forKey: "workspace-last-book-v1")')
@@ -47,8 +52,10 @@ for target in sorted((source/'Sources').rglob('*.swift')):
  original=old.stdout if old.returncode==0 else ''
  changes.extend(difflib.unified_diff(original.splitlines(True),target.read_text().splitlines(True),fromfile='a/'+rel,tofile='b/'+rel))
 (logs/'instrumentation.patch').write_text(''.join(changes))
-for name in ['tmp','clang-cache','swiftpm-cache','module-cache']:(base/name).mkdir(exist_ok=a.resume)
-env=os.environ.copy();env.update(TMPDIR=str(base/'tmp'),CLANG_MODULE_CACHE_PATH=str(base/'clang-cache'),SWIFTPM_MODULECACHE_OVERRIDE=str(base/'module-cache'))
+for name in ['tmp','swiftpm-cache']:(base/name).mkdir(exist_ok=a.resume)
+shared=ROOT/'.build/shared-module-cache';swift_cache=shared/'swift';clang_cache=shared/'clang'
+for cache in [swift_cache,clang_cache]:cache.mkdir(parents=True,exist_ok=True)
+env=os.environ.copy();env.update(TMPDIR=str(base/'tmp'),CLANG_MODULE_CACHE_PATH=str(clang_cache),SWIFTPM_MODULECACHE_OVERRIDE=str(swift_cache),SWIFT_MODULE_CACHE_PATH=str(swift_cache))
 args=['swift','build','--configuration','release','--product','ReadingBook','--scratch-path',str(base/'build'),'--cache-path',str(base/'swiftpm-cache'),'--disable-sandbox','-Xlinker','-lproc']
 manifest={'sourceCommit':ref,'archiveSHA256':hashlib.sha256(archive.read_bytes()).hexdigest(),'buildRoot':str(base),'sourceRoot':str(source),'configuration':'release','enableTesting':False,'swiftBuildArguments':args,'instrumentationPatchSHA256':hashlib.sha256((logs/'instrumentation.patch').read_bytes()).hexdigest(),'probeSourcesSHA256':{x:hashlib.sha256((TOOLS/x).read_bytes()).hexdigest() for x in ['PerfTrace.swift','PerfProbe.swift']},'benchmarkExecuted':False}
 (logs/'build-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')

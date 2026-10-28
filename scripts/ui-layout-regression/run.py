@@ -28,7 +28,8 @@ def compile_probe(build: Path, logs: Path, env: dict[str, str]) -> Path:
         ["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True, env=env
     ).strip()
     common = ["xcrun", "swiftc", "-parse-as-library", "-sdk", sdk,
-              "-module-cache-path", str(build / "cache")]
+              "-module-cache-path", env["SWIFT_MODULE_CACHE_PATH"],
+              "-Xcc", "-fmodules-cache-path=" + env["CLANG_MODULE_CACHE_PATH"]]
     commands = [
         common + ["-emit-library", "-emit-module", "-module-name", "ReadingCore",
                   str(SOURCES[-1]), "-emit-module-path", str(build / "ReadingCore.swiftmodule"),
@@ -132,10 +133,14 @@ def main() -> int:
     build = Path(tempfile.mkdtemp(prefix="run-", dir=build_parent))
     logs = ROOT / "logs/ui-layout-regression" / build.name
     logs.mkdir(parents=True)
-    for name in ["cache", "tmp"]:
+    for name in ["tmp"]:
         (build / name).mkdir()
+    shared = ROOT / ".build/shared-module-cache"
+    for cache in [shared / "swift", shared / "clang"]:
+        cache.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "TMPDIR": str(build / "tmp"),
-           "CLANG_MODULE_CACHE_PATH": str(build / "cache")}
+           "SWIFT_MODULE_CACHE_PATH": str(shared / "swift"),
+           "CLANG_MODULE_CACHE_PATH": str(shared / "clang")}
     report = {
         "baseline": args.baseline, "build_directory": str(build),
         "log_directory": str(logs),

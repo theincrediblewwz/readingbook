@@ -102,9 +102,9 @@ struct ReaderOutlinePanel: View {
             Picker("阅读导航内容", selection: $bookmarksOnly) {
                 Text("目录").tag(false); Text("书签").tag(true)
             }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 16).padding(.bottom, 12)
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索原文或章节", text: $query).textFieldStyle(.plain).font(.system(size: 15))
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "magnifyingglass").readingSearchIcon()
+                TextField("搜索原文或章节", text: $query).readingSearchInput()
                 if !query.isEmpty {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).frame(width: 44, height: 44).accessibilityLabel("清空原文搜索")

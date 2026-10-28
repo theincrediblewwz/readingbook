@@ -29,16 +29,16 @@ struct LibrarySearchView: View {
                     Text("原文优先 · 离线查询已导入书籍").font(.system(size: 13)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
-                Picker("检索范围", selection: $scope) {
-                    Text("本书").tag("current")
-                    Text("整个书库").tag("library")
-                }.labelsHidden().accessibilityLabel("检索范围").pickerStyle(.segmented).frame(width: 190)
+                ManagementSegmentedControl(selection: $scope, options: [
+                    ManagementSegmentOption(id: "current", title: "本书", detail: "只在当前打开书籍的原文和对象名称中检索"),
+                    ManagementSegmentOption(id: "library", title: "整个书库", detail: "在当前书库所有已载入书籍中检索")
+                ]).frame(width: 190)
                 Button { close() } label: { Image(systemName: "xmark") }
                     .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("关闭书库检索").keyboardShortcut(.cancelAction)
             }
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索原文、人物、概念或别名", text: $query).font(.system(size: 16)).textFieldStyle(.plain)
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "magnifyingglass").readingSearchIcon(pointSize: 16)
+                TextField("搜索原文、人物、概念或别名", text: $query).readingSearchInput(pointSize: 16)
                     .focused($queryFocused).onSubmit { scheduleSearch(debounce: false) }
                 if !query.isEmpty {
                     Button { query = ""; queryFocused = true } label: { Image(systemName: "xmark.circle.fill") }

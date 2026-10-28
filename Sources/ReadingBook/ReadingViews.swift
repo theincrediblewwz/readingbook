@@ -14,7 +14,10 @@ struct ReaderWorkspaceView: View {
     @State private var outlineFrame = CGRect.zero
     @State private var companionFrame = CGRect.zero
     @StateObject private var inlineReading = ReaderInlineState()
-    private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
+    private var isPDF: Bool {
+        store.sourceFileURL?.pathExtension.lowercased() == "pdf"
+            || store.book?.originalName.lowercased().hasSuffix(".pdf") == true
+    }
     private var pdfChrome: [CGRect] {
         guard isPDF, showPDF, store.readingSourceMode == "original" else { return [] }
         return [pdfController.chromeFrame, pdfController.thumbnailFrame].filter { !$0.isEmpty && !$0.isNull }
@@ -76,6 +79,11 @@ struct ReaderWorkspaceView: View {
                                },
                                workspaceMemory: store.workspaceMemory.pdf, memoryRevision: store.workspaceMemoryRevision,
                                onWorkspaceMemory: { memory in store.updateWorkspaceMemory({ $0.pdf = memory }, expectedKey: memoryKey) })
+                        } else if isPDF, showPDF {
+                            // The source URL arrives asynchronously after book
+                            // selection. Do not mount a temporary text/WebKit
+                            // reader for that PDF and flash its extracted text.
+                            Palette.paper.accessibilityLabel("正在打开原书")
                         } else { sourceText(unit) }
                     } else {
                         EmptyState(title: "选择一个章节", detail: "从阅读工具中的目录选择原文内容。", icon: "book.pages")
@@ -85,20 +93,13 @@ struct ReaderWorkspaceView: View {
                 ReaderFloatingPanel(title: "目录与书签", icon: "list.bullet", width: 302, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 88, avoidRects: pdfChrome,
                     showsRestoreButton: false, unifiedDismiss: true,
                     onFrameChange: { value in if outlineFrame != value { outlineFrame = value } }) { ReaderOutlinePanel(bookmarksOnly: $bookmarksOnly) }
-                ReaderFloatingPanel(title: "伴读与对话", icon: "sparkles", width: 376, height: 620, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: 88,
-                    avoidRects: pdfChrome + (outlineFrame.isEmpty ? [] : [outlineFrame]), elevated: true, showsRestoreButton: false, unifiedDismiss: true, resizable: true,
+                ReaderFloatingPanel(title: "伴读与对话", icon: "sparkles", width: max(376, ReadingCompanionToolbarMetrics.minimumPanelWidth), height: 620, minimumWidth: ReadingCompanionToolbarMetrics.minimumPanelWidth, isPresented: $store.readingCompanionVisible, viewport: geometry.size, bottomReserve: 88,
+                    avoidRects: pdfChrome + (outlineFrame.isEmpty ? [] : [outlineFrame]), elevated: true, showsRestoreButton: false, unifiedDismiss: true, resizable: true, showsCompanionTabs: true,
                     onFrameChange: { frame in if companionFrame != frame { companionFrame = frame } }) {
                     ReaderAIPanel()
                 }
                 ReaderInlineCard(state: inlineReading, viewport: geometry.size,
                     obstacles: inlineObstacles(in: geometry)).zIndex(9)
-                if !store.readingCompanionVisible {
-                    ReadingPreparationIndicator(state: store.readingPreparationState)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                        .padding(.leading, 12).padding(.bottom, 88)
-                        .allowsHitTesting(false)
-                }
             }
                 .coordinateSpace(name: ReaderInlineCoordinateSpace.name)
                 .background {
@@ -225,8 +226,8 @@ struct ReadingProcessingDetailsView: View {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 8) { preReadButton; executionButton }
                     Menu {
-                        Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.disabled(store.isBusy)
-                        Button(store.isBusy ? "暂停任务" : "开始 / 继续分析") { store.isBusy ? store.pause() : store.startReading() }.disabled(cannotPause)
+                        Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.disabled(!store.canStartReading)
+                        Button(store.isSmartReadingRunning ? "暂停分析" : "开始 / 继续分析") { store.isSmartReadingRunning ? store.pause() : store.startReading() }.disabled(cannotPause || (!store.isSmartReadingRunning && !store.canStartReading))
                     } label: { Image(systemName: "play.circle") }.help("预读、精读与暂停")
                 }
             }
@@ -298,11 +299,11 @@ struct ReadingProcessingDetailsView: View {
         }.background(Palette.canvas)
     }
     private var cannotPause: Bool { store.isSavingDocument || store.isExportingProject || store.isImportingBookCommit || store.isCommittingLocalWrite }
-    private var preReadButton: some View { Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy) }
+    private var preReadButton: some View { Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.buttonStyle(ReadingToolbarButtonStyle()).disabled(!store.canStartReading) }
     private var executionButton: some View {
-        Button { store.isBusy ? store.pause() : store.startReading() } label: {
-            Label(store.isBusy ? (cannotPause ? "处理中" : "暂停") : (store.book?.insights.isEmpty == false ? "继续分析" : "开始分析"), systemImage: store.isBusy ? "pause.fill" : "play.fill")
-        }.buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44).disabled(cannotPause)
+        Button { store.isSmartReadingRunning ? store.pause() : store.startReading() } label: {
+            Label(store.isSmartReadingRunning ? "暂停分析" : (store.book?.insights.isEmpty == false ? "继续分析" : "开始分析"), systemImage: store.isSmartReadingRunning ? "pause.fill" : "play.fill")
+        }.buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44).disabled(cannotPause || (!store.isSmartReadingRunning && !store.canStartReading))
     }
     private func overview(_ book: BookProject) -> some View {
         let analyzedIDs = Set(book.insights.filter { !$0.id.hasPrefix("deferred-") && !$0.id.hasPrefix("blank-") }.flatMap(\.unitIDs))
@@ -379,7 +380,18 @@ struct DocumentEditorView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject private var typography: ReadingTypographySettings
     @State private var preview = true
-    @State private var discardingDraft = false
+    @StateObject private var markdownSession = NoteMarkdownEditorSession()
+    @State private var expandsNoteLinks = false
+    @State private var discardActionOwner: NoteActionOwner?
+    @State private var documentActionOwner: NoteActionOwner?
+    @State private var pendingDocumentActionOwner: NoteActionOwner?
+    private struct NoteActionOwner: Identifiable {
+        let id = UUID()
+        let workspace: WorkspacePickerOwner
+        let documentID: String?
+        @MainActor init(store: AppStore) { workspace = WorkspacePickerOwner(store: store); documentID = store.selectedDocumentID }
+        @MainActor func matches(_ store: AppStore) -> Bool { workspace.matches(store) && documentID == store.selectedDocumentID && store.route == "editor" }
+    }
     @State private var showingDocuments = true
     @State private var listCollapsed = false
     @State private var measuredWindow = false
@@ -433,16 +445,25 @@ struct DocumentEditorView: View {
             }
             .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreListMemory(viewport: geometry.size, defaultShown: wide) }
         }
-        .confirmationDialog("放弃尚未保存的修改？", isPresented: $discardingDraft) {
-            Button("放弃修改", role: .destructive) { store.discardDraft() }
+        .confirmationDialog("放弃尚未保存的修改？", isPresented: Binding(get: { discardActionOwner != nil }, set: { if !$0 { discardActionOwner = nil } })) {
+            Button("放弃修改", role: .destructive) {
+                guard let owner = discardActionOwner, owner.matches(store), store.editorDirty, !store.isSavingDocument else { discardActionOwner = nil; return }
+                discardActionOwner = nil; store.discardDraft()
+            }
         } message: { Text("清除当前草稿，恢复最近保存的内容；已保存的 Markdown 不会删除。") }
-        .onChange(of: store.bookID) { _, _ in documentSearch = ""; preview = true; panelEpoch += 1 }
-        .onChange(of: store.selectedDocumentID) { _, next in if next == nil && store.editorDirty { preview = false } }
+        .onChange(of: store.bookID) { _, _ in dismissDocumentActions(); documentSearch = ""; preview = true; expandsNoteLinks = false; panelEpoch += 1 }
+        .onChange(of: store.selectedDocumentID) { previous, next in
+            if previous != nil || next == nil { expandsNoteLinks = false }
+            if next == nil && store.editorDirty { preview = false }
+        }
         .onChange(of: store.editorDirty) { _, dirty in if dirty && store.selectedDocumentID == nil { preview = false } }
         .onChange(of: showingDocuments) { _, _ in saveListMemory() }
         .onChange(of: listCollapsed) { _, _ in saveListMemory() }
         .onChange(of: listOrigin) { _, _ in if !listDragging { saveListMemory() } }
-        .onDisappear { saveListMemory() }
+        .onChange(of: store.libraryRootURL) { _, _ in dismissDocumentActions() }
+        .onChange(of: store.selectedDocumentID) { _, _ in dismissDocumentActions() }
+        .onChange(of: store.route) { _, route in if route != "editor" { dismissDocumentActions() } }
+        .onDisappear { dismissDocumentActions(); saveListMemory() }
     }
     private func restoreListMemory(viewport: CGSize, defaultShown: Bool) {
         memoryScope = store.workspaceMemoryKey
@@ -476,26 +497,43 @@ struct DocumentEditorView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Label(error, systemImage: "exclamationmark.circle").font(.system(size: 14)).foregroundStyle(Palette.copper).textSelection(.enabled)
                     if store.editorDirty, store.selectedDocumentID != nil {
-                        Button("另存为新笔记") { Task { await store.saveCurrentDocument(asNew: true) } }
+                        Button("另存为新笔记") { if markdownSession.finishEditing() { Task { await store.saveCurrentDocument(asNew: true) } } }
                             .buttonStyle(.bordered).disabled(store.isBusy || store.isSavingDocument)
                     }
                 }.padding(.horizontal, 28).padding(.bottom, 12)
             }
             if hasDocument {
-                if preview {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 22) {
-                            Text(store.editorTitle.isEmpty ? "未命名笔记" : store.editorTitle).font(.system(size: 30, weight: .semibold)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                            MarkdownText(markdown: previewBody).readingTextContext(.notes)
-                        }.padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 30)
+                ZStack {
+                    // Keep the real native editor alive under the preview so
+                    // selection, scroll position, IME and undo survive a mode
+                    // switch. Its Markdown never becomes a display placeholder.
+                    VStack(alignment: .leading, spacing: 0) {
+                        TextField("文档标题", text: Binding(get: { store.editorTitle }, set: { store.editorTitle = $0; store.editorDirty = true }), axis: .vertical)
+                            .font(.system(size: 28, weight: .semibold)).textFieldStyle(.plain).lineLimit(1...3)
+                            .padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 18).disabled(store.isRecognizingPDF).accessibilityLabel("文档标题")
+                        if (store.editorMarkdown as NSString).range(of: "(readingbook://book/", options: .literal).location != NSNotFound {
+                            Button { expandsNoteLinks.toggle() } label: {
+                                Label(expandsNoteLinks ? "收起原文定位" : "展开完整定位", systemImage: expandsNoteLinks ? "chevron.up" : "link")
+                                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                            }.buttonStyle(SettingsActionButtonStyle()).padding(.horizontal, 28).padding(.bottom, 10)
+                                .help("只收纳独立原文链接的长定位；点进定位时自动展开。复制、保存和导出始终保留完整 Markdown。")
+                        }
+                        NoteMarkdownEditor(session: markdownSession,
+                            markdown: Binding(get: { store.editorMarkdown }, set: { store.editorMarkdown = $0; store.editorDirty = true }),
+                            libraryRoot: store.libraryRootURL, bookID: store.bookID, documentID: store.selectedDocumentID,
+                            font: typography.nsFont(for: .notes), expanded: expandsNoteLinks,
+                            editable: !store.isRecognizingPDF, visible: !preview)
+                            .padding(.horizontal, 22).padding(.bottom, 22)
                     }
-                } else {
-                    TextField("文档标题", text: Binding(get: { store.editorTitle }, set: { store.editorTitle = $0; store.editorDirty = true }), axis: .vertical)
-                        .font(.system(size: 28, weight: .semibold)).textFieldStyle(.plain).lineLimit(1...3)
-                        .padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 18).disabled(store.isRecognizingPDF).accessibilityLabel("文档标题")
-                    TextEditor(text: Binding(get: { store.editorMarkdown }, set: { store.editorMarkdown = $0; store.editorDirty = true }))
-                        .font(typography.font(for: .notes)).lineSpacing(6).scrollContentBackground(.hidden)
-                        .padding(.horizontal, 22).padding(.bottom, 22).disabled(store.isRecognizingPDF)
+                    .opacity(preview ? 0 : 1).allowsHitTesting(!preview).accessibilityHidden(preview)
+                    if preview {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 22) {
+                                Text(store.editorTitle.isEmpty ? "未命名笔记" : store.editorTitle).font(.system(size: 30, weight: .semibold)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                                MarkdownText(markdown: previewBody).readingTextContext(.notes)
+                            }.padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 30)
+                        }
+                    }
                 }
             } else {
                 EmptyState(title: "写下你的理解", detail: "选择一篇笔记，或新建一篇真实的 Markdown 文档。", icon: "square.and.pencil", actionTitle: "新建笔记", action: { store.newDocument(); preview = false })
@@ -516,26 +554,60 @@ struct DocumentEditorView: View {
         HStack(spacing: 4) {
             DockIconButton(title: "笔记列表", icon: "list.bullet.rectangle", isSelected: showingDocuments) { showingDocuments.toggle(); if showingDocuments { listCollapsed = false } }
             DockDivider()
-            DockIconButton(title: preview ? "编辑笔记" : "预览笔记", icon: preview ? "square.and.pencil" : "eye", isSelected: !preview) { preview.toggle() }.disabled(!hasDocument)
-            DockIconButton(title: store.isSavingDocument ? "保存中" : "保存笔记", icon: "square.and.arrow.down") { Task { await store.saveCurrentDocument() } }.disabled(!store.editorDirty || store.isBusy)
+            DockIconButton(title: preview ? "编辑笔记：修改 Markdown 正文" : "当前为编辑模式：修改 Markdown 正文", icon: "square.and.pencil", isSelected: !preview) { preview = false }.disabled(!hasDocument)
+            DockIconButton(title: preview ? "当前为预览模式：显示排版后的笔记" : "预览笔记：显示排版后的 Markdown", icon: "eye", isSelected: preview) {
+                if markdownSession.finishEditing() { preview = true }
+            }.disabled(!hasDocument)
+            DockIconButton(title: store.isSavingDocument ? "保存中" : "保存笔记", icon: "square.and.arrow.down") { if markdownSession.finishEditing() { Task { await store.saveCurrentDocument() } } }.disabled(!store.editorDirty || store.isBusy)
             DockDivider()
             documentMenu
         }.fixedSize(horizontal: true, vertical: true)
     }
     private var documentMenu: some View {
-        Menu {
-            if store.editorDirty {
-                Button("放弃未保存修改…", role: .destructive) { discardingDraft = true }.disabled(store.isSavingDocument)
-                Divider()
+        DockIconButton(title: "笔记操作：新建、导出与草稿管理", icon: "ellipsis", isSelected: documentActionOwner != nil) {
+            pendingDocumentActionOwner = nil
+            documentActionOwner = NoteActionOwner(store: store)
+        }
+        .popover(item: $documentActionOwner, arrowEdge: .bottom) { owner in
+            ManagementActionPopover(title: "笔记操作", options: documentActions,
+                close: { if documentActionOwner?.id == owner.id { documentActionOwner = nil } },
+                select: { performDocumentAction($0, owner: owner) })
+        }
+    }
+    private var documentActions: [ManagementActionOption] {
+        var items = [ManagementActionOption(id: "new", title: "新建笔记", detail: store.editorDirty ? "先保存或放弃当前修改后可新建。" : "开始一篇新的 Markdown 笔记。", icon: "square.and.pencil", enabled: !store.editorDirty && !store.isBusy)]
+        if currentDocument != nil {
+            items.append(ManagementActionOption(id: "graph", title: "加入导图", detail: "将这篇已保存笔记加入本书导图。", icon: "point.3.connected.trianglepath.dotted", enabled: !store.isBusy))
+            items.append(ManagementActionOption(id: "export", title: "导出 Markdown…", detail: store.editorDirty ? "保存当前修改后可导出完整 .md 文件。" : "导出完整正文、公式与原文定位。", icon: "square.and.arrow.up", enabled: !store.editorDirty && !store.isBusy))
+        }
+        items.append(ManagementActionOption(id: "trash", title: "查看回收站", detail: "查找并恢复已移入回收站的内容。", icon: "trash"))
+        if store.editorDirty {
+            items.append(ManagementActionOption(id: "discard", title: "放弃未保存修改…", detail: "确认后恢复最近保存的正文。", icon: "arrow.uturn.backward", enabled: !store.isSavingDocument, destructive: true))
+        }
+        if currentDocument != nil {
+            items.append(ManagementActionOption(id: "delete", title: "移入回收站…", detail: "确认后移入回收站，之后仍可恢复。", icon: "trash", enabled: !store.isBusy && !store.editorDirty, destructive: true))
+        }
+        return items
+    }
+    private func dismissDocumentActions() { documentActionOwner = nil; pendingDocumentActionOwner = nil; discardActionOwner = nil }
+    private func performDocumentAction(_ id: String, owner: NoteActionOwner) {
+        guard documentActionOwner?.id == owner.id, owner.matches(store), documentActions.contains(where: { $0.id == id && $0.enabled }) else { return }
+        documentActionOwner = nil; pendingDocumentActionOwner = owner
+        // Let the popover close before presenting a confirmation or file panel.
+        Task { @MainActor in
+            await Task.yield()
+            guard pendingDocumentActionOwner?.id == owner.id, owner.matches(store), documentActions.contains(where: { $0.id == id && $0.enabled }) else { return }
+            pendingDocumentActionOwner = nil
+            switch id {
+            case "new": store.newDocument(); preview = false
+            case "graph": if let document = currentDocument { await store.addDocumentToGraph(document) }
+            case "export": store.exportMarkdown()
+            case "trash": store.showingTrash = true
+            case "discard": discardActionOwner = owner
+            case "delete": if let document = currentDocument { store.requestDeletion(.document, id: document.id, title: document.title) }
+            default: break
             }
-            if let document = currentDocument {
-                Button { Task { await store.addDocumentToGraph(document) } } label: { Label("加入导图", systemImage: "point.3.connected.trianglepath.dotted") }.disabled(store.isBusy)
-                Button { store.exportMarkdown() } label: { Label("导出 .md…", systemImage: "square.and.arrow.up") }.disabled(store.editorDirty || store.isBusy)
-                Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
-            }
-            Button { store.showingTrash = true } label: { Label("查看回收站", systemImage: "trash") }
-            Button("新建笔记") { store.newDocument(); preview = false }.disabled(store.editorDirty || store.isBusy)
-        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("草稿、导图与文档管理")
+        }
     }
     private func documentPanel(viewport: CGSize) -> some View {
         let height = listPanelHeight(viewport: viewport)
@@ -562,9 +634,9 @@ struct DocumentEditorView: View {
     }
     private var documentPicker: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索笔记…", text: $documentSearch).textFieldStyle(.plain).font(.system(size: 15))
+            HStack(alignment: .center) {
+                Image(systemName: "magnifyingglass").readingSearchIcon(pointSize: 15)
+                TextField("搜索笔记…", text: $documentSearch).readingSearchInput(pointSize: 15)
                 if !documentSearch.isEmpty { Button { documentSearch = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空笔记搜索").frame(width: 44, height: 44) }
             }.padding(.horizontal, 12).frame(minHeight: 46).background(Palette.surface.opacity(0.65), in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(Palette.line.opacity(0.8)))
             if store.editorDirty { Text("有未保存的修改，请先保存或放弃再切换。").font(.system(size: 13)).foregroundStyle(Palette.copper).fixedSize(horizontal: false, vertical: true) }

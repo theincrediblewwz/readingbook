@@ -16,3 +16,10 @@ private-books/
 node_modules/
 /PLAN.md
 /AGENTS.md
+
+# Regenerable Python helper bytecode
+__pycache__/
+*.py[cod]
+
+# Generated local preview runtime; editable concept fragments are tracked
+/Design/reader-interaction-concepts/*-preview.html

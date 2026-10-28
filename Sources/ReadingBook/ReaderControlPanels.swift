@@ -155,7 +155,7 @@ struct ServiceSwitcherPanel: View {
             Divider().opacity(0.5)
             HStack(spacing: 8) {
                 Button(action: manage) { Label("管理服务", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity) }
-                Button { store.testConnection() } label: { Label("测试连接", systemImage: "bolt").frame(maxWidth: .infinity) }.disabled(store.isBusy || store.settings.model.isEmpty)
+                Button { store.testConnection() } label: { Label("测试连接", systemImage: "bolt").frame(maxWidth: .infinity) }.disabled(!store.canTestAIConnection || store.settings.model.isEmpty)
             }.font(.system(size: 14)).buttonStyle(ReadingToolbarButtonStyle()).padding(8)
         }.frame(width: 320).background(Palette.surface)
     }

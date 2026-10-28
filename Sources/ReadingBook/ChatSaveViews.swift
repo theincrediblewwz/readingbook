@@ -25,6 +25,7 @@ private struct BookChatContent: View {
     @EnvironmentObject private var typography: ReadingTypographySettings
     @Environment(\.readingReduceMotion) private var reduceMotion
     @Environment(\.workspaceCanvasBlocked) private var workspaceBlocked
+    @Environment(\.isReaderPanelActive) private var panelActive
     @ObservedObject var composerDraft: QueryComposerDraft
     var embedded = false
     private var question: String {
@@ -38,24 +39,18 @@ private struct BookChatContent: View {
     @State private var openTrashAfterSheet = false
     @State private var reviewingChanges = false
     @State private var showingMemory = false
-    @State private var showingComposerHelp = false
+    @State private var composerPopover: ComposerPopover?
+    private enum ComposerPopover: String, Identifiable { case help, disclosure; var id: String { rawValue } }
     @State private var historyBook: BookProject?
     @State private var historyMessageID: String?
     @State private var memorySourceID: String?
     @FocusState private var composerFocused: Bool
-    private var composerIsActive: Bool { !workspaceBlocked && (embedded ? store.readingCompanionVisible && store.readingCompanionTab == "chat" : store.route == "query") }
+    private var composerIsActive: Bool { !workspaceBlocked && (embedded ? panelActive && store.readingCompanionVisible && store.readingCompanionTab == "chat" : store.route == "query") }
 
     var body: some View {
         VStack(spacing: 0) {
             if selectionMode { selectionBar }
-            if embedded {
-                HStack(spacing: 8) {
-                    if store.isQueryBusy { queryStatus } else { Spacer(minLength: 0) }
-                    Button { NotificationCenter.default.post(name: Notification.Name("ReadingBookExpandCompanion"), object: nil) } label: {
-                        Label("放大对话", systemImage: "arrow.up.left.and.arrow.down.right").font(.system(size: 13))
-                    }.buttonStyle(ReadingToolbarButtonStyle()).fixedSize().help("放大或还原对话窗口")
-                }.padding(.horizontal, 12).padding(.vertical, 4)
-            } else if store.isQueryBusy {
+            if !embedded && store.isQueryBusy {
                 queryStatus.padding(.horizontal, embedded ? 16 : 24).padding(.vertical, 8)
             }
             ScrollViewReader { proxy in
@@ -123,23 +118,23 @@ private struct BookChatContent: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("围绕所选内容，问一个问题…", text: Binding(get: { question }, set: { question = $0 }), axis: .vertical)
-                .font(typography.font(for: .conversation)).lineLimit(1...5).textFieldStyle(.plain).focused($composerFocused).onSubmit { send() }
-                .frame(minHeight: 44)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { scopeControls; Spacer(minLength: 4); modeControls; questionOptions; sendButton }
-                VStack(spacing: 4) {
-                    HStack(spacing: 8) { scopeControls; Spacer(minLength: 0); sendButton }
-                    HStack(spacing: 8) { modeControls; Spacer(minLength: 0); questionOptions }
-                }
-            }
-            if !store.isQueryBusy, let previous = store.queryRetryQuestion {
-                Button { question = previous; store.queryRetryQuestion = nil } label: { Label("继续上次问题", systemImage: "arrow.clockwise") }
-                    .buttonStyle(.borderless).font(.system(size: 13))
-            }
-            if !store.queryDisclosure.isEmpty && !store.isQueryBusy {
-                DisclosureGroup("这次查阅记录") {
-                    Text(store.queryDisclosure).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
-                }.font(.system(size: 13)).padding(.top, 4)
+                .font(typography.font(for: .conversation)).lineLimit(1...6).textFieldStyle(.plain).focused($composerFocused).onSubmit { send() }
+                .frame(minHeight: 48)
+            // One stable native menu hierarchy. Do not create an alternative
+            // composer containing the same menus during an adaptive size probe.
+            HStack(spacing: 5) {
+                scopeControls
+                modeStyleControl
+                Spacer(minLength: 0)
+                QueryAttachmentsControl().labelStyle(.iconOnly).frame(width: 28)
+                    .overlay(alignment: .topTrailing) {
+                        if attachmentCount > 0 {
+                            Text("\(attachmentCount)").font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.accent)
+                                .padding(.horizontal, 3).background(Palette.surface, in: Capsule()).offset(x: 4, y: 2).allowsHitTesting(false)
+                        }
+                    }.accessibilityLabel("附加内容").accessibilityValue("已附加 \(attachmentCount) 项")
+                questionOptions
+                sendButton
             }
             if !store.pendingCurrentBookChanges.isEmpty {
                 Button { reviewingChanges = true } label: {
@@ -147,66 +142,98 @@ private struct BookChatContent: View {
                         .font(.system(size: 15)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundStyle(Palette.accent).disabled(store.isBusy)
             }
-        }.padding(embedded ? 12 : 16).modifier(ChatComposerSurface(embedded: embedded)).frame(maxWidth: 900).padding(.horizontal, embedded ? 12 : 24).padding(.bottom, embedded ? 12 : 22)
-            .popover(isPresented: $showingComposerHelp) {
+        }.padding(embedded ? 10 : 16).modifier(ChatComposerSurface(embedded: embedded)).frame(maxWidth: 900).padding(.horizontal, embedded ? 12 : 24).padding(.bottom, embedded ? 10 : 22)
+            .popover(item: $composerPopover) { page in
+                if page == .disclosure {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("这次查阅记录").font(.system(size: 16, weight: .semibold))
+                        ScrollView { Text(store.queryDisclosure).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                    }.padding(20).frame(width: 340, height: 300)
+                } else {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("范围、保存与公式").font(.system(size: 16, weight: .semibold))
-                    Text("左下选择本次允许阅读的范围，附加内容会一同提供给 AI。")
+                    Text("左下选择本次允许阅读的范围；旁边的模式按钮选择对话模式、讲解方式与本次权限，回形针可附加内容。更多菜单可查看记录、历史与记忆。")
                     Text("回答的保存菜单支持完整保存、选段和多条合并。保留公式与排版时，选择 Markdown 源文片段。")
                     Text("纯阅读只分享所选内容；功能协作可调用组件。老师伴读会分开说明背景，原文考据只谈已读出处。已有笔记的修改仍先供你审阅。")
                 }.font(.system(size: 13)).foregroundStyle(.secondary).lineSpacing(4).padding(20).frame(width: 320)
+                }
             }
     }
     private var scopeControls: some View {
-        HStack(spacing: 6) { QueryScopeControl(compact: embedded).help(store.isQueryBusy ? store.lastQuestionContext : store.queryScopePreview); QueryAttachmentsControl() }
+        QueryScopeControl(compact: embedded).help(store.isQueryBusy ? store.lastQuestionContext : store.queryScopePreview)
+    }
+    private var permissionSummary: String {
+        store.queryInteractionMode.title + " · " + store.queryAnswerStyle.title +
+            (store.queryInteractionMode == .functional ? (store.queryAllowsOrganizing ? " · 允许本次整理，修改仍需审阅" : " · 只读提问") : " · 仅阅读所选内容")
+    }
+    private var attachmentCount: Int {
+        (store.queryScope == .notes ? 0 : store.queryAttachedDocuments.count) +
+            (store.queryInteractionMode == .functional ? store.queryAuthorizedNodes.count : 0)
     }
     private var sendButton: some View {
         Button(action: send) { Image(systemName: "arrow.up").font(.system(size: 17, weight: .semibold)).frame(width: 28, height: 30) }
             .controlSize(.large).buttonStyle(.borderedProminent)
             .disabled(!store.canStartQuery || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canUseQueryScope(store.queryScope))
-            .help("发送问题").accessibilityLabel("发送问题")
+            .help("发送问题\n" + permissionSummary).accessibilityLabel("发送问题").accessibilityHint(permissionSummary)
     }
-    private var questionOptions: some View {
+    private var compactModeStyleTitle: String {
+        (store.queryInteractionMode == .reading ? "纯阅读" : "协作") + " · " +
+            (store.queryAnswerStyle == .mentor ? "老师" : "考据")
+    }
+    private var modeStyleControl: some View {
         Menu {
-            if store.queryInteractionMode == .functional {
-                Button { store.queryAllowsOrganizing = false } label: { Label("只读提问", systemImage: "lock") }
-                Button { store.queryAllowsOrganizing = true } label: { Label("允许本次整理", systemImage: "square.stack.3d.up") }
-                Divider()
-            }
-            readingSizeControls
-            Divider()
-            Button { historyMessageID = nil; historyBook = store.book } label: { Label("查看全部历史", systemImage: "clock.arrow.circlepath") }
-            Toggle(isOn: $store.queryMemoryEnabled) { Label("整理长对话记忆", systemImage: "brain.head.profile") }
-            Button { showingMemory = true } label: { Label("查看记忆与原消息", systemImage: "text.bubble") }
-            Button { store.clearCurrentQueryMemory() } label: { Label("清除本范围的整理摘要", systemImage: "eraser") }
-            if store.latestAIChange != nil {
-                Divider()
-                Button { Task { await store.undoLatestAIChange() } } label: { Label("撤销最近一次 AI 整理", systemImage: "arrow.uturn.backward") }
-            }
-            Divider()
-            Button { store.requestedWorkspaceRoute = "reader" } label: { Label("回到原文", systemImage: "book.closed") }
-            Button { showingComposerHelp = true } label: { Label("范围、保存与公式说明", systemImage: "info.circle") }
-        } label: {
-            Label(store.queryAllowsOrganizing ? "本次整理" : "更多", systemImage: store.queryAllowsOrganizing ? "square.stack.3d.up" : "ellipsis")
-                .font(.system(size: 13, weight: .medium)).frame(minHeight: 44)
-        }.menuStyle(.borderlessButton).fixedSize().disabled(store.isQueryBusy).help("字号、权限与对话记忆")
-    }
-
-    private var modeControls: some View {
-        HStack(spacing: 8) {
-            Menu {
+            Text(permissionSummary)
+            Section("对话模式") {
                 ForEach(ReadingConversationMode.allCases, id: \.self) { mode in
                     Button { store.queryInteractionMode = mode } label: { Label(mode.title, systemImage: store.queryInteractionMode == mode ? "checkmark" : mode.icon) }
                 }
-            } label: { Label(store.queryInteractionMode.title, systemImage: store.queryInteractionMode.icon).font(.system(size: 13)).frame(minHeight: 44) }
-                .menuStyle(.borderlessButton).fixedSize().help("选择阅读对话或软件功能协作")
-            Menu {
+            }
+            Section("讲解方式") {
                 ForEach(ReadingAnswerStyle.allCases, id: \.self) { style in
                     Button { store.queryAnswerStyle = style } label: { Label(style.title, systemImage: store.queryAnswerStyle == style ? "checkmark" : style.icon) }
                 }
-            } label: { Label(store.queryAnswerStyle.title, systemImage: store.queryAnswerStyle.icon).font(.system(size: 13)).frame(minHeight: 44) }
-                .menuStyle(.borderlessButton).fixedSize().help("老师会解释背景；考据只谈原文依据")
-        }.disabled(store.isQueryBusy)
+            }
+            if store.queryInteractionMode == .functional {
+                Section("本次权限") {
+                    Button { store.queryAllowsOrganizing = false } label: { Label("只读提问", systemImage: store.queryAllowsOrganizing ? "lock" : "checkmark") }
+                    Button { store.queryAllowsOrganizing = true } label: { Label("允许本次整理", systemImage: store.queryAllowsOrganizing ? "checkmark" : "square.stack.3d.up") }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(compactModeStyleTitle).font(.system(size: 12, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .medium))
+            }.frame(minWidth: 64, minHeight: 44).contentShape(Rectangle())
+        }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize(horizontal: false, vertical: true).disabled(store.isQueryBusy)
+            .help(permissionSummary + "\n选择对话模式、讲解方式和功能协作权限")
+            .accessibilityLabel("对话模式与讲解方式").accessibilityValue(permissionSummary)
+    }
+    private var questionOptions: some View {
+        Menu {
+            Button { composerPopover = .disclosure } label: { Label("这次查阅记录", systemImage: "list.bullet.rectangle") }
+                .disabled(store.queryDisclosure.isEmpty)
+            if let previous = store.queryRetryQuestion {
+                Button { question = previous; store.queryRetryQuestion = nil } label: { Label("继续上次问题", systemImage: "arrow.clockwise") }.disabled(store.isQueryBusy)
+            }
+            Divider()
+            readingSizeControls
+            Divider()
+            Button { historyMessageID = nil; historyBook = store.book } label: { Label("查看全部历史", systemImage: "clock.arrow.circlepath") }
+            Toggle(isOn: $store.queryMemoryEnabled) { Label("整理长对话记忆", systemImage: "brain.head.profile") }.disabled(store.isQueryBusy)
+            Button { showingMemory = true } label: { Label("查看记忆与原消息", systemImage: "text.bubble") }
+            Button { store.clearCurrentQueryMemory() } label: { Label("清除本范围的整理摘要", systemImage: "eraser") }.disabled(store.isQueryBusy)
+            if store.latestAIChange != nil {
+                Divider()
+                Button { Task { await store.undoLatestAIChange() } } label: { Label("撤销最近一次 AI 整理", systemImage: "arrow.uturn.backward") }.disabled(store.isBusy)
+            }
+            Divider()
+            Button { store.requestedWorkspaceRoute = "reader" } label: { Label("回到原文", systemImage: "book.closed") }
+            Button { composerPopover = .help } label: { Label("范围、保存与公式说明", systemImage: "info.circle") }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .medium)).frame(width: 24, height: 44)
+        }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("查阅记录、历史、记忆与字号")
+            .accessibilityLabel("对话更多设置").accessibilityHint("查阅记录、历史、记忆与字号")
     }
     @ViewBuilder private var readingSizeControls: some View {
         Button { typography.setPointSize(typography.style(for: .conversation).pointSize + 1, for: .conversation) } label: { Label("放大文字", systemImage: "textformat.size.larger") }

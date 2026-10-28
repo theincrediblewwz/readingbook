@@ -24,6 +24,7 @@ struct SourceIndexWorkspaceView: View {
     @State private var sourceLimit = 36
     @State private var evidenceExpanded = true
     @State private var detailTab = "sources"
+    @State private var generationReview: CompanionGenerationIntent?
 
     private var refreshKey: String { "\(store.bookID ?? ""):\(store.projectRevision)" }
     private var filterKey: String { "\(store.bookID ?? ""):\(projectionToken):\(query):\(typeFilter):\(scope):\(store.selectedUnitID ?? "")" }
@@ -65,6 +66,7 @@ struct SourceIndexWorkspaceView: View {
             .popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
                 if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 390, height: 580) }
             }
+            .companionGenerationConfirmation($generationReview, generate: startEnhancement)
     }
 
     private var toolbar: some View {
@@ -78,9 +80,9 @@ struct SourceIndexWorkspaceView: View {
         }
     }
     private var searchField: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("搜索名称、别名与原文引句…", text: $query).font(.system(size: 15)).textFieldStyle(.plain)
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "magnifyingglass").readingSearchIcon()
+            TextField("搜索名称、别名与原文引句…", text: $query).readingSearchInput()
             if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("清空原文索引搜索") }
         }.padding(.leading, 12).frame(minHeight: 44)
     }
@@ -99,8 +101,9 @@ struct SourceIndexWorkspaceView: View {
                 ForEach(projection?.types ?? []) { type in Text(type.title).tag(type.id) }
             }
             Divider()
-            Button("增强当前片段") { store.enhanceCurrentSource() }.disabled(store.isBusy || store.selectedUnit == nil)
-            Button("打开智能阅读") { store.route = "workflow" }
+            Button("增强当前片段", action: requestEnhancement).disabled(!store.canStartCompanion || store.selectedUnit == nil)
+                .help("请求当前原文的伴读解释；已有分析会先提示确认，已有内容保留。")
+            Button("打开智能阅读") { store.route = "workflow" }.help("查看阅读计划、分析进度和可继续的任务。")
             let removed = store.book?.readingExperience?.trash ?? []
             Menu("恢复已移除伴读 · \(removed.count)") {
                 ForEach(removed) { item in Button(item.title) { Task { await store.restoreReadingItem(item.id) } }.disabled(store.isBusy) }
@@ -171,8 +174,27 @@ struct SourceIndexWorkspaceView: View {
         } else {
             VStack(spacing: 20) {
                 EmptyState(title: indexError == nil ? "从原文找到对象的每一处线索" : "索引暂未更新", detail: indexError ?? "精读或增强后，人物、事件、地点、概念与定理会按书的真实类型显示。搜索名称或引句，查看已登记的原文出处。", icon: "text.magnifyingglass")
-                Button { store.enhanceCurrentSource() } label: { Label("增强当前片段", systemImage: "sparkles") }.buttonStyle(.borderedProminent).controlSize(.large).disabled(store.isBusy || store.selectedUnit == nil)
+                Button(action: requestEnhancement) { Label(store.isCompanionGenerating ? "正在生成伴读…" : "增强当前片段", systemImage: "sparkles") }
+                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(!store.canStartCompanion || store.selectedUnit == nil)
+                    .help("请求当前原文的伴读解释；已有分析会先提示确认，旧内容和笔记保留。对话可同时进行。")
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+    private func requestEnhancement() {
+        guard store.canStartCompanion, let unit = store.selectedUnit, let book = store.book else { return }
+        let ids = unit.page.map { page in Set(book.units.filter { $0.page == page }.map(\.id)) } ?? [unit.id]
+        guard let intent = CompanionGenerationIntent(store: store, contextKey: unit.id, scope: .page, title: unit.locator,
+            review: ReadingCompanionGenerationReview(project: book, unitIDs: ids)) else { return }
+        if intent.review.requiresConfirmation { generationReview = intent }
+        else { startEnhancement(intent) }
+    }
+    private func startEnhancement(_ intent: CompanionGenerationIntent) {
+        guard intent.stillMatches(store, contextKey: store.selectedUnitID ?? ""), store.canStartCompanion else {
+            store.readingExperienceError = "阅读范围或任务状态已变化，请重新选择后再生成。"; return
+        }
+        Task {
+            guard intent.stillMatches(store, contextKey: store.selectedUnitID ?? "") else { return }
+            _ = await store.enhanceSourceScope(scope: intent.scope)
         }
     }
     private func objectSummary(_ entry: SourceIndexedObject) -> some View {

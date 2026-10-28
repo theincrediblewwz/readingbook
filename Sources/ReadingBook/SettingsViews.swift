@@ -55,10 +55,10 @@ struct ProviderSettingsView: View {
             Button("保存并关闭") {
                 store.saveServiceProfileForUI()
                 if !store.serviceProfileDraft.isDirty(in: store) { close() }
-            }.disabled(store.isBusy)
+            }.disabled(!store.canEditAISettings)
             Button("放弃更改并关闭", role: .destructive) {
                 if store.discardServiceDraftForNavigation() { close() }
-            }.disabled(store.isBusy)
+            }.disabled(!store.canEditAISettings)
             Button("继续编辑", role: .cancel) { }
         } message: { Text("本次修改尚未保存。保存失败时会留在这里，并保留输入。") }
         .onAppear { store.serviceProfileDraft.settingsPresentationCount += 1 }
@@ -86,7 +86,7 @@ struct ProviderSettingsView: View {
                             }.padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
                                 .background(Palette.accent.opacity(service.id == store.selectedServiceID ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 12))
                                 .contentShape(Rectangle())
-                        }.buttonStyle(.plain).disabled(store.isBusy)
+                        }.buttonStyle(.plain).disabled(!store.canEditAISettings)
                     }
                     if store.savedServices.isEmpty { Text("还没有保存的服务").font(.subheadline).foregroundStyle(.secondary).padding(16) }
                 }.padding(10)
@@ -99,7 +99,7 @@ struct ProviderSettingsView: View {
     private func modelConfiguration(wide: Bool) -> some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
+                VStack(alignment: .leading, spacing: 22) {
                     HStack(spacing: 8) {
                         if wide {
                             Text(store.serviceName.isEmpty ? "选择或新建服务" : store.serviceName).font(.system(size: 15, weight: .medium)).lineLimit(1)
@@ -113,34 +113,29 @@ struct ProviderSettingsView: View {
                         Spacer(minLength: 0)
                         DockIconButton(title: "使用指南", icon: "questionmark.circle", isSelected: false) { showingGuide = true }
                         DockIconButton(title: "删除当前服务配置及密钥", icon: "trash", isSelected: false) { deletingService = true }
-                            .disabled(store.selectedServiceID == nil || store.isBusy)
+                            .disabled(store.selectedServiceID == nil || !store.canEditAISettings)
                     }
                     ServiceProfileLocalError(draft: store.serviceProfileDraft)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("连接服务").font(.system(size: 20, weight: .semibold))
-                        Text("阅读、对话与书中组件共用这项服务。")
-                            .font(.system(size: 13)).foregroundStyle(.secondary)
-                    }
                     connectionFields
-                    Divider().opacity(0.5)
                     budgetFields
-                    Divider().opacity(0.5)
                     ocrFields
                     if !store.connectionStatus.isEmpty {
-                        Label(store.connectionStatus, systemImage: "info.circle").font(.system(size: 14)).foregroundStyle(.secondary)
-                            .textSelection(.enabled).padding(14).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Palette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                        SettingsGroupSection(title: "连接状态") {
+                            Label(store.connectionStatus, systemImage: "info.circle").font(.system(size: 14)).foregroundStyle(.secondary)
+                                .textSelection(.enabled).padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }.frame(maxWidth: 660, alignment: .leading).padding(24).frame(maxWidth: .infinity, alignment: .topLeading)
             }
             Divider().opacity(0.5)
-            HStack(spacing: 8) {
-                Button { showingCatalog = true } label: { Label("模型目录", systemImage: "square.stack.3d.up") }.buttonStyle(ReadingToolbarButtonStyle())
-                Button { store.testConnection() } label: { Label("测试连接", systemImage: "play") }
-                    .buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isBusy || store.settings.model.isEmpty)
-                Spacer(minLength: 0)
+            SettingsResponsiveActionLayout(minimumLeadingWidth: 250) {
+                HStack(spacing: 8) {
+                    Button { showingCatalog = true } label: { Label("模型目录", systemImage: "square.stack.3d.up") }.buttonStyle(SettingsActionButtonStyle())
+                    Button { store.testConnection() } label: { Label(store.isTestingConnection ? "测试中…" : "测试连接", systemImage: "play") }
+                        .buttonStyle(SettingsActionButtonStyle()).disabled(!store.canTestAIConnection || store.settings.model.isEmpty)
+                }.fixedSize(horizontal: true, vertical: false)
                 Button { store.saveServiceProfileForUI() } label: { Label("保存配置", systemImage: "checkmark") }
-                    .buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: ReadingLayout.controlHeight).disabled(store.isBusy)
+                    .buttonStyle(SettingsActionButtonStyle(prominent: true)).controlSize(.large).frame(minHeight: ReadingLayout.controlHeight).disabled(!store.canEditAISettings)
             }.padding(.horizontal, 20).padding(.vertical, 14)
         }.controlSize(.large)
     }
@@ -160,14 +155,21 @@ struct ProviderSettingsView: View {
             Button { store.newService() } label: { Label("自定义兼容服务", systemImage: "server.rack") }
             Divider()
             ForEach(store.providerCatalog.providers) { provider in Button { store.newService(provider) } label: { Label(provider.name, systemImage: "network") } }
-        } label: { Label("新建服务", systemImage: "plus") }.menuStyle(.borderlessButton).fixedSize()
-            .padding(.horizontal, 12).frame(minHeight: ReadingLayout.controlHeight).disabled(store.isBusy)
+        } label: { ManagementMenuLabel(title: "新建服务", icon: "plus") }
+            .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize()
+            .frame(minHeight: ReadingLayout.controlHeight).disabled(!store.canEditAISettings)
+            .help("新建自定义兼容服务，或使用已收录的服务预设")
     }
 
     private var connectionFields: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            SettingsFormRow("服务名称") { TextField("例如：我的 DeepSeek", text: $store.serviceName).settingsTextField() }
-            SettingsFormRow("接口地址") { TextField("完整 HTTPS 或本机服务 URL", text: $store.settings.baseURL).settingsTextField() }
+        SettingsGroupSection(title: "连接服务") {
+            Text("阅读、对话与书中组件共用这项服务。")
+                .font(.system(size: 13)).foregroundStyle(.secondary).padding(16)
+            SettingsGroupDivider()
+            SettingsFormRow("服务名称") { TextField("例如：我的 DeepSeek", text: $store.serviceName).settingsTextField() }.padding(16)
+            SettingsGroupDivider()
+            SettingsFormRow("接口地址") { TextField("完整 HTTPS 或本机服务 URL", text: $store.settings.baseURL).settingsTextField() }.padding(16)
+            SettingsGroupDivider()
             SettingsFormRow("API Key") {
                 VStack(alignment: .leading, spacing: 8) {
                     SecureField("API Key", text: $store.apiKey).settingsTextField()
@@ -179,21 +181,24 @@ struct ProviderSettingsView: View {
                         Text(store.legacyKeyRecoveryStatus).font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                 }
-            }
+            }.padding(16)
+            SettingsGroupDivider()
             SettingsFormRow("模型 ID") {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("精确模型 API ID", text: $store.settings.model).settingsTextField()
                     if let preset = store.matchingPreset {
-                        Menu { ForEach(preset.models) { model in Button { store.chooseModel(model) } label: { Label(model.name, systemImage: "cpu") } } } label: { Label("选择已核实预设", systemImage: "cpu") }
-                            .menuStyle(.borderlessButton).font(.system(size: 13)).fixedSize()
+                        Menu { ForEach(preset.models) { model in Button { store.chooseModel(model) } label: { Label(model.name, systemImage: "cpu") } } } label: { ManagementMenuLabel(title: "选择已核实预设", icon: "cpu") }
+                            .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize()
+                            .help("选择此服务目录中已核实的精确模型 ID 与能力参数")
                     }
                 }
-            }
+            }.padding(16)
             if let note = store.matchingPreset?.note, !note.isEmpty {
+                SettingsGroupDivider()
                 DisclosureGroup("服务说明") { Text(note).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 8) }
-                    .font(.system(size: 14))
+                    .font(.system(size: 14)).padding(16)
             }
-        }.disabled(store.isBusy)
+        }.disabled(!store.canEditAISettings)
     }
 
     @ViewBuilder private var credentialActions: some View {
@@ -201,25 +206,25 @@ struct ProviderSettingsView: View {
             .font(.system(size: 12)).foregroundStyle(.secondary)
         if store.apiKey.isEmpty, store.selectedServiceID != nil {
             Button(store.isRecoveringLegacyKey ? "正在取回…" : "取回旧钥匙串密钥") { store.recoverLegacyServiceKey() }
-                .buttonStyle(.borderless).font(.system(size: 12))
-                .disabled(store.isBusy || store.isRecoveringLegacyKey)
+                .buttonStyle(SettingsActionButtonStyle()).font(.system(size: 12))
+                .disabled(!store.canEditAISettings || store.isRecoveringLegacyKey)
                 .help("仅此次主动读取旧钥匙串，取回后保存在本机")
         }
     }
 
     private var budgetFields: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("输出与能力").font(.system(size: 16, weight: .semibold))
+        SettingsGroupSection(title: "输出与能力") {
             SettingsFormRow("最大输出 Token") {
                 HStack(spacing: 10) {
                     TextField("输出上限", value: $store.settings.maxOutputTokens, format: .number).settingsTextField()
-                    Button("Max") { store.useMaximumOutput() }.buttonStyle(ReadingToolbarButtonStyle())
-                        .background(Palette.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+                    Button("Max") { store.useMaximumOutput() }.buttonStyle(SettingsActionButtonStyle())
                         .disabled(store.matchingModel?.maxOutputTokens == nil)
                         .help("使用此精确型号已核实的输出上限；未知型号不能自动猜测")
                 }
-            }
-            if let model = store.matchingModel {
+            }.padding(16)
+            SettingsGroupDivider()
+            VStack(alignment: .leading, spacing: 12) {
+              if let model = store.matchingModel {
                 HStack(spacing: 12) {
                     Label(model.vision ? "支持图像输入" : "文本模型", systemImage: model.vision ? "photo" : "text.alignleft")
                     Text(model.tools ? "支持工具" : "工具能力未确认").foregroundStyle(.secondary)
@@ -228,13 +233,15 @@ struct ProviderSettingsView: View {
                 }.font(.system(size: 13))
                 Text("上下文 \(model.contextTokens.map { String($0) } ?? "未确认") · 输出上限 \(model.maxOutputTokens.map { String($0) } ?? "未确认") Token")
                     .font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
-            } else {
+              } else {
                 Text("未匹配已核实型号，Max 暂不可用；可手动设置参数并核对服务文档。")
                     .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let preset = store.matchingPreset, let url = URL(string: preset.documentationURL) { Link("服务文档", destination: url).font(.system(size: 13)) }
-            }
-            Text("Max 设置输出上限，不保证写满；实际请求仍受上下文余量和账户限制。")
-                .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+              }
+              Text("Max 设置输出上限，不保证写满；实际请求仍受上下文余量和账户限制。")
+                  .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }.padding(16)
+            SettingsGroupDivider()
             DisclosureGroup("高级设置", isExpanded: $showAdvanced) {
                 VStack(alignment: .leading, spacing: 18) {
                     SettingsFormRow("上下文 Token") {
@@ -250,24 +257,24 @@ struct ProviderSettingsView: View {
                     Text("推理模型的输出额度可能包含推理 Token。未知型号不自动推测。模型目录核查于 \(store.providerCatalog.verifiedAt.isEmpty ? "未记录" : store.providerCatalog.verifiedAt)。")
                         .font(.system(size: 13)).foregroundStyle(.secondary)
                 }.padding(.top, 16)
-            }.font(.system(size: 16, weight: .medium))
-        }.disabled(store.isBusy)
+            }.font(.system(size: 14, weight: .medium)).padding(16)
+        }.disabled(!store.canEditAISettings)
     }
 
     private var ocrFields: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("PDF 视觉识别").font(.system(size: 16, weight: .semibold))
+        SettingsGroupSection(title: "PDF 视觉识别") {
             SettingsFormRow("图像模型服务") {
                 Picker("图像模型服务", selection: Binding(get: { store.ocrServiceID ?? "" }, set: { store.ocrServiceID = $0.isEmpty ? nil : $0; UserDefaults.standard.set(store.ocrServiceID, forKey: "ocr-service") })) {
                     Text("当前阅读服务").tag("")
                     ForEach(store.savedServices) { service in Text("\(service.name) · \(service.settings.model)").tag(service.id) }
                 }.labelsHidden().lineLimit(1).frame(maxWidth: .infinity)
-            }
+            }.padding(16)
+            SettingsGroupDivider()
             DisclosureGroup("发送范围与测试说明", isExpanded: $showNotes) {
                 Text("文本分析发送所需原文，OCR 发送所选 PDF 页图。OCR 需支持图像输入，可与文本阅读使用不同服务；逐页请求与保存，可暂停续跑。测试连接会发送一条短文本请求。")
                     .font(.system(size: 13)).foregroundStyle(.secondary).padding(.top, 8)
-            }.font(.system(size: 14))
-        }.disabled(store.isBusy)
+            }.font(.system(size: 14)).padding(16)
+        }.disabled(!store.canEditAISettings)
     }
 }
 
@@ -304,6 +311,22 @@ private struct PluginLibraryWorkspace: View {
     @State private var componentError = ""
     @State private var componentNotice = ""
     @State private var pendingAddition: String?
+    @State private var definitionChoiceOwner: DefinitionChoiceOwner?
+    @State private var pendingDefinitionChoice: UUID?
+
+    private struct DefinitionChoiceOwner: Identifiable {
+        let id = UUID()
+        let library: String
+        let bookID: String?
+        let draftID: ObjectIdentifier
+        @MainActor init(store: AppStore, draft: PluginDefinitionDraft) {
+            library = store.libraryRootURL.standardizedFileURL.path
+            bookID = store.bookID; draftID = ObjectIdentifier(draft)
+        }
+        @MainActor func matches(_ store: AppStore, draft: PluginDefinitionDraft) -> Bool {
+            library == store.libraryRootURL.standardizedFileURL.path && bookID == store.bookID && draftID == ObjectIdentifier(draft)
+        }
+    }
 
     private var available: [WorkspaceComponentDescriptor] {
         WorkspaceComponentRegistry.shared.components.filter { !$0.permanent && !$0.requiresDefinition && store.savedComponent(for: $0) == nil && matches($0.title) }
@@ -339,6 +362,8 @@ private struct PluginLibraryWorkspace: View {
         .onAppear { definitionDraft.reconcile(in: store.book) }
         .onChange(of: store.book?.types) { _, _ in definitionDraft.reconcile(in: store.book) }
         .onChange(of: store.book?.methods) { _, _ in definitionDraft.reconcile(in: store.book) }
+        .onChange(of: store.bookID) { _, _ in definitionChoiceOwner = nil; pendingDefinitionChoice = nil }
+        .onChange(of: store.libraryRootURL) { _, _ in definitionChoiceOwner = nil; pendingDefinitionChoice = nil }
         .onExitCommand { requestDefinitionAction(.close) }
         .onChange(of: store.isBusy) { _, busy in
             guard !busy, let componentID = pendingAddition else { return }
@@ -350,20 +375,26 @@ private struct PluginLibraryWorkspace: View {
     }
     private var pluginList: some View {
         VStack(spacing: 0) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { pluginSearch; pluginFilter.frame(width: 180) }
-                VStack(spacing: 12) { pluginSearch; pluginFilter }
+            SettingsResponsiveActionLayout(minimumLeadingWidth: 230, spacing: 16) {
+                pluginSearch
+                pluginFilter.frame(width: 220)
             }.padding(16)
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if !importError.isEmpty { settingsError(importError) }
-                    if !componentError.isEmpty { settingsError(componentError) }
-                    if !componentNotice.isEmpty { Label(componentNotice, systemImage: "checkmark.circle").font(.system(size: 14)).foregroundStyle(Palette.accent).padding(.vertical, 12) }
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if !importError.isEmpty { SettingsContentGroup { settingsError(importError).padding(14) } }
+                    if !componentError.isEmpty { SettingsContentGroup { settingsError(componentError).padding(14) } }
+                    if !componentNotice.isEmpty {
+                        Label(componentNotice, systemImage: "checkmark.circle").font(.system(size: 14)).foregroundStyle(Palette.accent)
+                            .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 4).padding(.vertical, 6)
+                    }
                     if tab == "available" {
+                        pluginSectionTitle("可添加的组件")
                         ForEach(available) { component in capabilityRow(component, addOnly: true) }
                         if available.isEmpty { ContentUnavailableView(search.isEmpty ? "本书组件已经齐全" : "没有匹配的组件", systemImage: "checkmark.circle", description: Text("已添加的组件不会重复出现在这里。")) }
                     } else {
+                        pluginSectionTitle("工作区组件")
                         ForEach(WorkspaceComponentRegistry.shared.components.filter { !$0.requiresDefinition && matches($0.title) }) { component in capabilityRow(component, addOnly: false) }
+                        if (store.book?.plugins ?? []).contains(where: { matches($0.name + $0.description) }) { pluginSectionTitle("本书声明包").padding(.top, 8) }
                         ForEach((store.book?.plugins ?? []).filter { matches($0.name + $0.description) }) { plugin in
                             CompactPluginRow(plugin: plugin)
                         }
@@ -378,29 +409,39 @@ private struct PluginLibraryWorkspace: View {
                                     }
                                 }
                             }.padding(.top, 12)
-                        }.font(.system(size: 14)).padding(.vertical, 18)
+                        }.font(.system(size: 14, weight: .medium)).padding(16)
+                            .background(Palette.paper, in: RoundedRectangle(cornerRadius: 13))
+                            .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(Palette.line, lineWidth: 1))
+                            .help("展开查看应用提供的执行插件与动作名称").padding(.top, 6)
                     }
                 }.padding(.horizontal, 16).padding(.bottom, 16)
             }
             Divider().opacity(0.5)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { definitionButtons; Spacer(minLength: 0); importButton }
-                VStack(alignment: .leading, spacing: 8) { definitionButtons; importButton }
+            SettingsResponsiveActionLayout(minimumLeadingWidth: 230, spacing: 16) {
+                definitionButtons
+                importButton
             }.padding(14)
         }
     }
 
+    private func pluginSectionTitle(_ title: String) -> some View {
+        Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary).padding(.horizontal, 4).padding(.top, 4)
+    }
+
     private var pluginSearch: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("搜索插件或组件…", text: $search).textFieldStyle(.plain).font(.system(size: 15))
-            if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).accessibilityLabel("清空插件搜索") }
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "magnifyingglass").readingSearchIcon()
+            TextField("搜索插件或组件…", text: $search).readingSearchInput()
+            if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).help("清空插件或组件搜索").accessibilityLabel("清空插件搜索") }
         }.padding(.leading, 14).padding(.trailing, search.isEmpty ? 14 : 0).frame(minWidth: 160, minHeight: 44)
             .background(Palette.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Palette.line, lineWidth: 0.7))
     }
     private var pluginFilter: some View {
-        Picker("插件范围", selection: $tab) { Text("全部").tag("installed"); Text("可添加").tag("available") }.labelsHidden().pickerStyle(.segmented)
+        ManagementSegmentedControl(selection: $tab, options: [
+            ManagementSegmentOption(id: "installed", title: "全部", detail: "查看工作区组件、声明包与内置执行插件"),
+            ManagementSegmentOption(id: "available", title: "可添加", detail: "只显示尚未添加到本书的组件")
+        ]).accessibilityIdentifier("plugin-library-scope")
     }
 
     private func close() {
@@ -423,7 +464,7 @@ private struct PluginLibraryWorkspace: View {
         case .tab(let tab): definitionDraft.selectFirst(in: store.book, tab: tab); showDetails = true
         case .selection(let id): definitionDraft.load(in: store.book, id: id, tab: definitionDraft.tab)
         case .hide: showDetails = false
-        case .close: close()
+        case .close: definitionChoiceOwner = nil; pendingDefinitionChoice = nil; close()
         case .scheme: store.showingPlugins = false; store.openBookScheme(); if !embedded { dismiss() }
         case .openComponent(let id):
             guard let component = WorkspaceComponentRegistry.shared.component(id: id) else { return }
@@ -433,43 +474,96 @@ private struct PluginLibraryWorkspace: View {
     }
 
     private var definitionButtons: some View {
-        Menu {
-            Button { requestDefinitionAction(.scheme) } label: { Label("书本方案", systemImage: "slider.horizontal.3") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || store.isBusy)
-            Button { if definitionDraft.tab == "types" { showDetails = true } else { requestDefinitionAction(.tab("types")) } } label: { Label("类型", systemImage: "square.stack") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || definitionDraft.saving)
-            Button { if definitionDraft.tab == "methods" { showDetails = true } else { requestDefinitionAction(.tab("methods")) } } label: { Label("读法", systemImage: "checklist") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || definitionDraft.saving)
-            Divider()
-            Text("停用声明包会保留已有内容")
-        } label: { Label("类型与阅读方法", systemImage: "slider.horizontal.3") }
-            .menuStyle(.borderlessButton).fixedSize().padding(.horizontal, 10).frame(minHeight: 44)
+        Button {
+            pendingDefinitionChoice = nil
+            definitionChoiceOwner = DefinitionChoiceOwner(store: store, draft: definitionDraft)
+        } label: {
+            HStack(spacing: 9) {
+                Label("类型与阅读方法", systemImage: "slider.horizontal.3")
+                Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+            }.frame(minHeight: 26)
+        }.buttonStyle(SettingsActionButtonStyle()).fixedSize(horizontal: true, vertical: false)
+            .help("查看书本方案，管理卡片类型与阅读方法")
+            .accessibilityLabel("类型与阅读方法").accessibilityHint("展开书本方案、类型和读法入口")
+            .accessibilityValue(definitionChoiceOwner == nil ? "已收起" : "已展开")
+            .popover(item: $definitionChoiceOwner, arrowEdge: .trailing) { owner in
+                VStack(spacing: 0) {
+                    ManagementActionPopover(title: "类型与阅读方法", options: definitionChoices,
+                        close: { if definitionChoiceOwner?.id == owner.id { definitionChoiceOwner = nil } },
+                        select: { selectDefinitionChoice($0, owner: owner) })
+                    Divider().opacity(0.4)
+                    Label("停用声明包会保留已有内容", systemImage: "info.circle")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                }.frame(width: 340).background(Palette.surface)
+            }
+    }
+    private var definitionChoices: [ManagementActionOption] {
+        [ManagementActionOption(id: "scheme", title: "书本方案", detail: "预览与调整本书的类型、读法与组件安排。", icon: "slider.horizontal.3", enabled: store.book != nil && !store.isBusy),
+         ManagementActionOption(id: "types", title: "类型", detail: "查看卡片类型和字段，编辑后保存为新版本。", icon: "square.stack", enabled: store.book != nil && !definitionDraft.saving),
+         ManagementActionOption(id: "methods", title: "读法", detail: "查看阅读目标、步骤与执行动作，保留原版本。", icon: "checklist", enabled: store.book != nil && !definitionDraft.saving)]
+    }
+    private func selectDefinitionChoice(_ id: String, owner: DefinitionChoiceOwner) {
+        guard definitionChoiceOwner?.id == owner.id, owner.matches(store, draft: definitionDraft),
+              definitionChoices.contains(where: { $0.id == id && $0.enabled }) else { return }
+        definitionChoiceOwner = nil; pendingDefinitionChoice = owner.id
+        Task { @MainActor in
+            await Task.yield()
+            guard pendingDefinitionChoice == owner.id, owner.matches(store, draft: definitionDraft),
+                  definitionChoices.contains(where: { $0.id == id && $0.enabled }) else { return }
+            pendingDefinitionChoice = nil
+            switch id {
+            case "scheme": requestDefinitionAction(.scheme)
+            case "types", "methods":
+                // Reopening the current tab retains its dirty draft. Selecting
+                // another tab still follows the existing save/discard gate.
+                if definitionDraft.tab == id { showDetails = true }
+                else { requestDefinitionAction(.tab(id)) }
+            default: break
+            }
+        }
     }
     private var importButton: some View {
-        Button { requestDefinitionAction(.importPlugin) } label: { Label("导入 / 升级…", systemImage: "plus") }
-            .buttonStyle(.borderedProminent).controlSize(.large).disabled(store.book == nil || store.isBusy)
+        Button { requestDefinitionAction(.importPlugin) } label: { Label("导入 / 升级…", systemImage: "plus").frame(minHeight: 26) }
+            .buttonStyle(SettingsActionButtonStyle(prominent: true)).disabled(store.book == nil || store.isBusy)
+            .help("导入或升级声明包；先核对定义，已有内容与引用保留")
     }
     private func capabilityRow(_ component: WorkspaceComponentDescriptor, addOnly: Bool) -> some View {
         let installed = store.installedComponent(for: component) != nil
         let retainedByDisabledPack = !installed && store.savedComponent(for: component) != nil
-        return HStack(spacing: 12) {
-            Image(systemName: component.icon).font(.system(size: 22, weight: .regular)).foregroundStyle(Palette.accent)
-                .frame(width: 32, height: 44)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(component.title).font(.system(size: 15, weight: .medium)).lineLimit(2)
-                Text(retainedByDisabledPack ? "已保存，请启用所属声明包。" : capabilityDescription(component)).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            if component.permanent { Text("常驻").font(.system(size: 13)).foregroundStyle(.secondary) }
-            else {
-                Button(installed ? "打开" : retainedByDisabledPack ? "已停用" : "添加") {
-                    componentError = ""; componentNotice = ""
-                    if installed { requestDefinitionAction(.openComponent(component.id)) }
-                    else { pendingAddition = component.id; componentNotice = "正在添加\(component.title)…"; store.activate(component, open: false, onError: { componentError = $0; componentNotice = ""; pendingAddition = nil }) }
-                }.buttonStyle(ReadingToolbarButtonStyle()).disabled(store.book == nil || store.isBusy || retainedByDisabledPack)
-            }
-        }.padding(.vertical, 12).frame(minHeight: 64).overlay(alignment: .bottom) { Divider().opacity(0.4) }
+        return SettingsContentGroup {
+            SettingsResponsiveActionLayout(minimumLeadingWidth: 230, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: component.icon).font(.system(size: 21, weight: .regular)).foregroundStyle(Palette.accent)
+                        .frame(width: 34, height: 40)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(component.title).font(.system(size: 15, weight: .medium)).lineLimit(2)
+                        Text(retainedByDisabledPack ? "已保存，请启用所属声明包。" : capabilityDescription(component))
+                            .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if component.permanent {
+                    Text("常驻").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 10).padding(.vertical, 6).background(Palette.canvas, in: Capsule())
+                        .overlay(Capsule().strokeBorder(Palette.line, lineWidth: 1)).help("随应用提供的常驻组件，无需添加")
+                } else {
+                    Button {
+                        componentError = ""; componentNotice = ""
+                        if installed { requestDefinitionAction(.openComponent(component.id)) }
+                        else { pendingAddition = component.id; componentNotice = "正在添加\(component.title)…"; store.activate(component, open: false, onError: { componentError = $0; componentNotice = ""; pendingAddition = nil }) }
+                    } label: {
+                        Label(installed ? "打开" : retainedByDisabledPack ? "已停用" : "添加", systemImage: installed ? "arrow.up.right" : retainedByDisabledPack ? "pause.circle" : "plus")
+                            .frame(minWidth: 52, minHeight: 24)
+                    }.buttonStyle(SettingsActionButtonStyle()).disabled(store.book == nil || store.isBusy || retainedByDisabledPack)
+                        .help(retainedByDisabledPack ? "启用所属声明包后可重新打开，已保存内容仍保留" : installed ? "打开本书的\(component.title)组件" : "将\(component.title)添加到本书，之后可从侧栏打开")
+                        .accessibilityLabel((installed ? "打开" : retainedByDisabledPack ? "已停用" : "添加") + component.title)
+                }
+            }.frame(minHeight: 48).padding(16)
+        }
     }
     private func capabilityDescription(_ component: WorkspaceComponentDescriptor) -> String {
         switch component.rendererID ?? "" {
         case "book.scheme": return "预览与调整 AI 书本方案，保存模板，并安全撤销配置更新。"
-        case "math.verify": return "对支持的有理数矩阵与方程逐步验算，保留原文依据和不适用说明。"
         case "reading.layers": return "译文、释义、评注和资料对齐，随原文按需展开。"
         case "reading.mentions": return "按原文词句追踪对象、别名与出现位置。"
         case "reading.decisions": return "带原文依据的问题、选项与分析路径。"
@@ -494,8 +588,10 @@ private struct CompactPluginRow: View {
     let plugin: PluginManifest
     @State private var operationError = ""
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
+        SettingsContentGroup {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsResponsiveActionLayout(minimumLeadingWidth: 230, spacing: 14) {
+                    HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "shippingbox").font(.system(size: 22)).foregroundStyle(Palette.accent).frame(width: 32, height: 44)
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 14) {
@@ -503,19 +599,22 @@ private struct CompactPluginRow: View {
                         ForEach(plugin.types) { CompactTypeRow(type: $0) }
                         ForEach(plugin.methods.filter(PluginEngine.isActiveMethod)) { CompactMethodRow(method: $0) }
                         ForEach(plugin.views.filter { !PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }) { Label("\($0.title) · \($0.kind.title)", systemImage: $0.kind.icon).font(.system(size: 13)).foregroundStyle(.secondary) }
-                    }.padding(.top, 12)
+                    }.padding(.top, 14)
                 } label: {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(plugin.name).font(.system(size: 15, weight: .medium)).lineLimit(2)
-                        Text("声明包 · \(plugin.types.count) 类型 · \(plugin.methods.filter(PluginEngine.isActiveMethod).count) 方法 · \(plugin.views.filter { !PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }.count) 视图").font(.system(size: 13)).foregroundStyle(.secondary)
+                        Text("声明包 · \(plugin.types.count) 类型 · \(plugin.methods.filter(PluginEngine.isActiveMethod).count) 方法 · \(plugin.views.filter { !PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }.count) 视图").font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
-                }
+                }.help("展开查看\(plugin.name)的说明、类型、阅读方法与视图")
+                    }
                 Toggle("启用", isOn: Binding(get: { store.book?.disabledPluginIDs.contains(plugin.id) != true }, set: { enabled in
                     operationError = ""; Task { _ = await store.setPluginEnabled(enabled, id: plugin.id, onError: { operationError = $0 }) }
-                })).labelsHidden().accessibilityLabel("启用\(plugin.name)").toggleStyle(.switch).controlSize(.large).disabled(store.isBusy)
+                })).accessibilityLabel("启用\(plugin.name)").toggleStyle(.switch).controlSize(.large).disabled(store.isBusy)
+                    .help("启用或停用声明包；停用只隐藏其能力，已有内容会保留")
             }
             if !operationError.isEmpty { settingsError(operationError) }
-        }.padding(.vertical, 12).overlay(alignment: .bottom) { Divider().opacity(0.4) }
+            }.padding(16)
+        }
     }
 }
 
@@ -659,12 +758,18 @@ private struct PluginDefinitionPanel: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Picker("定义类型", selection: Binding(get: { draft.tab }, set: onTabChange)) { Text("卡片类型").tag("types"); Text("阅读方法").tag("methods") }.pickerStyle(.segmented).labelsHidden()
+                    ManagementSegmentedControl(selection: Binding(get: { draft.tab }, set: onTabChange), options: [
+                        ManagementSegmentOption(id: "types", title: "卡片类型", detail: "查看或编辑按书定义的卡片类型与字段"),
+                        ManagementSegmentOption(id: "methods", title: "阅读方法", detail: "查看或编辑阅读目标、步骤与执行动作")
+                    ]).accessibilityIdentifier("plugin-definition-scope")
                     Picker(selectedTab == "types" ? "选择类型" : "选择方法", selection: Binding(get: { draft.selectedID }, set: onSelectionChange)) {
                         Label("新建定义", systemImage: "plus").tag("")
                         if selectedTab == "types" { ForEach(store.book?.types ?? []) { Label($0.name, systemImage: $0.icon).tag($0.id) } }
                         else { ForEach(methods) { Label($0.name, systemImage: "checklist").tag($0.id) } }
-                    }.frame(minHeight: 44)
+                    }.pickerStyle(.menu).controlSize(.large).frame(maxWidth: .infinity, minHeight: 40)
+                        .padding(.horizontal, 10).background(Palette.paper, in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Palette.line, lineWidth: 1))
+                        .help("选择已有定义查看或另存新版本，也可选择新建定义")
                     VStack(alignment: .leading, spacing: 8) { Text("名称").font(.system(size: 14)); TextField(selectedTab == "types" ? "例如：定理、战役" : "读书法名称", text: $draft.name).settingsTextField() }
                     if selectedTab == "methods" {
                         VStack(alignment: .leading, spacing: 8) { Text("目标").font(.system(size: 14)); TextField("阅读目标", text: $draft.goal, axis: .vertical).settingsTextField() }
@@ -676,7 +781,11 @@ private struct PluginDefinitionPanel: View {
                             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.line, lineWidth: 0.6))
                     }
                     if selectedTab == "methods" {
-                        Picker("新步骤执行动作", selection: $draft.actionID) { ForEach(PluginEngine.activeWorkflowActions, id: \.id) { Label($0.title, systemImage: "arrow.triangle.branch").tag($0.id) } }.frame(minHeight: 44)
+                        Picker("新步骤执行动作", selection: $draft.actionID) { ForEach(PluginEngine.activeWorkflowActions, id: \.id) { Label($0.title, systemImage: "arrow.triangle.branch").tag($0.id) } }
+                            .pickerStyle(.menu).controlSize(.large).frame(maxWidth: .infinity, minHeight: 40)
+                            .padding(.horizontal, 10).background(Palette.paper, in: RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Palette.line, lineWidth: 1))
+                            .help("为新增或改写的步骤选择执行动作，原步骤绑定保持保留")
                         if let method = selectedMethod {
                             DisclosureGroup("原方法执行绑定", isExpanded: $showExecutions) { CompactMethodRow(method: method) }.font(.system(size: 14))
                         }
@@ -695,8 +804,9 @@ private struct PluginDefinitionPanel: View {
             HStack {
                 Text(store.book?.title ?? "先选择一本书").font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 8)
-                Button { draft.save(in: store) } label: { Label(draft.saving ? "保存中…" : selectedID.isEmpty ? "保存定义" : "保存为新版本", systemImage: "checkmark") }
-                    .buttonStyle(.borderedProminent).controlSize(.large).frame(minHeight: 44).disabled(store.book == nil || store.isBusy || draft.saving)
+                Button { draft.save(in: store) } label: { Label(draft.saving ? "保存中…" : selectedID.isEmpty ? "保存定义" : "保存为新版本", systemImage: "checkmark").frame(minHeight: 26) }
+                    .buttonStyle(SettingsActionButtonStyle(prominent: true)).disabled(store.book == nil || store.isBusy || draft.saving)
+                    .help(selectedID.isEmpty ? "将新定义保存到本书声明包" : "另存一个新版本，保留原定义、引用与执行回执")
             }.padding(14)
         }
     }

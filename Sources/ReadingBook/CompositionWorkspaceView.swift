@@ -497,9 +497,9 @@ private struct CompositionObjectList: View {
     private var filtered: [CompositionItem] { items.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.summary.localizedCaseInsensitiveContains(search) } }
     var body: some View {
         VStack(spacing: 4) {
-            HStack(spacing: 9) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("查找要素", text: $search).textFieldStyle(.plain)
+            HStack(alignment: .center, spacing: 9) {
+                Image(systemName: "magnifyingglass").readingSearchIcon()
+                TextField("查找要素", text: $search).readingSearchInput()
                 if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill").frame(width: 48, height: 48) }.buttonStyle(.plain).accessibilityLabel("清空搜索") }
             }.padding(.horizontal, 14).frame(minHeight: 48).background(Palette.paper.opacity(0.6), in: RoundedRectangle(cornerRadius: 14)).padding(12)
             if filtered.isEmpty { CompositionEmptyState(text: search.isEmpty ? "当前范围还没有这类要素。" : "没有匹配的要素。", icon: "rectangle.stack") }

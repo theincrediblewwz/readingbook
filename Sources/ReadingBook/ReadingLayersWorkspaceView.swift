@@ -16,6 +16,7 @@ struct ReadingLayersWorkspaceView: View {
     @State private var expandedSource = false
     @State private var sourceRenderedHeight: CGFloat = 0
     @State private var removal: LayerRemoval?
+    @State private var generationReview: CompanionGenerationIntent?
     @State private var restorationNotice = ""
 
     private var unit: SourceUnit? { store.book?.units.first { $0.id == sourceID } }
@@ -79,6 +80,7 @@ struct ReadingLayersWorkspaceView: View {
         .confirmationDialog("移除这条伴读内容？", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), presenting: removal) { item in
             Button("移入伴读回收站", role: .destructive) { Task { await store.removeReadingItem(item.id, kind: item.kind) } }
         } message: { item in Text("\(item.title)\n原书和已保存的 Markdown 保留，可从伴读恢复菜单恢复。") }
+        .companionGenerationConfirmation($generationReview, generate: startEnhancement)
     }
 
     private func initializeSelection() {
@@ -99,8 +101,10 @@ struct ReadingLayersWorkspaceView: View {
                 Button(action: close) { Image(systemName: "sidebar.left") }.buttonStyle(ReadingToolbarButtonStyle()).help("收起原文片段")
             }.padding(.horizontal, 18).padding(.top, 8)
             TextField("查找段落或章节", text: $search).textFieldStyle(.roundedBorder).controlSize(.large).padding(.horizontal, 16)
-            Picker("原文范围", selection: $unitScope) { Text("全书").tag("book"); Text("当前页 / 单元").tag("page") }
-                .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 16)
+            ManagementSegmentedControl(selection: $unitScope, options: [
+                ManagementSegmentOption(id: "book", title: "全书", detail: "查看全书中已有伴读内容的原文片段"),
+                ManagementSegmentOption(id: "page", title: "当前页 / 单元", detail: "只列出当前页或当前原文单元内的已有伴读")
+            ]).accessibilityIdentifier("reading-layers-source-scope").padding(.horizontal, 16)
             Button { sourceID = nil; showsDirectoryPopover = false } label: {
                 Label("查看全书伴读", systemImage: "books.vertical").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(ReadingToolbarButtonStyle(selected: sourceID == nil)).padding(.horizontal, 10)
@@ -183,7 +187,9 @@ struct ReadingLayersWorkspaceView: View {
                 ForEach(recoverableItems) { item in
                     Button("恢复 · \(item.kind == "alignment" ? "资料对读" : kindTitle(item.layer?.kind ?? "explanation")) · \(item.title)") { restore(item) }.disabled(store.isBusy)
                 }
-            } label: { Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44) }.menuStyle(.borderlessButton).help("伴读回收与恢复")
+            } label: { ManagementMenuLabel(title: "恢复", icon: "arrow.uturn.backward") }
+                .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize().help("查看并恢复已移除的释义、译文或资料对读")
+                .accessibilityLabel("伴读回收与恢复")
         }
     }
     @ViewBuilder private var sourceQuote: some View {
@@ -237,7 +243,10 @@ struct ReadingLayersWorkspaceView: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 9) { Text(label).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent); Text(title).font(.system(size: 23, weight: .semibold, design: .serif)) }
             Spacer(minLength: 0)
-            Menu { Button("移入伴读回收站", role: .destructive) { restorationNotice = ""; removal = LayerRemoval(id: id, kind: kind, title: title) }.disabled(store.isBusy) } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.menuStyle(.borderlessButton)
+            Menu { Button("移入伴读回收站", role: .destructive) { restorationNotice = ""; removal = LayerRemoval(id: id, kind: kind, title: title) }.disabled(store.isBusy) }
+                label: { ManagementMenuLabel(title: "更多", icon: "ellipsis") }
+                .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize().help("移入伴读回收站前会确认，原书与笔记保留")
+                .accessibilityLabel("这条伴读的更多操作")
         }
     }
     private func sourceLinks(_ ids: [String]) -> some View {
@@ -272,7 +281,29 @@ struct ReadingLayersWorkspaceView: View {
     private var footerActions: some View {
         HStack(spacing: 12) {
             Button { if let unit { store.navigateToUnit(unit.id); store.selectedObjectID = nil }; store.askAboutReadingContext() } label: { Label("问这一片段", systemImage: "bubble.left").frame(minHeight: 44) }.buttonStyle(.borderedProminent).controlSize(.large).disabled(unit == nil).help("使用当前原文片段全文提问；在上方拖选文字可复制。")
-            Button { if let unit { store.navigateToUnit(unit.id); store.selectedObjectID = nil }; store.enhanceCurrentSource() } label: { Label(store.isBusy ? "正在处理…" : "增强当前片段", systemImage: "sparkles") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(unit == nil || store.isBusy)
+            Button(action: requestEnhancement) { Label(store.isCompanionGenerating ? "正在生成伴读…" : "增强当前片段", systemImage: "sparkles") }
+                .buttonStyle(ReadingToolbarButtonStyle()).disabled(unit == nil || !store.canStartCompanion)
+                .help("为当前原文请求伴读解释；已有分析会先提示确认，旧内容和笔记保留。对话可同时进行。")
+        }
+    }
+    private func requestEnhancement() {
+        guard store.canStartCompanion, let unit, let book = store.book else { return }
+        let ids = unit.page.map { page in Set(book.units.filter { $0.page == page }.map(\.id)) } ?? [unit.id]
+        let review = ReadingCompanionGenerationReview(project: book, unitIDs: ids)
+        guard let intent = CompanionGenerationIntent(store: store, contextKey: unit.id, scope: .page,
+            title: unit.locator, review: review) else { return }
+        if review.requiresConfirmation { generationReview = intent }
+        else { startEnhancement(intent) }
+    }
+    private func startEnhancement(_ intent: CompanionGenerationIntent) {
+        guard intent.stillMatches(store, contextKey: sourceID ?? ""), store.canStartCompanion, let unit else {
+            store.readingExperienceError = "阅读范围或任务状态已变化，请重新选择后再生成。"; return
+        }
+        store.navigateToUnit(unit.id); store.selectedObjectID = nil
+        let selected = unit.id
+        Task {
+            guard intent.stillMatches(store, contextKey: sourceID ?? ""), store.selectedUnitID == selected else { return }
+            _ = await store.enhanceSourceScope(scope: intent.scope)
         }
     }
     private var attribution: some View { Text("AI 解释另列来源，请对照原文核对。追问后主动保存才成为笔记。").font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }

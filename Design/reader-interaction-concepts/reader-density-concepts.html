@@ -1,0 +1,144 @@
+<div id="readingbook-density-concepts" class="viz-carousel viz-dotted-background" aria-label="伴读内容收纳方案" data-previous-label="上一个方案" data-next-label="下一个方案">
+  <section data-variant="紧凑操作行" aria-label="紧凑操作行方案">
+    <div class="rb-stage"><div class="rb-window" data-layout="inline" data-mode="companion" aria-label="伴读与对话交互草图">
+      <header class="rb-header"><span class="rb-title"><i data-lucide="sparkles" aria-hidden="true"></i>伴读与对话</span><div class="rb-tabs"><button type="button" data-action="companion" aria-pressed="true">伴读</button><button type="button" data-action="chat" aria-pressed="false">对话</button></div><button type="button" class="rb-icon" data-action="zoom" aria-label="放大阅读"><i data-lucide="maximize-2" aria-hidden="true"></i></button></header>
+      <div class="rb-task"><span><span class="rb-dot"></span>伴读 · 等待模型响应</span><button type="button" data-action="stop" aria-label="停止这次伴读"><i data-lucide="pause" aria-hidden="true"></i></button></div>
+      <div class="rb-toolbar"><button type="button" data-action="section">解释与译文 <i data-lucide="chevron-down" aria-hidden="true"></i></button><button type="button" data-action="scope">当前页 <i data-lucide="chevron-down" aria-hidden="true"></i></button><span class="rb-spacer"></span><button type="button" data-action="type" aria-label="调整文字大小">Aa</button></div>
+      <main class="rb-reading">
+        <div class="rb-question" hidden><span class="rb-meta">你的问题</span><p>原文说谁在这里？</p></div>
+        <article class="rb-answer"><div class="rb-answer-heading"><span data-answer-title>这句话的意思</span><span class="rb-meta">AI 解读 · 示例</span><button type="button" class="rb-history-trigger" data-action="history-toggle" aria-expanded="false"><i data-lucide="history" aria-hidden="true"></i>历史 3</button></div><div class="rb-prose"><p>原文说“刘备在此”，因此这里的人是刘备。</p><p>“在此”是“在这里”的意思。理解这句话时，先确认说话人及其指向，再结合前后对话核对。</p><p>单独这一句已经能够回答“谁在这里”，不必把整页的背景解释都塞进句子卡。更长的说明可以保留在伴读中，需要时展开。</p><p>阅读时也可以点开出处，查看原句和相邻内容，再决定是否把自己的理解记入笔记。</p></div><button type="button" class="rb-expand" data-action="expand" aria-expanded="false">展开全文 <i data-lucide="chevron-down" aria-hidden="true"></i></button>
+          <div class="rb-actions"><button type="button" data-action="source" aria-expanded="false"><i data-lucide="corner-up-left" aria-hidden="true"></i>原文 · 3 处</button><span class="rb-spacer"></span><button type="button" data-action="save"><i data-lucide="square-pen" aria-hidden="true"></i>存为笔记</button></div>
+          <div class="rb-sources" hidden><div class="rb-subhead">原文出处 <button type="button" data-action="source" aria-label="收起出处">收起</button></div><button type="button" data-action="jump">第 1 页 · 刘备在此。</button><button type="button" data-action="jump">第 1 页 · 前一句：何人在此？</button><button type="button" data-action="jump">第 1 页 · 后一句：关羽随后而来。</button></div>
+          <div class="rb-draft" hidden><label>笔记草稿<textarea aria-label="笔记草稿">原文说“刘备在此”，因此这里的人是刘备。
+
+出处：第 1 页</textarea></label><button type="button" data-action="draft-close">返回阅读</button><span class="rb-meta">草图演示 · 未写入书库</span></div>
+        </article>
+        <div class="rb-history" hidden><div class="rb-subhead">先前记录 · 3 条<button type="button" data-action="history-toggle" aria-label="关闭历史">关闭</button></div><button type="button" data-action="history">上一条句译 · 建宁二年四月十五日…</button><button type="button" data-action="history">更早的页面解读 · 第 1 页</button><button type="button" data-action="history">更早的对话记录</button></div>
+      </main>
+      <footer class="rb-companion-footer"><button type="button" data-action="chat"><i data-lucide="message-circle" aria-hidden="true"></i>问这部分</button><button type="button" data-action="generate"><i data-lucide="sparkles" aria-hidden="true"></i>补充解释</button></footer>
+      <div class="rb-composer" hidden><textarea aria-label="围绕所选内容提问" placeholder="围绕所选内容，问一个问题…"></textarea><div class="rb-compose-row"><button type="button" data-action="scope">当前页 <i data-lucide="chevron-down" aria-hidden="true"></i></button><button type="button" data-action="mode" aria-expanded="false"><span data-mode-label>纯阅读 · 老师</span><i data-lucide="chevron-down" aria-hidden="true"></i></button><span class="rb-spacer"></span><button type="button" class="rb-icon" data-action="attach" aria-label="附加内容"><i data-lucide="paperclip" aria-hidden="true"></i></button><button type="button" class="rb-send" data-action="send" aria-label="发送问题"><i data-lucide="arrow-up" aria-hidden="true"></i></button></div><div class="rb-mode-menu" hidden><span class="rb-meta">对话模式</span><button type="button" data-action="reading">✓ 纯阅读</button><button type="button" data-action="functional">功能协作</button><span class="rb-meta">讲解方式</span><button type="button" data-action="mentor">✓ 老师伴读</button><button type="button" data-action="evidence">原文考据</button></div></div>
+      <div class="rb-feedback" aria-live="polite"></div>
+    </div></div>
+  </section>
+  <section data-variant="详情抽屉" aria-label="详情抽屉方案" hidden>
+    <div class="rb-stage"><div class="rb-window" data-layout="drawer" data-mode="companion" aria-label="详情抽屉交互草图">
+      <header class="rb-header"><span class="rb-title"><i data-lucide="sparkles" aria-hidden="true"></i>伴读与对话</span><div class="rb-tabs"><button type="button" data-action="companion" aria-pressed="true">伴读</button><button type="button" data-action="chat" aria-pressed="false">对话</button></div><button type="button" class="rb-icon" data-action="zoom" aria-label="放大阅读"><i data-lucide="maximize-2" aria-hidden="true"></i></button></header>
+      <div class="rb-task"><span><span class="rb-dot"></span>伴读 · 等待模型响应</span><button type="button" data-action="stop" aria-label="停止这次伴读"><i data-lucide="pause" aria-hidden="true"></i></button></div>
+      <div class="rb-toolbar"><button type="button" data-action="section">解释与译文 <i data-lucide="chevron-down" aria-hidden="true"></i></button><button type="button" data-action="scope">当前页 <i data-lucide="chevron-down" aria-hidden="true"></i></button><span class="rb-spacer"></span><button type="button" data-action="type" aria-label="调整文字大小">Aa</button></div>
+      <main class="rb-reading">
+        <div class="rb-question" hidden><span class="rb-meta">你的问题</span><p>原文说谁在这里？</p></div>
+        <article class="rb-answer"><div class="rb-answer-heading"><span data-answer-title>这句话的意思</span><span class="rb-meta">AI 解读 · 示例</span><button type="button" class="rb-history-trigger" data-action="history-toggle" aria-expanded="false"><i data-lucide="history" aria-hidden="true"></i>历史 3</button></div><div class="rb-prose"><p>原文说“刘备在此”，因此这里的人是刘备。</p><p>“在此”是“在这里”的意思。理解这句话时，先确认说话人及其指向，再结合前后对话核对。</p><p>单独这一句已经能够回答“谁在这里”，不必把整页的背景解释都塞进句子卡。更长的说明可以保留在伴读中，需要时展开。</p><p>阅读时也可以点开出处，查看原句和相邻内容，再决定是否把自己的理解记入笔记。</p></div><button type="button" class="rb-expand" data-action="expand" aria-expanded="false">展开全文 <i data-lucide="chevron-down" aria-hidden="true"></i></button>
+          <details class="rb-detail-drawer"><summary>出处与操作 <span>3 处原文</span></summary><div class="rb-sources"><button type="button" data-action="jump">第 1 页 · 刘备在此。</button><button type="button" data-action="jump">第 1 页 · 前一句：何人在此？</button><button type="button" data-action="jump">第 1 页 · 后一句：关羽随后而来。</button></div><div class="rb-actions"><button type="button" data-action="jump"><i data-lucide="corner-up-left" aria-hidden="true"></i>回到原文</button><span class="rb-spacer"></span><button type="button" data-action="save"><i data-lucide="square-pen" aria-hidden="true"></i>存为笔记</button></div></details>
+          <div class="rb-draft" hidden><label>笔记草稿<textarea aria-label="笔记草稿">原文说“刘备在此”，因此这里的人是刘备。
+
+出处：第 1 页</textarea></label><button type="button" data-action="draft-close">返回阅读</button><span class="rb-meta">草图演示 · 未写入书库</span></div>
+        </article>
+        <div class="rb-history" hidden><div class="rb-subhead">先前记录 · 3 条<button type="button" data-action="history-toggle" aria-label="关闭历史">关闭</button></div><button type="button" data-action="history">上一条句译 · 建宁二年四月十五日…</button><button type="button" data-action="history">更早的页面解读 · 第 1 页</button><button type="button" data-action="history">更早的对话记录</button></div>
+      </main>
+      <footer class="rb-companion-footer"><button type="button" data-action="chat"><i data-lucide="message-circle" aria-hidden="true"></i>问这部分</button><button type="button" data-action="generate"><i data-lucide="sparkles" aria-hidden="true"></i>补充解释</button></footer>
+      <div class="rb-composer" hidden><textarea aria-label="围绕所选内容提问" placeholder="围绕所选内容，问一个问题…"></textarea><div class="rb-compose-row"><button type="button" data-action="scope">当前页 <i data-lucide="chevron-down" aria-hidden="true"></i></button><button type="button" data-action="mode" aria-expanded="false"><span data-mode-label>纯阅读 · 老师</span><i data-lucide="chevron-down" aria-hidden="true"></i></button><span class="rb-spacer"></span><button type="button" class="rb-icon" data-action="attach" aria-label="附加内容"><i data-lucide="paperclip" aria-hidden="true"></i></button><button type="button" class="rb-send" data-action="send" aria-label="发送问题"><i data-lucide="arrow-up" aria-hidden="true"></i></button></div><div class="rb-mode-menu" hidden><span class="rb-meta">对话模式</span><button type="button" data-action="reading">✓ 纯阅读</button><button type="button" data-action="functional">功能协作</button><span class="rb-meta">讲解方式</span><button type="button" data-action="mentor">✓ 老师伴读</button><button type="button" data-action="evidence">原文考据</button></div></div>
+      <div class="rb-feedback" aria-live="polite"></div>
+    </div></div>
+  </section>
+</div>
+<style>
+#readingbook-density-concepts { color-scheme:light dark; }
+#readingbook-density-concepts .rb-stage { min-height:650px; padding:20px 10px; display:flex; justify-content:center; align-items:flex-start; }
+#readingbook-density-concepts .rb-window { --rb-paper:light-dark(#f8faff,#22252c);--rb-ink:light-dark(#20262e,#e4e8f0);--rb-muted:light-dark(#69717e,#a5aebe);--rb-line:light-dark(#dfe5f1,#414752);--rb-blue:light-dark(#376bd2,#91b4ff);--rb-soft:light-dark(#edf2fc,#2e3749);--rb-field:light-dark(#ffffff,#292e37);width:min(100%,520px);background:var(--rb-paper);color:var(--rb-ink);border:1px solid var(--rb-line);border-radius:24px;padding:14px;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;font-size:14px;line-height:1.6; }
+#readingbook-density-concepts .rb-window * { box-sizing:border-box; }
+#readingbook-density-concepts [hidden] { display:none!important; }
+#readingbook-density-concepts button { border:0;background:transparent;color:var(--rb-blue);font:inherit;border-radius:8px;min-height:32px;padding:3px 6px;display:inline-flex;align-items:center;justify-content:center;gap:5px; }
+#readingbook-density-concepts button:hover { background:var(--rb-soft); }
+#readingbook-density-concepts i,#readingbook-density-concepts svg { width:16px;height:16px;flex-shrink:0; }
+#readingbook-density-concepts .rb-header { display:flex;align-items:center;gap:10px;margin-bottom:9px; }
+#readingbook-density-concepts .rb-title { font-weight:600;display:flex;align-items:center;gap:8px;margin-right:auto;white-space:nowrap; }
+#readingbook-density-concepts .rb-tabs { display:flex;background:var(--rb-soft);border-radius:10px;padding:2px; }
+#readingbook-density-concepts .rb-tabs button { min-width:44px;color:var(--rb-muted); }
+#readingbook-density-concepts .rb-tabs button[aria-pressed=true] { background:var(--rb-field);color:var(--rb-blue);box-shadow:0 1px 4px light-dark(#1b385212,#00000020); }
+#readingbook-density-concepts .rb-task { display:flex;justify-content:space-between;align-items:center;background:var(--rb-soft);border-radius:16px;padding:0 5px 0 11px;color:var(--rb-muted);font-size:12px;margin-bottom:6px; }
+#readingbook-density-concepts .rb-dot { display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--rb-blue);margin-right:6px; }
+#readingbook-density-concepts .rb-toolbar { display:flex;align-items:center;gap:9px;padding-bottom:8px; }
+#readingbook-density-concepts .rb-spacer { flex:1; }
+#readingbook-density-concepts .rb-reading { padding:4px 3px 12px;position:relative; }
+#readingbook-density-concepts .rb-answer-heading { display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:600;margin-bottom:7px; }
+#readingbook-density-concepts .rb-meta { color:var(--rb-muted);font-size:12px;font-weight:400; }
+#readingbook-density-concepts .rb-prose { display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden; }
+#readingbook-density-concepts .rb-prose.is-expanded { display:block; }
+#readingbook-density-concepts .rb-prose p { margin:0 0 8px; }
+#readingbook-density-concepts .rb-expand { margin:3px 0 6px;padding-left:0; }
+#readingbook-density-concepts .rb-actions { display:flex;align-items:center;gap:8px;padding:3px 0;border-top:1px solid var(--rb-line); }
+#readingbook-density-concepts .rb-sources { background:var(--rb-soft);border-radius:10px;padding:8px;margin:5px 0; }
+#readingbook-density-concepts .rb-sources>button { display:flex;justify-content:flex-start;text-align:left;width:100%;font-size:12px; }
+#readingbook-density-concepts .rb-subhead { display:flex;justify-content:space-between;align-items:center;font-size:12px; }
+#readingbook-density-concepts .rb-history { position:absolute;z-index:3;right:0;top:34px;width:min(100%,340px);padding:10px;border:1px solid var(--rb-line);border-radius:12px;background:var(--rb-field);box-shadow:0 8px 24px light-dark(#21385a20,#00000040); }
+#readingbook-density-concepts .rb-history-trigger { margin-left:auto;min-height:26px;font-size:12px;background:var(--rb-soft);white-space:nowrap; }
+#readingbook-density-concepts summary { color:var(--rb-muted);padding:5px 1px; }
+#readingbook-density-concepts summary span { float:right;font-size:12px; }
+#readingbook-density-concepts .rb-history>button { display:flex;justify-content:flex-start;font-size:12px; }
+#readingbook-density-concepts .rb-companion-footer { display:flex;gap:8px;padding-top:9px;border-top:1px solid var(--rb-line); }
+#readingbook-density-concepts .rb-companion-footer>button { flex:1;background:var(--rb-soft);min-height:38px; }
+#readingbook-density-concepts .rb-composer { padding:9px;border:1px solid var(--rb-line);border-radius:15px;background:var(--rb-field);position:relative; }
+#readingbook-density-concepts textarea { width:100%;min-height:58px;resize:vertical;border:0;background:var(--rb-field);color:var(--rb-ink);font:inherit;display:block; }
+#readingbook-density-concepts .rb-compose-row { display:flex;align-items:center;gap:3px; }
+#readingbook-density-concepts .rb-compose-row button { white-space:nowrap;font-size:12px; }
+#readingbook-density-concepts .rb-send { background:var(--rb-blue);color:var(--rb-field);border-radius:50%;width:34px; }
+#readingbook-density-concepts .rb-mode-menu { position:absolute;z-index:3;bottom:42px;left:70px;background:var(--rb-field);border:1px solid var(--rb-line);border-radius:12px;padding:10px;min-width:190px;box-shadow:0 8px 24px light-dark(#21385a20,#00000040); }
+#readingbook-density-concepts .rb-mode-menu>* { display:flex;width:100%;justify-content:flex-start; }
+#readingbook-density-concepts .rb-question p { margin:4px 0 18px; }
+#readingbook-density-concepts .rb-draft { padding:10px;background:var(--rb-soft);border-radius:12px;margin-top:8px; }
+#readingbook-density-concepts .rb-draft textarea { min-height:100px;margin:6px 0;padding:7px;border-radius:8px; }
+#readingbook-density-concepts .rb-feedback { min-height:22px;font-size:12px;color:var(--rb-muted);margin-top:5px; }
+#readingbook-density-concepts [data-layout=drawer] .rb-answer { background:var(--rb-field);border:1px solid var(--rb-line);border-radius:14px;padding:12px; }
+#readingbook-density-concepts .rb-detail-drawer { border-top:1px solid var(--rb-line);font-size:12px; }
+#readingbook-density-concepts .rb-window.is-zoomed { width:100%; }
+@media(max-width:380px) { #readingbook-density-concepts .rb-stage { padding:12px 0;min-height:680px; } #readingbook-density-concepts .rb-window{padding:10px;} #readingbook-density-concepts .rb-title{font-size:12px;gap:4px;} #readingbook-density-concepts .rb-header{gap:4px;} #readingbook-density-concepts .rb-tabs button{min-width:36px;padding:2px 4px;} #readingbook-density-concepts .rb-compose-row{gap:0;} #readingbook-density-concepts .rb-compose-row button{padding:3px;} }
+</style>
+<script>
+(() => {
+ const root=document.getElementById('readingbook-density-concepts');
+ const saved=window.openai?.widgetState?.modelContent||{};
+ const instances=[...root.querySelectorAll('.rb-window')].map((win,index)=>({win,index,mode:saved[index]?.mode||'companion',expanded:!!saved[index]?.expanded,conversation:'纯阅读',style:'老师',previewLines:5}));
+ const persist=()=>window.openai?.setWidgetState?.({modelContent:instances.map(s=>({mode:s.mode,expanded:s.expanded})),privateContent:null})?.catch(()=>{});
+ function render(s){
+  s.win.dataset.mode=s.mode;
+  s.win.querySelector('.rb-toolbar').hidden=s.mode==='chat';
+  s.win.querySelector('.rb-question').hidden=s.mode!=='chat';
+  s.win.querySelector('.rb-composer').hidden=s.mode!=='chat';
+  s.win.querySelector('.rb-companion-footer').hidden=s.mode==='chat';
+  s.win.querySelector('[data-answer-title]').textContent=s.mode==='chat'?'一起理解':'这句话的意思';
+  s.win.querySelectorAll('.rb-tabs button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.action===s.mode)));
+  s.win.querySelector('.rb-prose').classList.toggle('is-expanded',s.expanded);
+  s.win.querySelector('.rb-prose').style.webkitLineClamp=String(s.previewLines);
+  const expand=s.win.querySelector('[data-action=expand]');expand.textContent=s.expanded?'收起全文':'展开全文';expand.setAttribute('aria-expanded',String(s.expanded));
+  s.win.querySelector('[data-mode-label]').textContent=s.conversation+' · '+s.style;
+ }
+ instances.forEach(s=>{
+  render(s);
+  s.win.addEventListener('click',e=>{
+   const b=e.target.closest('button[data-action]');if(!b)return;
+   const a=b.dataset.action, feedback=s.win.querySelector('.rb-feedback');feedback.textContent='';
+   if(a==='chat'||a==='companion')s.mode=a;
+   else if(a==='expand')s.expanded=!s.expanded;
+   else if(a==='history-toggle'){const history=s.win.querySelector('.rb-history');history.hidden=!history.hidden;s.win.querySelector('.rb-history-trigger').setAttribute('aria-expanded',String(!history.hidden));}
+   else if(a==='source'){const source=s.win.querySelector('.rb-sources');const drawer=s.win.querySelector('.rb-detail-drawer');if(drawer){drawer.open=!drawer.open;source.hidden=false;}else source.hidden=!source.hidden;s.win.querySelectorAll('[data-action=source]').forEach(x=>x.setAttribute('aria-expanded',String(!source.hidden)));}
+   else if(a==='save')s.win.querySelector('.rb-draft').hidden=false;
+   else if(a==='draft-close')s.win.querySelector('.rb-draft').hidden=true;
+   else if(a==='zoom')s.win.classList.toggle('is-zoomed');
+   else if(a==='mode'){const menu=s.win.querySelector('.rb-mode-menu');menu.hidden=!menu.hidden;b.setAttribute('aria-expanded',String(!menu.hidden));}
+   else if(['reading','functional','mentor','evidence'].includes(a)){if(a==='reading'||a==='functional')s.conversation=a==='reading'?'纯阅读':'功能协作';else s.style=a==='mentor'?'老师':'考据';s.win.querySelector('.rb-mode-menu').hidden=true;}
+   else if(a==='stop'){s.win.querySelector('.rb-task').hidden=true;feedback.textContent='伴读已停止；对话仍可继续（示意）';}
+   else if(a==='generate')feedback.textContent='已有分析：实际操作会先确认再生成，保留旧内容。';
+   else if(a==='jump')feedback.textContent='返回所点出处并高亮原句（示意）';
+   else if(a==='send')feedback.textContent='此处仅演示布局，不调用模型或写入书库。';
+   else if(a==='attach')feedback.textContent='附加内容：选择本次可读取的笔记（示意）';
+   else if(a==='scope')feedback.textContent='范围：当前页 / 当前章节 / 选中内容（示意）';
+   else if(a==='type')feedback.textContent='字号和讲解显示设置（示意）';
+   else if(a==='section')feedback.textContent='解释与译文 / 原文对象 / 资料对读（示意）';
+   else if(a==='history')feedback.textContent='展开所选的历史内容，当前回答仍保留（示意）';
+   render(s);persist();
+  });
+  if(globalThis.Tweak){const tweak=new Tweak({container:s.win,onChange:()=>render(s)});tweak.addSlider(s,'previewLines',{label:'默认预览行数',min:3,max:9,step:1});}
+ });
+ window.addEventListener('openai:set_globals',event=>{const state=event.detail?.globals?.widgetState?.modelContent;if(!Array.isArray(state))return;instances.forEach((s,i)=>{if(state[i]){s.mode=state[i].mode==='chat'?'chat':'companion';s.expanded=!!state[i].expanded;render(s);}});});
+})();
+</script>

@@ -573,6 +573,12 @@ swift test --scratch-path .build/tests
 bash scripts/build-macos.sh
 ```
 
+## 本机开发产物维护
+
+每轮更新后检查磁盘占用，清理可再生成的过期模块缓存、旧编译中间产物和已结束测试的重复副本。源码、构建、日志和备份都留在本工作目录；原书、笔记、分析、必要回滚备份与原始测试证据保留。各原生探针共用 `.build/shared-module-cache/`，不再每轮各存一份系统模块。
+
+运行 `python3 scripts/clean-workspace.py` 先预览，明确执行 `--apply` 才删除；历史产物另需开关。范围、进程保护和报告见[工作区清理说明](scripts/WORKSPACE_CLEANUP.md)。不要直接删除整个性能 `runs`，其中可能有唯一的原始日志。
+
 ## 第一次使用
 
 1. 导入 `Examples/math-sample.md` 或自己的书。密码 PDF 按提示解锁，取消可退出导入。
