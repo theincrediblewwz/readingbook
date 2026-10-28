@@ -1,0 +1,299 @@
+{
+  "schemaVersion": 1,
+  "study": "ReadingBook 0.10 UI 现状盘点：组件、插件、配置与弹窗",
+  "sourceCommit": "473b165c173acbcb7e94dbd82c358b8d35f42a9f",
+  "inspectedAt": "2026-10-15",
+  "evidenceLevel": "source-inspection-only",
+  "evidenceWarning": "以下控件与状态由当前 Swift/AppKit 代码逐项确认；未在 macOS 运行，未生成、替代或宣称真实截图。源码坐标供随后真实截图和设计稿对应。",
+  "sourceRoot": "E:/opensourceproject/readingbook/Sources/ReadingBook/",
+  "globalConstraints": [
+    {"id":"window","description":"窗口最小 800×600，默认 1480×940；hiddenTitleBar + unified toolbar。设计稿必须覆盖 800×600、1050 宽临界点和默认尺寸，不能以宽屏稿掩盖窄窗问题。","evidence":["ReadingBookApp.swift:7","ReadingBookApp.swift:9","ReadingBookApp.swift:12","ReadingBookApp.swift:14"]},
+    {"id":"controls","description":"共有按钮样式最小 40×40，组间距 8，面板内边距 16，节点面板宽 300。并非所有原生/文字按钮应用此样式，真实截图应比较密度一致性。","evidence":["ReadingGlass.swift:5","ReadingGlass.swift:6","ReadingGlass.swift:7","ReadingGlass.swift:8","ReadingGlass.swift:9","ReadingGlass.swift:57"]},
+    {"id":"glass","description":"现有 ReadingGlass 统一封装平台材质、减少透明和减少动态选项；效果稿需给文字对比、边界、背后内容和浮层层级，而不能只加透明背景。","evidence":["ReadingGlass.swift:21","ReadingGlass.swift:48","ReadingBookApp.swift:37"]},
+    {"id":"fixedSheets","description":"模型设置 600×560、OCR 560×460、回收站 600×500、插件 620×520 固定 sheet；跨书检索 min620×500。Mac 最小窗下需实际验证 sheet/滚动和底部动作是否完整可达。","evidence":["WorkspaceView.swift:54","WorkspaceView.swift:56","WorkspaceView.swift:57","WorkspaceView.swift:58","WorkspaceView.swift:59","WorkspaceView.swift:60"]},
+    {"id":"dataSemantics","description":"原书、用户 Markdown、AI 分析独立；设计不能把删除入口、自动保存、重试、OCR 覆盖保护等语义抹平。已有文档草稿时切换/导入/删除有保护。","evidence":["WorkspaceManagement.swift:13","WorkspaceManagement.swift:27","PDFSessionAccess.swift:34","ServiceProfiles.swift:187"]},
+    {"id":"modals","description":"工作台用单一 WorkspaceSheet 协调全局 sheet；批注为原生 PDF 窗口 sheet，聊天保存为路由内 sheet。交互稿需画出关闭、完成、错误和母层返回，而不只静态首屏。","evidence":["WorkspaceView.swift:17","WorkspaceView.swift:54","PDFReaderView.swift:897","ChatSaveViews.swift:53"]}
+  ],
+  "surfaces": [
+    {
+      "id":"component-discovery","title":"组件发现与导航","entry":"侧栏 添加组件 / 插件与读书法 → 组件能力",
+      "evidence":["WorkspaceView.swift:110","WorkspaceView.swift:120","WorkspaceView.swift:141","WorkspaceComponentRegistry.swift:83","WorkspaceComponentRegistry.swift:95","WorkspaceComponentRegistry.swift:105"],
+      "controls":[
+        {"label":"添加组件","kind":"Menu","action":"只列当前书未保存的非永久组件，图标+标题；添加后进入组件。","states":["书籍未选中不显示","全部已添加时整项隐藏","忙碌禁用","已有但所属包停用不会再次列出"],"necessity":"保留入口，避免和已装侧栏项重复。","evidence":["WorkspaceView.swift:120","WorkspaceView.swift:123","WorkspaceView.swift:142"]},
+        {"label":"移除此组件入口","kind":"context-menu","action":"移除当前书视图配置，不删已有知识；合并删除旧 alias 导航入口。","states":["普通组件","同 renderer 多个旧入口","当前组件被移除后回原文"],"necessity":"与数据删除明确区别；不必常驻按钮。","evidence":["WorkspaceView.swift:114","WorkspaceManagement.swift:91","WorkspaceComponentRegistry.swift:76"]},
+        {"label":"未安装的 renderer","kind":"fallback-state","action":"保留未知组件内容与配置，显示尚未安装。","states":["rendererID 未知","以后安装对应插件"],"necessity":"必须保留兼容与可理解的错误状态。","evidence":["WorkspaceComponentRegistry.swift:62","WorkspaceComponentRegistry.swift:65"]}
+      ],
+      "registeredRenderers":["要素卡片","时间与地图（timeline/map 共用）","思维导图","关系图谱","知识库","我的理解（永久）","与书对话（永久）","阅读流程（永久）","多层伴读 reading.layers","原文索引 reading.mentions","思考卡 reading.decisions","全书总览 reading.atlas"],
+      "captureStates":["部分组件已添加时的菜单","全部组件已添加","组件入口右键","未安装组件占位"]
+    },
+    {
+      "id":"spatial","title":"时间与地图主画布及悬浮时间卡","entry":"侧栏 时间与地图 / 伴读或总览事件 → 在时间与地图查看",
+      "evidence":["SpatialTimelineView.swift:79","SpatialTimelineView.swift:136"],
+      "controls":[
+        {"label":"地图缩放、指北针、比例尺","kind":"MapKit-controls","action":"原生地图导航。","states":["地图手势","有坐标点","无可定位事件"],"necessity":"优先保留原生能力，需与可拖面板避让。","evidence":["SpatialTimelineView.swift:82","SpatialTimelineView.swift:87"]},
+        {"label":"事件地图标记","kind":"icon-button","action":"选事件、展开同一个时间卡下方详情并定位；22/32 视觉点，至少36命中区。","states":["未选/选中","同地点多个事件","筛选后的点集"],"necessity":"地图直接操作，不能再要求工具栏跳转。","evidence":["SpatialTimelineView.swift:42","SpatialTimelineView.swift:254","SpatialTimelineView.swift:258","SpatialTimelineView.swift:262"]},
+        {"label":"时间卡标题与拖动柄","kind":"drag-region","action":"只从标题拖卡，松手吸附四角或下中；停靠持久化。","states":["默认下中","五个停靠位","拖动中","窗口缩放取消当前拖动"],"necessity":"保留独立拖动区，不能整卡吞掉按钮和时间端点交互。","evidence":["SpatialTimelineView.swift:28","SpatialTimelineView.swift:66","SpatialTimelineView.swift:103","SpatialTimelineView.swift:138"]},
+        {"label":"事件 N","kind":"button+popover","action":"展开当前时间范围事件清单。","states":["打开/收起","空事件","搜索无结果"],"necessity":"卡保持精简，长清单按需打开。","evidence":["SpatialTimelineView.swift:149","SpatialTimelineView.swift:152","SpatialTimelineView.swift:290"]},
+        {"label":"时间与地图选项","kind":"Menu","action":"当前原文相关事件、保留时间待考、地图适合全部标记、显示全部时间、停靠位置。","states":["当前原文/全书","包含/不包含未定年","五个停靠位选中标记"],"necessity":"次要操作集中，不变成常驻一整排。","evidence":["SpatialTimelineView.swift:153","SpatialTimelineView.swift:154","SpatialTimelineView.swift:155","SpatialTimelineView.swift:156","SpatialTimelineView.swift:157","SpatialTimelineView.swift:161"]},
+        {"label":"起止年份范围","kind":"button+popover","action":"打开精确起止年份输入。","states":["闭合显示范围","输入中","无效年份错误","取消/应用"],"necessity":"无须第二根时间轴，只与同一双端点轴共享值。","evidence":["SpatialTimelineView.swift:172","SpatialTimelineView.swift:180","SpatialTimelineView.swift:268","SpatialTimelineView.swift:271","SpatialTimelineView.swift:277","SpatialTimelineView.swift:279"]},
+        {"label":"一根时间轴的两个端点","kind":"dual-handle-range","action":"拖端点或方向键调起止年份；拥挤端点有不同命中半区；可达性提供范围控件。","states":["两点分开/重叠","拖动中","键盘焦点","窗口变化/失焦取消手势"],"necessity":"用户已明确单轴双点，不应还原成两根轴。","evidence":["TimelineRangeControl.swift:6","TimelineRangeControl.swift:47","TimelineRangeControl.swift:92","TimelineRangeControl.swift:95","TimelineRangeControl.swift:98"]},
+        {"label":"全部","kind":"button","action":"fitTime，与选项里的显示全部时间同动作。","states":["任何范围"],"necessity":"重复入口，设计稿需决定只保留一个清晰入口。","evidence":["SpatialTimelineView.swift:157","SpatialTimelineView.swift:183"]}
+      ],
+      "sizeConstraints":["面板最大宽560，实际 viewport.width−144","详情高度80...260并受窗口约束","面板最大 viewport.height−32","地图点点击目标至少36"],
+      "captureStates":["无详情的默认下中时间卡","地图点选中且详情展开","时间卡上角和下角停靠","精确时间输入","时间端点接近/重叠","800×600 无详情/有详情"]
+    },
+    {
+      "id":"spatial-details","title":"事件详情与事件清单","entry":"地图点 / 时间卡事件清单 / 其他页面定位事件",
+      "controls":[
+        {"label":"收起事件详情","kind":"icon-button","action":"只收详情，保留时间范围。","states":["详情展开"],"necessity":"关闭含义不能误变成重置时间。","evidence":["SpatialTimelineView.swift:210","SpatialTimelineView.swift:211"]},
+        {"label":"参与者/地点卡片行","kind":"button","action":"focus对象并开 ObjectInspector popover。","states":["有地点/无登记地点","有坐标/无坐标"],"necessity":"对象共享，别创建事件内重复卡片。","evidence":["SpatialTimelineView.swift:217","SpatialTimelineView.swift:221","SpatialTimelineView.swift:241"]},
+        {"label":"原文依据","kind":"evidence-link","action":"回引句或来源页。","states":["有证据","无证据提示"],"necessity":"保留来源通路。","evidence":["SpatialTimelineView.swift:224"]},
+        {"label":"显示并定位此事件","kind":"button","action":"当选中事件被范围过滤时重新显示定位。","states":["不在当前范围"],"necessity":"避免详情和地图过滤后看似丢失对象。","evidence":["SpatialTimelineView.swift:229","SpatialTimelineView.swift:231"]},
+        {"label":"事件搜索、关闭、事件整行","kind":"popover-controls","action":"搜索名称/时间/参与者，选整行后定位并关闭清单。","states":["无事件","搜索无结果","选中事件","关闭"],"necessity":"列表行必须整行可点；搜索不应撑开主地图。","evidence":["SpatialTimelineView.swift:294","SpatialTimelineView.swift:297","SpatialTimelineView.swift:302","SpatialTimelineView.swift:311","SpatialTimelineView.swift:316"]}
+      ],
+      "sizeConstraints":["事件清单350×400","对象详情popover330×500"],
+      "captureStates":["地图无坐标事件详情","选中事件不在范围","事件清单过滤前/后/空"]
+    },
+    {
+      "id":"mindmap","title":"思维导图主画布","entry":"侧栏 思维导图 / 保存 Markdown 后创建节点",
+      "evidence":["SpatialGraphViews.swift:51","GraphCanvas.swift:16"],
+      "controls":[
+        {"label":"画布空白","kind":"pointer+scroll","action":"拖空白平移，滚轮平移/缩放，空白右键新建笔记；无限世界坐标与视口裁剪。","states":["默认/平移/缩放","空导图","节点离开视口","Esc取消当前连线"],"necessity":"交互稿应画移动前后连续性，而非一个有边界的看板。","evidence":["GraphCanvas.swift:108","GraphCanvas.swift:111","GraphCanvas.swift:112","GraphCanvas.swift:192","GraphCanvas.swift:205"]},
+        {"label":"节点主体","kind":"click-doubleclick-drag","action":"单击只选中并在右侧详情预览；双击打开文档或来源；拖主体移动。","states":["未选/选中","拖动中/保存中/失败","多物理节点引用同一文档"],"necessity":"不能新增常驻“跳转到我的理解”“连线”按钮；保持用户明确手势。","evidence":["SpatialGraphViews.swift:77","SpatialGraphViews.swift:78","GraphCanvas.swift:312","GraphCanvas.swift:320","GraphCanvas.swift:322","GraphCanvas.swift:387"]},
+        {"label":"节点边缘连接点","kind":"port-click-drag","action":"边缘圆点点击开始/完成连线或按住拖向目标；支持键盘回车/空格。","states":["连接起点","拖线预览","目标高亮","保存失败保留错误"],"necessity":"不占工具栏；8px圆点+padding8命中区需在设计稿明确。","evidence":["GraphCanvas.swift:342","GraphCanvas.swift:344","GraphCanvas.swift:347","GraphCanvas.swift:351","GraphCanvas.swift:354"]},
+        {"label":"节点右键菜单","kind":"context-menu","action":"打开、查看来源关联、从这里连线/连接到这里/连接到…/取消、已有连线改名或删除、移除节点保留文档。","states":["有连接起点/无起点","已有连线/无连线","编辑被任务锁定"],"necessity":"为手势补足可发现性和可达性，次要动作不常驻。","evidence":["GraphCanvas.swift:358","GraphCanvas.swift:359","GraphCanvas.swift:360","GraphCanvas.swift:363","GraphCanvas.swift:365","GraphCanvas.swift:375","GraphCanvas.swift:385"]},
+        {"label":"连线标签","kind":"doubleclick+context-menu","action":"双击改名；回车保存/Esc取消；右键改名/移除。","states":["正常标签/内联输入","保存中/失败"],"necessity":"保留直接编辑，避免外加按钮。","evidence":["GraphCanvas.swift:477","GraphCanvas.swift:482","GraphCanvas.swift:484"]},
+        {"label":"画布浮动缩放控件","kind":"toolbar","action":"显示全部、缩小、当前百分比归100%、放大、定位选中节点。","states":["无选中定位禁用","缩放比例","被右侧面板遮挡后重定可用中心"],"necessity":"现为5个动作+分割线，应在效果稿同时体现大小与空白。","evidence":["GraphCanvas.swift:218","GraphCanvas.swift:221","GraphCanvas.swift:223","GraphCanvas.swift:227","GraphCanvas.swift:230","GraphCanvas.swift:237"]}
+      ],
+      "sizeConstraints":["节点220×90，标题16pt最多两行","节点面板300宽，默认展开在右上，最高620且受视口−96约束","图控40px最小目标"],
+      "captureStates":["空导图","普通图+右侧列表","右侧列表收起","节点选中","拖动节点","拖线","节点右键菜单","连线内联改名","800×600"]
+    },
+    {
+      "id":"graph-browser","title":"图谱右侧节点列表与详情","entry":"导图/关系图谱默认右侧悬浮面板 / 收起后的节点按钮",
+      "controls":[
+        {"label":"收起节点列表 / 节点·N","kind":"toggle-button","action":"右侧面板变为右上悬浮按钮，再点恢复；玻璃identity过渡。","states":["展开/收起","减少动态选项"],"necessity":"收起按钮不能和左上图谱计数重叠。","evidence":["GraphNodeBrowser.swift:24","SpatialGraphViews.swift:116","SpatialGraphViews.swift:187"]},
+        {"label":"查找节点","kind":"TextField","action":"过滤节点列表。","states":["查询/清空","无匹配"],"necessity":"必要，但其高度不能永久挤压详情。","evidence":["GraphNodeBrowser.swift:26","GraphNodeBrowser.swift:35"]},
+        {"label":"节点列表行","kind":"click-doubleclick","action":"单击显示节点详情并定位画布；双击打开内容；右键也可打开。","states":["选中/非选中","无选中说明","详情异步载入"],"necessity":"与画布单击/双击语义一致；整行至少52高。","evidence":["GraphNodeBrowser.swift:45","GraphNodeBrowser.swift:47","GraphNodeBrowser.swift:70","GraphNodeBrowser.swift:82","SpatialGraphViews.swift:109","SpatialGraphViews.swift:111"]}
+      ],
+      "sizeConstraints":["面板width300","列表height=min210,height×0.38，剩余为详情滚动"],
+      "captureStates":["Markdown文档详情","对象/事件详情","未选中","空搜索","窄窗收起状态"]
+    },
+    {
+      "id":"relations","title":"关系图谱","entry":"侧栏 关系图谱",
+      "controls":[
+        {"label":"当前原文","kind":"Toggle","action":"同 AppStore.readingScopeCurrent 切换全书/当前原文实体与事件；只显示两端都存在的关系。","states":["全书/当前原文","当前原文无关系"],"necessity":"状态与地图同源，设计稿需显露共享范围而非局部看似独立。","evidence":["SpatialGraphViews.swift:145","SpatialGraphViews.swift:163","SpatialGraphViews.swift:168","SpatialGraphViews.swift:169"]},
+        {"label":"关系节点与连线","kind":"read-only-graph","action":"共用画布选择/定位/缩放；双击开对象详情。此路由不注入move/connect/remove，不可像思维导图持久改结构。","states":["有关系/空状态","当前原文过滤","节点列表展开/收起"],"necessity":"必须在交互稿区分文档导图可编辑与派生关系图只读，而非暗示相同操作。","evidence":["SpatialGraphViews.swift:172","SpatialGraphViews.swift:175","SpatialGraphViews.swift:177","SpatialGraphViews.swift:182"]}
+      ],
+      "captureStates":["全书关系图","当前段落关系图","空范围","节点详情popover"]
+    },
+    {
+      "id":"entity-cards","title":"要素卡片集合","entry":"侧栏 要素卡片或指定类型集合",
+      "controls":[
+        {"label":"查找卡片","kind":"TextField","action":"按当前集合搜索。","states":["输入/无结果"],"necessity":"保留局部检索，与跨书全文检索区别。","evidence":["SpatialGraphViews.swift:16"]},
+        {"label":"类型筛选","kind":"Menu+Picker","action":"全部类型或本书动态类型筛选。","states":["全部/指定类型","AI自定义类型"],"necessity":"不能固定人物类型。","evidence":["SpatialGraphViews.swift:17","SpatialGraphViews.swift:18","SpatialGraphViews.swift:19"]},
+        {"label":"要素卡片","kind":"whole-card-button","action":"选中对象并开统一 ObjectInspector；卡含类型、摘要、原文依据数量。","states":["有证据/无证据","多个字段","长标题"],"necessity":"一张卡一个主入口，图标不应只用于人物。","evidence":["SpatialGraphViews.swift:32","SpatialGraphViews.swift:36","SpatialGraphViews.swift:37","SpatialGraphViews.swift:44"]}
+      ],
+      "captureStates":["混合类型卡片","数学自定义类型筛选","长标题和摘要","无匹配"]
+    },
+    {
+      "id":"object-inspector","title":"统一对象详情与编辑","entry":"卡片、地图、图谱、知识库、总览、伴读关联对象",
+      "controls":[
+        {"label":"收起详情","kind":"close-button","action":"有未保存字段时先保护草稿。","states":["只读","编辑脏草稿","保存中禁用"],"necessity":"关闭母层和关闭编辑的语义需明确。","evidence":["ObjectInspector.swift:42","ObjectInspector.swift:91"]},
+        {"label":"编辑/删除卡片","kind":"buttons","action":"编辑名称、动态类型、摘要、必填/可选字段、坐标和位置依据；删除派生对象进入全局确认。","states":["阅读态/编辑态","未知坐标留空","输入无效","保存失败保留输入","恢复上次内存草稿"],"necessity":"字段来自AI定义，不硬编码人物专用字段。","evidence":["ObjectInspector.swift:50","ObjectInspector.swift:109","ObjectInspector.swift:110","EntityEditView.swift:79","EntityEditView.swift:81","EntityEditView.swift:96","EntityEditView.swift:111","EntityEditView.swift:127","EntityEditView.swift:134"]},
+        {"label":"取消/保存","kind":"edit-actions","action":"取消当前草稿或保存；离开时提供保存后继续、放弃修改、继续编辑。","states":["保存中","保存失败","有后续跳转待执行"],"necessity":"必要工作流保护，不可为了极简移除反馈。","evidence":["ObjectInspector.swift:69","ObjectInspector.swift:73","ObjectInspector.swift:92","ObjectInspector.swift:93","ObjectInspector.swift:97"]},
+        {"label":"事件删除","kind":"destructive-button","action":"删除事件与结构化关联，无一键恢复。","states":["派生事件"],"necessity":"危险性必须同文档回收区别。","evidence":["ObjectInspector.swift:135","WorkspaceManagement.swift:14"]},
+        {"label":"文档动作","kind":"buttons","action":"打开文档、添加一个画布节点、移入回收站。","states":["活动文档","已不存在/已回收"],"necessity":"与笔记/知识库入口重复，可用一致上下文动作而非不同词义。","evidence":["ObjectInspector.swift:139","ObjectInspector.swift:140","ObjectInspector.swift:141","ObjectInspector.swift:147"]},
+        {"label":"关联对象/关系移除/相关文档/原文依据","kind":"links+context-action","action":"在详情中跟随对象、删关系、开文档或回原文。","states":["有关联/无关联","切换对象且有编辑草稿"],"necessity":"来源和关联留在同一详情语义，避免多重相同侧面板。","evidence":["ObjectInspector.swift:151","ObjectInspector.swift:155","ObjectInspector.swift:160","ObjectInspector.swift:239"]}
+      ],
+      "sizeConstraints":["通常popover330×500；总览340×520；全局 inspector min250 ideal280 max340，宽度>=920才并列"],
+      "captureStates":["概念详情","事件详情","文档详情","编辑必填/可选字段","未知坐标","未保存离开对话框","保存失败","回收后占位"]
+    },
+    {
+      "id":"knowledge-library","title":"知识库","entry":"侧栏 知识库",
+      "controls":[
+        {"label":"笔记 / 分析 / 要素","kind":"segmented-picker","action":"切分类；搜索全部内容时分类禁用且各分类结果同时显示。","states":["三分类","搜索中禁用分类","空分类"],"necessity":"原先“内容”标签截断已改 labelsHidden，设计稿需验证中文不受挤压。","evidence":["SpatialGraphViews.swift:218","SpatialGraphViews.swift:299","SpatialGraphViews.swift:302","SpatialGraphViews.swift:303"]},
+        {"label":"搜索全部内容","kind":"TextField","action":"跨笔记、阅读分析、要素查询。","states":["空/非空","无结果"],"necessity":"与分类切换逻辑须可读，不出现选择了笔记却偷偷搜别类的困惑。","evidence":["SpatialGraphViews.swift:227","SpatialGraphViews.swift:285","SpatialGraphViews.swift:306"]},
+        {"label":"写下理解","kind":"icon-button","action":"创建新用户 Markdown 草稿。","states":["忙碌禁用","已有脏草稿保护"],"necessity":"常用新增入口，需与新建图节点共用文档语义。","evidence":["SpatialGraphViews.swift:308","SpatialGraphViews.swift:309"]},
+        {"label":"笔记整行与右键","kind":"row-button+context-menu","action":"打开 Markdown；右键加入导图/移入回收站。","states":["空笔记","长标题","回收隐藏"],"necessity":"整行点击。","evidence":["SpatialGraphViews.swift:231","SpatialGraphViews.swift:241","SpatialGraphViews.swift:242","SpatialGraphViews.swift:243","SpatialGraphViews.swift:244"]},
+        {"label":"阅读分析展开与保存为文档","kind":"disclosure+button","action":"看分析全文、原文依据；显式另存真实 Markdown。","states":["收起/展开","忙碌禁用","无分析"],"necessity":"分析不是用户笔记，不能默默混为同类。","evidence":["SpatialGraphViews.swift:250","SpatialGraphViews.swift:257","SpatialGraphViews.swift:267","SpatialGraphViews.swift:324"]},
+        {"label":"要素整行","kind":"row-button","action":"统一对象详情。","states":["动态类型/图标","空要素"],"necessity":"不另建第二套详情操作。","evidence":["SpatialGraphViews.swift:272","SpatialGraphViews.swift:274","SpatialGraphViews.swift:280"]}
+      ],
+      "sizeConstraints":["分类190宽，搜索min110 max210；ViewThatFits可两行；内容max1000"],
+      "captureStates":["三分类各一页","搜索跨分类结果","窄窗换行","分析展开","长标题"]
+    },
+    {
+      "id":"workflow","title":"阅读流程与逐段回执","entry":"侧栏 阅读流程 / 全局阅读菜单",
+      "controls":[
+        {"label":"预读选法/重新预读","kind":"button","action":"AI读目录与样本生成方案，不增加全文覆盖。","states":["未计划/已有计划","运行中禁用"],"necessity":"预读和精读意义必须直接写清楚。","evidence":["ReadingViews.swift:174","ReadingViews.swift:207","ReadingViews.swift:232"]},
+        {"label":"开始精读/继续精读/暂停/处理中","kind":"primary-button","action":"顺序执行真实读书法；本地提交和保存阶段不可暂停。","states":["未开始","有insight继续","AI运行暂停","提交中禁用"],"necessity":"现共享isBusy会使不同后台任务呈现暂停态，设计须明确当前任务身份。","evidence":["ReadingViews.swift:231","ReadingViews.swift:233","ReadingViews.swift:235"]},
+        {"label":"窄窗执行菜单","kind":"responsive-menu","action":"同预读/执行动作用菜单替代宽按钮组。","states":["ViewThatFits宽/窄"],"necessity":"是响应式替代，不应同时显示重复两套。","evidence":["ReadingViews.swift:171","ReadingViews.swift:173"]},
+        {"label":"读书方案、方法、插件调用记录、全书综合","kind":"DisclosureGroups","action":"按需展开方法选择理由、执行步骤、最近16条审计、最后全书综合。","states":["无方案/有方案","收起/展开","无调用记录"],"necessity":"次要信息可折叠，流程首屏不能被大摘要占满。","evidence":["ReadingViews.swift:185","ReadingViews.swift:186","ReadingViews.swift:190","ReadingViews.swift:211","ReadingViews.swift:220","ReadingViews.swift:223"]},
+        {"label":"待核对清单与定位原文","kind":"disclosure+row-buttons","action":"列源质量、失败、延期，回原页核对。","states":["有告警/无告警","空提取不等于已读"],"necessity":"必须分开AI处理覆盖与内容准确性。","evidence":["ReadingViews.swift:267","ReadingViews.swift:273","ReadingViews.swift:286"]},
+        {"label":"核对单元选择/搜索/跟随阅读位置","kind":"popover","action":"选择要审查回执的单元或跟随当前单元。","states":["跟随/固定单元","搜索无结果"],"necessity":"避免每条回执永久列全书内容。","evidence":["ReadingLedgerView.swift:31","ReadingLedgerView.swift:81","ReadingLedgerView.swift:154","ReadingLedgerView.swift:155","ReadingLedgerView.swift:159"]},
+        {"label":"逐段账本与步骤执行记录","kind":"disclosure-cards","action":"逐段原文、行号、简要回执、输入版本与执行结果。","states":["未核对/已核对","失败/等待","展开原文/结果"],"necessity":"覆盖可审计不能仅一个百分比；但细节按需展开。","evidence":["ReadingLedgerView.swift:49","ReadingLedgerView.swift:89","ReadingLedgerView.swift:98","ReadingLedgerView.swift:114","ReadingLedgerView.swift:126","ReadingLedgerView.swift:143"]},
+        {"label":"重置失败步骤重试预算","kind":"button+confirmation","action":"仅清零失败步骤尝试次数，保留完成输出；继续精读才发新请求。","states":["失败步骤","忙碌禁用","确认/取消"],"necessity":"保留安全恢复但可放故障详情里。","evidence":["ReadingLedgerView.swift:78","ReadingLedgerView.swift:79","ReadingLedgerView.swift:80","ReadingLedgerView.swift:138"]}
+      ],
+      "captureStates":["未预读","已有方案未执行","执行/暂停/预算耗尽","回执展开","步骤失败及重试确认","待核对页"]
+    },
+    {
+      "id":"plugin-library","title":"插件与读书法设置","entry":"侧栏底部拼图按钮 / 工具栏更多",
+      "controls":[
+        {"label":"导入插件…","kind":"button","action":"导入当前书声明包；失败局部显示错误。","states":["无书/忙碌禁用","导入成功/本地错误"],"necessity":"是本地声明式扩展，不等于任意原生可执行插件。","evidence":["SettingsViews.swift:169","SettingsViews.swift:172","SettingsViews.swift:177"]},
+        {"label":"声明包行/启用开关","kind":"disclosure+Toggle","action":"看包版本、类型/方法/视图，启用或停用；停用不删知识和文档。","states":["无包","包展开","启用/停用","忙碌禁用"],"necessity":"停用与删除入口语义不可混用；当前无声明包卸载按钮。","evidence":["SettingsViews.swift:179","SettingsViews.swift:181","SettingsViews.swift:298","SettingsViews.swift:312","SettingsViews.swift:322","SettingsViews.swift:326"]},
+        {"label":"内置执行插件","kind":"DisclosureGroup","action":"查看实际工具schema所属插件与工具ID。","states":["收起/展开"],"necessity":"工程信息适合作高级说明，不抢普通阅读入口。","evidence":["SettingsViews.swift:188","SettingsViews.swift:193"]},
+        {"label":"内置组件","kind":"DisclosureGroup+rows","action":"图标、描述、添加/打开/已停用；添加不立即关闭弹窗，已装打开会关闭。","states":["未装/正在添加/成功/错误","已装","所属包停用"],"necessity":"与侧栏添加菜单同功能但偏管理，应清楚区分‘打开’和‘添加’。","evidence":["SettingsViews.swift:202","SettingsViews.swift:250","SettingsViews.swift:263","SettingsViews.swift:266","SettingsViews.swift:269","SettingsViews.swift:272"]},
+        {"label":"卡片类型 / 读书法","kind":"DisclosureGroups","action":"看动态类型ID/字段、读书法目标/真实动作映射和本次方案标记。","states":["全部收起/展开","自定义类型","本次已选方法"],"necessity":"当前是查看，不应把其静态行设计成可编辑表单。","evidence":["SettingsViews.swift:218","SettingsViews.swift:223","SettingsViews.swift:333","SettingsViews.swift:354","SettingsViews.swift:367","SettingsViews.swift:376"]},
+        {"label":"完成","kind":"footer-button","action":"关闭插件设置。","states":["滚动内容长时底部固定"],"necessity":"应保持可见动作区。","evidence":["SettingsViews.swift:235","SettingsViews.swift:238"]}
+      ],
+      "captureStates":["无包默认页","包展开与停用","组件能力展开","类型/方法展开","导入错误","添加反馈"]
+    },
+    {
+      "id":"model-profiles","title":"AI 服务配置主设置","entry":"AI 服务栏 服务设置 / 工具栏 AI / 系统 Settings",
+      "controls":[
+        {"label":"已保存配置","kind":"Picker","action":"切换持久服务，读取该服务钥匙串密钥；脏草稿先询问。","states":["新未保存","多个已保存","忙碌禁用","密钥读取失败保留草稿"],"necessity":"核心配置管理，应当一眼看出当前配置和未保存状态。","evidence":["SettingsViews.swift:49","SettingsViews.swift:50","ServiceProfiles.swift:64","ServiceProfiles.swift:74","ServiceProfiles.swift:99"]},
+        {"label":"新建","kind":"Menu","action":"自定义兼容服务或目录中的国内/美国提供商预设。","states":["空配置/已保存配置","脏草稿跳转保护"],"necessity":"是创建配置而非调用AI；需保留清晰名称。","evidence":["SettingsViews.swift:54","SettingsViews.swift:55","SettingsViews.swift:57","ServiceProfiles.swift:105"]},
+        {"label":"删除当前服务配置及密钥","kind":"icon-button+confirmation","action":"删本机配置和对应钥匙串项，OCR引用回退；不删书籍和生成内容。","states":["未保存禁用","确认删除","删后选下一服务/新服务","钥匙串失败局部报错"],"necessity":"不可复用书/文档回收图式；当前无恢复功能。","evidence":["SettingsViews.swift:39","SettingsViews.swift:59","SettingsViews.swift:61","ServiceProfiles.swift:158"]},
+        {"label":"配置名称 / 服务地址 / 模型 API ID / API Key","kind":"Grid-TextFields+SecureField","action":"输入服务名称、完整endpoint、精确模型ID、密钥。","states":["已保存/脏草稿","字段校验失败","忙碌禁用"],"necessity":"4个必要连接字段，名称与模型ID应区分。","evidence":["SettingsViews.swift:67","SettingsViews.swift:68","SettingsViews.swift:69","SettingsViews.swift:71","SettingsViews.swift:79","ServiceProfiles.swift:134"]},
+        {"label":"模型预设","kind":"Menu","action":"匹配提供商时列经核查模型，填token上下文与参数名；默认输出至多8192，Max另选。","states":["已知提供商显示","自定义提供商不显示","文本/视觉模型能力提示"],"necessity":"不能把选模型等同Max；设计需把已知与手动规格区别。","evidence":["SettingsViews.swift:74","SettingsViews.swift:75","ServiceProfiles.swift:120","ServiceProfiles.swift:124"]},
+        {"label":"关闭 / 测试连接 / 保存配置","kind":"footer-actions","action":"关闭设置、发送一条短文本测试、持久保存本地配置。","states":["有未保存更改文字","测试中/成功/失败","保存失败输入保留"],"necessity":"测试有网络调用与可能收费，交互稿保留说明；测试不等于视觉OCR已验证。","evidence":["SettingsViews.swift:32","SettingsViews.swift:33","SettingsViews.swift:35","SettingsViews.swift:36","ServiceProfiles.swift:173"]},
+        {"label":"保存并继续 / 放弃更改并继续 / 取消","kind":"alert-actions","action":"切换或新建配置时处理脏草稿。","states":["保存成功继续","保存失败当前输入保留","取消回原配置"],"necessity":"须纳入交互稿，不能只画连接成功态。","evidence":["ServiceProfileDraft.swift:47","ServiceProfileDraft.swift:50","ServiceProfileDraft.swift:51","ServiceProfileDraft.swift:52"]}
+      ],
+      "captureStates":["默认服务已保存","新建提供商菜单","多服务切换","连接字段错误","测试连接成功/失败","未保存离开提示","删除确认"]
+    },
+    {
+      "id":"model-max","title":"模型能力、Max 与请求预算","entry":"模型设置 → 能力与预算",
+      "controls":[
+        {"label":"模型能力/官方规格","kind":"labels+Link","action":"已知模型显示图像输入、工具调用、上下文和输出上限；未知型号提示手动核查。","states":["已知型号","未知型号","规格值未确认"],"necessity":"展示实际目录能力，不承诺最大化理解。","evidence":["SettingsViews.swift:86","SettingsViews.swift:88","SettingsViews.swift:89","SettingsViews.swift:91","SettingsViews.swift:93","SettingsViews.swift:97"]},
+        {"label":"最大输出token / Max","kind":"numeric-field+button","action":"手动填写输出上限；Max填经核实输出上限并同步上下文/参数名。","states":["已知可Max","未知Max禁用","手动超范围错误","忙碌禁用"],"necessity":"Max是额度上限，不是智力开关；不添加虚构‘满能力’状态。","evidence":["SettingsViews.swift:103","SettingsViews.swift:104","SettingsViews.swift:106","SettingsViews.swift:112","ServiceProfiles.swift:128"]},
+        {"label":"每轮最多N次请求","kind":"Stepper","action":"1...2000，每轮达到预算后可续跑。","states":["最小/最大","OCR按页预算"],"necessity":"读书连续执行的预算边界，应与输出token明确分组。","evidence":["SettingsViews.swift:110","ServiceProfiles.swift:195","ServiceProfiles.swift:200"]},
+        {"label":"高级参数与说明","kind":"DisclosureGroup","action":"上下文token手动输入、max_tokens/max_completion_tokens、目录核查日期与推理token说明。","states":["收起/展开","未知上下文留空","参数切换"],"necessity":"高级参数按需展开，不能占普通用户首屏。","evidence":["SettingsViews.swift:114","SettingsViews.swift:116","SettingsViews.swift:120","SettingsViews.swift:124","SettingsViews.swift:126"]}
+      ],
+      "captureStates":["已知模型Max前后","未知模型禁用Max","高级参数展开","无效token反馈"]
+    },
+    {
+      "id":"ai-service-bar","title":"侧栏 AI 服务悬浮栏","entry":"侧栏底部 AI·服务名",
+      "controls":[
+        {"label":"AI·服务名","kind":"DisclosureGroup","action":"持久化展开/收起当前AI栏。","states":["收起/展开","长服务名"],"necessity":"收起仅保留身份与展开指示，别堆放执行含义不明的播放图标。","evidence":["ServiceProfiles.swift:237","ServiceProfiles.swift:239","ServiceProfiles.swift:241","ServiceProfiles.swift:256"]},
+        {"label":"服务选择 / 服务设置 / 测试","kind":"Picker+buttons","action":"快速换已存配置、开完整设置、测试当前服务。","states":["无模型提示","配置未保存","测试反馈最多3行可help完整","忙碌禁用"],"necessity":"测试入口与主设置重复但属快捷操作；考虑交互稿是否需一直显示。","evidence":["ServiceProfiles.swift:243","ServiceProfiles.swift:247","ServiceProfiles.swift:249","ServiceProfiles.swift:251","ServiceProfiles.swift:253"]}
+      ],
+      "captureStates":["收起","展开多服务","测试失败长错误","未配置模型"]
+    },
+    {
+      "id":"ocr-panel","title":"扫描 PDF OCR 设置与执行","entry":"原文阅读的 OCR / 需要文本提示 / 识别续跑",
+      "controls":[
+        {"label":"识别范围","kind":"Picker","action":"缺少文本、当前页、指定页码、未OCR可替换页。","states":["四模式","范围验证错误","跳过受保护页"],"necessity":"范围必须可预览，以免误认为全部重写。","evidence":["PDFOCRPanel.swift:56","PDFOCRPanel.swift:57","PDFOCRPanel.swift:58","PDFOCRPanel.swift:59","PDFOCRPanel.swift:60"]},
+        {"label":"起始页 / 结束页","kind":"TextFields","action":"按原PDF物理页码指定范围。","states":["指定范围才显示","非法/越界/反向范围"],"necessity":"不能同正文单元编号混淆。","evidence":["PDFOCRPanel.swift:64","PDFOCRPanel.swift:65","PDFOCRPanel.swift:67","PDFOCRPanel.swift:77"]},
+        {"label":"模型配置","kind":"Picker","action":"当前阅读服务或单独保存的视觉服务。","states":["继承阅读服务","单独OCR服务","模型不支持图像时错误"],"necessity":"与主模型设置OCR选择同源，不能出现两套不一致配置。","evidence":["PDFOCRPanel.swift:101","PDFOCRPanel.swift:102","PDFOCRPanel.swift:103","SettingsViews.swift:134","SettingsViews.swift:137"]},
+        {"label":"本轮/跳过页摘要","kind":"status+disclosure","action":"显示按预算本轮页数、跳过原因、剩余可续跑页数。","states":["全部可识别","部分受保护","无可识别页","超本轮预算"],"necessity":"状态保留，不把所有细则都放固定高头部。","evidence":["PDFOCRPanel.swift:72","PDFOCRPanel.swift:85","PDFOCRPanel.swift:88","PDFOCRPanel.swift:92","PDFOCRPanel.swift:109"]},
+        {"label":"取消 / 设置服务 / 识别N页","kind":"footer-actions","action":"关面板、打开服务设置、逐页发大模型图像请求并逐页保存。","states":["无候选或错误禁用启动","启动后面板关闭","密码待解锁","预算暂停/出错可续跑"],"necessity":"‘识别’确实产生外发图像和请求，原PDF不改写；不应自动启动。","evidence":["PDFOCRPanel.swift:44","PDFOCRPanel.swift:46","PDFOCRPanel.swift:47","ServiceProfiles.swift:202","ServiceProfiles.swift:208","ServiceProfiles.swift:214","ServiceProfiles.swift:218","ServiceProfiles.swift:223"]}
+      ],
+      "captureStates":["缺少文本默认","当前页","指定范围校验错误","受保护跳过说明","单独OCR服务","页识别进行中","预算用尽可续跑"]
+    },
+    {
+      "id":"pdf-search","title":"PDF 浮动查找栏","entry":"原文阅读查找按钮 / PDF控制命令",
+      "controls":[
+        {"label":"搜索PDF文字","kind":"NSSearchField","action":"回车查找；原生内部清空叉移除，避免和外部关闭叉歧义。","states":["隐藏/显示","正在搜/有结果/无结果","超长输入","原书未解锁"],"necessity":"只有一个关闭叉；不要恢复两个x不同语义的旧问题。","evidence":["PDFReaderView.swift:177","PDFReaderView.swift:182","PDFReaderView.swift:185","PDFReaderView.swift:194"]},
+        {"label":"上一结果 / 下一结果","kind":"40×40-icon-buttons","action":"跳转异步搜索结果。","states":["无结果禁用","匹配计数","跨页"],"necessity":"同一浮层，结果反馈不可挤掉输入框。","evidence":["PDFReaderView.swift:192","PDFReaderView.swift:193","PDFReaderView.swift:584","PDFReaderView.swift:696"]},
+        {"label":"关闭查找（Esc）","kind":"button+keyboard","action":"隐藏整个栏，清空文本/匹配/状态，取消异步搜索代次，焦点回PDF。","states":["关闭后晚到结果不得恢复栏","批注sheet打开不拦Esc","卸载视图清理监听"],"necessity":"用户重点反馈，交互稿必须显式画关闭后的结果。","evidence":["PDFReaderView.swift:488","PDFReaderView.swift:490","PDFReaderView.swift:495","PDFReaderView.swift:503","PDFReaderView.swift:519"]}
+      ],
+      "sizeConstraints":["浮在PDF右上 top82，最大宽500，两侧至少12","搜索输入高40，结果按钮40×40"],
+      "captureStates":["搜索打开","有结果/无结果","x关闭后原PDF","窄窗搜索"]
+    },
+    {
+      "id":"pdf-native-controls","title":"PDF 导航、缩放与缩略图","entry":"原文浮动工具条与更多菜单；PDFReaderController分发",
+      "controls":[
+        {"label":"前后页 / 页码跳转","kind":"commands","action":"按原PDF页导航，不复用SourceUnit偏移。","states":["首/尾页禁用","错误页码","切书导航代次"],"necessity":"后续设计须复用现有阅读主工具条，避免PDF内部再放第二排。","evidence":["PDFReaderView.swift:205","PDFReaderView.swift:720","PDFReaderView.swift:722","PDFReaderController.swift:3"]},
+        {"label":"缩小/放大/适合页/适合宽/100%","kind":"commands","action":"原生PDF缩放；自定义缩放与自动适应模式区分。","states":["不同fitMode","窗口缩放重新适应","缩略图显示后重新fit"],"necessity":"一处放缩和模式，不能两行重复。","evidence":["PDFReaderView.swift:452","PDFReaderView.swift:455","PDFReaderView.swift:524","PDFReaderView.swift:724"]},
+        {"label":"缩略图 / 连续阅读","kind":"toggle-commands","action":"缩略图118宽按需显示；单页连续/单页模式切换保留当前页。","states":["缩略图默认隐藏","连续/单页","窄窗"],"necessity":"与章节目录是不同索引，但不能默认同时各占一列。","evidence":["PDFReaderView.swift:150","PDFReaderView.swift:163","PDFReaderView.swift:164","PDFReaderView.swift:447","PDFReaderView.swift:461","PDFReaderView.swift:731"]}
+      ],
+      "captureStates":["原始PDF默认","缩略图打开","原文目录与缩略图同时开","适宽/100%","长页和横向公式"]
+    },
+    {
+      "id":"pdf-annotations","title":"PDF 高亮、区域批注、清单与恢复","entry":"阅读工具条的高亮 / 更多→区域批注 / 批注清单",
+      "controls":[
+        {"label":"高亮文字 / 框选区域","kind":"commands","action":"已有文字选区创建高亮；扫描页可同页拖矩形后批注；Esc取消区域。","states":["有选区/无选区","扫描无文本","任务锁定"],"necessity":"两种来源不能装作一样：区域不自动OCR文字。","evidence":["PDFReaderView.swift:733","PDFReaderView.swift:734","PDFReaderView.swift:738","PDFReaderView.swift:1052"]},
+        {"label":"颜色 / 批注正文","kind":"segmented-picker+TextEditor","action":"选颜色并填最多16000字评论。","states":["新增/编辑","超长禁用保存","编辑失败输入保留"],"necessity":"改为漂亮popover也不能丢正文与错误状态。","evidence":["PDFReaderView.swift:1053","PDFReaderView.swift:1056","PDFReaderView.swift:1057","PDFReaderView.swift:1064"]},
+        {"label":"移入回收列表 / 取消 / 保存","kind":"sheet-actions","action":"独立书项目保存，不改原PDF；取消有脏修改确认。","states":["新建无删除按钮","保存中禁用","失败留当前表单","放弃确认"],"necessity":"与全局回收站不同清单，设计稿应清楚对象范围。","evidence":["PDFReaderView.swift:1059","PDFReaderView.swift:1060","PDFReaderView.swift:1064","PDFReaderView.swift:1067","PDFReaderView.swift:1069"]},
+        {"label":"显示已删除批注","kind":"Toggle","action":"同清单中显示活动/已删批注。","states":["默认隐藏已删","无批注","已删记录"],"necessity":"恢复入口就地可发现。","evidence":["PDFReaderView.swift:1087","PDFReaderView.swift:1090"]},
+        {"label":"定位原页 / 编辑 / 删除 / 恢复","kind":"row-actions","action":"活动批注定位编辑删除，已删批注定位恢复。","states":["活动/已删","忙碌禁用","恢复失败"],"necessity":"保留一套就地动作，不再加第二套批注回收管理页。","evidence":["PDFReaderView.swift:1098","PDFReaderView.swift:1099","PDFReaderView.swift:1100"]}
+      ],
+      "sizeConstraints":["批注编辑min320×360","清单min320×300","选区预览最高160"],
+      "captureStates":["文字高亮编辑","扫描区域编辑","取消脏批注确认","活动批注清单","已删批注显示与恢复","保存失败"]
+    },
+    {
+      "id":"encrypted-pdf","title":"加密 PDF 导入与会话解锁","entry":"拖放/文件选择导入加密PDF；重新启动后开书；OCR遇锁定源",
+      "controls":[
+        {"label":"PDF打开密码","kind":"SecureField","action":"密码仅本App会话内存使用；不写书包/钥匙串/设置。","states":["首次导入","打开会话","OCR待恢复","密码错误","正在解锁"],"necessity":"设计需呈现是哪本书及解锁用途，不能暗示密码持久保存。","evidence":["PDFSessionAccess.swift:15","PDFSessionAccess.swift:21","PDFSessionAccess.swift:190","PDFSessionAccess.swift:191","PDFSessionAccess.swift:193"]},
+        {"label":"取消 / 解锁并导入 / 解锁 / 解锁并继续识别","kind":"sheet-actions","action":"按用途启动对应操作；错误允许重试；取消不创建新书/不发OCR请求。","states":["输入空/超过1024禁用","忙碌禁用提交","本地导入提交阶段禁用取消","错误信息"],"necessity":"必须画失败与回退，不能只画成功。","evidence":["PDFSessionAccess.swift:197","PDFSessionAccess.swift:201","PDFSessionAccess.swift:202","PDFSessionAccess.swift:205","PDFSessionAccess.swift:145"]},
+        {"label":"原生PDF锁定覆盖层","kind":"overlay+SecureField+button","action":"PDF视图层提供内存解锁，损坏或载入失败显示重新载入。","states":["锁定解锁","损坏重载","与全局密码sheet协调"],"necessity":"两个解锁位置是实现的不同层，设计应避免同时出现重叠提示。","evidence":["PDFReaderView.swift:239","PDFReaderView.swift:251","PDFReaderView.swift:367","PDFReaderView.swift:373"]}
+      ],
+      "sizeConstraints":["密码sheet430宽，padding28","原生覆盖层内容<=360宽"],
+      "captureStates":["导入密码提示","密码错误","开书会话解锁","OCR解锁继续","取消后原视图"]
+    },
+    {
+      "id":"reading-companion","title":"多层伴读、原文索引与资料对读","entry":"原文增强/对象点击 → 右侧伴读；或独立组件reading.layers/mentions",
+      "controls":[
+        {"label":"伴读内容菜单","kind":"Menu","action":"解释与译文、原文中的对象、资料对读、停下来想一想。","states":["上下文汇总/专用组件","有内容/空"],"necessity":"避免又在阅读主区增加常驻多段工具栏。","evidence":["ReadingCompanionPanel.swift:25","ReadingCompanionPanel.swift:26","ReadingCompanionPanel.swift:27","ReadingCompanionPanel.swift:28","ReadingCompanionPanel.swift:29"]},
+        {"label":"恢复已移除的伴读","kind":"Menu","action":"列本书增强trash逐项恢复。","states":["有trash时才显示","忙碌禁用"],"necessity":"不是全局书/Markdown回收站，范围需标注。","evidence":["ReadingCompanionPanel.swift:32","ReadingCompanionPanel.swift:33"]},
+        {"label":"收起伴读 / 问这里","kind":"buttons","action":"收伴读或携当前上下文进入问答，不自动调用模型。","states":["浮层/独立组件","当前有选段/对象"],"necessity":"保持上下文，不因单击对象强制换页。","evidence":["ReadingCompanionPanel.swift:36","ReadingCompanionPanel.swift:41"]},
+        {"label":"整理为Markdown草稿","kind":"text-button","action":"明确用户操作才把层/对读内容进入可编辑草稿；原AI内容保留。","states":["已有脏草稿保护","新草稿"],"necessity":"与直接自动保存不同，词义必须准确。","evidence":["ReadingCompanionPanel.swift:68","ReadingCompanionPanel.swift:81"]},
+        {"label":"原文引句 / 关联对象 / 在时间与地图查看","kind":"source-links+buttons","action":"精确锚点回原文，跟随对象，事件进入当前原文范围地图。","states":["精确锚点/页级fallback","有关系/无关系"],"necessity":"这是核心阅读闭环，设计应画路由返回过程。","evidence":["ReadingCompanionPanel.swift:108","ReadingCompanionPanel.swift:145","ReadingCompanionPanel.swift:154","ReadingCompanionPanel.swift:163"]},
+        {"label":"增强当前片段","kind":"primary-button","action":"按真实回执门禁发模型请求生成增强。","states":["空伴读","运行中禁用","预算暂停","失败可续"],"necessity":"空状态解释当前未增强，不能用伪造内容装满设计。","evidence":["ReadingCompanionPanel.swift:123"]},
+        {"label":"增强条目更多→移除","kind":"Menu+confirmation","action":"移除派生增强到本书增强回收列表，可恢复。","states":["确认/取消","已删/恢复"],"necessity":"少量高价值上下文动作，当前32×32比统一40目标小。","evidence":["ReadingCompanionPanel.swift:54","ReadingCompanionPanel.swift:55","ReadingCompanionPanel.swift:130"]}
+      ],
+      "sizeConstraints":["阅读宽窗>=1050时右侧360宽；窄窗浮层最多380且viewport−24，height=viewport−98","专用组件内容max900"],
+      "captureStates":["有对象上下文汇总","层/对读","空伴读","更多菜单","恢复菜单","窄窗覆盖阅读区域"]
+    },
+    {
+      "id":"decision-cards","title":"思考卡","entry":"伴读 停下来想一想 / reading.decisions组件",
+      "controls":[
+        {"label":"思考选项卡","kind":"choice-row-buttons","action":"选项整行单击，选中后展开对应选项说明。","states":["未选/已选","不同书动态选项"],"necessity":"先判断后揭晓，不能直接把结果放首屏。","evidence":["ReadingCompanionPanel.swift:184","ReadingCompanionPanel.swift:185","ReadingCompanionPanel.swift:189"]},
+        {"label":"判断理由","kind":"multiline-TextField","action":"本机草稿随选择和解析状态保存。","states":["空/输入2...5行","切换后恢复"],"necessity":"这是私人理解草稿，不应自动发AI或公共投票。","evidence":["ReadingCompanionPanel.swift:191","ReadingCompanionPanel.swift:200","ReadingCompanionPanel.swift:209"]},
+        {"label":"看原书结果与解析 / 收起解析","kind":"button","action":"选择选项后才允许揭晓。","states":["未选禁用","揭晓/收起"],"necessity":"关键学习顺序，交互稿必须有前后两帧。","evidence":["ReadingCompanionPanel.swift:192","ReadingCompanionPanel.swift:193"]},
+        {"label":"保存思考为Markdown草稿 / 更多→移除","kind":"buttons+Menu","action":"显式整理选择与理由，已揭晓才附解析；移除可恢复。","states":["未揭晓/已揭晓","已有脏笔记草稿保护"],"necessity":"保存动作和草稿状态要分明，不用另造提交成绩按钮。","evidence":["ReadingCompanionPanel.swift:181","ReadingCompanionPanel.swift:194","ReadingCompanionPanel.swift:196"]}
+      ],
+      "captureStates":["未选且结果隐藏","已选与理由输入","解析揭晓","草稿恢复"]
+    },
+    {
+      "id":"book-atlas","title":"全书总览与原文共现","entry":"reading.atlas组件",
+      "controls":[
+        {"label":"总览内容","kind":"Menu+Picker","action":"章节与覆盖、内容类型、事件年代、原文共现。","states":["4模式","快照计算中","空数据"],"necessity":"视图切换，不是新数据源；不要每种模式再添侧栏。","evidence":["ReadingAtlasView.swift:16","ReadingAtlasView.swift:17","ReadingAtlasView.swift:32"]},
+        {"label":"章节覆盖卡片","kind":"row-button","action":"分别显示核对/回执/完整译文覆盖，点击回章节首单元。","states":["有局部译文不等于完整覆盖","失效依据另计"],"necessity":"保留3种意义但图形密度可精修；不融合成假‘完成度’。","evidence":["ReadingAtlasView.swift:51","ReadingAtlasView.swift:56","ReadingAtlasView.swift:58","ReadingAtlasView.swift:63","ReadingAtlasView.swift:66"]},
+        {"label":"类型条形统计","kind":"DisclosureGroups+object-buttons","action":"展开类型看对象，点击开详情；数学可为定理/概念。","states":["空类型","动态类型名称长","对象多"],"necessity":"适配动态类型，不固定人物榜单。","evidence":["ReadingAtlasView.swift:78","ReadingAtlasView.swift:80","ReadingAtlasView.swift:82"]},
+        {"label":"年代格子 / 时间待考 / 事件详情","kind":"buttons+disclosure","action":"选起始年分桶后看事件；时间待考单独看；再进地图。","states":["选桶/待考","无年代事件","跨年只计一次"],"necessity":"不再加第二套时间筛选轴。","evidence":["ReadingAtlasView.swift:95","ReadingAtlasView.swift:98","ReadingAtlasView.swift:103","ReadingAtlasView.swift:106","ReadingAtlasView.swift:109"]},
+        {"label":"原文共现图","kind":"read-only-graph","action":"共享GraphSurface选择/双击详情；共现不是结构化关系。","states":["有界采样提示","空共现"],"necessity":"必须保留共现与关系差异说明；不是关系图谱重复数据。","evidence":["ReadingAtlasView.swift:112","ReadingAtlasView.swift:120","ReadingAtlasView.swift:122","ReadingAtlasView.swift:123"]}
+      ],
+      "captureStates":["章节覆盖","类型展开","年代选桶","待考事件","原文共现","无数据"]
+    },
+    {
+      "id":"trash-and-deletion","title":"删除、回收与恢复的跨功能语义","entry":"书籍/文档右键、详情、笔记菜单、图谱右键、各局部回收菜单",
+      "controls":[
+        {"label":"书籍/Markdown移入回收站确认","kind":"global-confirmation","action":"书籍归档或文档trash；文档节点隐藏，恢复后还原。","states":["有脏草稿时拒绝删除","删除中","失败原数据保留"],"necessity":"主要可恢复删除；确认内容按对象种类变化。","evidence":["WorkspaceView.swift:66","WorkspaceView.swift:67","WorkspaceManagement.swift:12","WorkspaceManagement.swift:13","WorkspaceManagement.swift:27"]},
+        {"label":"派生要素/事件删除确认","kind":"global-confirmation","action":"删除对象及地图/关系/画布关联；保留Markdown正文，无一键恢复。","states":["不可恢复的派生数据删除"],"necessity":"风险与文档不同，不可用统一‘回收站’词义掩盖。","evidence":["WorkspaceManagement.swift:14","WorkspaceManagement.swift:43","WorkspaceManagement.swift:44"]},
+        {"label":"全局回收站恢复","kind":"sheet-list+buttons","action":"分书籍与每本书的Markdown列出，可恢复，无永久清空。","states":["空回收站","已归档书籍","活动书下已回收文档","忙碌禁用"],"necessity":"不要画不存在的永久清空、全选删除。","evidence":["WorkspaceManagement.swift:106","WorkspaceManagement.swift:107","WorkspaceManagement.swift:110","WorkspaceManagement.swift:113","WorkspaceManagement.swift:116"]},
+        {"label":"移除节点 / 移除连线 / 移除组件入口","kind":"context-actions","action":"仅删除呈现结构，原文档或知识保留；通过重新加入导图或组件恢复入口，非一键undo。","states":["仍有原文档","节点和连线清理","组件重开"],"necessity":"‘移除’与‘删除内容’需用统一视觉层级区分。","evidence":["WorkspaceManagement.swift:70","WorkspaceManagement.swift:73","WorkspaceManagement.swift:84","WorkspaceManagement.swift:91","GraphCanvas.swift:385"]},
+        {"label":"批注回收列表 / 伴读回收菜单 / 服务配置删除","kind":"scope-specific-recovery","action":"批注和伴读各局部恢复；服务配置及密钥删除当前不能恢复。","states":["各功能回收范围不同"],"necessity":"至少4种恢复语义，交互稿要建立一致可识别语言，不能假设全局回收站包办。","evidence":["PDFReaderView.swift:1087","PDFReaderView.swift:1100","ReadingCompanionPanel.swift:33","SettingsViews.swift:39"]}
+      ],
+      "captureStates":["删除书籍确认","删除Markdown确认","派生对象不可恢复说明","空回收站","书/文档恢复","局部伴读/批注恢复"]
+    }
+  ],
+  "crossSurfaceFindings": [
+    {"id":"F01","category":"duplicate-entry","description":"时间卡‘全部’与选项‘显示全部时间’都 fitTime；应只保留一处主要入口或明确快捷/高级层级。","evidence":["SpatialTimelineView.swift:157","SpatialTimelineView.swift:183"]},
+    {"id":"F02","category":"duplicate-entry","description":"服务选择、测试、服务设置分布侧栏AI栏、完整设置、工具栏服务popover；需一致状态和名称，设计不应再添一套。","evidence":["ServiceProfiles.swift:243","ServiceProfiles.swift:249","ServiceProfiles.swift:251","SettingsViews.swift:49","SettingsViews.swift:35"]},
+    {"id":"F03","category":"duplicate-entry","description":"加入导图/移入回收站存在知识库、笔记选择器、笔记更多、对象详情；可保留上下文入口，但动作文字、反馈和确认须统一。","evidence":["SpatialGraphViews.swift:243","ReadingViews.swift:392","ReadingViews.swift:422","ObjectInspector.swift:140"]},
+    {"id":"F04","category":"state-semantics","description":"readingScopeCurrent由地图与关系图谱共享，地图里选‘只看当前原文’后再进图谱会继承；设计稿需明确全书/当前阅读范围，不让用户误判丢数据。","evidence":["SpatialTimelineView.swift:154","SpatialGraphViews.swift:147","SpatialGraphViews.swift:169"]},
+    {"id":"F05","category":"interaction-semantics","description":"思维导图编辑文档节点，关系/共现图展示派生对象；视觉共用GraphSurface，但是否允许拖动保存、连线、移除不同。必须画各自手势能力，避免承诺不存在功能。","evidence":["SpatialGraphViews.swift:82","SpatialGraphViews.swift:87","SpatialGraphViews.swift:175","ReadingAtlasView.swift:123"]},
+    {"id":"F06","category":"density","description":"很多共有控件40高，但伴读条目更多32、图端点视觉8+16padding、地图marker命中36、原生Stepper/Picker不同；效果稿应建立可达目标与视觉密度一致标准。","evidence":["ReadingGlass.swift:57","ReadingCompanionPanel.swift:130","GraphCanvas.swift:344","SpatialTimelineView.swift:262"]},
+    {"id":"F07","category":"responsive-layout","description":"800最小窗下固定600/620宽sheet + 300宽节点面板 + 图控、地图viewport−144和最大560面板都可能产生拥挤；必须真实截图覆盖临界窗口，不能只验默认1480。","evidence":["ReadingBookApp.swift:9","WorkspaceView.swift:56","WorkspaceView.swift:59","GraphNodeBrowser.swift:50","SpatialTimelineView.swift:67"]},
+    {"id":"F08","category":"recovery-language","description":"文档/书籍全局回收，批注局部回收，伴读局部回收，派生对象和密钥无一键恢复，移除节点只保留文档。统一垃圾桶图标无法独自说明这些差异。","evidence":["WorkspaceManagement.swift:12","WorkspaceManagement.swift:14","PDFReaderView.swift:1100","ReadingCompanionPanel.swift:33","ServiceProfiles.swift:158"]},
+    {"id":"F09","category":"modal-overlap","description":"加密PDF有工作台密码sheet与原生PDF覆盖层两种解锁界面；真实截图需核对是否出现双提示与不同错误文案。","evidence":["WorkspaceView.swift:61","PDFSessionAccess.swift:182","PDFReaderView.swift:239"]},
+    {"id":"F10","category":"non-negotiable-behavior","description":"保留原始PDF默认、单轴双端点、导图单击预览/双击打开/边缘拖线、原文精确返回与OCR无坐标fallback、逐段处理覆盖与理解正确性分开、用户保存才形成Markdown。","evidence":["WorkspaceView.swift:15","TimelineRangeControl.swift:47","GraphCanvas.swift:322","PDFReaderView.swift:759","ReadingViews.swift:225","ReadingCompanionPanel.swift:68"]}
+  ],
+  "captureProtocol": {
+    "mustNotFabricate": "现阶段任何根据源码画出的画面，只能标‘现状结构示意/设计稿’，不能标macOS实机截图。",
+    "baselineSizes":[{"width":1480,"height":940,"purpose":"默认宽窗"},{"width":1050,"height":760,"purpose":"伴读并列/覆盖临界"},{"width":920,"height":700,"purpose":"全局inspector临界"},{"width":800,"height":600,"purpose":"最小窗"}],
+    "appearanceStates":["浅色","深色关键页面","减少透明","减少动态","键盘焦点"],
+    "dataFixtures":["含人物/事件/地点/时间的历史书","含定理/公式/证明的数学书","原生文本PDF","扫描PDF","加密PDF","长中文标题/动态字段/长错误信息","空书/未分析/无结果/回收数据"],
+    "requiredProof":"每张真实截图保留版本、窗口尺寸、页面和状态；截图清单与本JSON的surface.id和captureStates对应。"
+  }
+}

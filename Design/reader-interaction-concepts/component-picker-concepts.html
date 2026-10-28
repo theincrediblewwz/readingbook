@@ -1,0 +1,141 @@
+<div id="readingbook-component-picker-concepts" class="viz-carousel viz-dotted-background" aria-label="添加组件入口方案" data-previous-label="上一个方案" data-next-label="下一个方案">
+  <section data-variant="独立选择浮层" aria-label="独立选择浮层，推荐方案"><div class="cp-demo" data-layout="floating" aria-label="独立组件选择浮层"></div></section>
+  <section data-variant="导航内展开" aria-label="导航内展开方案" hidden><div class="cp-demo" data-layout="inline" aria-label="导航内展开组件选择"></div></section>
+</div>
+<template id="rb-cp-navigation-template">
+  <aside class="cp-nav" aria-label="阅读导航局部">
+    <nav aria-label="阅读工作台">
+      <button type="button" class="cp-nav-row cp-current cursor-interaction" data-nav="原文阅读"><i data-lucide="book-open" aria-hidden="true"></i><span>原文阅读</span></button>
+      <button type="button" class="cp-nav-row cursor-interaction" data-nav="智能阅读"><i data-lucide="sparkles" aria-hidden="true"></i><span>智能阅读</span></button>
+      <button type="button" class="cp-nav-row cursor-interaction" data-nav="与书对话"><i data-lucide="messages-square" aria-hidden="true"></i><span>与书对话</span></button>
+      <button type="button" class="cp-nav-row cursor-interaction" data-nav="我的笔记"><i data-lucide="square-pen" aria-hidden="true"></i><span>我的笔记</span></button>
+    </nav>
+    <div class="cp-component-section">
+      <span class="cp-group-name">本书组件</span>
+      <div class="cp-added" aria-label="本书组件示意"></div>
+      <button type="button" class="cp-add cursor-interaction" data-action="toggle" aria-expanded="true"><i data-lucide="plus" aria-hidden="true"></i><span>添加组件</span><i data-lucide="chevron-down" aria-hidden="true"></i></button>
+    </div>
+    <div class="cp-management"><button type="button" class="cp-nav-row cursor-interaction" data-nav="插件与组件"><i data-lucide="puzzle" aria-hidden="true"></i><span>插件与组件</span></button></div>
+  </aside>
+</template>
+<template id="rb-cp-picker-template">
+  <div class="cp-picker" role="dialog" aria-modal="false" aria-label="添加到本书">
+    <div class="cp-picker-heading"><span>添加到本书</span><button type="button" class="cp-close cursor-interaction" data-action="close" aria-label="关闭组件选择"><i data-lucide="x" aria-hidden="true"></i></button></div>
+    <div class="cp-options">
+      <button type="button" class="cp-option cursor-interaction" data-component="cards" data-tooltip="要素卡片：人物、地点、概念与事件"><i data-lucide="layers" aria-hidden="true"></i><span class="cp-option-copy"><span>要素卡片</span><span class="cp-description">人物、地点、概念与事件</span></span><span class="cp-added-mark" hidden><i data-lucide="check" aria-hidden="true"></i></span></button>
+      <button type="button" class="cp-option cursor-interaction" data-component="map" data-tooltip="时间与地图：按时间与地点追踪书中线索"><i data-lucide="map" aria-hidden="true"></i><span class="cp-option-copy"><span>时间与地图</span><span class="cp-description">按时间与地点追踪书中线索</span></span><span class="cp-added-mark" hidden><i data-lucide="check" aria-hidden="true"></i></span></button>
+      <button type="button" class="cp-option cursor-interaction" data-component="mindmap" data-tooltip="思维导图：用分支梳理观点和阅读结构"><i data-lucide="git-branch" aria-hidden="true"></i><span class="cp-option-copy"><span>思维导图</span><span class="cp-description">用分支梳理观点和阅读结构</span></span><span class="cp-added-mark" hidden><i data-lucide="check" aria-hidden="true"></i></span></button>
+      <button type="button" class="cp-option cursor-interaction" data-component="relations" data-tooltip="关系图谱：查看人物、事件和概念间的联系"><i data-lucide="network" aria-hidden="true"></i><span class="cp-option-copy"><span>关系图谱</span><span class="cp-description">查看人物、事件和概念间的联系</span></span><span class="cp-added-mark" hidden><i data-lucide="check" aria-hidden="true"></i></span></button>
+      <button type="button" class="cp-option cursor-interaction" data-component="knowledge" data-tooltip="知识库：集中查看本书已整理的资料"><i data-lucide="library" aria-hidden="true"></i><span class="cp-option-copy"><span>知识库</span><span class="cp-description">集中查看本书已整理的资料</span></span><span class="cp-added-mark" hidden><i data-lucide="check" aria-hidden="true"></i></span></button>
+      <button type="button" class="cp-option cursor-interaction" data-component="companion" data-tooltip="多层伴读：对照原文、译文和解释"><i data-lucide="book-open-text" aria-hidden="true"></i><span class="cp-option-copy"><span>多层伴读</span><span class="cp-description">对照原文、译文和解释</span></span><span class="cp-added-mark" hidden><i data-lucide="check" aria-hidden="true"></i></span></button>
+      <button type="button" class="cp-option cursor-interaction" data-component="overview" data-tooltip="全书总览：查看本书内容与阅读进展概览"><i data-lucide="chart-column" aria-hidden="true"></i><span class="cp-option-copy"><span>全书总览</span><span class="cp-description">查看本书内容与阅读进展概览</span></span><span class="cp-added-mark" hidden><i data-lucide="check" aria-hidden="true"></i></span></button>
+    </div>
+  </div>
+</template>
+<style>
+#readingbook-component-picker-concepts .cp-demo {
+  --cp-ink:light-dark(#202329,#e7eaf0);--cp-muted:light-dark(#686e79,#a8afbc);
+  --cp-panel:light-dark(#f8f9fb,#20232a);--cp-paper:light-dark(#ffffff,#282c35);
+  --cp-line:light-dark(#dce1e9,#444a56);--cp-hover:light-dark(#edf1f8,#343b49);
+  --cp-active:light-dark(#e6edfb,#2f405f);--cp-blue:light-dark(#3768c8,#a7c3ff);
+  --cp-shadow:light-dark(#213b631a,#00000038);--cp-option-height:52px;--cp-picker-width:340px;
+  position:relative;box-sizing:border-box;width:min(100%,708px);min-height:950px;margin:0 auto;padding:40px 24px 56px;color:var(--cp-ink);
+  font:400 15px/1.4 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
+}
+#readingbook-component-picker-concepts .cp-demo *,#readingbook-component-picker-concepts .cp-demo *::before,#readingbook-component-picker-concepts .cp-demo *::after{box-sizing:border-box;}
+#readingbook-component-picker-concepts .cp-demo [hidden]{display:none!important;}
+#readingbook-component-picker-concepts .cp-demo button{font:inherit;color:inherit;border:0;background:transparent;}
+#readingbook-component-picker-concepts .cp-demo svg{width:19px;height:19px;flex:none;stroke-width:1.7;}
+#readingbook-component-picker-concepts .cp-nav{width:270px;max-width:100%;padding:14px;background:var(--cp-panel);border:1px solid var(--cp-line);border-radius:20px;}
+#readingbook-component-picker-concepts .cp-nav-row{display:flex;align-items:center;gap:12px;width:100%;min-height:50px;padding:10px 12px;text-align:left;border-radius:11px;}
+#readingbook-component-picker-concepts .cp-nav-row:hover{background:var(--cp-hover);}
+#readingbook-component-picker-concepts .cp-current{color:var(--cp-blue)!important;background:var(--cp-active)!important;font-weight:500!important;}
+#readingbook-component-picker-concepts .cp-component-section{margin-top:12px;padding-top:13px;border-top:1px solid var(--cp-line);}
+#readingbook-component-picker-concepts .cp-group-name{display:block;color:var(--cp-muted);font-size:12px;padding:0 10px 8px;}
+#readingbook-component-picker-concepts .cp-add{display:flex;align-items:center;gap:10px;min-height:46px;width:100%;padding:10px 12px;background:var(--cp-paper)!important;border:1px solid var(--cp-line)!important;border-radius:11px;text-align:left;}
+#readingbook-component-picker-concepts .cp-add>span{flex:1;}
+#readingbook-component-picker-concepts .cp-add>svg:last-child{width:14px;height:14px;}
+#readingbook-component-picker-concepts .cp-add:hover{background:var(--cp-hover)!important;}
+#readingbook-component-picker-concepts .cp-add[aria-expanded=true]{border-color:var(--cp-blue)!important;}
+#readingbook-component-picker-concepts .cp-added:not(:empty){margin-bottom:8px;}
+#readingbook-component-picker-concepts .cp-added .cp-nav-row{min-height:44px;}
+#readingbook-component-picker-concepts .cp-management{margin-top:14px;padding-top:10px;border-top:1px solid var(--cp-line);}
+#readingbook-component-picker-concepts .cp-picker{width:var(--cp-picker-width);max-width:100%;background:var(--cp-paper);border:1px solid var(--cp-line);border-radius:16px;box-shadow:0 12px 35px var(--cp-shadow);}
+#readingbook-component-picker-concepts .cp-demo[data-layout=floating] .cp-picker{position:absolute;left:306px;top:100px;}
+#readingbook-component-picker-concepts .cp-picker-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px 9px 16px;min-height:48px;font-weight:500;}
+#readingbook-component-picker-concepts .cp-close{display:flex;align-items:center;justify-content:center;width:30px;min-height:30px;border-radius:8px;}
+#readingbook-component-picker-concepts .cp-close:hover{background:var(--cp-hover);}
+#readingbook-component-picker-concepts .cp-options{padding:2px 6px 7px;border-top:1px solid var(--cp-line);}
+#readingbook-component-picker-concepts .cp-option{display:flex;align-items:center;gap:12px;min-height:var(--cp-option-height);width:100%;padding:7px 10px;border-radius:10px;text-align:left;}
+#readingbook-component-picker-concepts .cp-option:hover{background:var(--cp-hover);}
+#readingbook-component-picker-concepts .cp-option>svg{color:var(--cp-blue);}
+#readingbook-component-picker-concepts .cp-option-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px;}
+#readingbook-component-picker-concepts .cp-option-copy>span:first-child{font-weight:500;}
+#readingbook-component-picker-concepts .cp-description{display:block;color:var(--cp-muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#readingbook-component-picker-concepts .cp-added-mark{display:flex;align-items:center;flex:none;color:var(--cp-blue);}
+#readingbook-component-picker-concepts .cp-added-mark svg{width:15px;height:15px;}
+#readingbook-component-picker-concepts .cp-demo[data-layout=inline] .cp-nav{width:360px;}
+#readingbook-component-picker-concepts .cp-demo[data-layout=inline] .cp-picker{width:100%;margin-top:8px;border-radius:12px;box-shadow:none;}
+#readingbook-component-picker-concepts .cp-demo[data-layout=inline] .cp-picker-heading{padding-left:12px;}
+#readingbook-component-picker-concepts .cp-demo[data-layout=inline] .cp-option{gap:10px;padding-left:7px;padding-right:7px;}
+#readingbook-component-picker-concepts .cp-feedback{position:absolute;left:24px;right:24px;bottom:24px;min-height:20px;font-size:12px;color:var(--cp-muted);}
+@media(max-width:680px){
+  #readingbook-component-picker-concepts .cp-demo{min-height:980px;padding:26px 12px 52px;}
+  #readingbook-component-picker-concepts .cp-nav,#readingbook-component-picker-concepts .cp-demo[data-layout=inline] .cp-nav{width:100%;}
+  #readingbook-component-picker-concepts .cp-demo[data-layout=floating] .cp-picker{position:static;margin-top:12px;width:100%;}
+}
+@media(pointer:coarse){#readingbook-component-picker-concepts .cp-close{width:44px;min-height:44px;}#readingbook-component-picker-concepts .cp-option{min-height:max(52px,var(--cp-option-height));}}
+</style>
+<script>
+(() => {
+  const root=document.getElementById('readingbook-component-picker-concepts');
+  const navTemplate=document.getElementById('rb-cp-navigation-template'),pickerTemplate=document.getElementById('rb-cp-picker-template');
+  const definitions={cards:{name:'要素卡片',icon:'layers'},map:{name:'时间与地图',icon:'map'},mindmap:{name:'思维导图',icon:'git-branch'},relations:{name:'关系图谱',icon:'network'},knowledge:{name:'知识库',icon:'library'},companion:{name:'多层伴读',icon:'book-open-text'},overview:{name:'全书总览',icon:'chart-column'}};
+  const saved=window.openai?.widgetState;
+  const clean=items=>Array.isArray(items)?Array.from(new Set(items)).filter(id=>definitions[id]):[];
+  const instances=Array.from(root.querySelectorAll('.cp-demo')).map((demo,index)=>{
+    demo.append(navTemplate.content.cloneNode(true));
+    const picker=pickerTemplate.content.cloneNode(true),panel=picker.querySelector('.cp-picker');panel.id='rb-component-picker-'+index;
+    demo.querySelector('[data-action=toggle]').setAttribute('aria-controls',panel.id);
+    if(demo.dataset.layout==='inline'){panel.setAttribute('role','region');panel.removeAttribute('aria-modal');demo.querySelector('.cp-component-section').append(picker);}else demo.append(picker);
+    const feedback=document.createElement('div');feedback.className='cp-feedback';feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');demo.append(feedback);
+    return {demo,index,added:clean(saved?.modelContent?.components?.[index]),open:saved?.privateContent?.views?.[index]?.open??true,rowHeight:52,pickerWidth:340};
+  });
+  function persist(){window.openai?.setWidgetState?.({modelContent:{components:instances.map(s=>s.added)},privateContent:{views:instances.map(s=>({open:s.open}))}})?.catch(()=>{});}
+  function position(s){
+    const picker=s.demo.querySelector('.cp-picker');
+    if(s.demo.dataset.layout!=='floating'||getComputedStyle(picker).position!=='absolute'||!s.open)return;
+    const stage=s.demo.getBoundingClientRect(),nav=s.demo.querySelector('.cp-nav').getBoundingClientRect(),trigger=s.demo.querySelector('[data-action=toggle]').getBoundingClientRect();
+    picker.style.left=(nav.right-stage.left+12)+'px';
+    picker.style.top=Math.max(20,Math.min(trigger.top-stage.top+trigger.height/2-picker.offsetHeight/2,s.demo.clientHeight-picker.offsetHeight-32))+'px';
+  }
+  function render(s){
+    const picker=s.demo.querySelector('.cp-picker'),trigger=s.demo.querySelector('[data-action=toggle]'),added=s.demo.querySelector('.cp-added');
+    s.demo.style.setProperty('--cp-option-height',s.rowHeight+'px');s.demo.style.setProperty('--cp-picker-width',s.pickerWidth+'px');
+    picker.hidden=!s.open;trigger.setAttribute('aria-expanded',String(s.open));added.replaceChildren();
+    s.added.forEach(id=>{
+      const item=definitions[id],button=document.createElement('button'),icon=document.createElement('i'),label=document.createElement('span');
+      button.type='button';button.className='cp-nav-row cursor-interaction';button.dataset.nav=item.name;button.setAttribute('aria-label',item.name+'，已加入导航示意');
+      icon.dataset.lucide=item.icon;icon.setAttribute('aria-hidden','true');label.textContent=item.name;button.append(icon,label);added.append(button);
+    });
+    s.demo.querySelectorAll('[data-component]').forEach(button=>{const selected=s.added.includes(button.dataset.component);button.querySelector('.cp-added-mark').hidden=!selected;button.setAttribute('aria-label',button.dataset.tooltip+(selected?'，已添加为导航示意':''));});
+    if(globalThis.lucide)lucide.createIcons({attrs:{width:19,height:19}});requestAnimationFrame(()=>position(s));
+  }
+  instances.forEach(s=>{
+    render(s);
+    s.demo.addEventListener('click',event=>{
+      const button=event.target.closest('button');if(!button||!s.demo.contains(button))return;
+      const action=button.dataset.action,component=button.dataset.component,nav=button.dataset.nav,feedback=s.demo.querySelector('.cp-feedback');
+      if(action==='toggle'){s.open=!s.open;render(s);if(s.open&&event.detail===0)s.demo.querySelector('[data-component]').focus();}
+      else if(action==='close'){s.open=false;render(s);s.demo.querySelector('[data-action=toggle]').focus();}
+      else if(component&&definitions[component]){const existed=s.added.includes(component);if(!existed)s.added.push(component);s.open=false;feedback.textContent=definitions[component].name+(existed?'已在此处导航示意中。':'已加入此处导航示意；原书未改动。');render(s);s.demo.querySelector('[data-action=toggle]').focus();}
+      else if(nav){feedback.textContent='查看'+nav+'（示意）';}else return;
+      persist();
+    });
+    s.demo.addEventListener('keydown',event=>{if(event.key==='Escape'&&s.open){event.preventDefault();s.open=false;render(s);s.demo.querySelector('[data-action=toggle]').focus();persist();}});
+    if(globalThis.ResizeObserver)new ResizeObserver(()=>position(s)).observe(s.demo);
+    if(globalThis.Tweak){const tweak=new Tweak({container:s.demo,onChange:()=>render(s)});tweak.addSlider(s,'rowHeight',{label:'组件选项行高',min:48,max:64,step:2,unit:'px'});if(s.demo.dataset.layout==='floating')tweak.addSlider(s,'pickerWidth',{label:'浮层宽度',min:300,max:360,step:10,unit:'px'});}
+  });
+  window.addEventListener('openai:set_globals',event=>{const state=event.detail?.globals?.widgetState;if(!state)return;instances.forEach((s,index)=>{s.added=clean(state.modelContent?.components?.[index]);s.open=state.privateContent?.views?.[index]?.open??true;render(s);});});
+})();
+</script>

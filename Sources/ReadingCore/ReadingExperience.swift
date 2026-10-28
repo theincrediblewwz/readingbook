@@ -149,11 +149,17 @@ public struct ReadingContext: Codable, Hashable, Sendable {
     public var endYear: Int?
     public var timeFrom: Double?
     public var timeTo: Double?
-    public init(sourceHash: String? = nil, unitID: String? = nil, selectedAnchorID: String? = nil, selectedText: String? = nil, selectedPrefix: String? = nil, selectedSuffix: String? = nil, objectID: String? = nil, documentID: String? = nil, page: Int? = nil, startYear: Int? = nil, endYear: Int? = nil, timeFrom: Double? = nil, timeTo: Double? = nil) {
+    /// Only a query selection may span pages; source anchors remain unit-local.
+    public var selectionEndPage: Int? = nil
+    /// An explicit, unit-local source click may supply its complete disposable
+    /// anchor without first saving it. Native drag selections leave this nil.
+    public var selectedSourceAnchor: SourceAnchor? = nil
+    public init(sourceHash: String? = nil, unitID: String? = nil, selectedAnchorID: String? = nil, selectedText: String? = nil, selectedPrefix: String? = nil, selectedSuffix: String? = nil, objectID: String? = nil, documentID: String? = nil, page: Int? = nil, startYear: Int? = nil, endYear: Int? = nil, timeFrom: Double? = nil, timeTo: Double? = nil, selectionEndPage: Int? = nil, selectedSourceAnchor: SourceAnchor? = nil) {
         self.sourceHash = sourceHash; self.unitID = unitID; self.selectedAnchorID = selectedAnchorID
         self.selectedText = selectedText; self.objectID = objectID; self.documentID = documentID; self.page = page
         self.selectedPrefix = selectedPrefix; self.selectedSuffix = selectedSuffix
         self.startYear = startYear; self.endYear = endYear; self.timeFrom = timeFrom; self.timeTo = timeTo
+        self.selectionEndPage = selectionEndPage; self.selectedSourceAnchor = selectedSourceAnchor
     }
 }
 
@@ -179,6 +185,21 @@ public enum ReadingExperienceRuntime {
     public static func createAnchor(sourceHash: String, unitID: String, quote: String, prefix: String = "", suffix: String = "", in project: BookProject) throws -> SourceAnchor {
         guard !sourceHash.isEmpty, sourceHash == project.sourceHash else { throw invalid("原文来源版本已变化，不能建立锚点。") }
         let unit = try sourceUnit(unitID, in: project)
+        return try createAnchor(sourceHash: sourceHash, unit: unit, quote: quote, prefix: prefix, suffix: suffix)
+    }
+
+    /// A disposable batch shares only the immutable source-unit check and hash.
+    /// Every quote still passes the same ambiguity, byte and identity checks.
+    static func anchorCreator(sourceHash: String, unitID: String, in project: BookProject) throws -> (String, String, String) throws -> SourceAnchor {
+        guard !sourceHash.isEmpty, sourceHash == project.sourceHash else { throw invalid("原文来源版本已变化，不能建立锚点。") }
+        let unit = try sourceUnit(unitID, in: project)
+        let unitHash = try BookImporter.sha256(Data(unit.text.utf8))
+        return { quote, prefix, suffix in
+            try createAnchor(sourceHash: sourceHash, unit: unit, quote: quote, prefix: prefix, suffix: suffix, preparedUnitHash: unitHash)
+        }
+    }
+
+    private static func createAnchor(sourceHash: String, unit: SourceUnit, quote: String, prefix: String, suffix: String, preparedUnitHash: String? = nil) throws -> SourceAnchor {
         try checkQuote(quote, prefix: prefix, suffix: suffix)
         let range = try uniqueRange(quote: quote, prefix: prefix, suffix: suffix, text: unit.text)
         guard let stringRange = Range(range, in: unit.text) else { throw invalid("原句不是有效的 Unicode 边界。") }
@@ -189,16 +210,32 @@ public enum ReadingExperienceRuntime {
         while canonicalSuffix.utf8.count > 1_024 { canonicalSuffix.removeLast() }
         let canonicalRange = try uniqueRange(quote: quote, prefix: canonicalPrefix, suffix: canonicalSuffix, text: unit.text)
         guard canonicalRange == range else { throw invalid("请改用更完整的原句建立稳定锚点。") }
-        let unitHash = try BookImporter.sha256(Data(unit.text.utf8))
-        let id = try anchorIdentity(sourceHash: sourceHash, unitID: unitID, unitTextHash: unitHash, quote: quote, range: range)
-        return SourceAnchor(id: id, sourceHash: sourceHash, unitID: unitID, unitTextHash: unitHash, quote: quote, prefix: canonicalPrefix, suffix: canonicalSuffix, utf16Location: range.location, utf16Length: range.length)
+        let unitHash = try preparedUnitHash ?? BookImporter.sha256(Data(unit.text.utf8))
+        let id = try anchorIdentity(sourceHash: sourceHash, unitID: unit.id, unitTextHash: unitHash, quote: quote, range: range)
+        return SourceAnchor(id: id, sourceHash: sourceHash, unitID: unit.id, unitTextHash: unitHash, quote: quote, prefix: canonicalPrefix, suffix: canonicalSuffix, utf16Location: range.location, utf16Length: range.length)
     }
 
     public static func resolve(_ anchor: SourceAnchor, in project: BookProject) throws -> ResolvedSourceAnchor {
         guard !anchor.sourceHash.isEmpty, anchor.sourceHash == project.sourceHash else { throw invalid("锚点属于其他原文版本。") }
         let unit = try sourceUnit(anchor.unitID, in: project)
-        try checkQuote(anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix)
+        return try resolve(anchor, unit: unit)
+    }
+
+    /// Prepared only for one immutable source unit. It shares the source hash,
+    /// while each stored anchor still proves its identity and unique quote.
+    public static func anchorResolver(sourceHash: String, unitID: String, in project: BookProject) throws -> (SourceAnchor) throws -> ResolvedSourceAnchor {
+        guard !sourceHash.isEmpty, sourceHash == project.sourceHash else { throw invalid("锚点属于其他原文版本。") }
+        let unit = try sourceUnit(unitID, in: project)
         let unitHash = try BookImporter.sha256(Data(unit.text.utf8))
+        return { anchor in
+            guard anchor.sourceHash == sourceHash, anchor.unitID == unit.id else { throw invalid("锚点属于其他原文版本或单元。") }
+            return try resolve(anchor, unit: unit, preparedUnitHash: unitHash)
+        }
+    }
+
+    private static func resolve(_ anchor: SourceAnchor, unit: SourceUnit, preparedUnitHash: String? = nil) throws -> ResolvedSourceAnchor {
+        try checkQuote(anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix)
+        let unitHash = try preparedUnitHash ?? BookImporter.sha256(Data(unit.text.utf8))
         guard !anchor.unitTextHash.isEmpty, anchor.unitTextHash == unitHash else { throw invalid("该页或片段文本已变化，旧锚点需要重新核对。") }
         let range = try uniqueRange(quote: anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix, text: unit.text)
         guard (anchor.utf16Location == nil) == (anchor.utf16Length == nil) else { throw invalid("锚点范围不完整。") }
@@ -264,11 +301,14 @@ public enum ReadingExperienceRuntime {
         var mentionIDs = Set(result.mentions.map(\.id))
         let entries: [(String, [String], [Evidence])] = project.entities.map { ($0.id, [$0.name] + $0.aliases, $0.evidence) } + project.events.map { ($0.id, [$0.name], $0.evidence) }
         for (targetID, names, evidence) in entries {
+            if Task.isCancelled { return result }
             for source in evidence where unitIDs?.contains(source.unitID) ?? true {
+                if Task.isCancelled { return result }
                 guard let evidenceAnchor = try? createAnchor(sourceHash: project.sourceHash, unitID: source.unitID, quote: source.quote, in: project),
                       let unit = project.units.first(where: { $0.id == source.unitID }),
                       let evidenceRange = try? resolve(evidenceAnchor, in: project) else { continue }
                 for name in Set(names) where !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if Task.isCancelled { return result }
                     guard let nameRange = try? uniqueRange(quote: name, prefix: "", suffix: "", text: source.quote),
                           let swiftRange = Range(NSRange(location: evidenceRange.utf16Location + nameRange.location, length: nameRange.length), in: unit.text) else { continue }
                     let location = evidenceRange.utf16Location + nameRange.location
@@ -290,7 +330,21 @@ public enum ReadingExperienceRuntime {
         var result = context
         if let hash = context.sourceHash, hash != project.sourceHash { throw invalid("阅读上下文属于其他原书版本。") }
         result.sourceHash = project.sourceHash
-        if let unitID = context.unitID { _ = try sourceUnit(unitID, in: project) }
+        if context.selectedSourceAnchor == nil, let unitID = context.unitID { _ = try sourceUnit(unitID, in: project) }
+        if let anchor = context.selectedSourceAnchor {
+            let resolved = try resolve(anchor, in: project)
+            guard context.selectedAnchorID == nil || context.selectedAnchorID == anchor.id,
+                  context.unitID == nil || context.unitID == resolved.unitID,
+                  context.page == nil || context.page == resolved.page,
+                  context.selectionEndPage == nil || context.selectionEndPage == resolved.page else {
+                throw invalid("原句锚点与提问位置不一致。")
+            }
+            if let selected = context.selectedText, !selected.utf8.elementsEqual(anchor.quote.utf8) { throw invalid("原句锚点与所选文字不一致。") }
+            if let prefix = context.selectedPrefix, !prefix.utf8.elementsEqual(anchor.prefix.utf8) { throw invalid("原句锚点与定位前文不一致。") }
+            if let suffix = context.selectedSuffix, !suffix.utf8.elementsEqual(anchor.suffix.utf8) { throw invalid("原句锚点与定位后文不一致。") }
+            result.unitID = resolved.unitID; result.page = resolved.page; result.selectedText = anchor.quote
+            result.selectedPrefix = anchor.prefix; result.selectedSuffix = anchor.suffix
+        }
         if let anchorID = context.selectedAnchorID {
             guard let anchor = state.anchors.first(where: { $0.id == anchorID }) else { throw invalid("当前选段锚点不存在。") }
             let resolved = try resolve(anchor, in: project)
@@ -299,6 +353,8 @@ public enum ReadingExperienceRuntime {
             if let selected = context.selectedText, !selected.utf8.elementsEqual(anchor.quote.utf8) { throw invalid("当前选中文字与锚点不一致。") }
             result.unitID = resolved.unitID; result.page = resolved.page; result.selectedText = anchor.quote
             result.selectedPrefix = anchor.prefix; result.selectedSuffix = anchor.suffix
+        } else if context.selectedSourceAnchor != nil {
+            // The complete source identity and literal range were proved above.
         } else if let selected = context.selectedText, !selected.isEmpty {
             guard let unitID = context.unitID else { throw invalid("选中文字必须明确属于一个源单元。") }
             let anchor = try createAnchor(sourceHash: project.sourceHash, unitID: unitID, quote: selected, prefix: context.selectedPrefix ?? "", suffix: context.selectedSuffix ?? "", in: project)
@@ -407,7 +463,6 @@ public enum ReadingExperienceRuntime {
         payload["events"] = items.events.prefix(16).map { ["id": $0.id, "name": String($0.name.prefix(160)), "dateText": String($0.dateText.prefix(120)), "summary": String($0.summary.prefix(300)), "placeIDs": Array($0.placeIDs.prefix(24)), "participantIDs": Array($0.participantIDs.prefix(24))] as [String: Any] }
         payload["layers"] = items.layers.prefix(12).map { ["id": $0.id, "kind": $0.kind, "title": String($0.title.prefix(120)), "markdown": String($0.markdown.prefix(500)), "sourceLabel": String($0.sourceLabel.prefix(120))] }
         payload["alignments"] = items.alignments.prefix(8).map { ["id": $0.id, "title": String($0.title.prefix(120)), "markdown": String($0.markdown.prefix(400))] }
-        payload["decisions"] = items.decisions.prefix(8).map { ["id": $0.id, "title": String($0.title.prefix(120)), "contextMarkdown": String($0.contextMarkdown.prefix(400))] }
         while true {
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
             if data.count <= maximumUTF8Bytes, let text = String(data: data, encoding: .utf8) { return text }

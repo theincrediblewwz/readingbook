@@ -75,7 +75,7 @@ struct EntityEditView: View {
     private var optionalCount: Int { optionalKeys.count + (hasSummary ? 0 : 1) + (hasGeography ? 0 : 1) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             field("名称 · 必填") { TextField("卡片名称", text: $draft.entity.name, axis: .vertical).lineLimit(1...3) }
             field("内容类型") {
                 Picker("内容类型", selection: $draft.entity.typeID) {
@@ -93,23 +93,23 @@ struct EntityEditView: View {
                         if !hasGeography { geographyFields }
                     }.padding(.top, 9)
                 } label: {
-                    Text("更多可选字段 · \(optionalCount)").font(.caption).foregroundStyle(.secondary)
+                    Text("更多可选字段 · \(optionalCount)").font(.system(size: 14)).foregroundStyle(.secondary).frame(minHeight: 44)
                 }.tint(Palette.accent)
             }
-            Text("原文依据保留；未知坐标请留空。").font(.caption).foregroundStyle(.secondary)
-        }.textFieldStyle(.roundedBorder).controlSize(.regular)
+            Text("原文依据保留；未知坐标请留空。").font(.system(size: 13)).foregroundStyle(.secondary)
+        }.font(.system(size: 16)).textFieldStyle(.roundedBorder).controlSize(.large)
     }
 
     private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.system(size: 14)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             content()
         }
     }
     private var summaryField: some View {
         field("概述 · Markdown") {
-            TextEditor(text: $draft.entity.summary).font(.body).frame(minHeight: 80, maxHeight: 130)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.line))
+            TextEditor(text: $draft.entity.summary).font(.system(size: 16)).scrollContentBackground(.hidden).padding(8).frame(minHeight: 110, maxHeight: 180)
+                .background(Palette.surface.opacity(0.8), in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.line))
         }
     }
     private func propertyField(_ key: String) -> some View {

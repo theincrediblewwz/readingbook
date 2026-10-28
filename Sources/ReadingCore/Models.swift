@@ -89,7 +89,7 @@ public enum ComponentKind: String, Codable, CaseIterable, Sendable {
         switch self {
         case .cards: return "要素卡片"; case .timeline: return "时间轴"; case .map: return "地图"
         case .mindmap: return "思维导图"; case .relations: return "关系图谱"; case .knowledge: return "知识库"
-        case .editor: return "写下理解"; case .query: return "与书对话"; case .workflow: return "阅读流程"
+        case .editor: return "写下理解"; case .query: return "与书对话"; case .workflow: return "智能阅读"
         }
     }
     public var icon: String {
@@ -110,11 +110,12 @@ public struct ViewDefinition: Codable, Identifiable, Hashable, Sendable {
     public var rendererID: String? = nil
     public var scope: String? = nil
     public var configuration: [String: String]? = nil
-    public init(id: String, title: String, kind: ComponentKind, typeIDs: [String] = [], rendererID: String? = nil, scope: String? = nil, configuration: [String: String]? = nil) {
+    public var composition: CompositionDefinition? = nil
+    public init(id: String, title: String, kind: ComponentKind, typeIDs: [String] = [], rendererID: String? = nil, scope: String? = nil, configuration: [String: String]? = nil, composition: CompositionDefinition? = nil) {
         self.id = id; self.title = title; self.kind = kind; self.typeIDs = typeIDs
-        self.rendererID = rendererID; self.scope = scope; self.configuration = configuration
+        self.rendererID = rendererID; self.scope = scope; self.configuration = configuration; self.composition = composition
     }
-    private enum CodingKeys: String, CodingKey { case id, title, kind, typeIDs, rendererID, scope, configuration }
+    private enum CodingKeys: String, CodingKey { case id, title, kind, typeIDs, rendererID, scope, configuration, composition }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id); title = try values.decode(String.self, forKey: .title)
@@ -125,6 +126,7 @@ public struct ViewDefinition: Codable, Identifiable, Hashable, Sendable {
         if ComponentKind(rawValue: rawKind) == nil, rendererID == nil { rendererID = rawKind }
         scope = try values.decodeIfPresent(String.self, forKey: .scope)
         configuration = try values.decodeIfPresent([String: String].self, forKey: .configuration)
+        composition = try values.decodeIfPresent(CompositionDefinition.self, forKey: .composition)
     }
 }
 public struct ReadingMethod: Codable, Identifiable, Hashable, Sendable {
@@ -143,6 +145,9 @@ public struct ReadingPlan: Codable, Sendable {
     public var methodIDs: [String]
     public var rationale: String
     public var focus: [String]
+    /// The host still clamps this suggestion to the reader and provider limits.
+    public var recommendedParallelism: Int? = nil
+    public var recommendedGranularity: ReadingAnalysisGranularity? = nil
     public init(methodIDs: [String] = [], rationale: String = "", focus: [String] = []) { self.methodIDs = methodIDs; self.rationale = rationale; self.focus = focus }
 }
 public struct ReadingInsight: Codable, Identifiable, Sendable {
@@ -181,6 +186,9 @@ public struct CanvasNode: Codable, Identifiable, Hashable, Sendable {
     public var targetID: String
     public var x: Double
     public var y: Double
+    public var title: String? = nil
+    public var documentIDs: [String]? = nil
+    public var isStandalone: Bool? = nil
     public init(id: String = UUID().uuidString, targetID: String, x: Double = 0, y: Double = 0) { self.id = id; self.targetID = targetID; self.x = x; self.y = y }
 }
 public struct CanvasEdge: Codable, Identifiable, Hashable, Sendable {
@@ -196,6 +204,9 @@ public struct ChatMessage: Codable, Identifiable, Sendable {
     public var content: String
     public var evidence: [Evidence]
     public var createdAt: Date
+    public var conversationMode: ReadingConversationMode? = nil
+    public var answerStyle: ReadingAnswerStyle? = nil
+    public var readingContext: ReadingChatContext? = nil
     public init(id: String = UUID().uuidString, role: String, content: String, evidence: [Evidence] = []) { self.id = id; self.role = role; self.content = content; self.evidence = evidence; self.createdAt = Date() }
 }
 public struct ToolAudit: Codable, Identifiable, Sendable {
@@ -203,6 +214,9 @@ public struct ToolAudit: Codable, Identifiable, Sendable {
     public var name: String
     public var summary: String
     public var createdAt: Date
+    public var requestID: String? = nil
+    public var requestNumber: Int? = nil
+    public var resultDetails: [String]? = nil
     public init(id: String = UUID().uuidString, name: String, summary: String) { self.id = id; self.name = name; self.summary = summary; self.createdAt = Date() }
 }
 public struct PluginManifest: Codable, Identifiable, Sendable {
@@ -241,6 +255,7 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var edges: [CanvasEdge] = []
     public var chats: [ChatMessage] = []
     public var audit: [ToolAudit] = []
+    public var aiRequestHistory: [AIRequestHistoryRecord]? = nil
     public var plugins: [PluginManifest] = []
     public var disabledPluginIDs: [String] = []
     public var appliedOperationIDs: [String] = []
@@ -254,9 +269,39 @@ public struct BookProject: Codable, Identifiable, Sendable {
     /// Real action checkpoints are never synthesized for historical completion.
     public var workflowRuns: [ReadingWorkflowStepRun]? = nil
     public var receiptBatch: ReadingReceiptBatch? = nil
+    /// Frozen user-selected analysis scope; absent in older libraries.
+    public var smartReading: SmartReadingSession? = nil
     public var readerAnnotations: [ReaderAnnotation]? = nil
     /// Optional additive metadata; older books are not rewritten or backfilled.
     public var readingExperience: ReadingExperienceState? = nil
+    /// Additive host-managed configuration proposals; old archives omit them.
+    public var bookSchemes: BookSchemeState? = nil
+    /// Deterministic calculations are kept separate from AI prose and source text.
+    public var mathVerifications: [MathVerificationRecord]? = nil
+    /// Optional temporal sidecar; legacy object IDs and original JSON arrays remain canonical.
+    public var temporalKnowledge: TemporalKnowledgeState? = nil
+    public var graphGroups: [CanvasGroup]? = nil
+    public var controlledChanges: ControlledChangeState? = nil
+    /// Host-owned recovery snapshots for ordinary manual removals; absent in older books.
+    public var manualTrash: ManualTrashState? = nil
+    /// Host-owned AI knowledge history and clearly separated teacher context.
+    /// Optional so existing projects keep their original objects and documents.
+    public var readingKnowledge: ReadingKnowledgeState? = nil
+    /// Host-generated navigation, never a replacement for the original PDF outline.
+    /// Missing on older books; source and extraction versions are checked before reuse.
+    public var generatedOutline: GeneratedBookOutline? = nil
+    /// Host-verified chapter starts from the original PDF, independent of AI navigation.
+    /// Missing in older libraries; original units and completion records are unchanged.
+    public var originalBookOutline: BookChapterOutline? = nil
+    /// In-memory delivery order only; never part of library data, grants or caches.
+    public internal(set) var publicationStamp: LibraryPublicationStamp? = nil
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, id, title, originalName, sourceHash, importedAt, units, coverage, types, entities, events, relations
+        case views, methods, plan, insights, syntheses, documents, nodes, edges, chats, audit, aiRequestHistory
+        case plugins, disabledPluginIDs, appliedOperationIDs, lastUnitID, bookmarks, ocrPages, paragraphReceipts
+        case readingStepResults, workflowRuns, receiptBatch, smartReading, readerAnnotations, readingExperience
+        case bookSchemes, mathVerifications, temporalKnowledge, graphGroups, controlledChanges, manualTrash, readingKnowledge, generatedOutline, originalBookOutline
+    }
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units
     }
@@ -275,6 +320,11 @@ public struct ProviderSettings: Codable, Sendable {
     public var maxOutputTokens: Int
     public var contextWindowTokens: Int? = nil
     public var tokenLimitParameter: String? = nil
+    /// Host-assigned request context; never persisted with a connection profile.
+    public var transportSessionID: String? = nil
+    private enum CodingKeys: String, CodingKey {
+        case baseURL, model, maxRequestsPerRun, maxOutputTokens, contextWindowTokens, tokenLimitParameter
+    }
     public init(baseURL: String = "http://localhost:11434/v1", model: String = "", maxRequestsPerRun: Int = 100, maxOutputTokens: Int = 6000, contextWindowTokens: Int? = nil, tokenLimitParameter: String? = nil) {
         self.baseURL = baseURL; self.model = model; self.maxRequestsPerRun = maxRequestsPerRun; self.maxOutputTokens = maxOutputTokens
         self.contextWindowTokens = contextWindowTokens; self.tokenLimitParameter = tokenLimitParameter

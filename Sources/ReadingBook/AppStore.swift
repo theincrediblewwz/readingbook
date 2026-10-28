@@ -2,47 +2,148 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import Security
+import CryptoKit
 import ReadingCore
 
 @MainActor final class AppStore: ObservableObject {
     @Published var books: [BookProject] = []
-    @Published var bookID: String?
-    @Published var route = "reader"
+    @Published var bookID: String? {
+        didSet {
+            if oldValue != bookID {
+                queryTask?.cancel(); companionTask?.cancel()
+                pendingPlanRegeneration = nil
+                readingPreparationState.reset()
+                readerChapterAnchor = nil
+                teacherBackground.cancelAll(); sentenceTranslation.cancelAll()
+                queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []; queryComposerDraft.text = ""
+                queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil
+                queryAllowsOrganizing = false; renderedWorkspaceVisibility = nil; renderedSelectedNodeIDs = []
+                smartReadingPlanReady = false
+                queryInteractionMode = UserDefaults.standard.string(forKey: "chat-mode-" + (bookID ?? "")).flatMap(ReadingConversationMode.init(rawValue:)) ?? .reading
+                queryAnswerStyle = UserDefaults.standard.string(forKey: "chat-style-" + (bookID ?? "")).flatMap(ReadingAnswerStyle.init(rawValue:)) ?? .mentor
+                if queryScope == .selection { queryScope = .page }
+            }
+        }
+    }
+    @Published var route = "reader" { didSet { if route != "query" { queryAllowsOrganizing = false }; rememberWorkspaceNavigation() } }
+    @Published var requestedWorkspaceRoute: String?
+    @Published var workspaceMemory = BookWorkspaceMemory()
+    @Published var workspaceMemoryRevision = 0
+    var restoringWorkspaceMemory = false
+    var workspaceMemorySaveTask: Task<Void, Never>?
     @Published var selectedObjectID: String?
     @Published var selectedUnitID: String? {
         didSet {
             if let bookID, let selectedUnitID { UserDefaults.standard.set(selectedUnitID, forKey: "position-\(bookID)") }
-            if oldValue != selectedUnitID { sourceReadingSelection = nil; focusedReadingAnchorID = nil; selectedObjectID = nil; readingContextDocumentID = nil; refreshReadingExperienceIndex() }
+            if oldValue != selectedUnitID { readerChapterAnchor = nil; sourceReadingSelection = nil; focusedReadingAnchorID = nil; selectedObjectID = nil; readingContextDocumentID = nil; refreshReadingExperienceIndex() }
         }
     }
     @Published var sourceReadingSelection: SourceReadingSelection?
     @Published var focusedReadingAnchorID: String?
+    @Published var readerChapterAnchor: SourceAnchor?
+    let queryComposerDraft = QueryComposerDraft()
+    let teacherBackground = TeacherBackgroundState()
+    let sentenceTranslation = SentenceTranslationState()
+    let readingPreparationState = ReadingPreparationState()
+    @Published var readingCompanionTab = "companion"
     @Published var readingCompanionVisible = false
     @Published var readingCompanionSection = "context"
-    @Published var readingSourceMode = "original"
-    @Published var readingExperienceIndex = ReadingExperienceState()
+    @Published var readingSourceMode = "original" { didSet { updateWorkspaceMemory { $0.readingSourceMode = readingSourceMode } } }
+    private(set) var readingExperienceIndexRevision: UInt64 = 0
+    @Published var readingExperienceIndex = ReadingExperienceState() {
+        didSet { readingExperienceIndexRevision &+= 1 }
+    }
     @Published var readingScopeCurrent = false
     @Published var lastQuestionContext = ""
+    @Published var queryScope: ReadingQueryScope = .page
+    /// nil means all active notes; an empty set is an explicit empty selection.
+    @Published var queryDocumentIDs: Set<String>?
+    /// Added only by the reader's explicit attachment controls; never inferred from visibility.
+    @Published var queryAttachedDocumentIDs: Set<String> = []
+    @Published var queryAuthorizedNodeIDs: Set<String> = []
+    @Published var queryMemoryEnabled = UserDefaults.standard.object(forKey: "query-memory-enabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(queryMemoryEnabled, forKey: "query-memory-enabled") }
+    }
+    @Published var queryDisclosure = ""
+    @Published var queryMemoryRevision = 0
+    @Published var isManagingQueryMemory = false
+    @Published var pendingAIHistoryWrites = 0
+    @Published var queryRetryQuestion: String?
+    @Published var queryAllowsOrganizing = false
+    @Published var queryInteractionMode: ReadingConversationMode = .reading {
+        didSet { if let bookID { UserDefaults.standard.set(queryInteractionMode.rawValue, forKey: "chat-mode-" + bookID) } }
+    }
+    @Published var queryAnswerStyle: ReadingAnswerStyle = .mentor {
+        didSet { if let bookID { UserDefaults.standard.set(queryAnswerStyle.rawValue, forKey: "chat-style-" + bookID) } }
+    }
+    @Published var isQueryBusy = false
+    let queryProgressState = AIProgressObservableState()
+    var queryTask: Task<Void, Never>?
+    var queryRunID: UUID?
+    @Published var isCompanionGenerating = false
+    @Published var activeCompanionUnitID: String?
+    let companionProgressState = AIProgressObservableState()
+    var companionTask: Task<Void, Never>?
+    var readingTask: Task<Void, Never>?
+    var readingRunID: UUID?
+    var bookSchemeWriteID: UUID?
+    let sharedAIRequests: AIRequestCoordinator
+    var canStartQuery: Bool { !isExclusiveBusy && !isQueryBusy && !isManagingQueryMemory && !isSavingDocument && !isRecognizingPDF && !storageState.working }
+    var canStartReading: Bool { !isExclusiveBusy && !isSmartReadingRunning && !isSavingDocument && !storageState.working }
+    var canStartCompanion: Bool { !isExclusiveBusy && !isCompanionGenerating && !isSavingDocument && !isRecognizingPDF && !storageState.working }
+    // Each AI lane freezes its connection before its first suspension. Editing
+    // the next request's configuration need not lock a running model response.
+    var canEditAISettings: Bool { !isExclusiveBusy && !isRecognizingPDF && !storageState.working }
+    @Published var isTestingConnection = false
+    var connectionTestTask: Task<Void, Never>?
+    let connectionProbe: @Sendable (ProviderSettings, String) async throws -> String
+    var canTestAIConnection: Bool { canEditAISettings && !isTestingConnection }
+    @Published var pendingAIChanges: [PendingAIChange] = []
+    @Published var renderedWorkspaceVisibility: ReadingVisibleObjectsSnapshot?
+    @Published var renderedSelectedNodeIDs: [String] = []
+    @Published var workspaceAICommand: WorkspaceAICommand?
+    var workspaceAIResponses: [UUID: Data] = [:]
     @Published var readingExperienceError: String?
     @Published var showingLibrarySearch = false
     @Published var readingContextDocumentID: String?
+    @Published var queryHistoryMessageID: String?
     var readingContextCacheKey: ReadingContext?
     var readingContextCache = ReadingContextItems()
     @Published var projectRevision = 0
     @Published var pdfNavigationToken = 0
     @Published var activeReadingUnitID: String?
+    @Published var isSmartReadingRunning = false
+    @Published var smartReadingPlanReady = false
+    @Published var pendingPlanRegeneration: SmartReadingPlanRegeneration?
+    var smartReadingProgressCacheKey: String?
+    var smartReadingProgressTask: Task<Void, Never>?
+    var smartReadingProgressCache: SmartReadingProgress?
+    var smartReadingUnitProgressCache = SmartReadingProgressCache()
+    var readingContinuationProgressCacheKey: String?
+    var readingContinuationProgressTask: Task<Void, Never>?
+    var readingContinuationProgressCache: ReadingContinuationDisplayProgress?
     @Published var search = ""
-    @Published var selectedDocumentID: String?
+    @Published var selectedDocumentID: String? { didSet { rememberWorkspaceNavigation() } }
     @Published var editorTitle = "" { didSet { if editorDirty { persistDraft() } } }
     @Published var editorMarkdown = "" { didSet { if editorDirty { persistDraft() } } }
-    @Published var editorDirty = false { didSet { if editorDirty { persistDraft() } } }
+    @Published var editorDirty = false { didSet { if editorDirty { persistDraft() } else { draftSaveTask?.cancel() } } }
+    var documentBaseHash: String?
+    private var draftSaveTask: Task<Void, Never>?
+    @Published var libraryLoadIssues: [LibraryLoadIssue] = []
     @Published var documentError: String?
     @Published var draftEvidence: [Evidence] = []
     @Published var sourceFileURL: URL?
     @Published var pdfPasswordRequest: PDFPasswordRequest?
     @Published var pdfSessionPasswords: [String: String] = [:]
     @Published var pdfUnlockedBookIDs: Set<String> = []
-    @Published var isBusy = false
+    @Published private var isExclusiveBusy = false
+    /// Existing manual editing/import/delete surfaces keep their exclusivity.
+    /// AI entry points use their own admission gates; this aggregate continues
+    /// protecting whole-project manual writes, import, deletion and transfer.
+    var isBusy: Bool {
+        get { isExclusiveBusy || isSmartReadingRunning || isQueryBusy || isCompanionGenerating }
+        set { isExclusiveBusy = newValue }
+    }
     @Published var isSavingDocument = false
     @Published var isExportingProject = false
     @Published var isImportingBookCommit = false
@@ -60,21 +161,63 @@ import ReadingCore
     @Published var ocrServiceID: String?
     @Published var connectionStatus = ""
     @Published var archivedBooks: [BookProject] = []
+    @Published var removedBooks: [BookProject] = []
+    let aiProgressState = AIProgressObservableState()
+    var aiProgress: AIProgressPresentationState {
+        get { aiProgressState.value }
+        set {
+            let old = aiProgressState.value
+            if old.runID != newValue.runID || old.bookID != newValue.bookID || old.status != newValue.status || old.phase != newValue.phase || old.toolName != newValue.toolName { objectWillChange.send() }
+            aiProgressState.value = newValue
+        }
+    }
+    var companionProgress: AIProgressPresentationState {
+        get { companionProgressState.value }
+        set {
+            let old = companionProgressState.value
+            if old.runID != newValue.runID || old.bookID != newValue.bookID || old.status != newValue.status || old.phase != newValue.phase || old.toolName != newValue.toolName { objectWillChange.send() }
+            companionProgressState.value = newValue
+        }
+    }
+    @Published var catalogOperations = 0
+    @Published var libraryRootURL: URL {
+        didSet { if oldValue != libraryRootURL { teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
+    }
+    @Published var lastTrashedProjectURL: URL?
+    let storageState = StorageSettingsState()
     @Published var deletionRequest: WorkspaceDeletion?
     @Published var settings = ProviderSettings()
+    @Published var providerCatalog = ProviderCatalog.current
     @Published var apiKey = ""
+    @Published var isRecoveringLegacyKey = false
+    @Published var legacyKeyRecoveryStatus = ""
+    let localCredentials = LocalCredentialStore()
     @Published var requestsUsed = 0
     @Published var timeFrom = -5000.0
     @Published var timeTo = 3000.0
     @Published var showUndated = true
-    let repository: LibraryRepository
+    @Published var selectedTemporalEntityID: String?
+    @Published var temporalAxis = "legacy"
+    @Published var timeCursor = 0.0
+    var repository: LibraryRepository
+    var modelCatalogRepository: ModelCatalogRepository
+    var readingIndexTask: Task<Void, Never>?
+    var readingIndexGeneration = 0
+    let readingPageSnapshots = ReadingPageSnapshotCache()
+    var readingIndexCache: [String: ReadingExperienceState] = [:]
+    var readingIndexCacheOrder: [String] = []
+    var readableRefreshTask: Task<Void, Never>?
     let serviceProfileDraft = ServiceProfileDraftState()
-    let reader = AIReader()
+    let reader: AIReader
+    let readingReader: AIReader
+    let queryReader: AIReader
+    let companionReader: AIReader
     let pdfOCRReader = PDFOCRReader()
     private var loaded = false
-    private var navigationGeneration = 0
+    var navigationGeneration = 0
     private var documentGeneration = 0
     var task: Task<Void, Never>?
+    var companionScopeRunID: UUID?
     var book: BookProject? { books.first { $0.id == bookID } }
     var selectedUnit: SourceUnit? { book?.units.first { $0.id == selectedUnitID } }
     var visibleEvents: [KnowledgeEvent] {
@@ -84,28 +227,69 @@ import ReadingCore
             return Double($0.endYear ?? year) >= timeFrom && Double(year) <= timeTo
         }.sorted { ($0.startYear ?? Int.max) < ($1.startYear ?? Int.max) }
     }
-    init() {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("ReadingBook", isDirectory: true)
+    init(sharedAIRequests: AIRequestCoordinator = AIRequestCoordinator(),
+         connectionProbe: @escaping @Sendable (ProviderSettings, String) async throws -> String = {
+             try await ProviderProbe.test(settings: $0, apiKey: $1)
+         }) {
+        self.sharedAIRequests = sharedAIRequests
+        self.connectionProbe = connectionProbe
+        reader = AIReader(coordinator: sharedAIRequests)
+        readingReader = AIReader(coordinator: sharedAIRequests)
+        queryReader = AIReader(coordinator: sharedAIRequests, lane: .foreground)
+        companionReader = AIReader(coordinator: sharedAIRequests, lane: .foreground)
+        let root = AppDataLocations.rootURL
+        libraryRootURL = root
         repository = LibraryRepository(rootURL: root)
+        modelCatalogRepository = ModelCatalogRepository(rootURL: root.appendingPathComponent("ModelCatalog", isDirectory: true))
         if let data = UserDefaults.standard.data(forKey: "provider"), let saved = try? JSONDecoder().decode(ProviderSettings.self, from: data) { settings = saved }
         loadServiceProfiles()
     }
     func load() async {
         guard !loaded else { return }; loaded = true
-        do { books = try await repository.loadAll(); if let first = books.first { await selectBook(first.id) } }
+        var completed = false
+        // `loaded` also prevents overlapping loads while this call suspends.
+        // A missing disk/read failure must remain retryable in this instance.
+        defer { if !completed { loaded = false } }
+        errorMessage = nil
+        guard AppDataLocations.configuredRootAvailable else {
+            errorMessage = "书库位置暂不可用。请连接原磁盘，或在设置中打开已有书库。"; route = "library"; return
+        }
+        await loadModelCatalog()
+        do {
+            let report = try await repository.loadReport()
+            books = report.projects; libraryLoadIssues = report.issues
+            removedBooks = try await repository.removedBooksReport().projects
+            let lastID = UserDefaults.standard.string(forKey: "workspace-last-book-v1")
+            if let first = books.first(where: { $0.id == lastID }) ?? books.first { await selectBook(first.id) }
+            refreshMissingReadableFiles()
+            if !report.issues.isEmpty { errorMessage = libraryLoadIssueSummary(report.issues) }
+            completed = true
+        }
         catch { errorMessage = "书库读取失败，原文件已保留：\(error.localizedDescription)" }
     }
-    func selectBook(_ id: String) async {
+    func selectBook(_ id: String, preferredRoute: String? = nil) async {
         guard !isBusy else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档，再切换书籍。"; return }
+        guard books.contains(where: { $0.id == id }) else { errorMessage = "这本书当前不可用，请回到书库重新选择。"; return }
+        isBusy = true
+        defer { isBusy = false; restoringWorkspaceMemory = false }
+        NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
+        flushWorkspaceMemory()
+        restoringWorkspaceMemory = true
         navigationGeneration += 1; documentGeneration += 1
         pdfNavigationToken += 1
         pdfPasswordRequest = nil
+        queryHistoryMessageID = nil
         let generation = navigationGeneration
-        bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil
+        bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil; documentBaseHash = nil
+        readingIndexTask?.cancel(); readingIndexTask = nil; readingIndexGeneration &+= 1; readingPageSnapshots.reset()
+        readingExperienceIndex = book?.readingExperience ?? ReadingExperienceState()
+        readingContextCacheKey = nil; readingContextCache = ReadingContextItems()
+        loadWorkspaceMemory()
         sourceReadingSelection = nil; focusedReadingAnchorID = nil; readingCompanionVisible = false; readingCompanionSection = "context"; readingSourceMode = "original"; readingScopeCurrent = false; lastQuestionContext = ""; readingExperienceError = nil
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
         if book?.units.contains(where: { $0.id == selectedUnitID }) != true { selectedUnitID = book?.units.first?.id }
+        if let page = workspaceMemory.activePDFPage, let unit = book?.units.first(where: { $0.page == page }) { selectedUnitID = unit.id }
         if let project = book {
             let url = await repository.sourceURL(for: project)
             guard bookID == id && generation == navigationGeneration else { return }
@@ -116,13 +300,30 @@ import ReadingCore
         let years = book?.events.flatMap { [$0.startYear, $0.endYear].compactMap { $0 } } ?? []
         timeFrom = Double((years.min() ?? -5000) - 1); timeTo = Double((years.max() ?? 3000) + 1)
         restoreDraft()
+        await restoreWorkspaceNavigation(expectedBookID: id, generation: generation)
+        guard bookID == id && generation == navigationGeneration else { return }
+        if let preferredRoute, !editorDirty { route = preferredRoute }
+        restoringWorkspaceMemory = false
+        workspaceMemoryRevision &+= 1
+        rememberWorkspaceNavigation()
         refreshReadingExperienceIndex()
+        let owner = repository
+        Task { try? await owner.refreshReadableViews(id: id, archived: false) }
     }
-    func publish(_ project: BookProject) {
+    @discardableResult
+    func publish(_ project: BookProject) -> Bool {
+        guard LibraryPublicationStamp.accepts(project, replacing: books.first(where: { $0.id == project.id }), owner: repository.publicationOwner) else { return false }
         projectRevision += 1
         if let index = books.firstIndex(where: { $0.id == project.id }) { books[index] = project }
         else { books.insert(project, at: 0) }
-        if project.id == bookID { refreshReadingExperienceIndex() }
+        if project.id == bookID {
+            let activeDocumentIDs = Set(project.activeDocuments.map(\.id))
+            queryAttachedDocumentIDs.formIntersection(activeDocumentIDs)
+            queryAuthorizedNodeIDs.formIntersection(Set(project.nodes.map(\.id)))
+            if let selected = queryDocumentIDs { queryDocumentIDs = selected.intersection(activeDocumentIDs) }
+            refreshReadingExperienceIndex()
+        }
+        return true
     }
     func chooseBook() {
         guard !isBusy else { return }
@@ -131,64 +332,10 @@ import ReadingCore
         if panel.runModal() == .OK, let url = panel.url { importBook(url) }
     }
     func importBook(_ url: URL) { startBookImport(url) }
-    func makePlan() {
-        guard let project = book, !isBusy, providerReady else { return }
-        guard !requiresPDFRecognition else { showingOCR = true; activity = "请先识别扫描页，或在对照原页后确认空白内容。"; return }
-        isBusy = true; activity = "AI 正在预读与选择方法、类型和组件…"
-        task = Task {
-            do {
-                await reader.resetBudget()
-                let result = try await reader.plan(project: project, settings: settings, apiKey: apiKey)
-                try Task.checkCancellation(); try await repository.save(result); publish(result)
-                requestsUsed = await reader.requestCount; route = "workflow"; activity = "预读计划已保存；全文覆盖尚未增加。"
-            } catch { handle(error) }
-            isBusy = false
-        }
-    }
-    func startReading() {
-        guard book != nil, !isBusy, providerReady else { return }
-        guard !requiresPDFRecognition else { showingOCR = true; activity = "扫描页尚未识别；请先 OCR，避免把空提取结果当成已读。"; return }
-        isBusy = true; activity = "准备顺序精读…"
-        task = Task {
-            await reader.resetBudget()
-            do {
-                if let current = book, current.plan == nil {
-                    let planned = try await reader.plan(project: current, settings: settings, apiKey: apiKey)
-                    try Task.checkCancellation(); try await repository.save(planned); publish(planned)
-                }
-                while let current = book {
-                    try Task.checkCancellation()
-                    let pending = current.units.first { unit in
-                        let status = current.coverage[unit.id]?.status ?? .pending
-                        return !ReadingLedger.isDeferred(unitID: unit.id, in: current) && status != .completed && !(status == .needsReview && ReadingLedger.hasReadingAnalysis(unitID: unit.id, in: current))
-                    }
-                    guard let unit = pending else { break }
-                    activity = "正在精读：\(unit.locator)"
-                    activeReadingUnitID = unit.id
-                    let result = try await reader.readNext(project: current, settings: settings, apiKey: apiKey)
-                    try Task.checkCancellation(); try await repository.save(result); publish(result)
-                    if let failure = ReadingWorkflowRuntime.failureMessage(in: result, unitID: unit.id) { throw ReadingError.invalid(failure) }
-                    requestsUsed = await reader.requestCount
-                }
-                while let current = book, !(await reader.synthesisComplete(project: current)) {
-                    try Task.checkCancellation(); activity = "正在做章节复盘与全书综合…"
-                    let result = try await reader.synthesizeNext(project: current, settings: settings, apiKey: apiKey)
-                    try Task.checkCancellation(); try await repository.save(result); publish(result); requestsUsed = await reader.requestCount
-                }
-                if let current = book { activity = current.isFullyProcessed ? "全部登记单元已处理并通过核对。" : "本轮顺序处理结束，仍有 \(current.reviewCount) 个单元待核对。" }
-            } catch { handle(error) }
-            requestsUsed = await reader.requestCount; isBusy = false
-        }
-    }
-    func pause() { guard !isSavingDocument, !isExportingProject, !isImportingBookCommit, !isCommittingLocalWrite else { return }; task?.cancel(); activity = "正在暂停，已保存结果可以继续阅读。" }
-    private var requiresPDFRecognition: Bool {
-        guard let book, book.originalName.lowercased().hasSuffix(".pdf") else { return false }
-        return book.units.contains { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (book.coverage[$0.id]?.status ?? .pending) == .pending }
-    }
     func resetWorkflowRetry(_ stepID: String, inBook expectedBookID: String) async {
         guard var current = book, current.id == expectedBookID, !isBusy else { return }
         isBusy = true; defer { isBusy = false }
-        do { try ReadingWorkflowRuntime.resetRetry(stepID: stepID, in: &current); try await repository.save(current); publish(current); activity = "已重置此步骤的重试预算，点击继续精读可重试。" }
+        do { try ReadingWorkflowRuntime.resetRetry(stepID: stepID, in: &current); publish(try await repository.save(current)); activity = "已重置此步骤的重试预算，点击继续分析可重试。" }
         catch { errorMessage = error.localizedDescription }
     }
     var providerReady: Bool {
@@ -202,20 +349,28 @@ import ReadingCore
     func saveSettings() {
         do {
             try persistServiceProfile()
-            showingSettings = false; activity = "模型配置已保存，密钥保存在系统钥匙串。"
+            showingSettings = false; activity = "模型配置与密钥已保存到本机。"
         } catch { errorMessage = error.localizedDescription }
     }
     func newDocument() {
         guard book != nil, !isRecognizingPDF else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档。"; return }
-        documentGeneration += 1; documentError = nil
+        documentGeneration += 1; documentError = nil; documentBaseHash = nil
         selectedDocumentID = nil; editorTitle = "新的理解"; editorMarkdown = "# 新的理解\n\n"; draftEvidence = []; editorDirty = true; route = "editor"
+    }
+    func discardDraftForWorkspaceNavigation() {
+        guard !isSavingDocument, let bookID else { return }
+        documentGeneration += 1
+        editorDirty = false; documentError = nil; documentBaseHash = nil
+        selectedDocumentID = nil; editorTitle = ""; editorMarkdown = ""; draftEvidence = []
+        UserDefaults.standard.removeObject(forKey: "draft-\(bookID)")
+        activity = "未保存修改已放弃；已保存的 Markdown 保留。"
     }
     func discardDraft() {
         guard !isSavingDocument, let bookID else { return }
         documentGeneration += 1; documentError = nil
         let document = book?.activeDocuments.first { $0.id == selectedDocumentID }
-        editorDirty = false
+        editorDirty = false; documentBaseHash = nil
         UserDefaults.standard.removeObject(forKey: "draft-\(bookID)")
         selectedDocumentID = nil; editorTitle = ""; editorMarkdown = ""; draftEvidence = []
         if let document { Task { await openDocument(document) } }
@@ -231,31 +386,39 @@ import ReadingCore
         documentGeneration += 1
         let generation = documentGeneration
         do {
-            let markdown = try await repository.readDocument(bookID: current.id, document: document)
+            let snapshot = try await repository.readDocumentSnapshot(bookID: current.id, document: document)
             guard current.id == bookID, generation == documentGeneration, !editorDirty else { return }
-            editorMarkdown = markdown
+            editorMarkdown = snapshot.markdown; documentBaseHash = snapshot.contentHash
             documentError = nil
             editorTitle = document.title; selectedDocumentID = document.id; draftEvidence = document.evidence; editorDirty = false; route = "editor"
             selectedObjectID = document.id; readingContextDocumentID = document.id
         } catch { if current.id == bookID && generation == documentGeneration { errorMessage = error.localizedDescription } }
     }
-    func saveCurrentDocument() async {
+    func saveCurrentDocument(asNew: Bool = false) async {
         guard var current = book, !isBusy, editorDirty else { return }
+        guard NoteMarkdownEditorSession.finishActiveEditing(libraryRoot: libraryRootURL, bookID: current.id) else {
+            documentError = "请先完成当前文字输入，再保存；草稿已保留。"
+            return
+        }
         documentError = nil
         let savingBookID = current.id, savingDocumentID = selectedDocumentID
         let savingTitle = editorTitle, savingMarkdown = editorMarkdown, savingEvidence = draftEvidence
+        let savingContentHash = SHA256.hash(data: Data(savingMarkdown.utf8)).map { String(format: "%02x", $0) }.joined()
         isBusy = true; isSavingDocument = true; activity = "正在保存 Markdown…"
         defer { isBusy = false; isSavingDocument = false }
         do {
-            var document = current.documents.first { $0.id == savingDocumentID } ?? DocumentRecord(title: savingTitle, linkedIDs: selectedObjectID.map { [$0] } ?? [], evidence: savingEvidence)
+            var document = (asNew ? nil : current.documents.first { $0.id == savingDocumentID }) ?? DocumentRecord(title: savingTitle, linkedIDs: selectedObjectID.map { [$0] } ?? [], evidence: savingEvidence)
             document.title = savingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名笔记" : savingTitle; document.updatedAt = Date()
-            if !current.nodes.contains(where: { $0.targetID == document.id }) {
+            if !current.nodes.contains(where: { $0.targetID == document.id || ($0.documentIDs ?? []).contains(document.id) }) {
                 let index = current.nodes.count; current.nodes.append(CanvasNode(targetID: document.id, x: Double(index % 3) * 270 + 60, y: Double(index / 3) * 150 + 60))
             }
-            current = try await repository.saveDocument(project: current, document: document, markdown: savingMarkdown)
+            current = try await repository.saveDocument(project: current, document: document, markdown: savingMarkdown, expectedContentHash: asNew ? nil : documentBaseHash)
             publish(current)
-            let unchanged = bookID == savingBookID && selectedDocumentID == savingDocumentID && editorTitle == savingTitle && editorMarkdown == savingMarkdown && draftEvidence == savingEvidence
-            if bookID == savingBookID && selectedDocumentID == savingDocumentID { selectedDocumentID = document.id }
+            let unchanged = bookID == savingBookID && selectedDocumentID == savingDocumentID
+                && ReadingNoteEditorContinuity.identicalSource(editorTitle, savingTitle)
+                && ReadingNoteEditorContinuity.identicalSource(editorMarkdown, savingMarkdown)
+                && draftEvidence == savingEvidence
+            if bookID == savingBookID && selectedDocumentID == savingDocumentID { selectedDocumentID = document.id; documentBaseHash = savingContentHash }
             if unchanged {
                 editorDirty = false; UserDefaults.standard.removeObject(forKey: "draft-\(current.id)"); activity = "Markdown 文档已保存。"
             } else {
@@ -273,7 +436,8 @@ import ReadingCore
             let title = String(question.prefix(60))
             let document = DocumentRecord(id: stableID, title: title, origin: "saved-answer", linkedIDs: selectedObjectID.map { [$0] } ?? [], evidence: message.evidence)
             let index = current.nodes.count; let node = CanvasNode(targetID: document.id, x: Double(index % 3) * 270 + 60, y: Double(index / 3) * 150 + 60)
-            if let parent = current.nodes.first(where: { $0.targetID == selectedDocumentID }) { current.edges.append(CanvasEdge(fromID: parent.id, toID: node.id, label: "追问")) }
+            let parents = current.nodes.filter { candidate in selectedDocumentID.map { candidate.targetID == $0 || (candidate.documentIDs ?? []).contains($0) } ?? false }
+            if let parent = parents.first(where: { renderedSelectedNodeIDs.contains($0.id) }) ?? parents.first { current.edges.append(CanvasEdge(fromID: parent.id, toID: node.id, label: "追问")) }
             current.nodes.append(node)
             let citations = message.evidence.map { "- [\($0.unitID)](readingbook://book/\(current.id)/unit/\($0.unitID))：\($0.quote)" }.joined(separator: "\n")
             let markdown = "# \(title)\n\n## 提问\n\n\(question)\n\n## 回答\n\n\(message.content)\n\n## 原文依据\n\n\(citations)\n\n<!-- conversation-message: \(message.id) -->\n"
@@ -281,31 +445,109 @@ import ReadingCore
             publish(current); activity = "回答已保存为 Markdown 与导图节点。"
         } catch { errorMessage = error.localizedDescription }
     }
-    func ask(_ question: String) {
-        guard let current = book, !isBusy, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, providerReady else { return }
-        isBusy = true; activity = "正在从原文检索依据并回答…"
-        let context = currentReadingContext
-        lastQuestionContext = readingContextDescription
-        task = Task {
-            do {
-                await reader.resetBudget()
-                var documents: [String: String] = [:]
-                var remaining = 200_000
-                for document in current.activeDocuments {
-                    let content = try await repository.readDocument(bookID: current.id, document: document)
-                    let bounded = String(content.prefix(max(0, remaining)))
-                    documents[document.id] = bounded; remaining -= bounded.count
-                    if remaining <= 0 { break }
+    func cancelQuery() { queryTask?.cancel() }
+    func ask(_ question: String, allowsOrganizing: Bool = false) {
+        guard let current = book, canStartQuery, !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, providerReady else { return }
+        guard question.count <= 4000 else { errorMessage = "问题最多 4000 字，请缩短后再发送；输入内容保留。"; return }
+        let context = queryReadingContext, scope = queryScope, preferences = currentQueryPreferences
+        let documentIDs = queryDocumentIDs.map { Array($0).sorted() }
+        let attachedDocumentIDs = scope == .notes ? [] : queryAttachedDocumentIDs.sorted()
+        let authorizedNodeIDs = preferences.interaction == .functional ? queryAuthorizedNodeIDs.sorted() : []
+        let memoryEnabled = queryMemoryEnabled
+        let requestRoot = libraryRootURL
+        let repository = repository
+        var requestSettings = settings
+        requestSettings.transportSessionID = "readingbook-" + current.id + "-chat-" + preferences.contextIdentity
+        let requestKey = apiKey
+        let workspaceSnapshot = preferences.interaction == .functional ? makeReadingWorkspaceSnapshot() : nil
+        let hostOperationContext = preferences.interaction == .functional ? queryHostOperationContext : nil
+        let viewTools = preferences.interaction == .functional ? readingViewToolAccess(bookID: current.id, sourceHash: current.sourceHash) : nil
+        let mayOrganize = allowsOrganizing && preferences.interaction == .functional
+        queryAllowsOrganizing = false
+        let requestRunID = UUID()
+        queryRunID = requestRunID
+        isQueryBusy = true
+        lastQuestionContext = queryScopePreview; queryDisclosure = "正在准备阅读内容…"; queryRetryQuestion = nil
+        let previousChangeIDs = Set(current.controlledChanges?.receipts.map(\.operationID) ?? [])
+        queryTask = Task {
+            let aiRunID = await beginQueryProgress(title: "与书对话", settings: requestSettings)
+            var writeGrant: ControlledWriteGrant?
+            defer {
+                finishAIProgress(aiRunID)
+                if queryRunID == requestRunID { isQueryBusy = false; queryTask = nil; queryRunID = nil }
+            }
+            defer {
+                if let grant = writeGrant, !pendingAIChanges.contains(where: { $0.grant.id == grant.id }) {
+                    Task { await repository.revokeChangeGrant(grant.id) }
                 }
-                let reply = try await reader.answer(question: question, project: current, settings: settings, apiKey: apiKey, documents: documents, readingContext: context)
+            }
+            do {
                 try Task.checkCancellation()
-                var result = current; result.chats.append(ChatMessage(role: "user", content: question)); result.chats.append(reply)
-                try await repository.save(result); publish(result); requestsUsed = await reader.requestCount
-                activity = "回答已生成；你可以选择保存为 Markdown。"
-            } catch { handle(error) }
-            isBusy = false
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
+                let requestProject = scope == .chapter ? try await ensureBookChapterOutline(project: current) : current
+                let worker = Task.detached(priority: .userInitiated) {
+                    try ReadingPreparedAnswer.freeze(project: requestProject, scope: scope, context: context,
+                        documentIDs: documentIDs, appendedDocumentIDs: attachedDocumentIDs,
+                        authorizedNodeIDs: authorizedNodeIDs, preferences: preferences)
+                }
+                let prepared = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                let snapshot = prepared.snapshot, chatContext = prepared.chatContext, history = prepared.history
+                try Task.checkCancellation()
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot,
+                      book?.sourceHash == current.sourceHash else { throw CancellationError() }
+                let memory = memoryEnabled ? await loadPreparedQueryMemory(snapshot: snapshot, history: history, root: requestRoot) : nil
+                try Task.checkCancellation()
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot,
+                      book?.sourceHash == current.sourceHash else { throw CancellationError() }
+                lastQuestionContext = snapshot.displayTitle; queryDisclosure = ""
+                var sentMessage = ChatMessage(role: "user", content: question)
+                sentMessage.conversationMode = preferences.interaction; sentMessage.answerStyle = preferences.style
+                sentMessage.readingContext = chatContext
+                var pending = requestProject; pending.chats.append(sentMessage)
+                let questionBase = try await repository.commitAIResult(base: requestProject, result: pending, operationID: "question-" + sentMessage.id)
+                try Task.checkCancellation()
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
+                publish(questionBase)
+                try Task.checkCancellation()
+                if mayOrganize {
+                    writeGrant = try await repository.issueChangeGrant(bookID: current.id, permissions: [.knowledge, .graph, .documents, .bookScheme],
+                        allowedUnitIDs: Set(snapshot.unitIDs), editableDocumentIDs: Set(snapshot.documentIDs), requiresReceipts: false,
+                        reason: "读者选择本次整理；原问题ID：\(sentMessage.id)；摘要：" + String(question.prefix(500)))
+                }
+                let proposalTools = writeGrant.map { readingProposalAccess(grant: $0, snapshot: snapshot) }
+                await queryReader.resetBudget()
+                var answer = try await queryReader.answerDetailed(question: question, prepared: prepared, settings: requestSettings, apiKey: requestKey,
+                    memory: memory, memoryEnabled: memoryEnabled, documentLoader: { document in
+                        try Task.checkCancellation()
+                        return try await repository.readDocument(bookID: current.id, document: document)
+                    }, hostOperationContext: hostOperationContext, workspace: workspaceSnapshot, hostTools: viewTools, proposalAccess: proposalTools)
+                try Task.checkCancellation()
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot,
+                      book?.sourceHash == current.sourceHash else { throw CancellationError() }
+                answer.message.conversationMode = preferences.interaction; answer.message.answerStyle = preferences.style
+                answer.message.readingContext = chatContext
+                var result = questionBase; result.chats.append(answer.message)
+                markAIProgressSaving(aiRunID)
+                let committed = try await repository.commitAIResult(base: questionBase, result: result, operationID: "answer-" + answer.message.id)
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
+                publish(committed); requestsUsed = await sharedAIRequests.requestsUsed
+                queryDisclosure = ([answer.diagnostics.disclosure] + answer.diagnostics.notices).joined(separator: "\n")
+                if memoryEnabled { await saveQueryMemory(answer.memory, for: snapshot, root: requestRoot) }
+                if !isSmartReadingRunning { activity = "回答已生成，可以选一段记入笔记。" }
+            } catch {
+                let cancelled = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
+                finishAIProgress(aiRunID, error: cancelled ? CancellationError() : error)
+                guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { return }
+                queryRetryQuestion = question
+                if cancelled { queryDisclosure = "已停止回答，已发送的问题保留。" }
+                else { errorMessage = error.localizedDescription }
+                let saved = book?.id == current.id ? (book?.controlledChanges?.receipts.filter { !previousChangeIDs.contains($0.operationID) && $0.undoneAt == nil }.count ?? 0) : 0
+                if saved > 0 { queryDisclosure = "回答未完成；已保存的授权整理可在记录中查看或撤销。" }
+                requestsUsed = await sharedAIRequests.requestsUsed
+            }
         }
     }
+
     func focus(_ id: String) {
         selectedObjectID = id
         if let event = book?.events.first(where: { $0.id == id }), let year = event.startYear {
@@ -320,7 +562,7 @@ import ReadingCore
     func navigateToUnit(_ id: String) {
         guard book?.units.contains(where: { $0.id == id }) == true else { return }
         pdfNavigationToken += 1
-        sourceReadingSelection = nil; focusedReadingAnchorID = nil
+        readerChapterAnchor = nil; sourceReadingSelection = nil; focusedReadingAnchorID = nil
         readingContextDocumentID = nil
         selectedUnitID = id
     }
@@ -347,6 +589,12 @@ import ReadingCore
                 focusedReadingAnchorID = anchor.id
             }
         }
+        else if kind == "message" {
+            guard book?.chats.contains(where: { $0.id == id }) == true else { errorMessage = "引用的历史对话不存在于这本书中。"; return }
+            if route == "reader" { readingCompanionVisible = true; readingCompanionTab = "chat" }
+            else { route = "query" }
+            queryHistoryMessageID = id
+        }
         else if kind == "document", let document = book?.documents.first(where: { $0.id == id }) { await openDocument(document) }
         else { errorMessage = "引用的原文或文档不存在于当前书籍。" }
     }
@@ -367,7 +615,7 @@ import ReadingCore
             if !hasAnalysis { current.insights.removeAll { $0.id == "deferred-\(unitID)" && $0.unitIDs == [unitID] } }
         }
         current.audit.append(ToolAudit(name: "user_review", summary: "用户核对单元 \(unitID)"))
-        do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
+        do { publish(try await repository.save(current)) } catch { errorMessage = error.localizedDescription }
     }
     func deferUnit(_ unitID: String) async {
         guard var current = book, !isBusy, let unit = current.units.first(where: { $0.id == unitID }) else { return }
@@ -375,7 +623,7 @@ import ReadingCore
         var entry = current.coverage[unitID] ?? CoverageEntry(); entry.status = .needsReview; entry.message = "用户保留本单元为待识别，未读取其中内容。"; entry.updatedAt = Date(); current.coverage[unitID] = entry
         let insightID = "deferred-\(unitID)"
         if !current.insights.contains(where: { $0.id == insightID }) { current.insights.append(ReadingInsight(id: insightID, unitIDs: [unitID], markdown: "【未读取，待识别】\(unit.locator)。该单元尚无可靠文本，不得推断其中的事实。")) }
-        do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
+        do { publish(try await repository.save(current)) } catch { errorMessage = error.localizedDescription }
     }
     func installedComponent(for kind: ComponentKind) -> ViewDefinition? {
         guard let component = WorkspaceComponentRegistry.shared.component(for: kind) else { return nil }
@@ -413,25 +661,12 @@ import ReadingCore
         current.views.append(view); isBusy = true
         Task {
             defer { isBusy = false }
-            do { try await repository.save(current); publish(current); if open, bookID == current.id { route = view.id }; activity = "已添加\(component.title)。" }
+            do { publish(try await repository.save(current)); if open, bookID == current.id { route = view.id }; activity = "已添加\(component.title)。" }
             catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription } }
         }
     }
     func importPlugin(onError: ((String) -> Void)? = nil) {
-        guard var current = book, !isBusy else { return }
-        let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]; panel.message = "选择声明式插件 manifest.json"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let data = try Data(contentsOf: url); guard data.count <= 1_000_000 else { throw ReadingError.invalid("插件包超过 1 MB。") }
-            let manifest = try JSONDecoder().decode(PluginManifest.self, from: data); try PluginEngine.install(manifest, into: &current)
-            guard bookID == current.id else { throw ReadingError.invalid("书籍已切换，请重新导入插件。") }
-            isBusy = true
-            Task {
-                defer { isBusy = false }
-                do { try await repository.save(current); publish(current); activity = "已安装\(manifest.name)，声明已保存。" }
-                catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription } }
-            }
-        } catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription } }
+        previewImportPlugin(onError: onError)
     }
     func exportProject() {
         guard let current = book, !isBusy else { return }
@@ -447,7 +682,15 @@ import ReadingCore
         guard !editorDirty else { errorMessage = "请先保存或放弃当前 Markdown 草稿，再导入书项目。"; return }
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.treatsFilePackagesAsDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
-            Task { do { let current = try await repository.importProject(from: url); publish(current); await selectBook(current.id) } catch { errorMessage = error.localizedDescription } }
+            isBusy = true; isImportingBookCommit = true; activity = "正在验证并导入书项目…"
+            task = Task {
+                do {
+                    let current = try await repository.importProject(from: url); publish(current)
+                    isImportingBookCommit = false; isBusy = false
+                    activity = "书项目已导入；原书与用户 Markdown 已保留。"
+                    await selectBook(current.id, preferredRoute: "reader")
+                } catch { isImportingBookCommit = false; isBusy = false; errorMessage = error.localizedDescription }
+            }
         }
     }
     func exportMarkdown() {
@@ -463,7 +706,9 @@ import ReadingCore
         selectedObjectID = unit.id; newDocument(); editorTitle = "关于\(unit.chapter)的理解"
         let quote = String(unit.text.prefix(240))
         draftEvidence = quote.isEmpty ? [] : [Evidence(unitID: unit.id, quote: quote)]
-        editorMarkdown = "# \(editorTitle)\n\n> \(quote.replacingOccurrences(of: "\n", with: "\n> "))\n\n[回到原文](readingbook://book/\(bookID ?? "")/unit/\(unit.id))\n\n## 我的理解\n\n"
+        // Source evidence remains attached and can be opened from the note header.
+        // Start with a clean writing surface; never rewrite an existing note.
+        editorMarkdown = "# \(editorTitle)\n\n"
     }
     func saveInsight(_ insight: ReadingInsight) async {
         guard var current = book, !isBusy else { return }
@@ -480,7 +725,7 @@ import ReadingCore
         guard var current = book, !isBusy else { return }
         isBusy = true; defer { isBusy = false }
         if current.bookmarks.contains(unitID) { current.bookmarks.removeAll { $0 == unitID } } else { current.bookmarks.append(unitID) }
-        do { try await repository.save(current); publish(current) } catch { errorMessage = error.localizedDescription }
+        do { publish(try await repository.save(current)) } catch { errorMessage = error.localizedDescription }
     }
     @discardableResult
     func moveNode(id: String, x: Double, y: Double, onError: ((String) -> Void)? = nil) async -> Bool {
@@ -490,7 +735,7 @@ import ReadingCore
         guard x.isFinite, y.isFinite, let index = current.nodes.firstIndex(where: { $0.id == id }) else { return fail("画布节点已移除，或坐标无效，请重新选择节点。") }
         isBusy = true; defer { isBusy = false }
         current.nodes[index].x = x; current.nodes[index].y = y
-        do { try await repository.save(current); publish(current); return true } catch { return fail(error.localizedDescription) }
+        do { publish(try await repository.save(current)); return true } catch { return fail(error.localizedDescription) }
     }
     @discardableResult
     func connectNodes(from: String, to: String, label: String, onError: ((String) -> Void)? = nil) async -> Bool {
@@ -501,8 +746,7 @@ import ReadingCore
         do {
             let connected = try GraphConnections.connecting(from: from, to: to, label: label, in: current)
             guard connected.edges.count != current.edges.count else { activity = "这两个画布节点之间已有同名关系。"; return true }
-            try await repository.save(connected)
-            publish(connected)
+            publish(try await repository.save(connected))
             activity = "画布节点已连接。"
             return true
         } catch { return fail(error.localizedDescription) }
@@ -516,8 +760,7 @@ import ReadingCore
         do {
             let renamed = try GraphConnections.renaming(edgeID: id, label: label, in: current)
             guard renamed.edges != current.edges else { return true }
-            try await repository.save(renamed)
-            publish(renamed)
+            publish(try await repository.save(renamed))
             activity = "连线关系已改名。"
             return true
         } catch { return fail(error.localizedDescription) }
@@ -526,7 +769,7 @@ import ReadingCore
     func setPluginEnabled(_ enabled: Bool, id: String, onError: ((String) -> Void)? = nil) async -> Bool {
         guard var current = book, !isBusy else { return false }
         isBusy = true; defer { isBusy = false }
-        do { try PluginEngine.setEnabled(enabled, pluginID: id, in: &current); try await repository.save(current); publish(current); return true }
+        do { try PluginEngine.setEnabled(enabled, pluginID: id, in: &current); publish(try await repository.save(current)); return true }
         catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription }; return false }
     }
     @discardableResult
@@ -543,45 +786,49 @@ import ReadingCore
         var edited = entity
         if edited.latitude != nil, (edited.latitude != current.entities[index].latitude || edited.longitude != current.entities[index].longitude), edited.locationNote?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false { edited.locationNote = "用户手动指定坐标；尚未作外部考证。" }
         current.entities[index] = edited; current.audit.append(ToolAudit(name: "user_edit", summary: "用户编辑卡片：\(entity.name)"))
-        do { try await repository.save(current); publish(current); return true } catch { return fail(error.localizedDescription) }
+        do { publish(try await repository.save(current)); return true } catch { return fail(error.localizedDescription) }
     }
     var enabledViews: [ViewDefinition] {
         guard let current = book else { return [] }
         let disabled = Set(current.plugins.filter { current.disabledPluginIDs.contains($0.id) }.flatMap { $0.views.map(\.id) })
         return current.views.filter { !disabled.contains($0.id) }
     }
-    private struct DocumentDraft: Codable { var documentID: String?; var title: String; var markdown: String; var evidence: [Evidence] }
+    private struct DocumentDraft: Codable { var documentID: String?; var title: String; var markdown: String; var evidence: [Evidence]; var baseHash: String? = nil }
     private func persistDraft() {
         guard let bookID, editorDirty else { return }
-        let draft = DocumentDraft(documentID: selectedDocumentID, title: editorTitle, markdown: editorMarkdown, evidence: draftEvidence)
+        draftSaveTask?.cancel()
+        let generation = documentGeneration
+        draftSaveTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
+            guard let self, !Task.isCancelled, self.bookID == bookID, self.documentGeneration == generation else { return }
+            self.flushDocumentDraft()
+        }
+    }
+    func flushDocumentDraft() {
+        draftSaveTask?.cancel(); draftSaveTask = nil
+        guard let bookID, editorDirty else { return }
+        let draft = DocumentDraft(documentID: selectedDocumentID, title: editorTitle, markdown: editorMarkdown, evidence: draftEvidence, baseHash: documentBaseHash)
         if let data = try? JSONEncoder().encode(draft) { UserDefaults.standard.set(data, forKey: "draft-\(bookID)") }
     }
     private func restoreDraft() {
         guard let bookID, let data = UserDefaults.standard.data(forKey: "draft-\(bookID)"), let draft = try? JSONDecoder().decode(DocumentDraft.self, from: data) else { return }
         selectedDocumentID = book?.activeDocuments.contains(where: { $0.id == draft.documentID }) == true ? draft.documentID : nil
+        documentBaseHash = selectedDocumentID == nil ? nil : draft.baseHash
         editorTitle = draft.title; editorMarkdown = draft.markdown; draftEvidence = draft.evidence; editorDirty = true; route = "editor"; activity = "已恢复上次尚未保存的文档草稿。"
+    }
+    func libraryLoadIssueSummary(_ issues: [LibraryLoadIssue]) -> String {
+        "有 \(issues.count) 个目录未载入，其他书籍仍可使用；原文件保留。\n" + issues.prefix(8).map { "\($0.folder)：\($0.message)" }.joined(separator: "\n")
     }
     func objectTitle(_ id: String) -> String { book?.entities.first { $0.id == id }?.name ?? book?.events.first { $0.id == id }?.name ?? book?.documents.first { $0.id == id }?.title ?? id }
 }
 
-enum Keychain {
+/// Read-only compatibility; only the explicit recovery action calls this.
+enum LegacyServiceKeychain {
     static let service = "org.readingbook.provider"
     static func read(account: String = "api-key") throws -> String {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         var item: CFTypeRef?; let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { return "" }
         guard status == errSecSuccess, let data = item as? Data, let text = String(data: data, encoding: .utf8) else { throw ReadingError.invalid("钥匙串读取失败（\(status)）。") }; return text
-    }
-    static func write(_ value: String, account: String = "api-key") throws {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
-        let attributes: [String: Any] = [kSecValueData as String: Data(value.utf8)]
-        var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound { var addition = query; addition[kSecValueData as String] = Data(value.utf8); status = SecItemAdd(addition as CFDictionary, nil) }
-        guard status == errSecSuccess else { throw ReadingError.invalid("钥匙串保存失败（\(status)）。") }
-    }
-    static func remove(account: String) throws {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw ReadingError.invalid("钥匙串删除失败（\(status)）。") }
     }
 }

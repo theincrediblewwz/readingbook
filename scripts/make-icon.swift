@@ -34,15 +34,15 @@ for (name, size) in sizes {
     let s = CGFloat(size) / 1024
     let plate = NSBezierPath(roundedRect: CGRect(x: 64*s, y: 64*s, width: 896*s, height: 896*s), xRadius: 205*s, yRadius: 205*s)
     let shadow = NSShadow(); shadow.shadowColor = NSColor.black.withAlphaComponent(0.2); shadow.shadowBlurRadius = 24*s; shadow.shadowOffset = NSSize(width: 0, height: -8*s)
-    NSGraphicsContext.saveGraphicsState(); shadow.set(); color(0x315D4D).setFill(); plate.fill(); NSGraphicsContext.restoreGraphicsState()
-    NSGradient(starting: color(0x244A3D), ending: color(0x416F59))?.draw(in: plate, angle: 90)
-    color(0xFAF9EE).withAlphaComponent(0.14).setStroke(); plate.lineWidth = max(0.5, 2*s); plate.stroke()
+    NSGraphicsContext.saveGraphicsState(); shadow.set(); color(0x3569D5).setFill(); plate.fill(); NSGraphicsContext.restoreGraphicsState()
+    NSGradient(starting: color(0x245BC7), ending: color(0x638AF1))?.draw(in: plate, angle: 90)
+    color(0xFFFFFF).withAlphaComponent(0.14).setStroke(); plate.lineWidth = max(0.5, 2*s); plate.stroke()
     let origin = CGPoint(x: 152*s, y: 152*s), scale = 30*s
-    color(0xFCFBF0).setFill(); glyph("plateLeft", origin: origin, scale: scale).fill()
-    color(0xE9EDDF).setFill(); glyph("plateRight", origin: origin, scale: scale).fill()
+    color(0xFFFFFF).setFill(); glyph("plateLeft", origin: origin, scale: scale).fill()
+    color(0xE9F0FF).setFill(); glyph("plateRight", origin: origin, scale: scale).fill()
     let crease = NSBezierPath(); crease.move(to: CGPoint(x: 512*s,y: 242*s)); crease.line(to: CGPoint(x: 512*s,y: 677*s))
-    color(0x315D4D).withAlphaComponent(0.32).setStroke(); crease.lineWidth = 4*s; crease.stroke()
-    color(0xD9AF76).setFill(); glyph("markAccent", origin: origin, scale: scale).fill()
+    color(0x3569D5).withAlphaComponent(0.32).setStroke(); crease.lineWidth = 4*s; crease.stroke()
+    color(0xBFD3FF).setFill(); glyph("markAccent", origin: origin, scale: scale).fill()
     NSGraphicsContext.restoreGraphicsState()
     guard let png = bitmap.representation(using: .png, properties: [:]) else { fatalError("Cannot render icon") }
     try png.write(to: directory.appendingPathComponent(name + ".png"))

@@ -24,7 +24,7 @@ struct ReadingLedgerView: View {
             let status = book.coverage[unit.id]?.status ?? .pending
             let deferred = ReadingLedger.isDeferred(unitID: unit.id, in: book)
             let issueCount = receipts.filter { !$0.issues.isEmpty }.count
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 12) {
                 DisclosureGroup(isExpanded: $expanded) {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(spacing: 10) {
@@ -46,12 +46,13 @@ struct ReadingLedgerView: View {
                     }.padding(.top, 10)
                 } label: {
                     HStack(spacing: 8) {
-                        Label("逐段账本", systemImage: "checklist").font(.subheadline.weight(.medium))
+                        Label("逐段阅读账本", systemImage: "checklist").font(.system(size: 17, weight: .semibold))
                         Spacer(minLength: 0)
-                        Text("\(acceptedIDs.count)/\(paragraphs.count) 段").font(.caption.monospacedDigit()).foregroundStyle(Palette.accent)
+                        Text("\(acceptedIDs.count)/\(paragraphs.count) 段").font(.system(size: 14, weight: .medium).monospacedDigit()).foregroundStyle(Palette.accent)
                     }
                 }
-                if !expanded { Text(unit.locator).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                ProgressView(value: Double(acceptedIDs.count), total: Double(max(1, paragraphs.count))).tint(Palette.accent).accessibilityLabel("核验回执覆盖")
+                if !expanded { Text(unit.locator).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1) }
                 if manifest == nil || savedReceipts == nil {
                     warning("清单或回执校验异常，旧记录保留，请检查来源版本。")
                 } else if deferred {
@@ -74,10 +75,10 @@ struct ReadingLedgerView: View {
                     Button("查看失败步骤") { expanded = true; showSteps = true }.font(.caption).buttonStyle(.borderless)
                 }
                 if requirements == nil && book.plan != nil { warning("读书法步骤清单暂不可用，请检查当前方案。") }
-            }.softPanel()
+            }.padding(18).readingGlass(radius: 20)
                 .confirmationDialog("重置此步骤的重试预算？", isPresented: Binding(get: { retryStepID != nil }, set: { if !$0 { retryStepID = nil } })) {
                     if let id = retryStepID { Button("重置预算，保留已完成步骤") { Task { await store.resetWorkflowRetry(id, inBook: book.id); retryStepID = nil } } }
-                } message: { Text("只清零失败步骤的尝试次数。已完成输出、原书与笔记保留；点击继续精读才会发出新请求。") }
+                } message: { Text("只清零失败步骤的尝试次数。已完成输出、原书与笔记保留；点击继续分析才会发出新请求。") }
                 .popover(isPresented: $showingUnits, arrowEdge: .bottom) { unitPicker(book) }
                 .onChange(of: store.bookID) { _, _ in chosenUnitID = ""; expanded = false; showSteps = false; showingUnits = false; unitSearch = "" }
         }
@@ -89,18 +90,18 @@ struct ReadingLedgerView: View {
                 Text("第 \(paragraph.order + 1) \(paragraph.kind == "fragment" ? "片段" : "段") · 行 \(paragraph.lineStart)–\(paragraph.lineEnd)").lineLimit(1)
                 Spacer(minLength: 0)
                 Text(accepted ? "回执已核验" : "待处理").foregroundStyle(.secondary).lineLimit(1)
-            }.font(.caption)
+            }.font(.system(size: 13))
             if let receipt {
                 Text(receipt.summary).font(.system(size: 16)).lineSpacing(4).textSelection(.enabled)
                 ForEach(Array(receipt.issues.enumerated()), id: \.offset) { _, issue in warning(issue) }
             }
             DisclosureGroup("对照本段原文") {
                 Text(paragraph.text).font(.system(size: 16, design: .monospaced)).lineSpacing(4).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
-            }.font(.caption).foregroundStyle(.secondary)
-        }.padding(10).background(Palette.accent.opacity(accepted ? 0.055 : 0.025), in: RoundedRectangle(cornerRadius: 8))
+            }.font(.system(size: 13)).foregroundStyle(.secondary)
+        }.padding(14).background(Palette.accent.opacity(accepted ? 0.055 : 0.025), in: RoundedRectangle(cornerRadius: 12))
     }
     private func warning(_ message: String) -> some View {
-        Label(message, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(Palette.copper).lineLimit(expanded ? nil : 2).help(message)
+        Label(message, systemImage: "exclamationmark.circle").font(.system(size: 13)).foregroundStyle(Palette.copper).lineLimit(expanded ? nil : 2).help(message)
     }
     private func stepSection(_ requirements: [ReadingStepRequirement], unit: SourceUnit, book: BookProject) -> some View {
         let results = (book.readingStepResults ?? []).filter { $0.unitID == unit.id }
@@ -126,6 +127,12 @@ struct ReadingLedgerView: View {
                                     Text("输入：本单元 \(run.input.paragraphIDs.count) 个已核对片段，\(run.input.previousStepIDs.count) 个前序步骤输出。")
                                     if !run.input.configuration.isEmpty { Text(run.input.configuration.keys.sorted().map { "\($0)：\(run.input.configuration[$0] ?? "")" }.joined(separator: "\n")) }
                                     Text(run.toolNames.isEmpty ? "尚无成功工具调用记录" : "已调用：" + run.toolNames.joined(separator: " · "))
+                                    if let ids = run.mathVerificationIDs, !ids.isEmpty {
+                                        let records = (book.mathVerifications ?? []).filter { ids.contains($0.id) }
+                                        ForEach(records) { record in
+                                            Text("历史记录 · " + record.summary).foregroundStyle(.secondary).textSelection(.enabled)
+                                        }
+                                    }
                                     if let output = run.output {
                                         Text(output.result).textSelection(.enabled)
                                         if let reason = output.noChangesReason { Text("未新增知识：" + reason).foregroundStyle(.secondary) }

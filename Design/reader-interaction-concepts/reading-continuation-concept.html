@@ -1,0 +1,218 @@
+<div id="reading-continuation" class="viz-dotted-background">
+  <style>
+    #reading-continuation { color-scheme:light dark; padding:16px 0; --rc-bg:light-dark(#f6f7fb,#1d2026); --rc-surface:light-dark(#ffffff,#272b33); --rc-text:light-dark(#202631,#eef1f7); --rc-secondary:light-dark(#646d7c,#b2bccb); --rc-line:light-dark(#e1e5ee,#424956); --rc-accent:light-dark(#3569cf,#91b4ff); --rc-soft:light-dark(#edf2fc,#293b59); --rc-quiet:light-dark(#e9edf3,#3a414d); --rc-warn:light-dark(#94601c,#efbf78); --rc-pad:20px; }
+    #reading-continuation * { box-sizing:border-box; }
+    #reading-continuation [hidden] { display:none !important; }
+    #reading-continuation .rc-window { max-width:700px; margin:0 auto; overflow:hidden; color:var(--rc-text); background:var(--rc-bg); border:1px solid var(--rc-line); border-radius:22px; font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; box-shadow:0 14px 40px light-dark(#26365812,#00000024); }
+    #reading-continuation .rc-header { display:flex; gap:10px; align-items:center; padding:18px var(--rc-pad); border-bottom:1px solid var(--rc-line); }
+    #reading-continuation .rc-heading { margin:0; font-size:19px; font-weight:600; }
+    #reading-continuation .rc-subtitle { font-size:12px; color:var(--rc-secondary); }
+    #reading-continuation .rc-spacer { flex:1; }
+    #reading-continuation .rc-demo { color:var(--rc-secondary); font-size:12px; white-space:nowrap; }
+    #reading-continuation .rc-body { padding:var(--rc-pad); display:grid; gap:16px; }
+    #reading-continuation .rc-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; }
+    #reading-continuation .rc-row-between { display:flex; justify-content:space-between; align-items:baseline; gap:12px; }
+    #reading-continuation .rc-count { font-variant-numeric:tabular-nums; font-weight:600; }
+    #reading-continuation .rc-muted { color:var(--rc-secondary); font-size:12px; }
+    #reading-continuation .rc-label { font-weight:600; }
+    #reading-continuation .rc-book-progress { height:5px; background:var(--rc-quiet); border-radius:4px; margin:10px 0 6px; overflow:hidden; }
+    #reading-continuation .rc-book-progress > span { display:block; height:100%; background:var(--rc-accent); }
+    #reading-continuation .rc-group { border:1px solid var(--rc-line); border-radius:14px; background:var(--rc-surface); overflow:hidden; }
+    #reading-continuation .rc-section { padding:14px 16px; }
+    #reading-continuation .rc-section + .rc-section { border-top:1px solid var(--rc-line); }
+    #reading-continuation .rc-fields { display:grid; grid-template-columns:minmax(100px,1fr) minmax(0,2.1fr); gap:14px; align-items:end; }
+    #reading-continuation label { display:block; }
+    #reading-continuation .rc-field-label { display:block; color:var(--rc-secondary); font-size:12px; margin-bottom:5px; }
+    #reading-continuation input[type=number], #reading-continuation select { width:100%; min-width:0; color:var(--rc-text); background:var(--rc-surface); border:1px solid var(--rc-line); border-radius:8px; padding:8px 10px; font:inherit; }
+    #reading-continuation .rc-page-fields { display:grid; grid-template-columns:1fr auto 1fr; gap:8px; align-items:center; }
+    #reading-continuation .rc-chapter-fields { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    #reading-continuation .rc-range-title { margin-top:9px; font-size:12px; color:var(--rc-secondary); }
+    #reading-continuation .rc-radio { position:relative; display:grid; grid-template-columns:18px 1fr; gap:9px; align-items:start; padding:11px 16px; cursor:default; }
+    #reading-continuation .rc-radio + .rc-radio { border-top:1px solid var(--rc-line); }
+    #reading-continuation .rc-radio:has(input:checked) { background:var(--rc-soft); }
+    #reading-continuation input[type=radio], #reading-continuation input[type=checkbox] { accent-color:var(--rc-accent); margin:4px 0 0; }
+    #reading-continuation .rc-radio-title { display:block; font-weight:500; }
+    #reading-continuation .rc-radio-help { display:block; font-size:12px; color:var(--rc-secondary); margin-top:1px; }
+    #reading-continuation .rc-supplement { padding:12px 16px; border-top:1px solid var(--rc-line); }
+    #reading-continuation .rc-check { display:flex; align-items:flex-start; gap:8px; }
+    #reading-continuation .rc-check input { flex:0 0 auto; }
+    #reading-continuation .rc-plan-bar { height:8px; display:flex; background:var(--rc-quiet); border-radius:5px; overflow:hidden; margin:10px 0; }
+    #reading-continuation .rc-plan-bar span { height:100%; }
+    #reading-continuation .rc-kept { background:var(--rc-accent); }
+    #reading-continuation .rc-pending { background:var(--rc-quiet); }
+    #reading-continuation .rc-repair { background:var(--rc-warn); }
+    #reading-continuation .rc-plan-rows { display:grid; gap:7px; }
+    #reading-continuation .rc-plan-line { display:grid; grid-template-columns:108px 1fr auto; gap:8px; align-items:baseline; }
+    #reading-continuation .rc-plan-line span:nth-child(2) { color:var(--rc-secondary); font-size:12px; }
+    #reading-continuation .rc-plan-line span:last-child { font-variant-numeric:tabular-nums; white-space:nowrap; }
+    #reading-continuation .rc-review { display:flex; align-items:flex-start; gap:9px; }
+    #reading-continuation .rc-review i { flex:0 0 auto; margin-top:3px; color:var(--rc-accent); }
+    #reading-continuation .rc-review .rc-check { margin-top:8px; font-size:12px; }
+    #reading-continuation .rc-review .rc-link { white-space:nowrap; flex:0 0 auto; }
+    #reading-continuation .rc-link { color:var(--rc-accent); background:none; border:0; font:inherit; padding:0; text-align:left; }
+    #reading-continuation .rc-button { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:38px; border:1px solid var(--rc-line); border-radius:10px; padding:8px 14px; background:var(--rc-surface); color:var(--rc-text); font:inherit; white-space:normal; }
+    #reading-continuation .rc-primary { border-color:transparent; background:var(--rc-accent); color:light-dark(#fff,#132442); font-weight:500; }
+    #reading-continuation .rc-button:disabled { opacity:.5; }
+    #reading-continuation .rc-footer { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; }
+    #reading-continuation .rc-preserved { color:var(--rc-secondary); font-size:12px; display:flex; gap:6px; align-items:center; }
+    #reading-continuation .rc-error { color:var(--rc-warn); font-size:12px; }
+    #reading-continuation .rc-confirm, #reading-continuation .rc-result { border-top:1px solid var(--rc-line); padding:14px 16px; }
+    #reading-continuation .rc-confirm p, #reading-continuation .rc-result p { margin:5px 0 12px; font-size:12px; color:var(--rc-secondary); }
+    #reading-continuation .rc-detail { margin-top:8px; padding:10px 0 0; display:grid; gap:4px; border-top:1px solid var(--rc-line); color:var(--rc-secondary); font-size:12px; }
+    #reading-continuation button { cursor:default; }
+    #reading-continuation button:focus-visible, #reading-continuation input:focus-visible, #reading-continuation select:focus-visible { outline:3px solid color-mix(in srgb,var(--rc-accent),transparent 35%); outline-offset:2px; }
+    #reading-continuation i[data-lucide] { width:18px; height:18px; display:inline-block; }
+    @media(max-width:460px) { #reading-continuation { --rc-pad:14px; padding:8px 0; } #reading-continuation .rc-fields { grid-template-columns:1fr; gap:10px; } #reading-continuation .rc-plan-line { grid-template-columns:90px 1fr auto; gap:5px; } #reading-continuation .rc-header { align-items:flex-start; } #reading-continuation .rc-footer > .rc-primary { width:100%; } #reading-continuation .rc-radio { padding:11px 13px; } #reading-continuation .rc-section { padding:13px; } }
+  </style>
+  <section class="rc-window" aria-label="智能阅读续读机制草图">
+    <header class="rc-header">
+      <i data-lucide="book-open" aria-hidden="true"></i>
+      <div><h2 class="rc-heading">智能阅读</h2><div class="rc-subtitle">三国演义 · 1,484 页</div></div>
+      <span class="rc-spacer"></span><span class="rc-demo">机制草图 · 示例进度</span>
+    </header>
+    <div class="rc-body">
+      <div>
+        <div class="rc-row-between"><span class="rc-label">已有分析</span><span class="rc-count" data-ref="book-count">100 / 1,484 页</span></div>
+        <div class="rc-book-progress" role="img" aria-label="示例：全书有100页完成分析"><span data-ref="book-fill" style="width:6.74%"></span></div>
+        <div class="rc-row-between"><span class="rc-muted" data-ref="completed-ranges">第 1–100 页 · 当前阅读要求已完成</span><button type="button" class="rc-link rc-muted" data-action="details" aria-expanded="false">查看覆盖详情</button></div>
+        <div class="rc-detail" data-ref="coverage-detail" hidden>
+          <span>内容讲解、人物与事件：第 1–100 页已有完成记录。</span>
+          <span>阅读位置：第 100 页。阅读位置与 AI 分析进度分别记录。</span>
+          <span>地图、译注等新增项目，可在继续时单独补充。</span>
+        </div>
+      </div>
+      <section class="rc-group" aria-label="选择下一次分析范围">
+        <div class="rc-section">
+          <div class="rc-fields">
+            <label><span class="rc-field-label">继续分析的范围</span><select data-ref="kind" aria-label="范围类型"><option value="pages">按页码</option><option value="chapters">按章节</option><option value="book">整本书</option></select></label>
+            <div data-ref="page-fields"><span class="rc-field-label">页码</span><div class="rc-page-fields"><input type="number" min="1" max="1484" step="1" value="50" aria-label="开始页" data-ref="start"><span>至</span><input type="number" min="1" max="1484" step="1" value="200" aria-label="结束页" data-ref="end"></div></div>
+            <div data-ref="chapter-fields" hidden><span class="rc-field-label">章节（示例目录）</span><div class="rc-chapter-fields"><select data-ref="chapter-start" aria-label="开始章节"></select><select data-ref="chapter-end" aria-label="结束章节"></select></div></div>
+            <div class="rc-muted" data-ref="whole-book" hidden>第 1–1,484 页；已有成果继续保留。</div>
+          </div>
+          <div class="rc-range-title" data-ref="range-title">第 50–200 页，共 151 页</div>
+        </div>
+      </section>
+      <section class="rc-group" aria-label="如何处理重叠内容">
+        <label class="rc-radio"><input type="radio" name="rc-intent" value="continue" checked><span><span class="rc-radio-title">继续补齐 <span class="rc-muted">· 默认</span></span><span class="rc-radio-help">沿用已完成的分析，只处理缺口和未完成项目。</span></span></label>
+        <label class="rc-radio"><input type="radio" name="rc-intent" value="supplement"><span><span class="rc-radio-title">继续并补充</span><span class="rc-radio-help">保留原讲解，为所选范围增加地图、译注等项目。</span></span></label>
+        <label class="rc-radio"><input type="radio" name="rc-intent" value="redo"><span><span class="rc-radio-title">重新分析</span><span class="rc-radio-help">已有内容生成新版本，旧版本仍可查看。</span></span></label>
+        <div class="rc-supplement" data-ref="supplement" hidden><div class="rc-row"><label class="rc-check"><input type="checkbox" data-ref="maps" checked><span>地图与时空</span></label><label class="rc-check"><input type="checkbox" data-ref="annotations"><span>译注</span></label></div></div>
+      </section>
+      <section class="rc-group" aria-label="执行前的安排预览">
+        <div class="rc-section" aria-live="polite">
+          <div class="rc-row-between"><span class="rc-label">本次安排</span><span class="rc-muted" data-ref="plan-total">151 页</span></div>
+          <div class="rc-plan-bar" role="img" data-ref="plan-bar" aria-label="沿用51页，新增分析100页"><span class="rc-kept" data-ref="kept-bar"></span><span class="rc-repair" data-ref="repair-bar"></span><span class="rc-pending" data-ref="pending-bar"></span></div>
+          <div class="rc-plan-rows" data-ref="plan-rows"></div>
+          <div class="rc-muted" data-ref="supplement-note" hidden>补充项目与基础分析可能处理同一页，上面的页数不相加。</div>
+          <div class="rc-error" data-ref="error" role="alert" hidden></div>
+        </div>
+        <div class="rc-section rc-review" data-ref="review-section">
+          <i data-lucide="refresh-cw" aria-hidden="true"></i>
+          <div style="flex:1;min-width:0"><div class="rc-row-between"><span class="rc-radio-title" data-ref="review-title">第 50–200 页的整体总结 · 待更新</span><button type="button" class="rc-link rc-muted" data-action="review-options" aria-expanded="false">选项</button></div><span class="rc-radio-help">沿用原方案的读后总结：分析结束后，把这段内容串起来总结。</span><div data-ref="review-options" hidden><label class="rc-check"><input type="checkbox" data-ref="auto-review" checked><span>新增分析保存后，更新这次所选内容的整体总结</span></label><div class="rc-muted">逐页分析不会因此重做；原方案未包含此步骤时，不额外生成。</div></div></div>
+        </div>
+        <div class="rc-confirm" data-ref="confirm" role="dialog" aria-label="确认重新分析" hidden><strong data-ref="confirm-title"></strong><p>旧分析和笔记保留。只有新结果成功保存后才切换当前版本；失败或取消不会清空旧内容。</p><div class="rc-row"><button type="button" class="rc-button" data-action="cancel-redo">返回</button><button type="button" class="rc-button rc-primary" data-action="confirm-redo">确认生成新版本</button></div></div>
+        <div class="rc-result" data-ref="result" aria-live="polite" hidden><strong>安排预览</strong><p data-ref="result-text"></p><button type="button" class="rc-link" data-action="back">返回调整</button></div>
+      </section>
+      <footer class="rc-footer"><span class="rc-preserved"><i data-lucide="history" aria-hidden="true"></i>原书、笔记和已有分析保留</span><button type="button" class="rc-button rc-primary" data-action="start">继续分析 100 页</button></footer>
+      <div class="rc-muted">相同原文、相同分析要求才可直接沿用；实际执行前还会列出缺项或需要重新准备的部分。</div>
+    </div>
+  </section>
+  <script>
+    (() => {
+      const root = document.getElementById('reading-continuation');
+      const refs = Object.fromEntries([...root.querySelectorAll('[data-ref]')].map(el => [el.dataset.ref, el]));
+      const totalPages = 1484;
+      const chapters = [[1,18],[19,40],[41,63],[64,89],[90,118],[119,150],[151,174],[175,200],[201,235],[236,260],[261,300],[301,340]];
+      const defaults = {kind:'pages',start:'50',end:'200',chapterStart:'3',chapterEnd:'8',intent:'continue',maps:true,annotations:false,autoReview:true,details:false,reviewOptions:false,planHasReview:true,compact:true,holes:false};
+      const stored = window.openai?.widgetState?.privateContent?.continuation;
+      const state = {...defaults,...(stored && typeof stored === 'object' ? stored : {})};
+      let confirmation = null;
+      let resultText = '';
+      for (const [index] of chapters.entries()) {
+        for (const key of ['chapter-start','chapter-end']) { const option = document.createElement('option'); option.value=String(index+1); option.textContent='第 '+(index+1)+' 章'; refs[key].append(option); }
+      }
+      const listRanges = values => {
+        if (!values.length) return '无';
+        const ranges=[]; let start=values[0], last=start;
+        for (const page of values.slice(1)) { if(page===last+1) last=page; else { ranges.push(start===last?String(start):start+'–'+last); start=last=page; } }
+        ranges.push(start===last?String(start):start+'–'+last);
+        return '第 '+ranges.join('、')+' 页';
+      };
+      function plan() {
+        let start=Number(state.start), end=Number(state.end);
+        if(state.kind==='book') { start=1; end=totalPages; }
+        if(state.kind==='chapters') { const a=chapters[Number(state.chapterStart)-1], b=chapters[Number(state.chapterEnd)-1]; start=a?.[0]; end=b?.[1]; }
+        if(!Number.isInteger(start)||!Number.isInteger(end)||start<1||end>totalPages||start>end) return {error:'请选择有效范围：开始位置不晚于结束位置，页码限 1–1,484。'};
+        const pages=Array.from({length:end-start+1},(_,i)=>start+i);
+        const savedPartial=pages.filter(p=>state.holes&&p>=61&&p<=70);
+        const complete=pages.filter(p=>p<=100&&!savedPartial.includes(p));
+        const partial=state.intent==='redo'?[]:savedPartial;
+        const fresh=pages.filter(p=>p>100);
+        const supplements=[state.maps?'地图与时空':null,state.annotations?'译注':null].filter(Boolean);
+        if(state.intent==='supplement'&&!supplements.length) return {error:'请选择至少一个要补充的项目。',start,end,pages,missingSupplement:true};
+        const redo=state.intent==='redo'?complete.concat(savedPartial).sort((a,b)=>a-b):[];
+        const kept=state.intent==='redo'?[]:complete;
+        const work=state.intent==='supplement'?pages.length:fresh.length+partial.length+redo.length;
+        const reviewNeedsUpdate=state.planHasReview&&!(start===1&&end===100&&state.intent==='continue'&&!state.holes);
+        return {start,end,pages,partial,complete,fresh,supplements,redo,kept,work,reviewNeedsUpdate};
+      }
+      function save() {
+        const p=plan();
+        if(window.openai?.setWidgetState) window.openai.setWidgetState({modelContent:{proposal:'reading-continuation',range:p.error?null:[p.start,p.end],intent:state.intent,supplements:state.intent==='supplement'?p.supplements:[],autoUpdateRangeReview:state.planHasReview&&state.autoReview,preserveExistingResults:true,exampleOnly:true},privateContent:{continuation:{...state}}}).catch(()=>{});
+      }
+      function addRow(label,range,count) {
+        const row=document.createElement('div'); row.className='rc-plan-line';
+        for(const text of [label,range,count+' 页']) { const span=document.createElement('span'); span.textContent=text; row.append(span); }
+        refs['plan-rows'].append(row);
+      }
+      function render() {
+        root.style.setProperty('--rc-pad',state.compact?'20px':'26px');
+        refs.kind.value=state.kind; refs.start.value=state.start; refs.end.value=state.end;
+        refs['chapter-start'].value=state.chapterStart; refs['chapter-end'].value=state.chapterEnd;
+        refs['page-fields'].hidden=state.kind!=='pages'; refs['chapter-fields'].hidden=state.kind!=='chapters'; refs['whole-book'].hidden=state.kind!=='book';
+        root.querySelectorAll('input[name="rc-intent"]').forEach(el=>el.checked=el.value===state.intent);
+        refs.maps.checked=state.maps; refs.annotations.checked=state.annotations; refs['auto-review'].checked=state.autoReview;
+        refs['review-section'].hidden=!state.planHasReview;refs['review-options'].hidden=!state.reviewOptions;root.querySelector('[data-action="review-options"]').setAttribute('aria-expanded',String(state.reviewOptions));
+        refs.supplement.hidden=state.intent!=='supplement'; refs['supplement-note'].hidden=state.intent!=='supplement'; refs['coverage-detail'].hidden=!state.details;
+        const detailsButton=root.querySelector('[data-action="details"]'); detailsButton.setAttribute('aria-expanded',String(state.details)); detailsButton.textContent=state.details?'收起覆盖详情':'查看覆盖详情';
+        refs['book-count'].textContent=(state.holes?'90':'100')+' / 1,484 页'; refs['book-fill'].style.width=((state.holes?90:100)/totalPages*100)+'%';
+        refs['completed-ranges'].textContent=state.holes?'第 1–60、71–100 页已完成 · 第 61–70 页有缺项':'第 1–100 页 · 当前阅读要求已完成';
+        root.querySelector('.rc-book-progress').setAttribute('aria-label',state.holes?'示例：90页完整，61至70页尚有未完成项目':'示例：100页完成分析');
+        refs['coverage-detail'].children[0].textContent=state.holes?'内容讲解已保存；第 61–70 页的人物与事件步骤未完成。':'内容讲解、人物与事件：第 1–100 页已有完成记录。';
+        const p=plan(), startButton=root.querySelector('[data-action="start"]');
+        refs['plan-rows'].replaceChildren(); refs.error.hidden=!p.error; refs.error.textContent=p.error||''; startButton.disabled=Boolean(p.error);
+        refs.confirm.hidden=!confirmation; refs.result.hidden=!resultText; refs['result-text'].textContent=resultText;
+        if(p.error) { refs['range-title'].textContent=p.missingSupplement?'第 '+p.start+'–'+p.end+' 页，共 '+p.pages.length+' 页':'范围尚未有效'; refs['plan-total'].textContent='—'; refs['review-title'].textContent=p.missingSupplement?'等待选择补充项目':'等待有效的分析范围';refs['auto-review'].disabled=true;startButton.textContent=p.missingSupplement?'请先选择补充项目':'请先选择有效范围';refs['plan-bar'].setAttribute('aria-label','尚无有效执行安排');['kept-bar','repair-bar','pending-bar'].forEach(k=>refs[k].style.width='0%'); return; }
+        refs['range-title'].textContent='第 '+p.start+'–'+p.end+' 页，共 '+p.pages.length+' 页'+(state.kind==='chapters'?' · 示例章节边界':'');
+        refs['plan-total'].textContent=p.pages.length+' 页';
+        if(p.kept.length) addRow('沿用已有分析',listRanges(p.kept),p.kept.length);
+        if(p.redo.length) addRow('生成新版本',listRanges(p.redo),p.redo.length);
+        if(p.partial.length) addRow('补齐缺项',listRanges(p.partial),p.partial.length);
+        if(p.fresh.length) addRow('首次分析',listRanges(p.fresh),p.fresh.length);
+        if(state.intent==='supplement') addRow('补充'+p.supplements.join('、'),'整个所选范围',p.pages.length);
+        if(!p.work) addRow('无需重复分析','所选范围已有兼容结果',0);
+        refs['kept-bar'].style.width=(p.kept.length/p.pages.length*100)+'%'; refs['repair-bar'].style.width=((p.redo.length+p.partial.length)/p.pages.length*100)+'%'; refs['pending-bar'].style.width=(p.fresh.length/p.pages.length*100)+'%';
+        refs['plan-bar'].setAttribute('aria-label','所选'+p.pages.length+'页：沿用'+p.kept.length+'，重做'+p.redo.length+'，补齐'+p.partial.length+'，首次分析'+p.fresh.length+'页');
+        refs['review-title'].textContent=(state.kind==='book'?'全书的整体总结':'第 '+p.start+'–'+p.end+' 页的整体总结')+(!p.reviewNeedsUpdate?' · 已是最新':state.autoReview?' · 本轮完成后更新':' · 这次不生成');
+        refs['auto-review'].disabled=!p.reviewNeedsUpdate;
+        startButton.textContent=state.intent==='redo'?'检查重做范围…':p.work?(state.intent==='supplement'?'继续并补充 ':'继续分析 ')+p.work+' 页':state.autoReview&&p.reviewNeedsUpdate?'仅生成这次内容的整体总结':'所选范围已完成，无需重复分析';
+        startButton.disabled=Boolean(confirmation)||Boolean(resultText)||(!p.work&&(!state.autoReview||!p.reviewNeedsUpdate));
+      }
+      function changed() { confirmation=null; resultText=''; render(); save(); }
+      const keys={'kind':'kind','start':'start','end':'end','chapter-start':'chapterStart','chapter-end':'chapterEnd'};
+      for(const [ref,key] of Object.entries(keys)) refs[ref].addEventListener(ref==='start'||ref==='end'?'input':'change',event=>{ state[key]=event.target.value; changed(); });
+      for(const [ref,key] of [['maps','maps'],['annotations','annotations'],['auto-review','autoReview']]) refs[ref].addEventListener('change',event=>{state[key]=event.target.checked; changed();});
+      root.querySelectorAll('input[name="rc-intent"]').forEach(el=>el.addEventListener('change',()=>{ state.intent=el.value; changed(); }));
+      function showPlan() { const p=plan(); if(p.error)return; confirmation=null; resultText='草图演示：沿用 '+p.kept.length+' 页，待处理 '+p.work+' 页。'+(state.intent==='redo'?'旧结果保留，新结果保存后切换当前版本。':'已有成果保持。')+(state.autoReview&&p.reviewNeedsUpdate?'本轮保存完成后，沿用原方案生成这次内容的整体总结。':'这次不生成新的整体总结。')+' 尚未发起 AI 请求。'; render(); save(); }
+      root.querySelector('[data-action="details"]').addEventListener('click',()=>{state.details=!state.details;render();save();});
+      root.querySelector('[data-action="review-options"]').addEventListener('click',()=>{state.reviewOptions=!state.reviewOptions;render();save();});
+      root.querySelector('[data-action="start"]').addEventListener('click',()=>{const p=plan();if(p.error)return;if(state.intent==='redo'){confirmation=JSON.stringify(p);refs['confirm-title'].textContent='重新分析第 '+p.start+'–'+p.end+' 页？其中 '+p.redo.length+' 页已有分析成果。';render();}else showPlan();});
+      root.querySelector('[data-action="cancel-redo"]').addEventListener('click',()=>{confirmation=null;render();});
+      root.querySelector('[data-action="confirm-redo"]').addEventListener('click',()=>{if(confirmation===JSON.stringify(plan()))showPlan();else changed();});
+      root.querySelector('[data-action="back"]').addEventListener('click',()=>{resultText='';render();});
+      window.addEventListener('openai:set_globals',event=>{const next=event.detail?.globals?.widgetState?.privateContent?.continuation;if(next&&typeof next==='object'&&!Object.keys(defaults).every(key=>next[key]===state[key])){Object.assign(state,defaults,next);confirmation=null;resultText='';render();}});
+      render();
+      if(globalThis.Tweak) { const tweak=new Tweak({container:root.querySelector('.rc-window'),onChange:changed});tweak.addToggle(state,'compact',{label:'紧凑布局'});tweak.addToggle(state,'holes',{label:'演示第61–70页中断缺项'});tweak.addToggle(state,'planHasReview',{label:'原方案包含读后总结'}); }
+    })();
+  </script>
+</div>

@@ -1,0 +1,7 @@
+{
+  "checks": [
+    "Paired annotations select and scroll to the segment; source returns to exact page"
+  ],
+  "errors": [],
+  "consoleErrors": []
+}

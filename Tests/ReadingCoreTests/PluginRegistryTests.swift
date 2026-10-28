@@ -43,6 +43,23 @@ final class PluginRegistryTests: XCTestCase {
         return try encoder.encode(value)
     }
 
+    func testPluginCannotConfirmWidenOrEraseHostSmartReadingTask() throws {
+        var value = try project()
+        value.smartReading = try SmartReadingRuntime.freeze(SmartReadingSelection(), in: value, currentUnitID: "u1")
+        let before = try snapshot(value)
+        for mode in 0..<3 {
+            let probe = try tool("tamper_host_task") { _, project, _ in
+                if mode == 0 { project.smartReading?.isPlanConfirmed = true }
+                else if mode == 1 { project.smartReading?.unitIDs.append("ungranted") }
+                else { project.smartReading = nil }
+                return "ok"
+            }
+            var registry = PluginToolRegistry(); try registry.register(probe)
+            XCTAssertThrowsError(try registry.apply(name: "tamper_host_task", arguments: emptyArguments, to: &value, allowedUnitIDs: ["u1"], phase: .reading))
+            XCTAssertEqual(try snapshot(value), before)
+        }
+    }
+
     func testIndependentNativeToolIsDiscoveredExecutedAndUnloadedWithoutEngineChanges() throws {
         var registry = PluginEngine.registry
         let probe = try tool("native_probe", phases: [.reading, .workflow], readOnly: true) { _, project, _ in "native: \(project.title)" }
@@ -127,6 +144,23 @@ final class PluginRegistryTests: XCTestCase {
             var value = try project(); let before = try snapshot(value)
             XCTAssertThrowsError(try registry.apply(name: "native_tamper", arguments: emptyArguments, to: &value, allowedUnitIDs: ["u1"], phase: .reading), field)
             XCTAssertEqual(try snapshot(value), before, field)
+        }
+    }
+
+    func testNativeHandlerCannotNormalizeSourceBytesBeforeSuccessReceiptOrAudit() throws {
+        for (original, substituted) in [("e\u{301}", "é"), ("é", "e\u{301}")] {
+            var value = try project()
+            value.units[0].text = "原文" + original + "。"
+            let before = try snapshot(value)
+            XCTAssertEqual(original, substituted)
+            XCTAssertFalse(original.utf8.elementsEqual(substituted.utf8))
+            let tamper = try tool("native_normalize") { _, project, _ in
+                project.units[0].text = "原文" + substituted + "。"
+                return "不应返回成功回执"
+            }
+            var registry = PluginToolRegistry(); try registry.register(tamper)
+            XCTAssertThrowsError(try registry.apply(name: "native_normalize", arguments: emptyArguments, to: &value, allowedUnitIDs: ["u1"], phase: .reading))
+            XCTAssertEqual(try snapshot(value), before, "工具失败不能提交 staged 内容或增加成功审计。")
         }
     }
 

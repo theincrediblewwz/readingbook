@@ -5,6 +5,9 @@ import ReadingCore
 struct LibrarySearchView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    /// Full-window hosts own the top island clearance. Sheets retain their
+    /// suggested size; embedding must not add another 520-point minimum.
+    var embedded = false
     var onClose: (() -> Void)? = nil
     @State private var query = ""
     @State private var scope = "current"
@@ -22,20 +25,20 @@ struct LibrarySearchView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("书库检索").font(.system(size: 18, weight: .semibold))
-                    Text("原文优先 · 离线查询已导入书籍").font(.caption).foregroundStyle(.secondary)
+                    Text("书库检索").font(.system(size: 23, weight: .semibold))
+                    Text("原文优先 · 离线查询已导入书籍").font(.system(size: 13)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
-                Picker("检索范围", selection: $scope) {
-                    Text("本书").tag("current")
-                    Text("整个书库").tag("library")
-                }.labelsHidden().accessibilityLabel("检索范围").pickerStyle(.segmented).frame(width: 190)
+                ManagementSegmentedControl(selection: $scope, options: [
+                    ManagementSegmentOption(id: "current", title: "本书", detail: "只在当前打开书籍的原文和对象名称中检索"),
+                    ManagementSegmentOption(id: "library", title: "整个书库", detail: "在当前书库所有已载入书籍中检索")
+                ]).frame(width: 190)
                 Button { close() } label: { Image(systemName: "xmark") }
                     .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("关闭书库检索").keyboardShortcut(.cancelAction)
             }
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索原文、人物、概念或别名", text: $query).font(.system(size: 16)).textFieldStyle(.plain)
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "magnifyingglass").readingSearchIcon(pointSize: 16)
+                TextField("搜索原文、人物、概念或别名", text: $query).readingSearchInput(pointSize: 16)
                     .focused($queryFocused).onSubmit { scheduleSearch(debounce: false) }
                 if !query.isEmpty {
                     Button { query = ""; queryFocused = true } label: { Image(systemName: "xmark.circle.fill") }
@@ -44,7 +47,7 @@ struct LibrarySearchView: View {
             }.padding(.leading, 16).padding(.trailing, 4).frame(minHeight: 52).readingGlass(radius: 16)
             HStack(spacing: 8) {
                 if searching { ProgressView().controlSize(.small) }
-                Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(status).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(3)
                 Spacer(minLength: 0)
             }.frame(minHeight: 24)
             if !errorMessage.isEmpty {
@@ -52,8 +55,9 @@ struct LibrarySearchView: View {
             }
             results.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(ReadingLayout.panelPadding)
-        .frame(minWidth: 620, idealWidth: 820, minHeight: 520, idealHeight: 660)
+        .padding(24).background(Palette.canvas).controlSize(.large)
+        .frame(minWidth: embedded ? nil : 620, idealWidth: embedded ? nil : 820,
+               minHeight: embedded ? nil : 520, idealHeight: embedded ? nil : 660)
         .onReceive(store.$books) { books in
             let next = books.map { LibrarySourceSnapshot(project: $0) }
             guard next != snapshots else { return }
@@ -101,7 +105,7 @@ struct LibrarySearchView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: "book.closed").foregroundStyle(Palette.accent)
-                    Text(match.bookTitle).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(match.bookTitle).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                     Spacer(minLength: 8)
                     Text(match.locator).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(.secondary)
@@ -109,7 +113,7 @@ struct LibrarySearchView: View {
                 let before = (match.hasEarlierText ? "…" : "") + match.snippetBefore
                 let after = match.snippetAfter + (match.hasLaterText ? "…" : "")
                 Text("\(before)\(Text(match.quote).bold().foregroundStyle(Palette.accent))\(after)")
-                    .font(.system(size: 15)).lineSpacing(5).lineLimit(5).multilineTextAlignment(.leading)
+                    .font(.system(size: 16)).lineSpacing(6).lineLimit(5).multilineTextAlignment(.leading)
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).readingGlass(radius: 16).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(opening || store.isBusy)
     }
@@ -119,7 +123,7 @@ struct LibrarySearchView: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "rectangle.stack").font(.system(size: 18)).foregroundStyle(Palette.accent).frame(width: 24)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(match.entity.name).font(.system(size: 14, weight: .semibold))
+                    Text(match.entity.name).font(.system(size: 16, weight: .semibold))
                     Text("\(match.bookTitle) · 匹配名称：\(match.matchedName)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     if !match.entity.summary.isEmpty { Text(match.entity.summary).font(.callout).foregroundStyle(.secondary).lineLimit(2) }
                 }

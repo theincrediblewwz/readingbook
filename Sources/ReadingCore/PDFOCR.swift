@@ -26,6 +26,7 @@ public actor PDFOCRReader {
     public private(set) var requestCount = 0
     private var consumedTokens = 0
     private var operationActive = false
+    private var progressHandler: AIProgressHandler?
     private var runTokenLimit: Int?
     private static let maximumRunTokens = 4_194_304
     static let maximumImageBytes = 8 * 1_024 * 1_024
@@ -33,6 +34,11 @@ public actor PDFOCRReader {
     static let reviewNotice = "大模型 OCR 转录尚待原页核对；扫描质量、小字、公式、图表及复杂版式可能存在遗漏或误识别。"
 
     public init() {}
+
+    public func setProgressHandler(_ handler: AIProgressHandler?) {
+        guard !operationActive else { return }
+        progressHandler = handler
+    }
 
     public func resetBudget() {
         guard !operationActive else { return }
@@ -51,6 +57,7 @@ public actor PDFOCRReader {
         guard consumedTokens < tokenBudget else { throw ReadingError.invalid("本轮 OCR 已达到 \(tokenBudget) token 的保护预算，请主动开始下一轮。") }
         try Task.checkCancellation()
         operationActive = true
+        progressHandler?(AIProgressEvent(.preparing))
         defer { operationActive = false }
 
         #if os(macOS)
@@ -62,7 +69,7 @@ public actor PDFOCRReader {
         let messages = try Self.makeMessages(imageData: image.data, mimeType: image.mimeType, page: page)
         // ProviderClient must estimate vision input separately from base64 transport bytes.
         let prepared = try ProviderClient.prepare(messages: messages, tools: [], settings: settings,
-                                                  apiKey: apiKey, remainingTokens: tokenBudget - consumedTokens)
+                                                  apiKey: apiKey, remainingTokens: tokenBudget - consumedTokens, stream: progressHandler != nil)
         try Task.checkCancellation()
         // Reserve before sending: a cancelled or truncated response may still have incurred
         // provider usage even though perform cannot return a usable usage record.
@@ -70,7 +77,16 @@ public actor PDFOCRReader {
         consumedTokens += reserved
         runTokenLimit = tokenBudget
         requestCount += 1
-        let response = try await ProviderClient.perform(prepared)
+        let handler = progressHandler, requestID = UUID(), number = requestCount
+        handler?(AIProgressEvent(.waitingForResponse, requestID: requestID, requestNumber: number))
+        let observer: (@Sendable (ProviderStreamSnapshot) -> Void)?
+        if let callback = handler {
+            observer = { value in callback(AIProgressEvent(value.phase, requestID: requestID, requestNumber: number,
+                reasoningCharacters: value.reasoningCharacters, answerCharacters: value.answerCharacters, receivedBytes: value.receivedBytes)) }
+        } else { observer = nil }
+        let response = try await ProviderClient.perform(prepared, progress: observer)
+        try Task.checkCancellation()
+        handler?(AIProgressEvent(.requestCompleted, requestID: requestID, requestNumber: number))
         let addition = (consumedTokens - reserved).addingReportingOverflow(response.tokenCost)
         consumedTokens = addition.overflow ? tokenBudget : min(tokenBudget, addition.partialValue)
         try Task.checkCancellation()

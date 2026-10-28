@@ -43,7 +43,7 @@ extension AppStore {
                 isImportingBookCommit = true
                 // Repository copies the original encrypted bytes. No unlocked
                 // PDFDocument or decrypted replacement is written to the book.
-                try await repository.create(project, sourceURL: url)
+                project = try await repository.create(project, sourceURL: url)
                 publish(project)
                 if url.pathExtension.lowercased() == "pdf" {
                     if let password { pdfSessionPasswords[project.id] = password }

@@ -66,9 +66,9 @@ public enum ReadingLedger {
     private static let deferredMessage = "用户保留本单元为待识别，未读取其中内容。"
 
     public static func isDeferred(unitID: String, in project: BookProject) -> Bool {
-        guard let unit = project.units.first(where: { $0.id == unitID }),
-              project.coverage[unitID]?.status == .needsReview,
-              project.coverage[unitID]?.message == deferredMessage else { return false }
+        guard project.coverage[unitID]?.status == .needsReview,
+              project.coverage[unitID]?.message == deferredMessage,
+              let unit = project.units.first(where: { $0.id == unitID }) else { return false }
         return project.insights.contains {
             $0.id == "deferred-\(unitID)" && $0.unitIDs == [unitID] &&
             $0.markdown == "【未读取，待识别】\(unit.locator)。该单元尚无可靠文本，不得推断其中的事实。"
@@ -89,7 +89,7 @@ public enum ReadingLedger {
     /// Blank separators stay attached to a fragment. Concatenating the manifest texts exactly reproduces unit.text.
     /// Fenced code and display-math blocks remain together; long ordinary blocks are explicitly labelled fragments.
     public static func paragraphs(for unit: SourceUnit, in project: BookProject) throws -> [ReadingParagraph] {
-        guard project.units.contains(where: { $0.id == unit.id && $0.text == unit.text }), unit.text.utf8.count <= 2_000_000 else {
+        guard project.units.contains(where: { $0.id == unit.id && $0.text.utf8.elementsEqual(unit.text.utf8) }), unit.text.utf8.count <= 2_000_000 else {
             throw ReadingError.invalid("逐段清单来源不存在、已变化或过大。")
         }
         if unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [] }
@@ -197,6 +197,11 @@ public enum ReadingLedger {
 
     /// Storage/import validation is deliberately independent from the completion gate: old projects may have no ledger.
     public static func validateStoredRecords(in project: BookProject) throws {
+        var mathCache = MathVerificationValidationCache()
+        try validateStoredRecords(in: project, mathCache: &mathCache)
+    }
+
+    public static func validateStoredRecords(in project: BookProject, mathCache: inout MathVerificationValidationCache) throws {
         let unitIDs = Set(project.units.map(\.id))
         let records = project.paragraphReceipts ?? [], steps = project.readingStepResults ?? []
         guard Set(records.map(\.paragraphID)).count == records.count, Set(steps.map(\.stepID)).count == steps.count,
@@ -229,7 +234,7 @@ public enum ReadingLedger {
             let manifest = try paragraphs(for: unit, in: project).filter { batch.paragraphIDs.contains($0.id) }
             guard try makeBatch(unit: unit, paragraphs: manifest) == batch else { throw ReadingError.invalid("保存的阅读批次与原文不匹配。") }
         }
-        try ReadingWorkflowRuntime.validateStoredRecords(in: project)
+        try ReadingWorkflowRuntime.validateStoredRecords(in: project, mathCache: &mathCache)
     }
 
     static func matches(_ receipt: ParagraphReceipt, paragraph: ReadingParagraph) -> Bool {

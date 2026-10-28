@@ -2,10 +2,15 @@ import SwiftUI
 import AppKit
 import PDFKit
 import ReadingCore
+import os
+
+private let pdfDecorationSignposter = OSSignposter(subsystem: "org.readingbook.app", category: "PDFDecorations")
 
 /// Displays the original PDF with PDFKit. Page numbers and callbacks are 1-based.
 /// OCR text is deliberately not substituted for the PDF's rendered page.
 struct PDFReaderView: NSViewRepresentable {
+    @Environment(\.workspaceCanvasBlocked) private var interactionBlocked
+    @Environment(\.readingReduceTransparency) private var reduceTransparency
     var controller: PDFReaderController
     var url: URL
     var sourceHash: String
@@ -21,26 +26,42 @@ struct PDFReaderView: NSViewRepresentable {
     var navigationToken: Int
     var onPageChange: ((Int) -> Void)?
     var sourceDecorations: [SourceReadingDecoration]
+    var sourceDecorationRevision: Int?
+    var sourcePageTexts: [Int: PDFPageSourceText]
     var focusedDecorationID: String?
     var onSourceDecorationTap: ((String) -> Void)?
     var onSourceSelection: ((SourceReadingSelection?) -> Void)?
+    var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
+    var onVisiblePagesChange: (([Int]) -> Void)?
+    var onPreparationChanged: ((ReadingPreparationEvent) -> Void)?
+    var workspaceMemory: WorkspacePDFMemory?
+    var memoryRevision = 0
+    var onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)?
 
-    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil) {
+    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)? = nil) {
         self.controller = controller; self.url = url; self.sourceHash = sourceHash; self.password = password; self.annotations = annotations
         self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
         self.onUnlock = onUnlock; self.onSaveAnnotations = onSaveAnnotations; self.onTrashAnnotation = onTrashAnnotation
         self.canEditAnnotations = canEditAnnotations
-        self.sourceDecorations = sourceDecorations; self.focusedDecorationID = focusedDecorationID
+        self.sourceDecorations = sourceDecorations; self.sourceDecorationRevision = sourceDecorationRevision; self.focusedDecorationID = focusedDecorationID
+        self.sourcePageTexts = sourcePageTexts
         self.onSourceDecorationTap = onSourceDecorationTap; self.onSourceSelection = onSourceSelection
+        self.onSourceDecorationHover = onSourceDecorationHover; self.onVisiblePagesChange = onVisiblePagesChange
+        self.onPreparationChanged = onPreparationChanged
+        self.workspaceMemory = workspaceMemory; self.memoryRevision = memoryRevision; self.onWorkspaceMemory = onWorkspaceMemory
     }
 
     func makeNSView(context: Context) -> PDFReaderContainerView {
         let view = PDFReaderContainerView()
+        view.setInteractionBlocked(interactionBlocked)
+        view.setReducedTransparency(reduceTransparency)
         view.update(from: self)
         return view
     }
 
     func updateNSView(_ nsView: PDFReaderContainerView, context: Context) {
+        nsView.setInteractionBlocked(interactionBlocked)
+        nsView.setReducedTransparency(reduceTransparency)
         nsView.update(from: self)
     }
 
@@ -52,6 +73,7 @@ struct PDFReaderView: NSViewRepresentable {
 @MainActor final class PDFReaderContainerView: NSView, NSSearchFieldDelegate {
     private let bindingID = UUID()
     private weak var controller: PDFReaderController?
+    private var interactionBlocked = false
     private var sourceHash = ""
     private var sessionPassword: String?
     private var onUnlock: ((String) -> Void)?
@@ -62,14 +84,179 @@ struct PDFReaderView: NSViewRepresentable {
     private var renderedAnnotations: [(PDFPage, PDFAnnotation)] = []
     private var annotationIDs: [ObjectIdentifier: String] = [:]
     private var sourceDecorations: [SourceReadingDecoration] = []
+    private var sourceDecorationsHaveUnpagedValues = false
+    private var sourceDecorationValuesByID: [String: SourceReadingDecoration] = [:]
+    private var sourcePageTexts: [Int: PDFPageSourceText] = [:]
     private var sourceDecorationPage: Int?
     private var sourceDecorationFocusID: String?
-    private var renderedSourceAnnotations: [(PDFPage, PDFAnnotation)] = []
-    private var sourceAnnotationIDs: [ObjectIdentifier: String] = [:]
+    private var appliedSourceDecorationFocusID: String?
+    private var appliedSourceDecorationProofIdentity: String?
+    private var awaitingSourceFocusProof = false
+    private struct SourceLineKey: Hashable, Sendable { let id: String; let line: Int }
+    private struct SourceGeometry {
+        let value: SourceReadingDecoration
+        let page: Int
+        let lines: [CGRect]
+        let cost: Int
+    }
+    @MainActor private final class SourceGeometryPage {
+        let text: String
+        let byteCount: Int
+        struct LineLayout: Equatable {
+            let crop: CGRect; let rotation: Int; let characterCount: Int
+        }
+        var nativeLines = NativePDFTextLine.Directory()
+        var nativeLineLayout: LineLayout?
+        var ranges: [QuoteCacheKey: CachedQuoteRange] = [:]
+        var rangeBytes = 0
+        // Identity is the canonical page's raw-byte hash. A nil proof with a
+        // non-nil identity remembers a completed mismatch, not cancellation.
+        var sourceTextProofIdentity: String?
+        var sourceTextProof: NativePageTextProof?
+        var unresolvedIDs: Set<String> = []
+        var unresolvedProofAttempts: [String: String] = [:]
+        var geometry: [String: SourceGeometry] = [:]
+        var geometryBytes = 0
+        private(set) var passageValues: [String: SourceReadingDecoration] = [:]
+        private(set) var passageRanges: [String: NSRange] = [:]
+        var passageIndex = ReadingRangeIndex<String>()
+        var passageBytes = 0
+        private var passageIndexDirty = false
+        var hitBands = ReadingGeometryBands<SourceLineKey>()
+        var paintBands = ReadingGeometryBands<SourceLineKey>()
+        var cost: Int { byteCount + nativeLines.byteCount + rangeBytes + geometryBytes + passageBytes + (sourceTextProof?.byteCount ?? 0) + unresolvedIDs.count * 192 }
+        init(prepared: NativePDFPreparationWorker.PreparedPage) {
+            self.text = prepared.text; self.byteCount = prepared.byteCount
+            nativeLines = prepared.directory
+            nativeLineLayout = LineLayout(crop: prepared.crop, rotation: prepared.rotation, characterCount: prepared.nativeCharacterCount)
+        }
+        func remember(_ value: SourceGeometry) {
+            geometryBytes += value.cost - (geometry[value.value.id]?.cost ?? 0)
+            geometry[value.value.id] = value
+            for (line, rectangle) in value.lines.enumerated() {
+                let key = SourceLineKey(id: value.value.id, line: line)
+                hitBands.insert(key, rectangle: rectangle)
+                if value.value.interaction == .term && !value.value.passive { paintBands.insert(key, rectangle: rectangle) }
+            }
+        }
+        func retain(validIDs: Set<String>) {
+            unresolvedIDs.formIntersection(validIDs)
+            unresolvedProofAttempts = unresolvedProofAttempts.filter { validIDs.contains($0.key) }
+            let removedPassages = passageValues.keys.contains { !validIDs.contains($0) }
+            if removedPassages {
+                passageValues = passageValues.filter { validIDs.contains($0.key) }
+                passageRanges = passageRanges.filter { validIDs.contains($0.key) }
+                passageIndexDirty = true
+                rebuildPassageIndexIfNeeded()
+            }
+            guard geometry.keys.contains(where: { !validIDs.contains($0) }) else { return }
+            geometry = geometry.filter { validIDs.contains($0.key) }
+            geometryBytes = geometry.values.reduce(0) { $0 + $1.cost }
+            hitBands = ReadingGeometryBands<SourceLineKey>()
+            paintBands = ReadingGeometryBands<SourceLineKey>()
+            for value in geometry.values {
+                for (line, rectangle) in value.lines.enumerated() {
+                    let key = SourceLineKey(id: value.value.id, line: line)
+                    hitBands.insert(key, rectangle: rectangle)
+                    if value.value.interaction == .term && !value.value.passive { paintBands.insert(key, rectangle: rectangle) }
+                }
+            }
+        }
+        func rememberPassage(_ value: SourceReadingDecoration, range: NSRange?) {
+            guard passageValues[value.id] != value || passageRanges[value.id] != range else { return }
+            passageValues[value.id] = value; passageRanges[value.id] = range
+            passageIndexDirty = true
+        }
+        func removePassage(_ id: String) {
+            let value = passageValues.removeValue(forKey: id), range = passageRanges.removeValue(forKey: id)
+            if value != nil || range != nil { passageIndexDirty = true }
+        }
+        func rebuildPassageIndexIfNeeded() {
+            guard passageIndexDirty else { return }
+            passageIndex = ReadingRangeIndex(passageRanges.map { .init(id: $0.key, range: $0.value) })
+            passageBytes = passageValues.values.reduce(0) { $0 + $1.quote.utf8.count + ($1.prefix?.utf8.count ?? 0) + ($1.suffix?.utf8.count ?? 0) + 256 }
+            passageIndexDirty = false
+        }
+        func needsProofRetry(_ id: String, identity: String, currentValues: [String: SourceReadingDecoration]) -> Bool {
+            guard unresolvedIDs.contains(id), unresolvedProofAttempts[id] != identity, let value = currentValues[id] else { return false }
+            return passageValues[id] == value || geometry[id]?.value == value
+        }
+        func rememberMatch(_ id: String, range: NSRange?, proofIdentity: String?) {
+            if range != nil { unresolvedIDs.remove(id); unresolvedProofAttempts.removeValue(forKey: id) }
+            else {
+                unresolvedIDs.insert(id)
+                unresolvedProofAttempts[id] = proofIdentity
+            }
+        }
+    }
+    private var sourceGeometries: [String: SourceGeometry] = [:]
+    private var sourceGeometryIDsByPage: [Int: [String]] = [:]
+    private var sourceGeometryPages: [Int: SourceGeometryPage] = [:]
+    private var sourceGeometryPageOrder: [Int] = []
+    private var sourceDecorationTask: Task<Void, Never>?
+    private let nativePreparation = NativePDFPreparationWorker()
+    private var sourcePreparationRun: UUID?
+    private var sourceGeometryTask: Task<Void, Never>?
+    private var sourceGeometryRun: UUID?
+    private var sourceQuoteTask: Task<Void, Never>?
+    private var sourceQuoteRun: UUID?
+    private var sourceQuoteTarget: SourceReadingDecoration?
+    private struct PendingSourceGeometry {
+        let page: Int; let value: SourceReadingDecoration; let range: NSRange
+    }
+    private var pendingSourceGeometry: [String: PendingSourceGeometry] = [:]
+    private var inFlightSourceGeometryIDs = Set<String>()
+    private var sourceDecorationGeneration = 0
+    private var sourceDecorationRevision: Int?
+    private var hoveredSourceID: String?
+    private var sourceInputGeneration = 0
+    private var renderedSourceInputGeneration = -1
+    private var groupedSourceDecorations: [Int: [SourceReadingDecoration]] = [:]
+    private var validSourceDecorationIDsByPage: [Int: Set<String>] = [:]
+    private var sourceAvailablePages: Set<Int> = []
+    private var renderedSourceWindow: [Int] = []
+    private var sourcePreparationNeedsRetry = false
+    private let sourceCanvas = PDFSourceDecorationCanvas()
+    private var sourcePointerMonitor: Any?
+    private var sourcePress: (hit: PDFSourceDecorationHit, point: CGPoint, generation: Int)?
+    private var sourceInteractionGeneration = 0
+    private var sourceHoverRefresh = ReadingHoverRefresh()
+    private var sourceHoverRefreshWork: DispatchWorkItem?
+    private var sourceScrollQuietUntil = 0.0
+    private var onVisiblePagesChange: (([Int]) -> Void)?
+    private var onPreparationChanged: ((ReadingPreparationEvent) -> Void)?
+    private var lastVisiblePages: [Int] = []
+    private var visiblePagePublishScheduled = false
+    private struct QuoteCacheKey: Hashable, Sendable {
+        // String equality normalizes Unicode; matching below deliberately does
+        // not. Keep cache identities byte-exact as well.
+        let quote: Data
+        let prefix: Data?
+        let suffix: Data?
+        var byteCount: Int { quote.count + (prefix?.count ?? 0) + (suffix?.count ?? 0) }
+    }
+    private struct CachedQuoteRange: Sendable { let range: NSRange? }
+    private struct PageQuoteMatches: Sendable {
+        let ranges: [String: CachedQuoteRange]
+        let uniqueMatchedIDs: Set<String>
+        let sourceTextIdentity: String?
+        let proof: NativePageTextProof?
+    }
+    private weak var quoteCachePage: PDFPage?
+    private var quoteRangeCache: [QuoteCacheKey: CachedQuoteRange] = [:]
+    private var quoteCacheBytes = 0
     private var onSourceDecorationTap: ((String) -> Void)?
     private var onSourceSelection: ((SourceReadingSelection?) -> Void)?
-    private var pendingQuote: (page: Int, quote: String, prefix: String?, suffix: String?)?
-    private var isFocusingQuote = false
+    private var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
+    private var pendingQuote: (page: Int, quote: String, prefix: String?, suffix: String?, decoration: SourceReadingDecoration?)?
+    /// Navigation emphasis is not a user text selection. In particular, a
+    /// remounted reader may restore a focused anchor while hover stays usable.
+    private var quoteFocusHighlight: PDFSelection?
+    private var pendingWorkspaceMemory: WorkspacePDFMemory?
+    private var appliedMemoryRevision: Int?
+    private var memoryCallback: ((WorkspacePDFMemory) -> Void)?
+    private var memoryCaptureTask: DispatchWorkItem?
+    private weak var observedClip: NSClipView?
     private var sourceSelectionObservation = 0
     private var annotationPanel: NSPanel?
     private var editingAnnotationSheet = false
@@ -78,6 +265,8 @@ struct PDFReaderView: NSViewRepresentable {
     private let pdfView = AnnotationPDFView()
     private let thumbnails = PDFThumbnailView()
     private let thumbnailScroll = NSScrollView()
+    private let thumbnailPanel = PDFReaderFloatingPanel()
+    private var thumbnailTop: NSLayoutConstraint?
     private let contentStack = NSStackView()
     private let header = PDFReaderFloatingPanel()
     private let searchField = NSSearchField()
@@ -104,8 +293,14 @@ struct PDFReaderView: NSViewRepresentable {
     private var navigationRequestID = 0
     private var pageObservationID = 0
     private var installingDocument = false
-    private var pendingNavigation: (id: Int, page: Int, notifyParent: Bool)?
+    private enum PageLanding: Equatable { case start, end }
+    private var pendingNavigation: (id: Int, page: Int, notifyParent: Bool, landing: PageLanding)?
+    private var readingDirection = PDFReadingDirection.vertical
+    private var pageScrollMonitor: Any?
+    private var pageGestureOwnership = CanvasGestureOwnership()
+    private var pageTurnPolicy = PDFPageTurnPolicy()
     private var fitMode = FitMode.width
+    private var isApplyingFit = false
     private var lastViewportSize = NSSize.zero
     private var searchGeneration = 0
     private var searchDelegate: PDFReaderSearchDelegate?
@@ -117,6 +312,26 @@ struct PDFReaderView: NSViewRepresentable {
     private var allowsSearchAutoNavigation = false
     private var searchEscapeMonitor: Any?
     private let matchLimit = 5000
+    private struct ControlSnapshot: Equatable {
+        let controllerID: ObjectIdentifier?
+        let generation: Int
+        let page: Int
+        let pageCount: Int
+        let zoom: Int
+        let ready: Bool
+        let selected: Bool
+        let canEdit: Bool
+        let searchVisible: Bool
+        let continuous: Bool
+        let direction: PDFReadingDirection
+        let thumbnailsVisible: Bool
+        let fitMode: String
+        let searchFrame: CGRect
+        let thumbnailFrame: CGRect
+    }
+    private var pendingControlSnapshot: ControlSnapshot?
+    private var lastControlSnapshot: ControlSnapshot?
+    private var controlPublishScheduled = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -126,59 +341,105 @@ struct PDFReaderView: NSViewRepresentable {
     convenience init() { self.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError("PDFReaderContainerView is created in code") }
 
+    func setInteractionBlocked(_ blocked: Bool) {
+        guard interactionBlocked != blocked else { return }
+        interactionBlocked = blocked; pdfView.interactionBlocked = blocked
+        if blocked { awaitingSourceFocusProof = false; resetPageGesture(); invalidateSourcePress(); cancelSourceQuotePreparation() }
+        else { scheduleSourceHoverRefresh() }
+        guard blocked, let owner = window, let responder = owner.firstResponder else { return }
+        // Only resign a PDF-owned responder. A management card may already
+        // own this window's shared field editor by the time this update runs.
+        if ownsResponder(responder) { owner.makeFirstResponder(nil) }
+    }
+    func setReducedTransparency(_ reduced: Bool) {
+        let enabled = reduced || UserDefaults.standard.bool(forKey: "appearance.reduceTransparency")
+            || NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        header.setReducedTransparency(enabled); thumbnailPanel.setReducedTransparency(enabled)
+    }
+    private func ownsResponder(_ responder: NSResponder) -> Bool {
+        let searchEditor = searchField.currentEditor()
+        let belongsToPDF = (responder as? NSView).map { $0 === pdfView || $0.isDescendant(of: pdfView) } ?? false
+        return belongsToPDF || responder === searchField || (searchEditor != nil && responder === searchEditor)
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        interactionBlocked ? nil : super.hitTest(point)
+    }
+
     private func configure() {
         pdfView.onRegion = { [weak self] page, rect in self?.createRegion(page: page, rect: rect) }
-        pdfView.onRegionError = { [weak self] message in self?.setStatus(message) }
-        pdfView.isManagedAnnotation = { [weak self] annotation in
-            self?.annotationIDs[ObjectIdentifier(annotation)] != nil || self?.sourceAnnotationIDs[ObjectIdentifier(annotation)] != nil
+        pdfView.onReadingNavigation = { [weak self] offset, direction, pageStep, repeatKey in
+            self?.handlePageNavigationKey(offset: offset, direction: direction, pageStep: pageStep, repeatKey: repeatKey) ?? false
         }
-        pdfView.isSourceAnnotation = { [weak self] annotation in self?.sourceAnnotationIDs[ObjectIdentifier(annotation)] != nil }
+        pdfView.onRegionError = { [weak self] message in self?.setStatus(message) }
+        pdfView.isManagedAnnotation = { [weak self] annotation in self?.annotationIDs[ObjectIdentifier(annotation)] != nil }
+        pdfView.onSourcePointerLeft = { [weak self] in self?.cancelSourceHoverRefresh(); self?.reportSourceHover(nil) }
+        sourceCanvas.wantsLayer = true
+        sourceCanvas.layer?.backgroundColor = NSColor.clear.cgColor
+        sourceCanvas.paint = { [weak self] dirty in self?.drawSourceDecorations(in: dirty) }
         pdfView.onAnnotationTap = { [weak self] annotation in self?.openAnnotation(annotation) }
         pdfView.autoScales = false
-        pdfView.displayMode = .singlePageContinuous
-        pdfView.displayDirection = .vertical
+        readingDirection = defaultReadingDirection
+        pdfView.displayMode = defaultContinuous ? .singlePageContinuous : .singlePage
+        pdfView.displayDirection = readingDirection == .vertical ? .vertical : .horizontal
+        pdfView.readingDirection = readingDirection
         pdfView.displayBox = .cropBox
         pdfView.displaysPageBreaks = true
         pdfView.minScaleFactor = 0.05
         pdfView.maxScaleFactor = 12
         pdfView.backgroundColor = .windowBackgroundColor
         NotificationCenter.default.addObserver(self, selector: #selector(pageChanged(_:)), name: .PDFViewPageChanged, object: pdfView)
+        NotificationCenter.default.addObserver(self, selector: #selector(visiblePagesChanged(_:)), name: .PDFViewVisiblePagesChanged, object: pdfView)
         NotificationCenter.default.addObserver(self, selector: #selector(scaleChanged(_:)), name: .PDFViewScaleChanged, object: pdfView)
         NotificationCenter.default.addObserver(self, selector: #selector(selectionChanged(_:)), name: .PDFViewSelectionChanged, object: pdfView)
         NotificationCenter.default.addObserver(self, selector: #selector(annotationHit(_:)), name: .PDFViewAnnotationHit, object: pdfView)
+        NotificationCenter.default.addObserver(self, selector: #selector(pdfViewportScrolled(_:)), name: NSView.boundsDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(captureWorkspaceMemoryNow(_:)), name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
 
-        thumbnails.pdfView = pdfView
         thumbnails.thumbnailSize = NSSize(width: 86, height: 112)
         thumbnails.maximumNumberOfColumns = 1
         thumbnails.allowsDragging = false
         thumbnails.allowsMultipleSelection = false
         thumbnails.labelFont = .systemFont(ofSize: 10)
-        thumbnails.backgroundColor = .controlBackgroundColor
+        thumbnails.backgroundColor = .clear
         thumbnailScroll.documentView = thumbnails
         thumbnailScroll.hasVerticalScroller = true
         thumbnailScroll.hasHorizontalScroller = false
         thumbnailScroll.autohidesScrollers = true
-        thumbnailScroll.drawsBackground = true
-        thumbnailScroll.backgroundColor = .controlBackgroundColor
-        thumbnailScroll.isHidden = true
-        thumbnailScroll.widthAnchor.constraint(equalToConstant: 118).isActive = true
+        thumbnailScroll.drawsBackground = false
+        thumbnailScroll.translatesAutoresizingMaskIntoConstraints = false
+        thumbnailPanel.isHidden = true
+        let thumbnailTitle = NSTextField(labelWithString: "缩略图")
+        thumbnailTitle.font = .systemFont(ofSize: 14, weight: .semibold)
+        let thumbnailHeader = row([thumbnailTitle, symbolButton("xmark", "关闭缩略图", #selector(hideThumbnails))])
+        let thumbnailBody = NSStackView(views: [thumbnailHeader, thumbnailScroll])
+        thumbnailBody.orientation = .vertical; thumbnailBody.alignment = .leading; thumbnailBody.spacing = 4
+        thumbnailHeader.setContentHuggingPriority(.required, for: .vertical)
+        thumbnailScroll.setContentHuggingPriority(.defaultLow, for: .vertical)
+        thumbnailBody.translatesAutoresizingMaskIntoConstraints = false
+        thumbnailPanel.panelContent.addSubview(thumbnailBody)
+        NSLayoutConstraint.activate([
+            thumbnailBody.leadingAnchor.constraint(equalTo: thumbnailPanel.panelContent.leadingAnchor, constant: 10),
+            thumbnailBody.trailingAnchor.constraint(equalTo: thumbnailPanel.panelContent.trailingAnchor, constant: -10),
+            thumbnailBody.topAnchor.constraint(equalTo: thumbnailPanel.panelContent.topAnchor, constant: 8),
+            thumbnailBody.bottomAnchor.constraint(equalTo: thumbnailPanel.panelContent.bottomAnchor, constant: -10),
+            thumbnailHeader.widthAnchor.constraint(equalTo: thumbnailBody.widthAnchor),
+            thumbnailScroll.widthAnchor.constraint(equalTo: thumbnailBody.widthAnchor)
+        ])
 
         contentStack.orientation = .horizontal
         contentStack.alignment = .top
         contentStack.distribution = .fill
         contentStack.spacing = 0
         contentStack.detachesHiddenViews = true
-        contentStack.addArrangedSubview(thumbnailScroll)
         contentStack.addArrangedSubview(pdfView)
         pdfView.heightAnchor.constraint(equalTo: contentStack.heightAnchor).isActive = true
-        thumbnailScroll.heightAnchor.constraint(equalTo: contentStack.heightAnchor).isActive = true
         pdfView.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         searchField.placeholderString = "搜索 PDF 文字 · 回车查找"
         searchField.controlSize = .regular
-        searchField.font = .systemFont(ofSize: 13)
+        searchField.font = .systemFont(ofSize: 15)
         searchField.setAccessibilityLabel("搜索 PDF 文字")
-        searchField.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        searchField.heightAnchor.constraint(equalToConstant: 44).isActive = true
         // One visible close affordance closes the entire find panel. Keeping the
         // search field's native clear cross beside it gave two identical crosses
         // different meanings, while the original outer cross only cleared text.
@@ -219,14 +480,22 @@ struct PDFReaderView: NSViewRepresentable {
         ])
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         header.translatesAutoresizingMaskIntoConstraints = false; header.isHidden = true
-        addSubview(contentStack); addSubview(header)
+        thumbnailPanel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(contentStack); addSubview(sourceCanvas); addSubview(thumbnailPanel); addSubview(header)
+        let thumbnailTop = thumbnailPanel.topAnchor.constraint(equalTo: topAnchor, constant: 76)
+        self.thumbnailTop = thumbnailTop
         NSLayoutConstraint.activate([
             contentStack.leadingAnchor.constraint(equalTo: leadingAnchor), contentStack.trailingAnchor.constraint(equalTo: trailingAnchor),
             contentStack.topAnchor.constraint(equalTo: topAnchor), contentStack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            header.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 12),
-            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 82),
-            header.widthAnchor.constraint(lessThanOrEqualToConstant: 500)
+            header.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 18),
+            header.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -18),
+            header.centerXAnchor.constraint(equalTo: centerXAnchor),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 76),
+            header.widthAnchor.constraint(lessThanOrEqualToConstant: 500),
+            thumbnailPanel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            thumbnailTop,
+            thumbnailPanel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -88),
+            thumbnailPanel.widthAnchor.constraint(equalToConstant: 156)
         ])
         let preferredSearchWidth = header.widthAnchor.constraint(equalToConstant: 500)
         preferredSearchWidth.priority = .defaultHigh; preferredSearchWidth.isActive = true
@@ -269,6 +538,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     func update(from input: PDFReaderView) {
         let url = input.url, requestedPage = input.page, navigationToken = input.navigationToken
+        let sourceChanged = sourceHash != input.sourceHash
         if controller !== input.controller {
             controller?.unbind(id: bindingID)
             controller = input.controller
@@ -277,14 +547,66 @@ struct PDFReaderView: NSViewRepresentable {
         callback = input.onPageChange; onUnlock = input.onUnlock
         onSaveAnnotations = input.onSaveAnnotations; onTrashAnnotation = input.onTrashAnnotation
         onSourceDecorationTap = input.onSourceDecorationTap; onSourceSelection = input.onSourceSelection
-        let sourceDecorationsChanged = sourceDecorations != input.sourceDecorations || sourceDecorationPage != requestedPage
-        sourceDecorations = Array(input.sourceDecorations.prefix(1_000)); sourceDecorationPage = requestedPage
+        onSourceDecorationHover = input.onSourceDecorationHover
+        onVisiblePagesChange = input.onVisiblePagesChange
+        onPreparationChanged = input.onPreparationChanged
+        // This optional acceleration metadata has its own lifetime. A normal
+        // publication may briefly withhold it; keep existing marks/geometry
+        // and fall back to unique matching rather than flashing the page.
+        let newProofMetadata = input.sourcePageTexts.contains { sourcePageTexts[$0.key]?.identity != $0.value.identity }
+        sourcePageTexts = input.sourcePageTexts
+        for (number, cache) in sourceGeometryPages {
+            // Missing window metadata is not evidence that an idle page's
+            // source changed. Reuse still requires present, matching metadata
+            // at the use site; a new document/source clears all page caches.
+            guard let identity = sourcePageTexts[number]?.identity,
+                  cache.sourceTextProofIdentity != identity else { continue }
+            cache.sourceTextProofIdentity = nil; cache.sourceTextProof = nil
+        }
+        let requestedPageChanged = sourceDecorationPage != requestedPage
+        let sourceDecorationsChanged = sourceChanged || input.url.standardizedFileURL != loadedURL || (requestedPageChanged && sourceDecorationsHaveUnpagedValues) || (sourceDecorationFocusID != input.focusedDecorationID && sourceDecorations != input.sourceDecorations) || (input.sourceDecorationRevision.map { $0 != sourceDecorationRevision }
+            ?? (sourceDecorations != input.sourceDecorations))
+        if sourceDecorationsChanged {
+            invalidateSourcePress()
+            sourceDecorations = input.sourceDecorations; sourceInputGeneration &+= 1
+            groupedSourceDecorations = Dictionary(grouping: sourceDecorations, by: { $0.page ?? requestedPage ?? 1 })
+            // Keep every supplied mark eligible. Matching is consumed in
+            // bounded worker batches below; a work limit must not delete the
+            // tail of a dense page from the presentation catalog.
+            validSourceDecorationIDsByPage = [:]
+            sourceDecorationsHaveUnpagedValues = false
+            for value in input.sourceDecorations {
+                if value.page == nil { sourceDecorationsHaveUnpagedValues = true }
+                validSourceDecorationIDsByPage[value.page ?? requestedPage ?? 1, default: []].insert(value.id)
+            }
+            sourceAvailablePages = Set(groupedSourceDecorations.keys)
+            sourceDecorationValuesByID = Dictionary(sourceDecorations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            // New unrelated presentation data does not cancel a reader's
+            // outstanding jump. If its actual target changed, retry only while
+            // that same explicit intent is still active, never after a scroll.
+            if let target = sourceQuoteTarget, sourceDecorationValuesByID[target.id] != target {
+                let retry = sourceQuoteRun != nil && input.focusedDecorationID == target.id && sourceDecorationValuesByID[target.id] != nil
+                cancelSourceQuotePreparation()
+                if retry { appliedSourceDecorationFocusID = nil; appliedSourceDecorationProofIdentity = nil }
+            }
+        }
+        sourceDecorationRevision = input.sourceDecorationRevision; sourceDecorationPage = requestedPage
         sourceHash = input.sourceHash; sessionPassword = input.password
         canEditAnnotations = input.canEditAnnotations
         let annotationsChanged = input.annotations != savedAnnotations
         savedAnnotations = input.annotations
         let canonical = url.standardizedFileURL
-        if canonical != loadedURL {
+        if canonical != loadedURL || sourceChanged || appliedMemoryRevision != input.memoryRevision {
+            // Capture against the old callback before rebinding to another book.
+            if canonical != loadedURL || sourceChanged { captureWorkspaceMemory() }
+            memoryCaptureTask?.cancel(); memoryCaptureTask = nil
+            appliedMemoryRevision = input.memoryRevision
+            pendingWorkspaceMemory = input.workspaceMemory?.isValid == true ? input.workspaceMemory : nil
+            applyWorkspaceDisplayPreferences()
+            if canonical == loadedURL && !sourceChanged { synchronizeThumbnails() }
+        }
+        memoryCallback = input.onWorkspaceMemory
+        if canonical != loadedURL || sourceChanged {
             sourcePage = requestedPage; lastParentPage = requestedPage; lastParentNavigationToken = navigationToken
             load(canonical)
         } else if requestedPage != lastParentPage || navigationToken != lastParentNavigationToken {
@@ -304,25 +626,29 @@ struct PDFReaderView: NSViewRepresentable {
         if document?.isLocked == true, let password = input.password, !password.isEmpty,
            document?.unlock(withPassword: password) == true { showDocument() }
         if annotationsChanged { renderSavedAnnotations(); if showingAnnotationList { showAnnotations() } }
-        if sourceDecorationsChanged { renderSourceDecorations() }
+        if sourceDecorationsChanged || newProofMetadata || requestedPageChanged { renderSourceDecorations() }
         if sourceDecorationFocusID != input.focusedDecorationID {
+            cancelSourceQuotePreparation()
             sourceDecorationFocusID = input.focusedDecorationID
-            if let id = input.focusedDecorationID, let decoration = sourceDecorations.first(where: { $0.id == id }), let page = requestedPage {
-                focusQuote(on: page, quote: decoration.quote, prefix: decoration.prefix, suffix: decoration.suffix)
-            }
+            clearQuoteFocusHighlight()
+            appliedSourceDecorationFocusID = nil; appliedSourceDecorationProofIdentity = nil; pendingQuote = nil
         }
+        focusSourceDecorationIfReady()
         refreshControls()
+        if pendingNavigation == nil, pendingWorkspaceMemory != nil, document?.isLocked == false { restoreWorkspaceDestination() }
     }
 
     private func load(_ url: URL) {
+        resetPageGesture(); observedClip = nil
         if !editingAnnotationSheet { closeAnnotationPanel() }
         pdfView.cancelRegionSelection()
-        clearSourceDecorations(); sourceDecorationFocusID = nil; pendingQuote = nil
+        clearSourceDecorations(); resetQuoteCache(); sourceDecorationFocusID = nil; appliedSourceDecorationFocusID = nil; appliedSourceDecorationProofIdentity = nil; pendingQuote = nil
         invalidateNavigation(); installingDocument = true
         defer { installingDocument = false }
         allowsSearchAutoNavigation = false; lastCallback = nil
         dismissSearch(restoreFocus: false)
         document?.delegate = nil
+        thumbnails.pdfView = nil
         pdfView.document = nil; document = nil
         if securityScoped { loadedURL?.stopAccessingSecurityScopedResource() }
         securityScoped = false; loadedURL = url
@@ -350,14 +676,11 @@ struct PDFReaderView: NSViewRepresentable {
         pdfView.document = document
         renderSavedAnnotations()
         renderSourceDecorations()
-        thumbnails.pdfView = pdfView
-        layoutThumbnails()
+        synchronizeThumbnails()
         let desired = sourcePage ?? 1
         navigate(to: (1...document.pageCount).contains(desired) ? desired : 1, notifyParent: false)
-        if let id = sourceDecorationFocusID, let decoration = sourceDecorations.first(where: { $0.id == id }) {
-            focusQuote(on: desired, quote: decoration.quote, prefix: decoration.prefix, suffix: decoration.suffix)
-        }
         installingDocument = false
+        focusSourceDecorationIfReady()
         refreshControls()
     }
 
@@ -391,7 +714,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     /// Explicit navigation always addresses a destination, including a repeated
     /// request for the current page. Notifications resume after its layout turn.
-    private func navigate(to number: Int, notifyParent: Bool = true) {
+    private func navigate(to number: Int, notifyParent: Bool = true, landing: PageLanding = .start) {
         guard let document, !document.isLocked, document.pageCount > 0, (1...document.pageCount).contains(number), let target = document.page(at: number - 1) else {
             if document?.isLocked != true { setStatus("页码超出 PDF 的有效范围。") }
             return
@@ -399,20 +722,39 @@ struct PDFReaderView: NSViewRepresentable {
         invalidateNavigation()
         setStatus("")
         let request = navigationRequestID, generation = documentGeneration
-        pendingNavigation = (request, number, notifyParent)
-        position(at: target)
+        pendingNavigation = (request, number, notifyParent, landing)
+        position(at: target, landing: landing)
         DispatchQueue.main.async { [weak self] in self?.settleNavigation(request, generation: generation, attempt: 0) }
     }
 
     private func invalidateNavigation() {
+        invalidateSourcePress()
+        cancelSourceQuotePreparation()
+        clearQuoteFocusHighlight()
+        awaitingSourceFocusProof = false
         navigationRequestID &+= 1; pageObservationID &+= 1; pendingNavigation = nil; pendingQuote = nil
     }
 
-    private func position(at page: PDFPage) {
+    private func position(at page: PDFPage, landing: PageLanding = .start) {
         pdfView.go(to: page)
+        // A display-mode change rebuilds PDFKit's document view. Resolve that
+        // layout before fitting or a destination may use the previous page's
+        // geometry and retain its old scroll offset in single-page mode.
+        pdfView.layoutDocumentView()
         applyFit()
+        pdfView.layoutDocumentView()
         let box = page.bounds(for: pdfView.displayBox)
-        pdfView.go(to: PDFDestination(page: page, at: CGPoint(x: box.minX, y: box.maxY)))
+        let point: CGPoint
+        if landing == .end {
+            let visiblePage = pdfView.convert(box, from: page)
+            let top = pdfView.isFlipped ? visiblePage.minY : visiblePage.maxY
+            let bottom = pdfView.isFlipped ? visiblePage.maxY : visiblePage.minY
+            let edge = readingDirection == .vertical
+                ? CGPoint(x: visiblePage.minX, y: bottom)
+                : CGPoint(x: visiblePage.maxX, y: top)
+            point = pdfView.convert(edge, to: page)
+        } else { point = CGPoint(x: box.minX, y: box.maxY) }
+        pdfView.go(to: PDFDestination(page: page, at: point))
         refreshControls()
     }
 
@@ -430,23 +772,34 @@ struct PDFReaderView: NSViewRepresentable {
                 setStatus("PDF 定位未完成，请重新选择页码。")
                 return
             }
-            position(at: target)
+            position(at: target, landing: pending.landing)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in self?.settleNavigation(request, generation: generation, attempt: attempt + 1) }
             return
         }
         pendingNavigation = nil; refreshControls()
+        restoreWorkspaceDestination()
         if let quote = pendingQuote, quote.page == pending.page {
-            pendingQuote = nil; applyQuoteFocus(on: quote.page, quote: quote.quote, prefix: quote.prefix, suffix: quote.suffix)
+            pendingQuote = nil; applyQuoteFocus(on: quote.page, quote: quote.quote, prefix: quote.prefix, suffix: quote.suffix, decoration: quote.decoration)
         }
         if pending.notifyParent { schedulePageCallback(pending.page) }
         else { lastEmittedPage = pending.page }
     }
 
-    @objc private func previousPage() { if let page = currentPageNumber, page > 1 { navigate(to: page - 1) } }
-    @objc private func nextPage() { if let page = currentPageNumber, let document, page < document.pageCount { navigate(to: page + 1) } }
+    @objc private func previousPage() {
+        if let page = currentPageNumber, page > 1 { navigate(to: page - 1); window?.makeFirstResponder(pdfView) }
+    }
+    @objc private func nextPage() {
+        if let page = currentPageNumber, let document, page < document.pageCount { navigate(to: page + 1); window?.makeFirstResponder(pdfView) }
+    }
     @objc private func toggleThumbnails() {
-        thumbnailScroll.isHidden.toggle()
-        needsLayout = true; layoutSubtreeIfNeeded(); layoutThumbnails(); applyFit()
+        setThumbnailsVisible(thumbnailPanel.isHidden)
+    }
+    @objc private func hideThumbnails() { setThumbnailsVisible(false) }
+    private func setThumbnailsVisible(_ visible: Bool) {
+        guard !visible || (document != nil && document?.isLocked == false) else { return }
+        thumbnailPanel.isHidden = !visible
+        synchronizeThumbnails()
+        needsLayout = true; layoutSubtreeIfNeeded(); layoutThumbnails(); refreshControls()
     }
 
     @objc private func zoomOut() { changeZoom(by: 1 / 1.2) }
@@ -459,10 +812,32 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     private func changePDFDisplayMode(_ mode: PDFDisplayMode) {
-        let page = currentPageNumber
+        guard pdfView.displayMode != mode else { refreshControls(); return }
+        let page = currentPageNumber ?? sourcePage ?? 1
+        memoryCaptureTask?.cancel(); memoryCaptureTask = nil; pendingWorkspaceMemory = nil
+        // Suppress synchronous PDFKit observations until the explicit current
+        // page navigation has been installed. A mode choice must not echo a
+        // transient first page into the book's reading position.
+        installingDocument = true
+        resetPageGesture()
+        if mode == .singlePage { fitMode = .page }
         pdfView.displayMode = mode
-        if let page { navigate(to: page, notifyParent: false) }
-        applyFit()
+        pdfView.layoutDocumentView()
+        installingDocument = false
+        navigate(to: page, notifyParent: false)
+        refreshControls()
+    }
+
+    private func changePDFDirection(_ direction: PDFReadingDirection) {
+        guard readingDirection != direction else { refreshControls(); return }
+        let page = currentPageNumber ?? sourcePage ?? 1
+        memoryCaptureTask?.cancel(); memoryCaptureTask = nil; pendingWorkspaceMemory = nil
+        installingDocument = true; resetPageGesture()
+        readingDirection = direction; pdfView.readingDirection = direction
+        pdfView.displayDirection = direction == .vertical ? .vertical : .horizontal
+        pdfView.layoutDocumentView(); installingDocument = false
+        navigate(to: page, notifyParent: false)
+        refreshControls()
     }
 
     @objc private func toggleSearch() {
@@ -475,7 +850,7 @@ struct PDFReaderView: NSViewRepresentable {
         searchRow.isHidden = false; header.isHidden = false
         installSearchEscapeMonitor()
         needsLayout = true; layoutSubtreeIfNeeded()
-        if wasHidden, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        if wasHidden, !reduceReadingMotion {
             header.alphaValue = 0
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.18; header.animator().alphaValue = 1
@@ -495,16 +870,17 @@ struct PDFReaderView: NSViewRepresentable {
         // from navigating, restoring highlights or showing a late status message.
         clearSearchState(); setStatus("")
         header.isHidden = true; needsLayout = true
-        if wasVisible, restoreFocus { window?.makeFirstResponder(pdfView) }
+        if wasVisible, restoreFocus, !interactionBlocked { window?.makeFirstResponder(pdfView) }
     }
 
     private func installSearchEscapeMonitor() {
         guard searchEscapeMonitor == nil else { return }
         searchEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let handled = MainActor.assumeIsolated {
-                guard let self, event.keyCode == 53, !self.searchRow.isHidden,
-                      event.window === self.window, self.window?.attachedSheet == nil,
-                      !self.editingAnnotationSheet else { return false }
+                guard let self, !self.interactionBlocked, event.keyCode == 53, !self.searchRow.isHidden,
+                      let owner = self.window, event.window === owner, owner.attachedSheet == nil,
+                      !self.editingAnnotationSheet, let responder = owner.firstResponder,
+                      self.ownsResponder(responder) || responder === owner else { return false }
                 self.closeSearch(); return true
             }
             return handled ? nil : event
@@ -521,16 +897,145 @@ struct PDFReaderView: NSViewRepresentable {
         super.viewWillMove(toWindow: newWindow)
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        removePageScrollMonitor(); removeSourcePointerMonitor(); resetPageGesture()
+        guard window != nil else { return }
+        sourcePointerMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .scrollWheel]) { [weak self] event in
+            MainActor.assumeIsolated { self?.observeSourcePointer(event) }
+            // Observation only: native PDF text selection, links and scrolling
+            // always receive the original event, including source clicks.
+            return event
+        }
+        pageScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            let consumed = MainActor.assumeIsolated { self?.consumePageScroll(event) ?? false }
+            return consumed ? nil : event
+        }
+    }
+    private func removePageScrollMonitor() {
+        if let pageScrollMonitor { NSEvent.removeMonitor(pageScrollMonitor) }
+        pageScrollMonitor = nil
+    }
+    private func resetPageGesture() { pageGestureOwnership.reset(); pageTurnPolicy.reset() }
+    private static func gesturePhase(_ phase: NSEvent.Phase) -> CanvasGesturePhase {
+        if phase.contains(.cancelled) { return .cancelled }
+        if phase.contains(.began) { return .began }
+        if phase.contains(.mayBegin) { return .mayBegin }
+        if phase.contains(.ended) { return .ended }
+        return phase.isEmpty ? .none : .changed
+    }
+    private func ownsPDFHit(_ event: NSEvent, in owner: NSWindow) -> Bool {
+        ownsPDFHit(at: event.locationInWindow, in: owner)
+    }
+    private func ownsPDFHit(at windowPoint: CGPoint, in owner: NSWindow) -> Bool {
+        guard let content = owner.contentView else { return false }
+        let point = content.superview?.convert(windowPoint, from: nil) ?? windowPoint
+        guard let hit = content.hitTest(point), hit === pdfView || hit.isDescendant(of: pdfView) else { return false }
+        // A scrollbar is a native control rather than a page-turn surface.
+        return !(hit is NSScroller)
+    }
+    private func consumePageScroll(_ event: NSEvent) -> Bool {
+        guard pdfView.displayMode == .singlePage, !interactionBlocked,
+              !isHiddenOrHasHiddenAncestor, !installingDocument,
+              let owner = window, event.window === owner, owner.isKeyWindow,
+              owner.attachedSheet == nil, NSApp.modalWindow == nil,
+              !editingAnnotationSheet, document?.isLocked == false else {
+            resetPageGesture(); return false
+        }
+        let phase = Self.gesturePhase(event.phase), momentum = Self.gesturePhase(event.momentumPhase)
+        let eligible = ownsPDFHit(event, in: owner)
+        guard pageGestureOwnership.accepts(phase: phase, momentum: momentum, isEligible: eligible) else { return false }
+        // A field editor elsewhere in this window keeps its input. PDF-owned
+        // text selection is not an editable field and remains scrollable.
+        if let editor = owner.firstResponder as? NSTextView, editor.isEditable, !editor.isDescendant(of: pdfView) {
+            pageTurnPolicy.reset(); return true
+        }
+        // A gesture-owned turn may still be completing PDFKit layout. Preserve
+        // its one-turn latch and swallow the tail until that navigation settles.
+        if pendingNavigation != nil { return true }
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              !pdfView.isRegionSelectionArmed, let edges = pageBoundaries() else { return false }
+        let wheelAlongReadingAxis = readingDirection == .horizontal && event.scrollingDeltaX == 0
+            && (!event.hasPreciseScrollingDeltas || event.modifierFlags.contains(.shift))
+        let primary = readingDirection == .vertical || wheelAlongReadingAxis ? event.scrollingDeltaY : event.scrollingDeltaX
+        let cross = wheelAlongReadingAxis ? 0 : (readingDirection == .vertical ? event.scrollingDeltaX : event.scrollingDeltaY)
+        // scrollingDelta already respects macOS natural scrolling. Negating
+        // converts movement of the content into previous/next-page semantics.
+        switch pageTurnPolicy.action(delta: -Double(primary), crossDelta: Double(cross),
+                                     precise: event.hasPreciseScrollingDeltas, phase: phase,
+                                     momentum: momentum, timestamp: event.timestamp,
+                                     atStart: edges.start, atEnd: edges.end) {
+        case .scroll: return false
+        case .consume: return true
+        case .turn(let offset):
+            turnPage(offset: offset); return true
+        }
+    }
+    private func pageBoundaries() -> (start: Bool, end: Bool)? {
+        guard let page = pdfView.currentPage else { return nil }
+        if observedClip == nil { observePDFViewport() }
+        let viewport = observedClip.map { pdfView.convert($0.bounds, from: $0) } ?? pdfView.bounds
+        let rect = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page), tolerance: CGFloat = 3
+        guard rect.width > 0, rect.height > 0, viewport.width > 0, viewport.height > 0 else { return nil }
+        if readingDirection == .horizontal {
+            return (rect.minX >= viewport.minX - tolerance, rect.maxX <= viewport.maxX + tolerance)
+        }
+        if pdfView.isFlipped {
+            return (rect.minY >= viewport.minY - tolerance, rect.maxY <= viewport.maxY + tolerance)
+        }
+        return (rect.maxY <= viewport.maxY + tolerance, rect.minY >= viewport.minY - tolerance)
+    }
+    private func turnPage(offset: Int) {
+        guard let page = currentPageNumber, let document else { return }
+        let destination = page + offset
+        guard (1...document.pageCount).contains(destination) else { return }
+        navigate(to: destination, landing: offset < 0 ? .end : .start)
+    }
+    private func handlePageNavigationKey(offset: Int, direction: PDFReadingDirection, pageStep: Bool, repeatKey: Bool) -> Bool {
+        guard !interactionBlocked, !installingDocument,
+              let owner = window, owner.attachedSheet == nil, !editingAnnotationSheet,
+              let responder = owner.firstResponder, ownsResponder(responder) else { return false }
+        awaitingSourceFocusProof = false
+        cancelSourceQuotePreparation()
+        if pendingNavigation != nil { return true }
+        guard let edges = pageBoundaries() else { return false }
+        let boundary = offset < 0 ? edges.start : edges.end
+        if pdfView.displayMode == .singlePage, direction == readingDirection, boundary {
+            // Holding a key does not run through several pages after the first
+            // turn; another physical key press starts the next turn.
+            if !repeatKey { turnPage(offset: offset) }
+            return true
+        }
+        guard let clip = observedClip else { return false }
+        var proposed = clip.bounds
+        let distance = pageStep ? (direction == .vertical ? proposed.height : proposed.width) * 0.85 : 40
+        if direction == .vertical {
+            proposed.origin.y += CGFloat(offset) * distance * (clip.documentView?.isFlipped == true ? 1 : -1)
+        } else { proposed.origin.x += CGFloat(offset) * distance }
+        clip.scroll(to: clip.constrainBoundsRect(proposed).origin)
+        clip.enclosingScrollView?.reflectScrolledClipView(clip)
+        scheduleWorkspaceCapture()
+        return true
+    }
+
     override func layout() {
         super.layout()
+        sourceCanvas.frame = bounds; sourceCanvas.needsDisplay = true
+        scheduleVisiblePages()
+        let chrome = visibleChromeFrame(header)
+        let nextTop: CGFloat = chrome.isEmpty ? 76 : max(76, chrome.maxY + 12)
+        if let thumbnailTop, abs(thumbnailTop.constant - nextTop) > 0.5 { thumbnailTop.constant = nextTop }
         let size = pdfView.bounds.size
         if abs(size.width - lastViewportSize.width) > 0.5 || abs(size.height - lastViewportSize.height) > 0.5 {
+            invalidateSourcePress()
             lastViewportSize = size; layoutThumbnails(); applyFit()
             if let pending = pendingNavigation, size.width > 40, size.height > 40 {
                 let request = pending.id, generation = documentGeneration
                 DispatchQueue.main.async { [weak self] in self?.settleNavigation(request, generation: generation, attempt: 0) }
             }
+            scheduleSourceHoverRefresh()
         }
+        refreshControls()
     }
 
     private func applyFit() {
@@ -543,16 +1048,32 @@ struct PDFReaderView: NSViewRepresentable {
         let scale: CGFloat = fitMode == .actual ? 1 : (fitMode == .width ? width : min(width, height))
         pdfView.autoScales = false
         let clamped = min(pdfView.maxScaleFactor, max(pdfView.minScaleFactor, scale))
+        isApplyingFit = true
         if abs(pdfView.scaleFactor - clamped) > 0.001 { pdfView.scaleFactor = clamped }
+        isApplyingFit = false
         refreshControls()
     }
 
+    private func synchronizeThumbnails() {
+        // PDFThumbnailView eagerly creates native collection cells even while
+        // an ancestor panel is hidden. Keep it detached until the user opens
+        // thumbnails (including a saved visible workspace).
+        guard !thumbnailPanel.isHidden, let document, !document.isLocked else {
+            if thumbnails.pdfView != nil { thumbnails.pdfView = nil }
+            return
+        }
+        if thumbnails.pdfView !== pdfView { thumbnails.pdfView = pdfView }
+        layoutThumbnails()
+    }
+
     private func layoutThumbnails() {
+        guard !thumbnailPanel.isHidden, thumbnails.pdfView != nil else { return }
         let height = max(thumbnailScroll.contentSize.height, CGFloat(document?.pageCount ?? 0) * 146 + 20)
         thumbnails.frame = NSRect(x: 0, y: 0, width: max(100, thumbnailScroll.contentSize.width), height: height)
     }
 
     @objc private func pageChanged(_ notification: Notification) {
+        scheduleVisiblePages(); sourceCanvas.needsDisplay = true
         refreshControls()
         guard !installingDocument, pendingNavigation == nil else { return }
         if fitMode == .page { applyFit() }
@@ -576,23 +1097,130 @@ struct PDFReaderView: NSViewRepresentable {
         }
     }
 
-    @objc private func scaleChanged(_ notification: Notification) { refreshControls() }
+    @objc private func scaleChanged(_ notification: Notification) {
+        invalidateSourcePress()
+        if !isApplyingFit, !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil { fitMode = .custom }
+        refreshControls(); sourceCanvas.needsDisplay = true; scheduleWorkspaceCapture()
+        scheduleSourceHoverRefresh()
+    }
+
+    @objc private func pdfViewportScrolled(_ notification: Notification) {
+        guard let clip = notification.object as? NSClipView, clip === observedClip else { return }
+        sourceScrollQuietUntil = ProcessInfo.processInfo.systemUptime + 0.15
+        invalidateSourcePress(); reportSourceHover(nil)
+        sourceCanvas.needsDisplay = true; scheduleVisiblePages(); scheduleWorkspaceCapture()
+        scheduleSourceHoverRefresh()
+    }
+    private func observePDFViewport() {
+        func findClip(_ view: NSView) -> NSClipView? {
+            if let scroll = view as? NSScrollView { return scroll.contentView }
+            for child in view.subviews { if let clip = findClip(child) { return clip } }
+            return nil
+        }
+        observedClip = findClip(pdfView); observedClip?.postsBoundsChangedNotifications = true
+    }
+    private var defaultReadingDirection: PDFReadingDirection {
+        PDFReadingDirection(rawValue: UserDefaults.standard.string(forKey: "reading.defaultDirection") ?? "") ?? .vertical
+    }
+    private var defaultContinuous: Bool {
+        UserDefaults.standard.object(forKey: "reading.defaultContinuous") as? Bool ?? true
+    }
+    private var reduceReadingMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || UserDefaults.standard.bool(forKey: "appearance.reduceMotion")
+    }
+    private func applyWorkspaceDisplayPreferences() {
+        let saved = pendingWorkspaceMemory
+        resetPageGesture()
+        readingDirection = saved.map { $0.direction ?? .vertical } ?? defaultReadingDirection
+        pdfView.readingDirection = readingDirection
+        pdfView.displayDirection = readingDirection == .vertical ? .vertical : .horizontal
+        switch saved?.fitMode { case "page": fitMode = .page; case "actual": fitMode = .actual; case "custom": fitMode = .custom; default: fitMode = .width }
+        let continuous = saved?.continuous ?? defaultContinuous
+        pdfView.displayMode = continuous ? .singlePageContinuous : .singlePage
+        if saved == nil, !continuous { fitMode = .page }
+        thumbnailPanel.isHidden = !(saved?.thumbnails ?? false)
+        if fitMode == .custom, let scale = saved?.scale { pdfView.scaleFactor = CGFloat(scale) }
+    }
+    private func restoreWorkspaceDestination() {
+        observePDFViewport()
+        guard let saved = pendingWorkspaceMemory else { scheduleWorkspaceCapture(); return }
+        pendingWorkspaceMemory = nil
+        guard let page = document?.page(at: saved.page - 1), currentPageNumber == saved.page else { return }
+        if fitMode == .custom { pdfView.scaleFactor = CGFloat(saved.scale) } else { applyFit() }
+        if let location = saved.location {
+            let box = page.bounds(for: pdfView.displayBox)
+            let point = CGPoint(x: box.minX + min(1, max(0, location.x)) * box.width, y: box.minY + min(1, max(0, location.y)) * box.height)
+            pdfView.go(to: PDFDestination(page: page, at: point))
+        }
+        scheduleWorkspaceCapture()
+    }
+    private func scheduleWorkspaceCapture() {
+        guard !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil else { return }
+        memoryCaptureTask?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.captureWorkspaceMemory() }
+        memoryCaptureTask = item; DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+    }
+    @objc private func captureWorkspaceMemoryNow(_ notification: Notification) {
+        // The caller flushes immediately after posting, before a book switch or
+        // app shutdown can invalidate this reader's scoped memory callback.
+        memoryCaptureTask?.cancel(); memoryCaptureTask = nil
+        captureWorkspaceMemory()
+    }
+    private func captureWorkspaceMemory() {
+        guard !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil,
+              let document, !document.isLocked, let destination = pdfView.currentDestination, let page = destination.page else { return }
+        let index = document.index(for: page), box = page.bounds(for: pdfView.displayBox)
+        guard index != NSNotFound, box.width > 0, box.height > 0 else { return }
+        let location = WorkspacePoint(x: Double((destination.point.x - box.minX) / box.width), y: Double((destination.point.y - box.minY) / box.height))
+        let mode: String
+        switch fitMode { case .page: mode = "page"; case .width: mode = "width"; case .actual: mode = "actual"; case .custom: mode = "custom" }
+        let memory = WorkspacePDFMemory(page: index + 1, location: location, scale: Double(pdfView.scaleFactor), fitMode: mode, continuous: pdfView.displayMode == .singlePageContinuous, thumbnails: !thumbnailPanel.isHidden, direction: readingDirection)
+        if memory.isValid { memoryCallback?(memory) }
+    }
 
     private func refreshControls() {
         let ready = document != nil && document?.isLocked == false && (document?.pageCount ?? 0) > 0
         let number = currentPageNumber ?? 1, count = ready ? document?.pageCount ?? 0 : 0
         previousMatchButton.isEnabled = !matches.isEmpty; nextMatchButton.isEnabled = !matches.isEmpty
-        let zoom = Int((pdfView.scaleFactor * 100).rounded()), selected = !(pdfView.currentSelection?.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        let id = bindingID, generation = documentGeneration, canEdit = canEditAnnotations
+        let zoom = Int((pdfView.scaleFactor * 100).rounded()), selected = pdfView.currentSelection?.pages.isEmpty == false
         let searchVisible = !searchRow.isHidden
-        DispatchQueue.main.async { [weak self, weak controller] in
-            guard let self, self.documentGeneration == generation else { return }
-            controller?.update(id: id, page: number, pageCount: count, zoomPercent: zoom, isReady: ready, hasSelection: ready && selected, canEditAnnotations: canEdit, isSearchVisible: searchVisible)
-        }
+        let continuous = pdfView.displayMode == .singlePageContinuous, thumbnailsVisible = !thumbnailPanel.isHidden
+        let mode: String
+        switch fitMode { case .page: mode = "page"; case .width: mode = "width"; case .actual: mode = "actual"; case .custom: mode = "custom" }
+        let searchFrame = visibleChromeFrame(header), thumbnailFrame = visibleChromeFrame(thumbnailPanel)
+        let snapshot = ControlSnapshot(controllerID: controller.map { ObjectIdentifier($0) }, generation: documentGeneration,
+            page: number, pageCount: count, zoom: zoom, ready: ready, selected: ready && selected, canEdit: canEditAnnotations,
+            searchVisible: searchVisible, continuous: continuous, direction: readingDirection, thumbnailsVisible: thumbnailsVisible, fitMode: mode,
+            searchFrame: searchFrame, thumbnailFrame: thumbnailFrame)
+        if let previous = pendingControlSnapshot ?? lastControlSnapshot, previous == snapshot { return }
+        pendingControlSnapshot = snapshot
+        guard !controlPublishScheduled else { return }
+        controlPublishScheduled = true
+        DispatchQueue.main.async { [weak self] in self?.publishControls() }
+    }
+    private func publishControls() {
+        controlPublishScheduled = false
+        guard let snapshot = pendingControlSnapshot else { return }
+        pendingControlSnapshot = nil
+        guard snapshot.generation == documentGeneration,
+              snapshot.controllerID == controller.map({ ObjectIdentifier($0) }) else { refreshControls(); return }
+        guard snapshot != lastControlSnapshot else { return }
+        lastControlSnapshot = snapshot
+        controller?.update(id: bindingID, page: snapshot.page, pageCount: snapshot.pageCount, zoomPercent: snapshot.zoom,
+            isReady: snapshot.ready, hasSelection: snapshot.selected, canEditAnnotations: snapshot.canEdit,
+            isSearchVisible: snapshot.searchVisible, isContinuous: snapshot.continuous, direction: snapshot.direction,
+            thumbnailsVisible: snapshot.thumbnailsVisible, fitMode: snapshot.fitMode,
+            chromeFrame: snapshot.searchFrame, thumbnailFrame: snapshot.thumbnailFrame)
+    }
+    private func visibleChromeFrame(_ view: NSView) -> CGRect {
+        guard overlay.isHidden, !view.isHidden, view.bounds.width > 0, view.bounds.height > 0 else { return .zero }
+        let frame = view.convert(view.bounds, to: self)
+        return CGRect(x: frame.minX, y: isFlipped ? frame.minY : bounds.height - frame.maxY,
+                      width: frame.width, height: frame.height)
     }
 
     @objc private func findText() {
-        guard !searchRow.isHidden, let document, !document.isLocked else { return }
+        guard !interactionBlocked, !searchRow.isHidden, let document, !document.isLocked else { return }
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { clearSearchState(); return }
         guard query.count <= 500 else { setStatus("搜索词最多为 500 字。"); return }
@@ -619,7 +1247,7 @@ struct PDFReaderView: NSViewRepresentable {
         document?.delegate = nil; document?.cancelFindString(); searchDelegate = nil
         matches = []; matchIndex = -1; searching = false; searchLimited = false
         highlightUpdateScheduled = false; allowsSearchAutoNavigation = false
-        pdfView.highlightedSelections = nil; pdfView.clearSelection()
+        updateSelectionHighlights(); pdfView.clearSelection()
         resultLabel.stringValue = ""; refreshControls()
     }
 
@@ -648,7 +1276,15 @@ struct PDFReaderView: NSViewRepresentable {
         if matches.isEmpty { setStatus("没有找到匹配文字。扫描页没有文字层时，原生搜索无法查到图中的字。") }
     }
 
-    private func updateHighlights() { pdfView.highlightedSelections = matches; updateSearchDisplay(); refreshControls() }
+    private func updateSelectionHighlights() {
+        if let quoteFocusHighlight { pdfView.highlightedSelections = matches + [quoteFocusHighlight] }
+        else { pdfView.highlightedSelections = matches.isEmpty ? nil : matches }
+    }
+    private func clearQuoteFocusHighlight() {
+        guard quoteFocusHighlight != nil else { return }
+        quoteFocusHighlight = nil; updateSelectionHighlights()
+    }
+    private func updateHighlights() { updateSelectionHighlights(); updateSearchDisplay(); refreshControls() }
     private func updateSearchDisplay() {
         if matches.isEmpty { resultLabel.stringValue = searching ? "查找中…" : "无结果" }
         else { resultLabel.stringValue = "\(matchIndex + 1)/\(matches.count)\(searchLimited ? "+" : searching ? "…" : "")" }
@@ -677,7 +1313,7 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard control === searchField, commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        guard !interactionBlocked, control === searchField, commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
         closeSearch(); return true
     }
 
@@ -693,15 +1329,18 @@ struct PDFReaderView: NSViewRepresentable {
         button.bezelStyle = .circular; button.controlSize = .regular; button.isBordered = false
         button.imageScaling = .scaleProportionallyDown
         button.toolTip = title; button.setAccessibilityLabel(title)
-        button.widthAnchor.constraint(equalToConstant: 40).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
         return button
     }
 
     func shutdown() {
+        pendingControlSnapshot = nil; lastControlSnapshot = nil
+        memoryCaptureTask?.cancel(); captureWorkspaceMemory(); memoryCallback = nil; observedClip = nil
         invalidateNavigation(); installingDocument = true
         removeSearchEscapeMonitor()
+        removePageScrollMonitor(); removeSourcePointerMonitor(); resetPageGesture()
         searchGeneration += 1; document?.delegate = nil; document?.cancelFindString(); searchDelegate = nil
         NotificationCenter.default.removeObserver(self)
         thumbnails.pdfView = nil; pdfView.document = nil; document = nil; callback = nil
@@ -710,26 +1349,31 @@ struct PDFReaderView: NSViewRepresentable {
         // window is modal. Keep the draft sheet alive until explicit save/cancel.
         if !editingAnnotationSheet { closeAnnotationPanel() }
         sessionPassword = nil; onUnlock = nil; onSaveAnnotations = nil; onTrashAnnotation = nil
-        clearSourceDecorations(); onSourceDecorationTap = nil; onSourceSelection = nil; pendingQuote = nil
+        clearSourceDecorations(); resetQuoteCache(); onSourceDecorationTap = nil; onSourceSelection = nil; onSourceDecorationHover = nil; onVisiblePagesChange = nil; pendingQuote = nil
         if securityScoped { loadedURL?.stopAccessingSecurityScopedResource() }; securityScoped = false
     }
 
     private func perform(_ command: PDFReaderCommand) {
+        awaitingSourceFocusProof = false
         switch command {
         case .prev: previousPage()
         case .next: nextPage()
         case .jump(let page):
             guard let document, (1...document.pageCount).contains(page) else { setStatus("页码超出原PDF范围。"); return }
-            navigate(to: page)
+            navigate(to: page); window?.makeFirstResponder(pdfView)
         case .zoomIn: zoomIn()
         case .zoomOut: zoomOut()
         case .fitPage: fitMode = .page; applyFit()
         case .fitWidth: fitMode = .width; applyFit()
         case .actualSize: fitMode = .actual; applyFit()
         case .showSearch: showSearch()
+        case .hideSearch: closeSearch()
         case .toggleSearch: toggleSearch()
         case .toggleThumbnails: toggleThumbnails()
+        case .setThumbnails(let visible): setThumbnailsVisible(visible)
         case .toggleContinuous: changePDFDisplayMode(pdfView.displayMode == .singlePageContinuous ? .singlePage : .singlePageContinuous)
+        case .setContinuous(let continuous): changePDFDisplayMode(continuous ? .singlePageContinuous : .singlePage)
+        case .setDirection(let direction): changePDFDirection(direction)
         case .createHighlight: createHighlight()
         case .createRegion:
             guard canEditAnnotations else { setStatus("当前任务运行中，请稍后添加区域批注。"); return }
@@ -739,11 +1383,13 @@ struct PDFReaderView: NSViewRepresentable {
         case .showAnnotations: showAnnotations()
         case .focusQuote(let page, let quote): focusQuote(on: page, quote: quote)
         }
+        scheduleWorkspaceCapture()
     }
 
     @objc private func selectionChanged(_ notification: Notification) {
         refreshControls()
-        guard !isFocusingQuote else { return }
+        if pdfView.currentSelection?.pages.isEmpty == false { awaitingSourceFocusProof = false; cancelSourceQuotePreparation(); clearQuoteFocusHighlight() }
+        else { scheduleSourceHoverRefresh() }
         sourceSelectionObservation &+= 1
         let observation = sourceSelectionObservation, generation = documentGeneration
         let deliver: (SourceReadingSelection?) -> Void = { [weak self] selection in
@@ -761,84 +1407,691 @@ struct PDFReaderView: NSViewRepresentable {
         let pages = selected.pages
         let index = pages.first.map { document.index(for: $0) }
         let pageNumber = index.flatMap { $0 == NSNotFound ? nil : $0 + 1 }
-        deliver(SourceReadingSelection(text: text, isExact: false, page: pageNumber))
+        let lastIndex = pages.last.map { document.index(for: $0) }
+        let endPage = lastIndex.flatMap { $0 == NSNotFound ? nil : $0 + 1 }
+        deliver(SourceReadingSelection(text: text, isExact: false, page: pageNumber, endPage: endPage))
     }
 
-    private func nativeQuoteRange(_ quote: String, prefix: String? = nil, suffix: String? = nil, on page: PDFPage) -> NSRange? {
-        guard !quote.isEmpty, quote.utf16.count <= 32_768,
-              (prefix?.utf8.count ?? 0) <= 4_096, (suffix?.utf8.count ?? 0) <= 4_096,
-              let content = page.string else { return nil }
-        let text = content as NSString
-        var start = 0
-        var candidate: NSRange?
-        while start < text.length {
-            let range = text.range(of: quote, options: [.literal], range: NSRange(location: start, length: text.length - start))
-            guard range.location != NSNotFound else { break }
-            // Advance one UTF-16 unit to include overlapping matches. Imported
-            // unit offsets never enter this native page search.
-            start = range.location + 1
-            guard text.substring(with: range).utf8.elementsEqual(quote.utf8) else { continue }
-            if let prefix, !prefix.isEmpty {
-                let length = prefix.utf16.count
-                guard range.location >= length,
-                      text.substring(with: NSRange(location: range.location - length, length: length)).utf8.elementsEqual(prefix.utf8) else { continue }
-            }
-            if let suffix, !suffix.isEmpty {
-                let length = suffix.utf16.count
-                guard NSMaxRange(range) <= text.length - length,
-                      text.substring(with: NSRange(location: NSMaxRange(range), length: length)).utf8.elementsEqual(suffix.utf8) else { continue }
-            }
-            guard candidate == nil else { return nil }
-            candidate = range
-        }
-        return candidate
+    private func resetQuoteCache() {
+        quoteCachePage = nil
+        quoteRangeCache.removeAll(keepingCapacity: true); quoteCacheBytes = 0
     }
 
-    private func focusQuote(on number: Int, quote: String, prefix: String? = nil, suffix: String? = nil) {
+    nonisolated private static func findNativeQuoteRange(_ quote: String, prefix: String?, suffix: String?, text: NSString) -> NSRange? {
+        NativeQuoteRangeMatcher.range(of: quote, prefix: prefix, suffix: suffix, in: text)
+    }
+
+    private func focusQuote(on number: Int, quote: String, prefix: String? = nil, suffix: String? = nil,
+                            decoration: SourceReadingDecoration? = nil) {
         guard let document, !document.isLocked, (1...document.pageCount).contains(number) else { return }
         navigate(to: number)
         // Set after navigate(), which invalidates every older navigation target.
-        pendingQuote = (number, quote, prefix, suffix)
+        pendingQuote = (number, quote, prefix, suffix, decoration)
     }
 
-    private func applyQuoteFocus(on number: Int, quote: String, prefix: String? = nil, suffix: String? = nil) {
-        guard let page = document?.page(at: number - 1), let range = nativeQuoteRange(quote, prefix: prefix, suffix: suffix, on: page),
-              let selection = page.selection(for: range) else {
-            setStatus("已定位到原页；原生文字无法唯一匹配此引文，未推测词位。扫描页请对照原页与识别稿。"); return
+    private func focusSourceDecorationIfReady() {
+        guard let id = sourceDecorationFocusID,
+              document?.isLocked == false,
+              let decoration = sourceDecorations.first(where: { $0.id == id }),
+              let page = decoration.page ?? sourceDecorationPage else { return }
+        let identity = sourcePageTexts[page]?.identity
+        // A repeated quote may fail unique matching before the page snapshot
+        // arrives. Retry once for that new proof, without restarting navigation
+        // on every publication or repeatedly retrying a proven mismatch.
+        guard appliedSourceDecorationFocusID != id ||
+                (awaitingSourceFocusProof && identity != nil && appliedSourceDecorationProofIdentity != identity) else { return }
+        // The target page snapshot may arrive after the navigation request.
+        // Keep that one request pending instead of consuming its ID too soon.
+        focusQuote(on: page, quote: decoration.quote, prefix: decoration.prefix, suffix: decoration.suffix, decoration: decoration)
+        appliedSourceDecorationFocusID = id; appliedSourceDecorationProofIdentity = identity
+        awaitingSourceFocusProof = identity == nil
+    }
+
+    private func applyQuoteFocus(on number: Int, quote: String, prefix: String? = nil, suffix: String? = nil,
+                                 decoration: SourceReadingDecoration? = nil) {
+        if let decoration, sourceDecorationValuesByID[decoration.id] != decoration { return }
+        guard !quote.isEmpty, quote.utf16.count <= 32_768,
+              (prefix?.utf8.count ?? 0) <= 4_096, (suffix?.utf8.count ?? 0) <= 4_096,
+              let page = document?.page(at: number - 1), let session = nativePreparationSession() else { return }
+        cancelSourceQuotePreparation()
+        if quoteCachePage !== page { resetQuoteCache(); quoteCachePage = page }
+        let key = QuoteCacheKey(quote: Data(quote.utf8), prefix: prefix.map { Data($0.utf8) }, suffix: suffix.map { Data($0.utf8) })
+        let savedUnique = quoteRangeCache[key], source = sourcePageTexts[number]
+        let cached = sourceGeometryPages[number]
+        let savedIdentity = cached?.sourceTextProofIdentity, savedProof = cached?.sourceTextProof
+        let documentID = documentGeneration, navigation = navigationRequestID
+        let generation = sourceDecorationGeneration, run = UUID()
+        sourceQuoteRun = run
+        sourceQuoteTarget = decoration
+        onPreparationChanged?(.started(run, .init(phase: .pageText, page: number)))
+        let progress = preparationProgress(run: run, generation: generation, documentID: documentID)
+        sourceQuoteTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.sourceQuoteRun == run {
+                    self.onPreparationChanged?(.finished(run)); self.sourceQuoteRun = nil; self.sourceQuoteTask = nil; self.sourceQuoteTarget = nil
+                }
+            }
+            do {
+                let cache: SourceGeometryPage
+                if let cached { cache = cached }
+                else {
+                    let prepared = try await self.nativePreparation.preparePage(session: session, page: number, onProgress: progress)
+                    guard !Task.isCancelled, self.documentGeneration == documentID, self.navigationRequestID == navigation,
+                          self.sourceQuoteRun == run, page.bounds(for: .cropBox) == prepared.crop,
+                          page.rotation == prepared.rotation,
+                          decoration.map({ self.sourceDecorationValuesByID[$0.id] == $0 }) ?? true else { return }
+                    let layout = SourceGeometryPage.LineLayout(crop: prepared.crop, rotation: prepared.rotation, characterCount: prepared.nativeCharacterCount)
+                    cache = self.sourceGeometryPages[number].flatMap { $0.nativeLineLayout == layout ? $0 : nil } ?? SourceGeometryPage(prepared: prepared)
+                    self.sourceGeometryPages[number] = cache
+                    self.sourceGeometryPageOrder.removeAll { $0 == number }; self.sourceGeometryPageOrder.append(number)
+                    self.trimSourceGeometryCache(keeping: Array(Set(self.renderedSourceWindow + [number])))
+                }
+                let text = cache.text
+                progress(.init(phase: .matching, page: number, completed: 0, total: 1))
+                let calculation = Task.detached(priority: .userInitiated) { () -> (NSRange?, NativePageTextProof?, Bool) in
+                    let proof = source.flatMap { value in
+                        savedIdentity == value.identity ? savedProof : NativePageTextProof.prove(page: number, nativeText: text, source: value)
+                    }
+                    if let decoration, (decoration.page ?? number) == number,
+                       let exact = proof?.range(of: decoration.quote, location: decoration.rangeLocation, length: decoration.rangeLength) {
+                        return (exact, proof, true)
+                    }
+                    let range: NSRange?
+                    if let savedUnique { range = savedUnique.range }
+                    else { range = Self.findNativeQuoteRange(quote, prefix: prefix, suffix: suffix, text: text as NSString) }
+                    return (range, proof, false)
+                }
+                let (range, proof, exact) = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
+                guard !Task.isCancelled, self.documentGeneration == documentID, self.navigationRequestID == navigation,
+                      self.sourceQuoteRun == run,
+                      decoration.map({ self.sourceDecorationValuesByID[$0.id] == $0 }) ?? true else { return }
+                guard !exact || source?.identity == self.sourcePageTexts[number]?.identity else {
+                    // Publication can briefly withhold the current page proof.
+                    // Keep rejecting the stale result, but let the next actual
+                    // metadata publication retry this still-current intent.
+                    if let decoration, self.sourceDecorationFocusID == decoration.id {
+                        self.awaitingSourceFocusProof = true
+                        self.appliedSourceDecorationProofIdentity = nil
+                    }
+                    return
+                }
+                if let source, self.sourcePageTexts[number]?.identity == source.identity, (proof?.byteCount ?? 0) <= 2_097_152 {
+                    cache.sourceTextProofIdentity = source.identity; cache.sourceTextProof = proof
+                }
+                // Only a generic unique match enters the quote/context cache.
+                // Exact offsets may intentionally disambiguate repeated quotes.
+                if !exact, savedUnique == nil, key.byteCount <= 1_048_576 {
+                    if self.quoteRangeCache.count >= 256 || self.quoteCacheBytes + key.byteCount > 1_048_576 {
+                        self.quoteRangeCache.removeAll(keepingCapacity: true); self.quoteCacheBytes = 0
+                    }
+                    self.quoteRangeCache[key] = CachedQuoteRange(range: range); self.quoteCacheBytes += key.byteCount
+                }
+                guard let range, range.location >= 0, range.location != NSNotFound, range.length > 0,
+                      let count = cache.nativeLineLayout?.characterCount,
+                      range.location <= count, range.length <= count - range.location,
+                      let selection = page.selection(for: range) else {
+                    self.setStatus("已定位到原页；原生文字无法唯一匹配此引文，未推测词位。扫描页请对照原页与识别稿。"); return
+                }
+                selection.color = NSColor.systemTeal.withAlphaComponent(0.3)
+                self.pdfView.clearSelection()
+                self.quoteFocusHighlight = selection; self.updateSelectionHighlights()
+                self.pdfView.go(to: selection); self.refreshControls()
+            } catch is CancellationError { return }
+            catch {
+                guard self.documentGeneration == documentID, self.navigationRequestID == navigation,
+                      self.sourceQuoteRun == run else { return }
+                self.setStatus("已定位到原页，阅读提示暂未准备好。")
+            }
         }
-        isFocusingQuote = true
-        selection.color = NSColor.systemTeal.withAlphaComponent(0.3)
-        pdfView.setCurrentSelection(selection, animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
-        pdfView.go(to: selection)
-        isFocusingQuote = false; refreshControls()
+    }
+    private func cancelSourceQuotePreparation() {
+        sourceQuoteTask?.cancel(); sourceQuoteTask = nil
+        if let run = sourceQuoteRun { onPreparationChanged?(.finished(run)) }; sourceQuoteRun = nil
+        sourceQuoteTarget = nil
     }
 
     private func clearSourceDecorations() {
-        for (page, annotation) in renderedSourceAnnotations { page.removeAnnotation(annotation) }
-        renderedSourceAnnotations = []; sourceAnnotationIDs = [:]
+        invalidateSourcePress()
+        cancelSourceQuotePreparation()
+        sourceDecorationGeneration &+= 1; cancelSourcePreparation()
+        sourceGeometries = [:]; sourceGeometryIDsByPage = [:]; sourceGeometryPages = [:]; sourceGeometryPageOrder = []
+        renderedSourceInputGeneration = -1; renderedSourceWindow = []; lastVisiblePages = []
+        sourcePreparationNeedsRetry = false
+        hoveredSourceID = nil; sourcePress = nil; publishSourceHover(nil); sourceCanvas.needsDisplay = true
     }
-
-    private func renderSourceDecorations() {
-        clearSourceDecorations()
-        guard let document, !document.isLocked, let number = sourceDecorationPage,
-              (1...document.pageCount).contains(number), let page = document.page(at: number - 1) else { return }
-        for decoration in sourceDecorations {
-            guard let range = nativeQuoteRange(decoration.quote, prefix: decoration.prefix, suffix: decoration.suffix, on: page), let selection = page.selection(for: range) else { continue }
-            for line in selection.selectionsByLine() {
-                let rect = line.bounds(for: page).intersection(page.bounds(for: .cropBox))
-                guard !rect.isNull, !rect.isEmpty else { continue }
-                // Presentation overlays belong to this view only and are never
-                // written to the source PDF or the user's saved annotations.
-                let annotation = PDFAnnotation(bounds: rect, forType: .underline, withProperties: nil)
-                annotation.color = .systemTeal; annotation.contents = "查看“\(decoration.quote)”的关联内容"
-                page.addAnnotation(annotation); renderedSourceAnnotations.append((page, annotation))
-                sourceAnnotationIDs[ObjectIdentifier(annotation)] = decoration.id
+    @objc private func visiblePagesChanged(_ notification: Notification) { scheduleVisiblePages() }
+    private func scheduleVisiblePages() {
+        guard !visiblePagePublishScheduled else { return }
+        visiblePagePublishScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }; self.visiblePagePublishScheduled = false
+            guard let document = self.document, !document.isLocked else { return }
+            let pages = Array(Set(self.pdfView.visiblePages.compactMap { page -> Int? in
+                let index = document.index(for: page); return index == NSNotFound ? nil : index + 1
+            })).sorted()
+            self.sourceCanvas.needsDisplay = true
+            if pages != self.lastVisiblePages {
+                self.invalidateSourcePress()
+                self.lastVisiblePages = pages; self.onVisiblePagesChange?(pages); self.renderSourceDecorations()
+                // Visibility can change while the prepared page window stays
+                // identical. renderSourceDecorations then has no worker to
+                // rearm the tail that invalidateSourcePress just cancelled.
+                self.scheduleSourceHoverRefresh()
             }
         }
-        pdfView.needsDisplay = true
     }
-
+    private func nativePreparationSession() -> NativePDFPreparationWorker.Session? {
+        guard let loadedURL, !sourceHash.isEmpty else { return nil }
+        return .init(url: loadedURL, sourceHash: sourceHash, generation: documentGeneration, password: sessionPassword)
+    }
+    private func preparationProgress(run: UUID, generation: Int, documentID: Int) -> @Sendable (ReadingPreparationProgress) -> Void {
+        { [weak self] value in
+            Task { @MainActor [weak self] in
+                guard let self, self.documentGeneration == documentID else { return }
+                let sourceRun = self.sourceDecorationGeneration == generation && (self.sourcePreparationRun == run || self.sourceGeometryRun == run)
+                guard sourceRun || self.sourceQuoteRun == run else { return }
+                self.onPreparationChanged?(.advanced(run, value))
+            }
+        }
+    }
+    private func cancelSourcePreparation() {
+        sourceDecorationTask?.cancel(); sourceDecorationTask = nil
+        sourceGeometryTask?.cancel(); sourceGeometryTask = nil; pendingSourceGeometry = [:]
+        inFlightSourceGeometryIDs = []
+        if let run = sourcePreparationRun { onPreparationChanged?(.finished(run)) }; sourcePreparationRun = nil
+        if let run = sourceGeometryRun { onPreparationChanged?(.finished(run)) }; sourceGeometryRun = nil
+    }
+    private func renderSourceDecorations() {
+        guard let document, !document.isLocked else { clearSourceDecorations(); return }
+        let current = currentPageNumber ?? sourceDecorationPage ?? 1
+        let window = ReadingSentenceAnchors.pageWindow(current: current, visible: lastVisiblePages, available: sourceAvailablePages)
+        let inputChanged = renderedSourceInputGeneration != sourceInputGeneration
+        let windowChanged = renderedSourceWindow != window
+        if !inputChanged, !windowChanged, sourceDecorationTask != nil { return }
+        let needsProofRetry = !inputChanged && !windowChanged && window.contains { number in
+            guard number > 0, number <= document.pageCount, let cache = sourceGeometryPages[number], let identity = sourcePageTexts[number]?.identity else { return false }
+            return cache.unresolvedIDs.contains { cache.needsProofRetry($0, identity: identity, currentValues: sourceDecorationValuesByID) }
+        }
+        guard inputChanged || windowChanged || needsProofRetry || sourcePreparationNeedsRetry else { return }
+        sourcePreparationNeedsRetry = false
+        sourceDecorationGeneration &+= 1; cancelSourcePreparation()
+        if inputChanged {
+            for (number, validIDs) in validSourceDecorationIDsByPage { sourceGeometryPages[number]?.retain(validIDs: validIDs) }
+        }
+        renderedSourceInputGeneration = sourceInputGeneration; renderedSourceWindow = window
+        let generation = sourceDecorationGeneration, documentID = documentGeneration
+        let desiredIDs = Set(window.flatMap { (groupedSourceDecorations[$0] ?? []).map(\.id) })
+        sourceGeometries = sourceGeometries.filter { desiredIDs.contains($0.key) && $0.value.value == sourceDecorationValuesByID[$0.key] }
+        if let hoveredSourceID, !desiredIDs.contains(hoveredSourceID) {
+            self.hoveredSourceID = nil; sourcePress = nil; publishSourceHover(nil)
+        }
+        let grouped = groupedSourceDecorations
+        sourceGeometryIDsByPage = grouped.mapValues { $0.map(\.id) }
+        guard !window.isEmpty, let session = nativePreparationSession() else { return }
+        let visible = Set(lastVisiblePages).union([current])
+        let priorityWindows = [window.filter { visible.contains($0) }, window.filter { !visible.contains($0) }]
+        let run = UUID(); sourcePreparationRun = run
+        onPreparationChanged?(.started(run, .init(phase: .pageText, page: priorityWindows.first?.first)))
+        let progress = preparationProgress(run: run, generation: generation, documentID: documentID)
+        sourceDecorationTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.sourcePreparationRun == run { self.onPreparationChanged?(.finished(run)); self.sourcePreparationRun = nil }
+                if self.sourceDecorationGeneration == generation { self.sourceDecorationTask = nil }
+            }
+            do {
+                // All actual visible pages become interactive before idle-only
+                // neighboring pages consume native parsing or term geometry.
+                for (priority, pages) in priorityWindows.enumerated() where !pages.isEmpty {
+                    if priority > 0 { try await Task.sleep(nanoseconds: 100_000_000) }
+                    for passages in [true, false] {
+                        for number in pages {
+                            try await self.waitForSourceScrollIdle(extraDelay: priority > 0 ? 0.35 : 0)
+                            guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation,
+                                  let page = document.page(at: number - 1) else { return }
+                            let cache: SourceGeometryPage
+                            if let saved = self.sourceGeometryPages[number], let layout = saved.nativeLineLayout,
+                               layout.crop == page.bounds(for: .cropBox), layout.rotation == page.rotation { cache = saved }
+                            else {
+                                let prepared: NativePDFPreparationWorker.PreparedPage
+                                do { prepared = try await self.nativePreparation.preparePage(session: session, page: number, onProgress: progress) }
+                                catch NativePDFPreparationWorker.Failure.pageTextTooLarge { continue }
+                                guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation,
+                                      page.bounds(for: .cropBox) == prepared.crop, page.rotation == prepared.rotation else { return }
+                                let layout = SourceGeometryPage.LineLayout(crop: prepared.crop, rotation: prepared.rotation, characterCount: prepared.nativeCharacterCount)
+                                cache = self.sourceGeometryPages[number].flatMap { $0.nativeLineLayout == layout ? $0 : nil } ?? SourceGeometryPage(prepared: prepared)
+                                self.sourceGeometryPages[number] = cache
+                                self.scheduleSourceHoverRefresh()
+                            }
+                            self.sourceGeometryPageOrder.removeAll { $0 == number }; self.sourceGeometryPageOrder.append(number)
+                            let pageText = self.sourcePageTexts[number]
+                            var additions: [SourceReadingDecoration] = [], inspected = 0
+                            for value in grouped[number] ?? [] {
+                                guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
+                                guard (value.interaction == .passage) == passages else { continue }
+                                if !passages { cache.removePassage(value.id) }
+                                if let identity = pageText?.identity, cache.needsProofRetry(value.id, identity: identity, currentValues: self.sourceDecorationValuesByID) {
+                                    additions.append(value)
+                                } else if passages, cache.passageValues[value.id] == value {
+                                    if let geometry = cache.geometry[value.id], geometry.value == value { self.sourceGeometries[value.id] = geometry }
+                                } else if let geometry = cache.geometry[value.id], geometry.value == value { self.sourceGeometries[value.id] = geometry }
+                                else { additions.append(value); self.sourceGeometries.removeValue(forKey: value.id) }
+                                inspected += 1
+                                if inspected.isMultiple(of: 512) {
+                                    try await Task.sleep(nanoseconds: 1_000_000)
+                                    try await self.waitForSourceScrollIdle(extraDelay: priority > 0 ? 0.35 : 0)
+                                }
+                            }
+                            if additions.isEmpty {
+                                if passages { cache.rebuildPassageIndexIfNeeded() }
+                                self.trimSourceGeometryCache(keeping: window); self.scheduleSourceHoverRefresh(); continue
+                            }
+                            let text = cache.text
+                            var phaseProofChecked = pageText != nil && cache.sourceTextProofIdentity == pageText?.identity
+                            var phaseProof = phaseProofChecked ? cache.sourceTextProof : nil
+                            progress(.init(phase: .matching, page: number, completed: 0, total: additions.count))
+                            for batchStart in stride(from: 0, to: additions.count, by: 12_000) {
+                                try await self.waitForSourceScrollIdle(extraDelay: priority > 0 ? 0.35 : 0)
+                                let batchEnd = batchStart + min(12_000, additions.count - batchStart)
+                                let matchingAdditions = Array(additions[batchStart..<batchEnd]), saved = cache.ranges
+                                let checkedProof = phaseProofChecked, savedProof = phaseProof, total = additions.count
+                                let calculation = Task.detached(priority: priority == 0 ? .userInitiated : .utility) { () -> PageQuoteMatches in
+                                    let interval = pdfDecorationSignposter.beginInterval("MatchPageQuotes")
+                                    defer { pdfDecorationSignposter.endInterval("MatchPageQuotes", interval) }
+                                    var nativeSource: NSString?
+                                    let proof = checkedProof ? savedProof : pageText.flatMap { NativePageTextProof.prove(page: number, nativeText: text, source: $0) }
+                                    var ranges: [String: CachedQuoteRange] = [:], uniqueMatchedIDs = Set<String>()
+                                    var lastProgress = ProcessInfo.processInfo.systemUptime
+                                    for (offset, value) in matchingAdditions.enumerated() {
+                                        guard !Task.isCancelled else { break }
+                                        guard !value.quote.isEmpty, value.quote.utf16.count <= 32_768,
+                                              (value.prefix?.utf8.count ?? 0) <= 4_096, (value.suffix?.utf8.count ?? 0) <= 4_096 else { continue }
+                                        if let range = proof?.range(of: value.quote, location: value.rangeLocation, length: value.rangeLength) {
+                                            ranges[value.id] = CachedQuoteRange(range: range)
+                                        } else {
+                                            let key = QuoteCacheKey(quote: Data(value.quote.utf8), prefix: value.prefix.map { Data($0.utf8) }, suffix: value.suffix.map { Data($0.utf8) })
+                                            if let cached = saved[key] { ranges[value.id] = cached }
+                                            else {
+                                                let source = nativeSource ?? (text as NSString); nativeSource = source
+                                                ranges[value.id] = CachedQuoteRange(range: Self.findNativeQuoteRange(value.quote, prefix: value.prefix, suffix: value.suffix, text: source))
+                                            }
+                                            uniqueMatchedIDs.insert(value.id)
+                                        }
+                                        if ProcessInfo.processInfo.systemUptime - lastProgress >= 0.1 {
+                                            progress(.init(phase: .matching, page: number, completed: batchStart + offset + 1, total: total))
+                                            lastProgress = ProcessInfo.processInfo.systemUptime
+                                        }
+                                    }
+                                    return PageQuoteMatches(ranges: ranges, uniqueMatchedIDs: uniqueMatchedIDs, sourceTextIdentity: pageText?.identity, proof: proof)
+                                }
+                                let matches = await withTaskCancellationHandler(operation: { await calculation.value }, onCancel: { calculation.cancel() })
+                                guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
+                                phaseProofChecked = true; phaseProof = matches.proof
+                                if let identity = matches.sourceTextIdentity, self.sourcePageTexts[number]?.identity == identity {
+                                    if (matches.proof?.byteCount ?? 0) <= 2_097_152 { cache.sourceTextProofIdentity = identity; cache.sourceTextProof = matches.proof }
+                                    else { cache.sourceTextProofIdentity = nil; cache.sourceTextProof = nil }
+                                }
+                                progress(.init(phase: .matching, page: number, completed: batchEnd, total: additions.count))
+                                // Native geometry is prepared only by the actor's
+                                // own document, in small requests. The displayed
+                                // PDF never parses a cold page for source hints.
+                                if !passages {
+                                    let requests = matchingAdditions.compactMap { value -> NativePDFPreparationWorker.GeometryRequest? in
+                                        matches.ranges[value.id]?.range.map { .init(id: value.id, range: $0) }
+                                    }
+                                    for start in stride(from: 0, to: requests.count, by: 24) {
+                                        try await self.waitForSourceScrollIdle(extraDelay: priority > 0 ? 0.35 : 0)
+                                        let end = min(start + 24, requests.count)
+                                        let geometry = try await self.nativePreparation.prepareGeometry(session: session, page: number, requests: Array(requests[start..<end]))
+                                        guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
+                                        for request in requests[start..<end] {
+                                            guard let value = self.sourceDecorationValuesByID[request.id] else { continue }
+                                            let lines = geometry[request.id] ?? []
+                                            let cost = value.quote.utf8.count + (value.prefix?.utf8.count ?? 0) + (value.suffix?.utf8.count ?? 0) + lines.count * 64 + 256
+                                            let ready = SourceGeometry(value: value, page: number, lines: lines, cost: cost)
+                                            cache.remember(ready); self.sourceGeometries[request.id] = ready
+                                        }
+                                        self.sourceCanvas.needsDisplay = true; self.scheduleSourceHoverRefresh()
+                                        progress(.init(phase: .geometry, page: number, completed: end, total: requests.count))
+                                    }
+                                }
+                                var applied = 0
+                                for value in matchingAdditions {
+                                    guard !Task.isCancelled, self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
+                                    let key = QuoteCacheKey(quote: Data(value.quote.utf8), prefix: value.prefix.map { Data($0.utf8) }, suffix: value.suffix.map { Data($0.utf8) })
+                                    let matched = matches.ranges[value.id]
+                                    if matches.uniqueMatchedIDs.contains(value.id), let matched, key.byteCount <= 1_048_576,
+                                       cache.ranges[key] != nil || (cache.ranges.count < 2000 && cache.rangeBytes + key.byteCount <= 1_048_576) {
+                                        if cache.ranges[key] == nil { cache.rangeBytes += key.byteCount }; cache.ranges[key] = matched
+                                    }
+                                    if passages { cache.rememberPassage(value, range: matched?.range) }
+                                    else if cache.geometry[value.id]?.value != value {
+                                        let cost = value.quote.utf8.count + (value.prefix?.utf8.count ?? 0) + (value.suffix?.utf8.count ?? 0) + 256
+                                        let geometry = SourceGeometry(value: value, page: number, lines: [], cost: cost)
+                                        cache.remember(geometry); self.sourceGeometries[value.id] = geometry
+                                    }
+                                    cache.rememberMatch(value.id, range: matched?.range, proofIdentity: matches.sourceTextIdentity)
+                                    applied += 1
+                                    if applied.isMultiple(of: 128) { try await Task.sleep(nanoseconds: 1_000_000) }
+                                }
+                            }
+                            if passages { cache.rebuildPassageIndexIfNeeded() }
+                            self.sourceCanvas.needsDisplay = true; self.trimSourceGeometryCache(keeping: window); self.scheduleSourceHoverRefresh()
+                        }
+                    }
+                }
+            } catch is CancellationError { return }
+            catch {
+                guard self.documentGeneration == documentID, self.sourceDecorationGeneration == generation else { return }
+                // Only another explicit render trigger may retry this failure.
+                // Do not recurse or schedule timers after a native/file error.
+                self.sourcePreparationNeedsRetry = true
+                self.setStatus("阅读提示暂未准备好，原文仍可阅读。")
+                return
+            }
+            if self.sourceDecorationGeneration == generation { self.sourceDecorationTask = nil; self.renderSourceDecorations() }
+        }
+    }
+    private func trimSourceGeometryCache(keeping window: [Int]) {
+        while sourceGeometryPageOrder.count > 16 || sourceGeometryPages.values.reduce(0, { $0 + $1.cost }) > 12_582_912 {
+            // In-use visible geometry must not disappear merely because a
+            // dense page exceeds the idle-cache target. Evict only idle pages.
+            guard let unused = sourceGeometryPageOrder.firstIndex(where: { !window.contains($0) }) else { break }
+            sourceGeometryPages.removeValue(forKey: sourceGeometryPageOrder.remove(at: unused))
+        }
+    }
+    private func waitForSourceScrollIdle(extraDelay: TimeInterval = 0) async throws {
+        while true {
+            try Task.checkCancellation()
+            let remaining = sourceScrollQuietUntil + extraDelay - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { return }
+            try await Task.sleep(nanoseconds: UInt64(min(0.2, remaining) * 1_000_000_000))
+        }
+    }
+    private func drawSourceDecorations(in dirty: CGRect) {
+        guard let document, !document.isLocked else { return }
+        for number in lastVisiblePages {
+            guard let page = document.page(at: number - 1), let cache = sourceGeometryPages[number] else { continue }
+            let dirtyInPDF = sourceCanvas.convert(dirty.insetBy(dx: -4, dy: -4), to: pdfView)
+            let visible = pdfView.convert(dirtyInPDF.intersection(pdfView.bounds), to: page).intersection(page.bounds(for: .cropBox))
+            guard !visible.isEmpty, !visible.isNull else { continue }
+            var candidates: Set<SourceLineKey>
+            if cache.paintBands.requiresFallback {
+                candidates = Set((sourceGeometryIDsByPage[number] ?? []).flatMap { id in
+                    guard let geometry = sourceGeometries[id], geometry.value.interaction == .term, !geometry.value.passive else { return [SourceLineKey]() }
+                    return geometry.lines.indices.map { SourceLineKey(id: id, line: $0) }
+                })
+            } else { candidates = cache.paintBands.candidates(intersecting: visible) }
+            if let hoveredSourceID, sourceGeometries[hoveredSourceID]?.page == number {
+                if cache.hitBands.requiresFallback, let hovered = sourceGeometries[hoveredSourceID] {
+                    candidates.formUnion(hovered.lines.indices.map { SourceLineKey(id: hoveredSourceID, line: $0) })
+                } else {
+                    candidates.formUnion(cache.hitBands.candidates(intersecting: visible).filter { $0.id == hoveredSourceID })
+                }
+            }
+            for key in candidates {
+                guard let geometry = sourceGeometries[key.id], geometry.page == number, geometry.lines.indices.contains(key.line) else { continue }
+                let active = key.id == hoveredSourceID
+                guard active || (geometry.value.interaction == .term && !geometry.value.passive) else { continue }
+                let rect = geometry.lines[key.line]
+                guard rect.intersects(visible) else { continue }
+                NSColor.systemTeal.withAlphaComponent(active ? 0.95 : 0.38).setStroke()
+                let from = sourceCanvas.convert(pdfView.convert(CGPoint(x: rect.minX, y: rect.minY), from: page), from: pdfView)
+                let to = sourceCanvas.convert(pdfView.convert(CGPoint(x: rect.maxX, y: rect.minY), from: page), from: pdfView)
+                let center = sourceCanvas.convert(pdfView.convert(CGPoint(x: rect.midX, y: rect.midY), from: page), from: pdfView)
+                let width = active ? 1.6 : 1.0
+                guard let segment = ReadingUnderlineGeometry.outside(edgeStart: from, edgeEnd: to, contentCenter: center, lineWidth: width) else { continue }
+                let path = NSBezierPath(); path.lineWidth = width
+                path.move(to: segment.start); path.line(to: segment.end); path.stroke()
+            }
+        }
+    }
+    private func sourceHit(at point: CGPoint, preferTerm: Bool) -> PDFSourceDecorationHit? {
+        guard let document, let page = pdfView.page(for: point, nearest: false) else { return nil }
+        let index = document.index(for: page), local = pdfView.convert(point, to: page)
+        guard index != NSNotFound, let cache = sourceGeometryPages[index + 1] else { return nil }
+        // Native links and real annotations keep their existing actions.
+        if page.annotation(at: local) != nil { return nil }
+        // Clicks prefer an already prepared term. Asking PDFKit for the whole
+        // sentence's character/line geometry first adds work that cannot alter
+        // that winner, especially with many overlapping passive passages.
+        if preferTerm, let term = cachedSourceHit(at: local, on: page, number: index + 1, cache: cache, preferTerm: true, onlyTerms: true) { return term }
+        // Physical native line ranges are authoritative here. PDFKit's
+        // characterIndex can omit synthesized line breaks or count emoji
+        // differently, and a glyph gap may return no index at all.
+        let prepared = cachedSourceHit(at: local, on: page, number: index + 1, cache: cache, preferTerm: preferTerm)
+        guard ProcessInfo.processInfo.systemUptime >= sourceScrollQuietUntil, !cache.passageIndex.isEmpty else { return prepared }
+        let lines = cache.nativeLines.lines(at: local)
+        guard !lines.isEmpty else { return prepared }
+        let maximumRequests = 8
+        var candidates: [NativePDFTextLine.Candidate<String>] = []
+        var cached: (id: String, rectangle: CGRect, length: Int)?
+        var visited = Set<String>()
+        for line in lines {
+            for range in line.ranges {
+                cache.passageIndex.forEachEntry(intersecting: range) { entry in
+                    guard visited.insert(entry.id).inserted, validSourceDecorationIDsByPage[index + 1]?.contains(entry.id) == true,
+                          let value = cache.passageValues[entry.id], value.interaction == .passage,
+                          value == sourceDecorationValuesByID[entry.id] else { return }
+                    if let geometry = cache.geometry[entry.id], geometry.value == value {
+                        sourceGeometries[entry.id] = geometry
+                        if let rectangle = geometry.lines.first(where: { $0.contains(local) }) {
+                            let moreSpecific = cached.map {
+                                entry.range.length < $0.length || (entry.range.length == $0.length && entry.id < $0.id)
+                            } ?? true
+                            if moreSpecific { cached = (entry.id, rectangle, entry.range.length) }
+                        }
+                        return
+                    }
+                    let candidate = NativePDFTextLine.Candidate(id: entry.id, range: entry.range)
+                    let position = candidates.firstIndex {
+                        candidate.range.length < $0.range.length || (candidate.range.length == $0.range.length && candidate.id < $0.id)
+                    } ?? candidates.count
+                    if position < maximumRequests {
+                        candidates.insert(candidate, at: position)
+                        if candidates.count > maximumRequests { candidates.removeLast() }
+                    }
+                }
+            }
+        }
+        // Cold native geometry never runs in the pointer handler. A single
+        // background queue coalesces at most eight current candidates; completed
+        // results request a fresh current-pointer check, not a stored position.
+        let moreSpecific = candidates.prefix { candidate in
+            cached.map { candidate.range.length < $0.length || (candidate.range.length == $0.length && candidate.id < $0.id) } ?? true
+        }
+        queueSourceGeometry(Array(moreSpecific), page: index + 1, cache: cache)
+        if let cached { return PDFSourceDecorationHit(id: cached.id, rect: pdfView.convert(cached.rectangle, from: page)) }
+        return prepared
+    }
+    private func queueSourceGeometry(_ candidates: [NativePDFTextLine.Candidate<String>], page: Int, cache: SourceGeometryPage) {
+        guard let session = nativePreparationSession() else { return }
+        var next: [String: PendingSourceGeometry] = [:]
+        for candidate in candidates.prefix(8) {
+            guard !inFlightSourceGeometryIDs.contains(candidate.id),
+                  let value = cache.passageValues[candidate.id], value == sourceDecorationValuesByID[candidate.id],
+                  cache.passageRanges[candidate.id] == candidate.range else { continue }
+            next[candidate.id] = PendingSourceGeometry(page: page, value: value, range: candidate.range)
+        }
+        pendingSourceGeometry = next
+        guard sourceGeometryTask == nil, !pendingSourceGeometry.isEmpty else { return }
+        let generation = sourceDecorationGeneration, documentID = documentGeneration, run = UUID()
+        sourceGeometryRun = run
+        onPreparationChanged?(.started(run, .init(phase: .geometry, page: page, completed: 0, total: next.count)))
+        let progress = preparationProgress(run: run, generation: generation, documentID: documentID)
+        sourceGeometryTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.sourceGeometryRun == run {
+                    self.onPreparationChanged?(.finished(run)); self.sourceGeometryRun = nil
+                    self.sourceGeometryTask = nil; self.inFlightSourceGeometryIDs = []; self.pendingSourceGeometry = [:]
+                }
+            }
+            do {
+                while !self.pendingSourceGeometry.isEmpty {
+                    try await self.waitForSourceScrollIdle()
+                    guard !Task.isCancelled, self.documentGeneration == documentID,
+                          self.sourceDecorationGeneration == generation, self.sourceGeometryRun == run,
+                          let number = self.pendingSourceGeometry.values.first?.page,
+                          let cache = self.sourceGeometryPages[number] else { return }
+                    let batch = Array(self.pendingSourceGeometry.values.filter { $0.page == number }.prefix(8))
+                    self.inFlightSourceGeometryIDs = Set(batch.map { $0.value.id })
+                    for item in batch { self.pendingSourceGeometry.removeValue(forKey: item.value.id) }
+                    let requests = batch.map { NativePDFPreparationWorker.GeometryRequest(id: $0.value.id, range: $0.range) }
+                    let values = try await self.nativePreparation.prepareGeometry(session: session, page: number, requests: requests, onProgress: progress)
+                    guard !Task.isCancelled, self.documentGeneration == documentID,
+                          self.sourceDecorationGeneration == generation, self.sourceGeometryRun == run,
+                          self.sourceGeometryPages[number] === cache,
+                          let page = self.document?.page(at: number - 1), let layout = cache.nativeLineLayout,
+                          page.bounds(for: .cropBox) == layout.crop, page.rotation == layout.rotation else { return }
+                    for item in batch {
+                        guard self.sourceDecorationValuesByID[item.value.id] == item.value,
+                              cache.passageValues[item.value.id] == item.value,
+                              cache.passageRanges[item.value.id] == item.range else { continue }
+                        let lines = values[item.value.id] ?? []
+                        let geometry = SourceGeometry(value: item.value, page: number, lines: lines, cost: lines.count * 64 + 128)
+                        cache.remember(geometry); self.sourceGeometries[item.value.id] = geometry
+                    }
+                    self.inFlightSourceGeometryIDs = []
+                    self.sourceCanvas.needsDisplay = true; self.scheduleSourceHoverRefresh()
+                }
+            } catch is CancellationError { return }
+            catch {
+                if self.sourceGeometryRun == run { self.pendingSourceGeometry = [:] }
+            }
+        }
+    }
+    private func cachedSourceHit(at local: CGPoint, on page: PDFPage, number: Int, cache: SourceGeometryPage,
+                                 preferTerm: Bool, onlyTerms: Bool = false) -> PDFSourceDecorationHit? {
+        let candidates: Set<SourceLineKey>
+        if cache.hitBands.requiresFallback {
+            candidates = Set((sourceGeometryIDsByPage[number] ?? []).flatMap { id -> [SourceLineKey] in
+                guard let geometry = sourceGeometries[id] else { return [] }
+                return geometry.lines.indices.map { SourceLineKey(id: id, line: $0) }
+            })
+        } else { candidates = cache.hitBands.candidates(atY: local.y) }
+        var best: (id: String, rect: CGRect, term: Bool, length: Int)?
+        for key in candidates {
+            guard let geometry = sourceGeometries[key.id], geometry.page == number, geometry.lines.indices.contains(key.line),
+                  !onlyTerms || geometry.value.interaction == .term else { continue }
+            let rect = geometry.lines[key.line]
+            guard rect.contains(local) else { continue }
+            let term = geometry.value.interaction == .term, length = geometry.value.rangeLength ?? Int.max
+            if let chosen = best {
+                if term != chosen.term { if term != preferTerm { continue } }
+                else if length > chosen.length || (length == chosen.length && key.id >= chosen.id) { continue }
+            }
+            best = (key.id, rect, term, length)
+        }
+        guard let best else { return nil }
+        return PDFSourceDecorationHit(id: best.id, rect: pdfView.convert(best.rect, from: page))
+    }
+    private func removeSourcePointerMonitor() {
+        if let sourcePointerMonitor { NSEvent.removeMonitor(sourcePointerMonitor) }
+        sourcePointerMonitor = nil; invalidateSourcePress()
+    }
+    private func invalidateSourcePress() {
+        cancelSourceHoverRefresh()
+        sourceInteractionGeneration &+= 1; sourcePress = nil
+    }
+    private func cancelSourceHoverRefresh() {
+        sourceHoverRefreshWork?.cancel(); sourceHoverRefreshWork = nil
+        sourceHoverRefresh.cancel()
+    }
+    private func scheduleSourceHoverRefresh() {
+        // PDFKit may clear selection or change scale synchronously while a
+        // document is being replaced. That transition has no eligible hover;
+        // its page worker will request one after installation completes.
+        guard !installingDocument else { return }
+        let previous = sourceHoverRefresh.pending
+        guard let ticket = sourceHoverRefresh.request(at: ProcessInfo.processInfo.systemUptime, quietUntil: sourceScrollQuietUntil) else { return }
+        if previous == ticket, sourceHoverRefreshWork != nil { return }
+        sourceHoverRefreshWork?.cancel()
+        let documentID = documentGeneration, interaction = sourceInteractionGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.documentGeneration == documentID, self.sourceInteractionGeneration == interaction,
+                  self.sourceHoverRefresh.pending == ticket else { return }
+            self.sourceHoverRefreshWork = nil
+            guard self.sourceHoverRefresh.consume(ticket, at: ProcessInfo.processInfo.systemUptime, quietUntil: self.sourceScrollQuietUntil) else {
+                self.scheduleSourceHoverRefresh(); return
+            }
+            // Scheduling never makes a former mouse position authoritative.
+            // Geometry may finish after leaving the page or opening a panel;
+            // only the pointer's current frontmost window and hit are eligible.
+            guard let owner = self.window, NSApp.isActive, owner.isKeyWindow,
+                  NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == owner.windowNumber,
+                  !self.interactionBlocked, !self.isHiddenOrHasHiddenAncestor, !self.installingDocument,
+                  owner.attachedSheet == nil, NSApp.modalWindow == nil, !self.pdfView.isRegionSelectionArmed,
+                  NSEvent.pressedMouseButtons == 0,
+                  NSEvent.modifierFlags.intersection([.option, .command, .control]).isEmpty,
+                  self.pdfView.currentSelection?.pages.isEmpty != false else {
+                self.reportSourceHover(nil); return
+            }
+            let point = owner.mouseLocationOutsideOfEventStream
+            guard self.ownsPDFHit(at: point, in: owner) else { self.reportSourceHover(nil); return }
+            self.reportSourceHover(self.sourceHit(at: self.pdfView.convert(point, from: nil), preferTerm: false))
+        }
+        sourceHoverRefreshWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, ticket.deadline - ProcessInfo.processInfo.systemUptime), execute: work)
+    }
+    private func observeSourcePointer(_ event: NSEvent) {
+        // A later click, drag or wheel expresses a newer reader intention.
+        // Late acceleration metadata must not pull the viewport back to an
+        // earlier sentence after that action (including scrollbar dragging).
+        if event.type != .mouseMoved, event.window === window {
+            awaitingSourceFocusProof = false
+            cancelSourceQuotePreparation()
+        }
+        if event.type == .mouseMoved {
+            guard event.window === window, NSEvent.pressedMouseButtons == 0 else {
+                cancelSourceHoverRefresh(); reportSourceHover(nil); return
+            }
+            scheduleSourceHoverRefresh(); return
+        }
+        // Wheel events keep their original recipient. Clearing an existing
+        // hover needs neither a window hit-test nor a full-book read boundary.
+        if event.type == .scrollWheel {
+            guard event.window === window else { return }
+            sourceScrollQuietUntil = ProcessInfo.processInfo.systemUptime + 0.15
+            invalidateSourcePress(); reportSourceHover(nil); scheduleSourceHoverRefresh(); return
+        }
+        guard let owner = window, event.window === owner, !interactionBlocked, !isHiddenOrHasHiddenAncestor,
+              !installingDocument, owner.attachedSheet == nil, NSApp.modalWindow == nil,
+              !pdfView.isRegionSelectionArmed, ownsPDFHit(event, in: owner),
+              event.modifierFlags.intersection([.option, .command, .control]).isEmpty else {
+            invalidateSourcePress(); if event.type == .mouseMoved { reportSourceHover(nil) }; return
+        }
+        let point = pdfView.convert(event.locationInWindow, from: nil)
+        switch event.type {
+        case .leftMouseDown:
+            invalidateSourcePress()
+            clearQuoteFocusHighlight()
+            reportSourceHover(nil)
+            sourcePress = event.clickCount == 1 ? sourceHit(at: point, preferTerm: true).map { ($0, point, sourceInteractionGeneration) } : nil
+        case .leftMouseDragged, .scrollWheel:
+            invalidateSourcePress(); reportSourceHover(nil)
+        case .leftMouseUp:
+            defer { sourcePress = nil }
+            guard event.clickCount == 1, let press = sourcePress, hypot(point.x - press.point.x, point.y - press.point.y) <= 3,
+                  press.generation == sourceInteractionGeneration, let geometry = sourceGeometries[press.hit.id] else { return }
+            let generation = documentGeneration, navigation = navigationRequestID, input = sourceInputGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.documentGeneration == generation, self.navigationRequestID == navigation,
+                      self.sourceInputGeneration == input, self.sourceInteractionGeneration == press.generation,
+                      self.window === owner, !self.interactionBlocked, !self.isHiddenOrHasHiddenAncestor,
+                      !self.installingDocument, owner.attachedSheet == nil, NSApp.modalWindow == nil,
+                      !self.pdfView.isRegionSelectionArmed,
+                      self.sourceGeometries[press.hit.id]?.value == geometry.value,
+                      self.sourceGeometries[press.hit.id]?.page == geometry.page,
+                      self.pdfView.currentSelection?.string?.isEmpty != false else { return }
+                self.reportSourceHover(press.hit, activated: true)
+            }
+        default: break
+        }
+    }
     private func renderSavedAnnotations() {
+        invalidateSourcePress()
         for (page, annotation) in renderedAnnotations { page.removeAnnotation(annotation) }
         renderedAnnotations = []; annotationIDs = [:]
         guard let document, !document.isLocked else { return }
@@ -862,13 +2115,47 @@ struct PDFReaderView: NSViewRepresentable {
     @objc private func annotationHit(_ notification: Notification) {
         guard let annotation = notification.userInfo?["PDFAnnotationHit"] as? PDFAnnotation else { return }
         // Source mentions are admitted by the click/drag distinction below.
-        guard sourceAnnotationIDs[ObjectIdentifier(annotation)] == nil else { return }
         openAnnotation(annotation)
     }
     private func openAnnotation(_ annotation: PDFAnnotation) {
-        if let id = sourceAnnotationIDs[ObjectIdentifier(annotation)] { onSourceDecorationTap?(id); return }
         guard let id = annotationIDs[ObjectIdentifier(annotation)], let record = savedAnnotations.first(where: { $0.id == id && $0.trashedAt == nil }) else { return }
         editAnnotations([record])
+    }
+
+    private func reportSourceHover(_ hit: PDFSourceDecorationHit?, activated: Bool = false) {
+        guard hit != nil || hoveredSourceID != nil else { return }
+        if hoveredSourceID != hit?.id {
+            let old = hoveredSourceID; hoveredSourceID = hit?.id
+            invalidateSourceHover(old); invalidateSourceHover(hit?.id)
+        }
+        guard let hit else { publishSourceHover(nil); return }
+        let rect = convert(hit.rect, from: pdfView)
+        let topRect = isFlipped ? rect : CGRect(x: rect.minX, y: bounds.height - rect.maxY, width: rect.width, height: rect.height)
+        publishSourceHover(SourceReadingHover(id: hit.id, rect: topRect, point: CGPoint(x: topRect.midX, y: topRect.maxY), activated: activated))
+    }
+    private func publishSourceHover(_ value: SourceReadingHover?) {
+        // Resets also run inside make/updateNSView. The SwiftUI recipient
+        // publishes observable card state, so every delivery must leave that
+        // update transaction. Preserve FIFO, including explicit activation.
+        let generation = documentGeneration, navigation = navigationRequestID, interaction = sourceInteractionGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // A reset carries no old source and still clears a card on reload.
+            // A positive hit must never arrive after a document/navigation change.
+            if let value {
+                guard self.documentGeneration == generation, self.navigationRequestID == navigation,
+                      self.sourceInteractionGeneration == interaction, self.hoveredSourceID == value.id,
+                      !self.interactionBlocked, !self.installingDocument else { return }
+            }
+            self.onSourceDecorationHover?(value)
+        }
+    }
+    private func invalidateSourceHover(_ id: String?) {
+        guard let id, let geometry = sourceGeometries[id], let page = document?.page(at: geometry.page - 1) else { return }
+        for rect in geometry.lines {
+            let display = sourceCanvas.convert(pdfView.convert(rect, from: page), from: pdfView).insetBy(dx: -4, dy: -4)
+            sourceCanvas.setNeedsDisplay(display)
+        }
     }
 
     private func createHighlight() {
@@ -952,19 +2239,30 @@ private extension ReaderAnnotationColor {
 /// Region mode intercepts PDFKit's text selection only while explicitly armed.
 /// Both endpoints must belong to the same page; coordinates are converted by PDFView, including rotation/crop.
 @MainActor private final class AnnotationPDFView: PDFView {
+    var onSourcePointerLeft: (() -> Void)?
+    private var sourceTrackingArea: NSTrackingArea?
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); window?.acceptsMouseMovedEvents = true }
+    override func updateTrackingAreas() {
+        if let sourceTrackingArea { removeTrackingArea(sourceTrackingArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
+        sourceTrackingArea = area; addTrackingArea(area); super.updateTrackingAreas()
+    }
+    override func mouseExited(with event: NSEvent) { onSourcePointerLeft?(); super.mouseExited(with: event) }
+    var interactionBlocked = false
+    var readingDirection = PDFReadingDirection.vertical
+    var onReadingNavigation: ((Int, PDFReadingDirection, Bool, Bool) -> Bool)?
     var onRegion: ((PDFPage, CGRect) -> Void)?
     var onRegionError: ((String) -> Void)?
     var isManagedAnnotation: ((PDFAnnotation) -> Bool)?
-    var isSourceAnnotation: ((PDFAnnotation) -> Bool)?
     var onAnnotationTap: ((PDFAnnotation) -> Void)?
     private var regionArmed = false
+    var isRegionSelectionArmed: Bool { regionArmed }
     private var handlingManagedClick = false
-    private var sourceClick: (annotation: PDFAnnotation, point: CGPoint)?
     private var regionStart: (page: PDFPage, pagePoint: CGPoint, viewPoint: CGPoint)?
     private var regionPreview: NSView?
 
     func armRegionSelection() { cancelRegionSelection(); regionArmed = true }
-    func cancelRegionSelection() { regionArmed = false; handlingManagedClick = false; sourceClick = nil; regionStart = nil; regionPreview?.removeFromSuperview(); regionPreview = nil }
+    func cancelRegionSelection() { regionArmed = false; handlingManagedClick = false; regionStart = nil; regionPreview?.removeFromSuperview(); regionPreview = nil }
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
         if regionArmed { return bounds.contains(local) ? self : nil }
@@ -974,20 +2272,12 @@ private extension ReaderAnnotationColor {
     private func managedAnnotation(at point: CGPoint) -> PDFAnnotation? {
         guard let page = page(for: point, nearest: false) else { return nil }
         let local = convert(point, to: page)
-        let candidates = page.annotations.reversed().filter { isManagedAnnotation?($0) == true && $0.bounds.contains(local) }
-        // Saved user annotations retain their edit target when a source mention
-        // overlaps the same text. The Option key always permits text selection.
-        return candidates.first(where: { isSourceAnnotation?($0) != true }) ?? candidates.first
+        return page.annotations.reversed().first { isManagedAnnotation?($0) == true && $0.bounds.contains(local) }
     }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        sourceClick = nil
         if !regionArmed {
             if !event.modifierFlags.contains(.option), let annotation = managedAnnotation(at: point) {
-                if isSourceAnnotation?(annotation) == true {
-                    sourceClick = (annotation, point)
-                    super.mouseDown(with: event); return
-                }
                 handlingManagedClick = true; onAnnotationTap?(annotation); return
             }
             super.mouseDown(with: event); return
@@ -1001,19 +2291,12 @@ private extension ReaderAnnotationColor {
     }
     override func mouseDragged(with event: NSEvent) {
         guard !handlingManagedClick else { return }
-        sourceClick = nil
         guard let start = regionStart else { if !regionArmed { super.mouseDragged(with: event) }; return }
         let point = convert(event.locationInWindow, from: nil)
         regionPreview?.frame = NSRect(x: min(point.x, start.viewPoint.x), y: min(point.y, start.viewPoint.y), width: abs(point.x - start.viewPoint.x), height: abs(point.y - start.viewPoint.y))
     }
     override func mouseUp(with event: NSEvent) {
         if handlingManagedClick { handlingManagedClick = false; return }
-        if let click = sourceClick {
-            sourceClick = nil; super.mouseUp(with: event)
-            let point = convert(event.locationInWindow, from: nil)
-            if event.clickCount == 1, hypot(point.x - click.point.x, point.y - click.point.y) <= 3 { onAnnotationTap?(click.annotation) }
-            return
-        }
         guard let start = regionStart else { if !regionArmed { super.mouseUp(with: event) }; return }
         let point = convert(event.locationInWindow, from: nil)
         defer { cancelRegionSelection() }
@@ -1024,8 +2307,38 @@ private extension ReaderAnnotationColor {
         onRegion?(start.page, rect)
     }
     override func keyDown(with event: NSEvent) {
+        guard !interactionBlocked else { return }
         if regionArmed && event.keyCode == 53 { cancelRegionSelection(); onRegionError?(""); return }
+        // Every plain arrow pans along its own axis. Only the selected reading
+        // axis turns pages, and only after the current magnified page boundary.
+        if !regionArmed, (displayMode == .singlePage || displayMode == .singlePageContinuous),
+           event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+           let onReadingNavigation {
+            let input: (Int, PDFReadingDirection, Bool)?
+            switch event.keyCode {
+            case 123: input = (-1, .horizontal, false)
+            case 124: input = (1, .horizontal, false)
+            case 126: input = (-1, .vertical, false)
+            case 125: input = (1, .vertical, false)
+            case 116: input = (-1, readingDirection, true)
+            case 121: input = (1, readingDirection, true)
+            default: input = nil
+            }
+            if let input, onReadingNavigation(input.0, input.1, input.2, event.isARepeat) { return }
+        }
         super.keyDown(with: event)
+    }
+    override func swipe(with event: NSEvent) {
+        guard !interactionBlocked else { return }
+        guard !regionArmed, (displayMode == .singlePage || displayMode == .singlePageContinuous), let onReadingNavigation else {
+            super.swipe(with: event); return
+        }
+        let delta = readingDirection == .vertical ? event.deltaY : event.deltaX
+        let cross = readingDirection == .vertical ? event.deltaX : event.deltaY
+        // Discrete accessibility/system swipes obey the same axis as two-finger
+        // scrolling. Perpendicular swipes must not invoke PDFKit's own pager.
+        guard abs(delta) > 0.001, abs(delta) >= abs(cross) else { return }
+        _ = onReadingNavigation(delta > 0 ? -1 : 1, readingDirection, true, false)
     }
 }
 
@@ -1114,12 +2427,42 @@ private struct PDFAnnotationList: View {
 /// content hierarchy on macOS 26; older systems keep the same panel geometry.
 @MainActor private final class PDFReaderFloatingPanel: NSView {
     let panelContent = NSView()
+    private var surface: NSView?
+    private var reducedTransparency = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         panelContent.translatesAutoresizingMaskIntoConstraints = false
+        installSurface()
+        wantsLayer = true
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.16)
+        shadow.shadowBlurRadius = 18; shadow.shadowOffset = NSSize(width: 0, height: -5)
+        self.shadow = shadow
+    }
+    func setReducedTransparency(_ reduced: Bool) {
+        guard reducedTransparency != reduced else { return }
+        reducedTransparency = reduced; installSurface()
+    }
+    private func installSurface() {
+        if #available(macOS 26.0, *), let glass = surface as? NSGlassEffectView { glass.contentView = nil }
+        panelContent.removeFromSuperview(); surface?.removeFromSuperview()
         let surface: NSView
-        if #available(macOS 26.0, *) {
+        if reducedTransparency {
+            let opaque = NSView(); opaque.wantsLayer = true
+            opaque.layer?.cornerRadius = 22; opaque.layer?.masksToBounds = true
+            opaque.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            opaque.layer?.borderWidth = 0.75
+            opaque.layer?.borderColor = NSColor.separatorColor.cgColor
+            opaque.addSubview(panelContent)
+            NSLayoutConstraint.activate([
+                panelContent.leadingAnchor.constraint(equalTo: opaque.leadingAnchor),
+                panelContent.trailingAnchor.constraint(equalTo: opaque.trailingAnchor),
+                panelContent.topAnchor.constraint(equalTo: opaque.topAnchor),
+                panelContent.bottomAnchor.constraint(equalTo: opaque.bottomAnchor)
+            ])
+            surface = opaque
+        } else if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.style = .regular; glass.cornerRadius = 22
             glass.contentView = panelContent
@@ -1140,17 +2483,20 @@ private struct PDFAnnotationList: View {
             ])
             surface = material
         }
+        self.surface = surface
         surface.translatesAutoresizingMaskIntoConstraints = false
         addSubview(surface)
         NSLayoutConstraint.activate([
             surface.leadingAnchor.constraint(equalTo: leadingAnchor), surface.trailingAnchor.constraint(equalTo: trailingAnchor),
             surface.topAnchor.constraint(equalTo: topAnchor), surface.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
-        wantsLayer = true
-        let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.16)
-        shadow.shadowBlurRadius = 18; shadow.shadowOffset = NSSize(width: 0, height: -5)
-        self.shadow = shadow
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        if reducedTransparency {
+            surface?.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            surface?.layer?.borderColor = NSColor.separatorColor.cgColor
+        }
     }
 
     convenience init() { self.init(frame: .zero) }
@@ -1170,5 +2516,16 @@ private final class PDFReaderSearchDelegate: NSObject, PDFDocumentDelegate {
     func documentDidEndDocumentFind(_ notification: Notification) {
         let generation = generation
         DispatchQueue.main.async { [weak owner] in owner?.finishSearch(generation: generation) }
+    }
+}
+
+private struct PDFSourceDecorationHit: Sendable { let id: String; let rect: CGRect }
+@MainActor private final class PDFSourceDecorationCanvas: NSView {
+    var paint: ((CGRect) -> Void)?
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.current?.cgContext.clear(dirtyRect)
+        paint?(dirtyRect)
     }
 }

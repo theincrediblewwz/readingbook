@@ -1,0 +1,244 @@
+{
+  "results": [
+    {
+      "route": "library",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "reader",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "parallel",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "layers",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "source-index",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "workflow",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "chat",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "notes",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "map",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "mindmap",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "relations",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "knowledge",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "atlas",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "cards",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "plugins",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "models",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "trash",
+      "width": 1440,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "library",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "reader",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "parallel",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "layers",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "source-index",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "workflow",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "chat",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "notes",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "map",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "mindmap",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "relations",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "knowledge",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "atlas",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "cards",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "plugins",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "models",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    },
+    {
+      "route": "trash",
+      "width": 800,
+      "overflow": false,
+      "panels": [],
+      "mathErrors": 0
+    }
+  ],
+  "errors": [],
+  "console": []
+}

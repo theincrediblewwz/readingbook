@@ -83,14 +83,52 @@ public struct PluginToolRegistry: Sendable {
         guard arguments.count <= 262_144,
               (try? JSONSerialization.jsonObject(with: arguments)) is [String: Any] else { throw ReadingError.invalid("工具参数必须是小于256 KiB的JSON对象。") }
         guard let tool = storage[name], phase == nil || tool.phases.contains(phase!) else { throw ReadingError.invalid("当前阶段没有注册插件工具：\(name)") }
-        if tool.requiresReceipts { try ReadingLedger.requireComplete(unitIDs: allowedUnitIDs, in: project) }
+        if tool.requiresReceipts { try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project) }
         var candidate = project
         let result = try tool.execute(arguments, project: &candidate, allowed: allowedUnitIDs)
+        if name == "views_configure", ReadingAnalysisAuthority.current != nil {
+            guard project.views.allSatisfy({ old in candidate.views.contains(old) }),
+                  candidate.views.filter({ view in !project.views.contains(where: { $0.id == view.id }) }).allSatisfy({ $0.configuration?["presentation"] == "inline" && $0.composition != nil }) else {
+                throw ReadingError.invalid("后台阅读只新增独立内嵌组件，已有视图和布局保留。")
+            }
+        }
         guard candidate.id == project.id, candidate.sourceHash == project.sourceHash, candidate.originalName == project.originalName,
-              candidate.units == project.units, candidate.documents == project.documents else {
+              candidate.units == project.units,
+              zip(candidate.units, project.units).allSatisfy({ $0.text.utf8.elementsEqual($1.text.utf8) }),
+              candidate.documents == project.documents else {
             throw ReadingError.invalid("插件不能修改原书或用户Markdown文档。")
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        guard try encoder.encode(candidate.generatedOutline) == encoder.encode(project.generatedOutline),
+              try encoder.encode(candidate.originalBookOutline) == encoder.encode(project.originalBookOutline) else {
+            throw ReadingError.invalid("插件不能改写宿主目录；请由读者从目录界面生成。")
+        }
+        guard try encoder.encode(candidate.bookSchemes) == encoder.encode(project.bookSchemes) else {
+            throw ReadingError.invalid("插件不能直接改写书本方案的预览、应用和撤销记录；请由用户在宿主界面确认。")
+        }
+        let standardCompletion = tool.pluginID == "builtin.standard-reading" && name == "reading_analysis" && phase == .reading
+        var candidateSession = candidate.smartReading, previousSession = project.smartReading
+        if standardCompletion {
+            try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
+            let old = previousSession?.analysisCheckpoints ?? [], next = candidateSession?.analysisCheckpoints ?? []
+            guard next.count == old.count || next.count == old.count + 1, Array(next.prefix(old.count)) == old else { throw ReadingError.invalid("标准分析只能追加当前原文块的检查点。") }
+            candidateSession?.analysisCheckpoints = nil; previousSession?.analysisCheckpoints = nil
+        }
+        guard try encoder.encode(candidateSession) == encoder.encode(previousSession) else {
+            throw ReadingError.invalid("插件不能改写宿主冻结的智能阅读范围、确认状态或进度任务。")
+        }
+        guard try encoder.encode(candidate.manualTrash) == encoder.encode(project.manualTrash) else {
+            throw ReadingError.invalid("插件不能修改用户回收站或代替用户恢复已删除内容。")
+        }
+        try ManualTrashRuntime.validateReservedRecords(in: candidate)
+        if candidate.mathVerifications != project.mathVerifications {
+            guard tool.pluginID == "builtin.math-verification", name == "math_verify", tool.requiresReceipts,
+                  phase == nil || phase == .reading || phase == .workflow, !allowedUnitIDs.isEmpty else {
+                throw ReadingError.invalid("数学核查记录只能由已通过逐段回执的宿主数学工具追加。")
+            }
+            try MathVerificationTools.validateTransition(from: project.mathVerifications, to: candidate.mathVerifications,
+                                                          allowedUnitIDs: allowedUnitIDs, in: candidate)
+        }
         guard try encoder.encode(candidate.readerAnnotations) == encoder.encode(project.readerAnnotations),
               try encoder.encode(candidate.chats) == encoder.encode(project.chats), candidate.bookmarks == project.bookmarks else {
             throw ReadingError.invalid("插件不能修改用户批注、会话或书签。")
@@ -101,7 +139,19 @@ public struct PluginToolRegistry: Sendable {
             try ReadingExperienceTools.validateTransition(from: project.readingExperience, to: candidate.readingExperience,
                                                           allowedUnitIDs: allowedUnitIDs, in: candidate)
         }
+        if candidate.temporalKnowledge != project.temporalKnowledge {
+            guard tool.pluginID == "builtin.temporal-knowledge", name == "knowledge_temporal", tool.requiresReceipts,
+                  phase == nil || phase == .reading || phase == .workflow, !allowedUnitIDs.isEmpty else {
+                throw ReadingError.invalid("时态知识只能通过宿主当前逐段回执与来源门禁追加，不能从预读、只读查询或任意插件改写。")
+            }
+            try TemporalKnowledgeToolPlugin.validateTransition(from: project.temporalKnowledge, to: candidate.temporalKnowledge,
+                                                               allowedUnitIDs: allowedUnitIDs, in: candidate)
+        }
+        guard try encoder.encode(candidate.controlledChanges) == encoder.encode(project.controlledChanges), candidate.graphGroups == project.graphGroups else {
+            throw ReadingError.invalid("阅读插件不能伪造受控变更凭据或修改用户画布分组。")
+        }
         let hostReadingTool = tool.pluginID == "builtin.reading"
+        let insightsUnchanged = try encoder.encode(candidate.insights) == encoder.encode(project.insights)
         let finish = hostReadingTool && name == "reading_finish"
         let receipt = hostReadingTool && name == "read_receipt"
         let step = hostReadingTool && name == "workflow_step_complete"
@@ -110,10 +160,13 @@ public struct PluginToolRegistry: Sendable {
         }
         if !finish {
             guard try encoder.encode(candidate.coverage) == encoder.encode(project.coverage),
-                  candidate.insights.count == project.insights.count,
-                  try encoder.encode(candidate.insights) == encoder.encode(project.insights),
+                  (standardCompletion || insightsUnchanged),
                   try encoder.encode(candidate.syntheses) == encoder.encode(project.syntheses), candidate.lastUnitID == project.lastUnitID else {
                 throw ReadingError.invalid("插件不能直接修改阅读覆盖或伪造综合结果；请通过宿主完成门禁。")
+            }
+            if standardCompletion {
+                guard candidate.insights.count >= project.insights.count, candidate.insights.count <= project.insights.count + 1,
+                      try encoder.encode(Array(candidate.insights.prefix(project.insights.count))) == encoder.encode(project.insights) else { throw ReadingError.invalid("标准分析不能改写已有分析。") }
             }
         }
         if !receipt {
@@ -130,6 +183,7 @@ public struct PluginToolRegistry: Sendable {
             guard try encoder.encode(candidate) == encoder.encode(project) else { throw ReadingError.invalid("只读插件工具尝试修改项目。") }
             return result
         }
+        try AnalysisSourceGuard.validate(arguments: arguments, before: project, after: candidate)
         candidate.audit.append(ToolAudit(name: name, summary: result))
         let data = try JSONSerialization.data(withJSONObject: ["ok": true, "tool": name, "pluginID": tool.pluginID, "summary": result], options: [.sortedKeys])
         guard let response = String(data: data, encoding: .utf8) else { throw ReadingError.invalid("无法编码插件结果。") }

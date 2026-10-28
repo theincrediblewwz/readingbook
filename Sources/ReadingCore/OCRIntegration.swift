@@ -15,6 +15,13 @@ public enum OCRIntegration {
         let units = project.units.filter { $0.page == page }
         guard !units.isEmpty else { return "页码不存在。" }
         let ids = Set(units.map(\.id))
+        do {
+            if !ids.isDisjoint(with: try ManualTrashRuntime.protectedUnitIDs(in: project)) {
+                return "此页仍被回收记录及其关联引用，不能覆盖恢复所需原文。请导入为新项目后识别。"
+            }
+        } catch {
+            return "回收记录暂时无法核对，已保留原文；请先检查回收记录后再识别。"
+        }
         let protectedAnchors = (project.readingExperience?.anchors ?? []) + (project.readingExperience?.trash ?? []).flatMap(\.anchors)
         if protectedAnchors.contains(where: { ids.contains($0.unitID) }) { return "此页已有阅读增强或原文锚点，不能覆盖引用正文。请导入为新项目后识别。" }
         if units.contains(where: { project.coverage[$0.id]?.status == .completed }) { return "此页已有完成记录，重新导入原书为新项目后可以重新识别。" }
@@ -25,6 +32,8 @@ public enum OCRIntegration {
         evidence.append(contentsOf: project.relations.flatMap(\.evidence))
         evidence.append(contentsOf: project.documents.flatMap(\.evidence))
         evidence.append(contentsOf: project.chats.flatMap(\.evidence))
+        // Soft-deleted verification records still retain their original-source evidence.
+        evidence.append(contentsOf: (project.mathVerifications ?? []).flatMap { $0.request.evidence })
         if evidence.contains(where: { ids.contains($0.unitID) }) || project.documents.contains(where: { !ids.isDisjoint(with: $0.linkedIDs) }) || project.nodes.contains(where: { ids.contains($0.targetID) }) { return "此页已有笔记或知识引用，不能覆盖。请将原书导入为新项目再识别。" }
         if project.chats.contains(where: { message in ids.contains { message.content.contains("[unit:\($0)]") || message.content.contains("/unit/\($0)") } }) { return "对话含有此页引用，不能替换引用正文。" }
         return nil
@@ -57,6 +66,8 @@ public enum OCRIntegration {
         updated.ocrPages = (updated.ocrPages ?? []).filter { $0.page != result.page }
         updated.ocrPages?.append(OCRPageProvenance(page: result.page, model: result.model, createdAt: result.createdAt, issues: result.issues, unitIDs: replacements.map(\.id)))
         updated.plan = nil // Previews based on the old extraction must be redone.
+        updated.smartReading = nil // Frozen unit IDs/hashes no longer describe the new text layer.
+        updated.bookSchemes?.pending = nil
         updated.audit.append(ToolAudit(name: "pdf_ocr", summary: "第 \(result.page) 页使用 \(result.model) 逐页转录，保留原 PDF；待人工核对，阅读覆盖尚未增加。"))
         return updated
     }

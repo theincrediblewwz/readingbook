@@ -170,4 +170,20 @@ final class ReadingExperienceToolTests: XCTestCase {
         XCTAssertThrowsError(try configure([["id": "explanations", "title": "改成另一渲染器", "kind": "knowledge", "rendererID": "reading.decisions"]]))
         XCTAssertEqual(try snapshot(value), before)
     }
+
+    func testRetiredThoughtCardsRemainReadableButCannotBeCreatedByEnrichment() throws {
+        var value = try project()
+        let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: value.sourceHash, unitID: "u1", quote: "阿瞒", in: value)
+        let card = DecisionCard(id: "old-thought", title: "以前的思考", contextMarkdown: "保留旧记录", options: [
+            DecisionOption(id: "a", title: "甲", markdown: "理由"), DecisionOption(id: "b", title: "乙", markdown: "理由")], sourceAnchorIDs: [anchor.id])
+        value.readingExperience = ReadingExperienceState(anchors: [anchor], decisions: [card])
+        let restored = try JSONDecoder().decode(BookProject.self, from: snapshot(value))
+        XCTAssertNoThrow(try ReadingExperienceRuntime.validateStoredState(try XCTUnwrap(restored.readingExperience), in: restored))
+        let before = try snapshot(value)
+        var request = payload; request["decisions"] = []
+        XCTAssertThrowsError(try apply(request, to: &value))
+        XCTAssertEqual(try snapshot(value), before)
+        try apply(payload, to: &value)
+        XCTAssertEqual(value.readingExperience?.decisions, [card], "A normal new layer cannot discard archived thought cards.")
+    }
 }

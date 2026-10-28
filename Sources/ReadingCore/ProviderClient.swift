@@ -6,6 +6,7 @@ import FoundationNetworking
 /// This transport has no file, browsing, or arbitrary network tools. Its only
 /// destination is the provider endpoint explicitly configured by the user.
 enum ProviderClient {
+    private static let fallbackSessionID = "readingbook-" + UUID().uuidString
     struct ToolCall: Decodable, Sendable {
         struct Function: Decodable, Sendable { let name: String; let arguments: String }
         let id: String
@@ -79,7 +80,7 @@ enum ProviderClient {
     }
 
     static func prepare(messages: [[String: Any]], tools: [[String: Any]], settings: ProviderSettings,
-                        apiKey: String, remainingTokens: Int) throws -> Prepared {
+                        apiKey: String, remainingTokens: Int, stream: Bool = false) throws -> Prepared {
         let url = try endpoint(settings.baseURL)
         let model = settings.model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty, model.count <= 240 else { throw ReadingError.invalid("请先填写模型名称。") }
@@ -91,7 +92,7 @@ enum ProviderClient {
         guard apiKey.utf8.count <= 8192, !apiKey.contains("\r"), !apiKey.contains("\n") else {
             throw ReadingError.invalid("密钥格式无效。")
         }
-        var body: [String: Any] = ["model": model, "messages": messages, "stream": false, "n": 1]
+        var body: [String: Any] = ["model": model, "messages": messages, "stream": stream, "n": 1]
         if !tools.isEmpty { body["tools"] = tools; body["tool_choice"] = "auto" }
         let outputKey = settings.tokenLimitParameter ?? "max_tokens"
         guard ["max_tokens", "max_completion_tokens"].contains(outputKey) else { throw ReadingError.invalid("不支持的输出 token 参数。") }
@@ -124,15 +125,22 @@ enum ProviderClient {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 600)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(stream ? "text/event-stream, application/json" : "application/json", forHTTPHeaderField: "Accept")
+        request.setValue("ReadingBook/0.17", forHTTPHeaderField: "User-Agent")
+        if url.host?.lowercased() == "opencode.ai" {
+            let sessionID = settings.transportSessionID ?? fallbackSessionID
+            guard sessionID.range(of: "^[a-zA-Z0-9._:-]{1,180}$", options: .regularExpression) != nil else { throw ReadingError.invalid("模型会话标识无效。") }
+            request.setValue(sessionID, forHTTPHeaderField: "x-opencode-session")
+        }
         if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         return Prepared(request: request, estimatedInputTokens: estimate)
     }
 
-    static func perform(_ prepared: Prepared) async throws -> Result {
+    static func perform(_ prepared: Prepared, configuration suppliedConfiguration: URLSessionConfiguration? = nil,
+                        progress: (@Sendable (ProviderStreamSnapshot) -> Void)? = nil) async throws -> Result {
         try Task.checkCancellation()
-        let configuration = URLSessionConfiguration.ephemeral
+        let configuration = suppliedConfiguration ?? URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 600
         configuration.timeoutIntervalForResource = 1800
         configuration.urlCache = nil
@@ -141,9 +149,20 @@ enum ProviderClient {
         configuration.httpShouldSetCookies = false
         // Redirects could otherwise move a user-supplied bearer token to a
         // different destination or downgrade HTTPS to HTTP.
-        let session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
-        let (data, response) = try await session.data(for: prepared.request)
+        let streaming = ProviderStreamingResponse()
+        let reporter = progress.map(ProviderProgressReporter.init)
+        streaming.decoder.onProgress = { value in reporter?.emit(value) }
+        streaming.onBufferedProgress = { bytes in reporter?.emit(ProviderStreamSnapshot(receivedBytes: bytes)) }
+        defer { reporter?.stop() }
+        let transport: (Data, URLResponse)
+        do {
+            transport = try await BoundedProviderResponse.read(prepared.request, configuration: configuration,
+                onResponse: { response in
+                    streaming.setContentType(response.mimeType)
+                    reporter?.emit(ProviderStreamSnapshot())
+                }, onChunk: { chunk in try streaming.append(chunk) })
+        } catch { throw userFacingTransportError(error) }
+        let (data, response) = transport
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw ReadingError.invalid("模型服务未返回 HTTP 响应。") }
         guard (200...299).contains(http.statusCode) else {
@@ -151,29 +170,51 @@ enum ProviderClient {
             throw ReadingError.invalid("模型请求失败（HTTP \(http.statusCode)）；请检查服务地址、模型、授权与额度。")
         }
         guard data.count <= 4 * 1024 * 1024 else { throw ReadingError.invalid("模型响应超过 4 MiB 限制。") }
-        let decoded: Response
-        do { decoded = try JSONDecoder().decode(Response.self, from: data) }
-        catch { throw ReadingError.invalid("模型响应不符合 Chat Completions 契约，当前内容未计为已读。") }
-        guard decoded.choices.count == 1, let choice = decoded.choices.first,
-              let reason = choice.finish_reason, choice.message.role == "assistant" else {
+        let message: Message, reason: String, reported: Int?
+        if let result = try streaming.finish() {
+            message = result.0; reason = result.1; reported = result.2
+            reporter?.emit(streaming.decoder.snapshot, force: true)
+        } else {
+            let decoded: Response
+            do { decoded = try JSONDecoder().decode(Response.self, from: data) }
+            catch { throw ReadingError.invalid("模型响应不符合 Chat Completions 契约，当前内容未计为已读。") }
+            guard decoded.choices.count == 1, let choice = decoded.choices.first,
+                  let finish = choice.finish_reason else { throw ReadingError.invalid("模型响应缺少完整的单条 assistant 结果。") }
+            message = choice.message; reason = finish; reported = decoded.usage?.total_tokens
+            reporter?.emit(ProviderStreamSnapshot(phase: message.tool_calls?.isEmpty == false ? .receivingTools : .answering,
+                reasoningCharacters: message.reasoning_content?.unicodeScalars.count ?? 0,
+                answerCharacters: message.content?.unicodeScalars.count ?? 0, receivedBytes: data.count), force: true)
+        }
+        guard message.role == "assistant" else {
             throw ReadingError.invalid("模型响应缺少完整的单条 assistant 结果。")
         }
-        guard choice.message.refusal?.isEmpty != false else { throw ReadingError.invalid("模型拒绝本次请求，当前内容未计为已读。") }
+        guard message.refusal?.isEmpty != false else { throw ReadingError.invalid("模型拒绝本次请求，当前内容未计为已读。") }
         guard reason == "stop" || reason == "tool_calls" else {
             let detail = reason == "length" ? "输出被截断" : "未正常结束（\(String(reason.prefix(40)))）"
             throw ReadingError.invalid("模型\(detail)，当前内容未计为已读。")
         }
-        let reported = decoded.usage?.total_tokens
-        if let reported, reported < 0 { throw ReadingError.invalid("模型返回了无效 token 计数。") }
-        return Result(message: choice.message, finishReason: reason,
+        if let reported, !(0...4_194_304).contains(reported) { throw ReadingError.invalid("模型返回了无效或超出保护范围的 token 计数。") }
+        return Result(message: message, finishReason: reason,
                       tokenCost: max(1, reported ?? (prepared.estimatedInputTokens + data.count)))
     }
-}
 
-private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(_ session: URLSession, task: URLSessionTask,
-                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
-                    completionHandler: @escaping (URLRequest?) -> Void) {
-        completionHandler(nil)
+    /// Transport diagnostics can contain a provider URL or echoed credentials.
+    /// Map only network failures; cancellation and protocol/storage errors keep
+    /// their control semantics and original types.
+    static func userFacingTransportError(_ error: Error) -> Error {
+        guard let network = error as? URLError, network.code != .cancelled else { return error }
+        let message: String
+        switch network.code {
+        case .timedOut: message = "模型响应超时，请稍后重试。"
+        case .notConnectedToInternet, .dataNotAllowed: message = "网络暂不可用，请恢复连接后重试。"
+        case .networkConnectionLost: message = "与模型服务的连接中断，请稍后重试；已保存内容保留。"
+        case .cannotConnectToHost: message = "无法连接模型服务，请检查服务是否运行及地址是否正确。"
+        case .cannotFindHost, .dnsLookupFailed: message = "找不到模型服务，请检查服务地址和网络连接。"
+        case .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
+             .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .clientCertificateRejected, .clientCertificateRequired:
+            message = "模型服务的安全连接或证书验证失败，请检查服务配置。"
+        default: message = "模型服务连接失败，请检查网络和服务设置后重试。"
+        }
+        return ReadingError.invalid(message)
     }
 }

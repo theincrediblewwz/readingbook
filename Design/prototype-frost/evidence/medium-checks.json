@@ -1,0 +1,26 @@
+{
+  "results": [
+    {
+      "route": "map",
+      "overflow": false,
+      "panels": []
+    },
+    {
+      "route": "mindmap",
+      "overflow": false,
+      "panels": []
+    },
+    {
+      "route": "notes",
+      "overflow": false,
+      "panels": []
+    },
+    {
+      "route": "models",
+      "overflow": false,
+      "panels": []
+    }
+  ],
+  "errors": [],
+  "consoleErrors": []
+}

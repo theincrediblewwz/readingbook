@@ -20,10 +20,14 @@ struct PDFOCRPanel: View {
     var body: some View {
         let summary = selection
         let runCount = min(summary.recognizable.count, max(0, configuration.maxRequestsPerRun))
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("PDF 页面识别").font(.system(size: 18, weight: .semibold)).lineLimit(1)
-                Text("逐页发送原始页图，转录为 Markdown 与 LaTeX").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                Image(systemName: "viewfinder").font(.system(size: 24)).foregroundStyle(Palette.accent)
+                    .frame(width: 46, height: 46).background(Palette.accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 13))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("PDF 页面识别").font(.system(size: 22, weight: .semibold)).lineLimit(1)
+                    Text("逐页转录为 Markdown 与 LaTeX").font(.system(size: 13)).foregroundStyle(.secondary)
+                }
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -35,19 +39,19 @@ struct PDFOCRPanel: View {
                             Text("每页一个模型请求，完成一页才保存；达到配置的每轮预算后暂停。失败后选择剩余页继续。")
                             Text("已有阅读结论或知识引用的页面会被保护。已识别页仅在尚未产生分析或引用时可以重识别。")
                             Text("原始 PDF 保持不变。看不清的符号、图表和复杂排版保留待核对标记；识别成功不表示理解或提取无遗漏。")
-                        }.font(.caption).foregroundStyle(.secondary).padding(.top, 6)
-                    }.font(.system(size: 12)).padding(.horizontal, 2)
+                        }.font(.system(size: 13)).foregroundStyle(.secondary).padding(.top, 9)
+                    }.font(.system(size: 14)).padding(.horizontal, 2)
                 }.padding(.vertical, 2)
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             HStack(spacing: 10) {
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(ReadingToolbarButtonStyle())
                 Spacer()
-                Button("设置服务") { dismiss(); store.showingSettings = true }
+                Button("设置服务") { dismiss(); store.showingSettings = true }.buttonStyle(ReadingToolbarButtonStyle())
                 Button("识别 \(runCount) 页") { store.startOCR(pages: summary.recognizable) }
-                    .buttonStyle(.borderedProminent).disabled(summary.recognizable.isEmpty || summary.validationError != nil || store.isBusy)
-            }
-        }.padding(18).controlSize(.regular)
+                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(summary.recognizable.isEmpty || summary.validationError != nil || store.isBusy)
+            }.frame(minHeight: ReadingLayout.controlHeight)
+        }.padding(22).controlSize(.large).background(Palette.canvas.opacity(0.4))
             .onAppear { firstPage = String(store.selectedUnit?.page ?? pages.first ?? 1); lastPage = firstPage; store.serviceProfileDraft.ocrError = "" }
     }
 
@@ -58,10 +62,10 @@ struct PDFOCRPanel: View {
                 Text("当前页").tag("current")
                 Text("指定页码").tag("range")
                 Text("未 OCR 的可替换页").tag("all")
-            }.font(.system(size: 12))
+            }.font(.system(size: 14))
             if mode == "range" {
                 HStack(spacing: 8) {
-                    Text("原 PDF 页码").font(.system(size: 12))
+                    Text("原 PDF 页码").font(.system(size: 14))
                     TextField("起始页", text: $firstPage).frame(maxWidth: 90).accessibilityLabel("OCR 起始页")
                     Text("—").foregroundStyle(.secondary)
                     TextField("结束页", text: $lastPage).frame(maxWidth: 90).accessibilityLabel("OCR 结束页")
@@ -69,9 +73,9 @@ struct PDFOCRPanel: View {
                 }.textFieldStyle(.roundedBorder)
             }
             HStack {
-                Text("本轮将识别 \(min(summary.recognizable.count, max(0, configuration.maxRequestsPerRun))) 页 · 跳过 \(summary.skippedCount) 页").font(.system(size: 12, weight: .medium))
+                Text("本轮识别 \(min(summary.recognizable.count, max(0, configuration.maxRequestsPerRun))) 页 · 跳过 \(summary.skippedCount) 页").font(.system(size: 14, weight: .medium))
                 Spacer()
-                Text("原书共 \(pages.count) 页").font(.caption).foregroundStyle(.secondary)
+                Text("共 \(pages.count) 页").font(.system(size: 13)).foregroundStyle(.secondary)
             }
             if let error = summary.validationError {
                 Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red)

@@ -1,0 +1,15 @@
+/* Full canvas stays the same size; every control below is a local overlay. */
+.reader-scroll.with-companion{padding-right:28px!important}
+.reader-page .reader-toolbar{left:50%;max-width:calc(100% - 120px)}
+.reader-question-orb{position:absolute;right:26px;bottom:26px;z-index:24;width:58px;height:58px;min-width:58px;padding:0;border-radius:50%;color:var(--accent);box-shadow:0 10px 30px #3e6ea41b}
+.reader-question-orb svg{width:25px;height:25px}
+.reader-scope-composer{right:26px;bottom:26px;width:410px}
+.reader-composer-range>.button{min-width:40px;width:40px;height:40px;padding:0;margin-left:auto}
+.reader-next-companion{max-height:calc(100dvh - 150px)!important}
+.reader-page:has(.reader-scope-composer) .reader-next-companion{max-height:calc(100dvh - 315px)!important}
+.management-overlay{position:absolute;inset:0;z-index:58;background:#142b5008;isolation:isolate}
+.management-overlay .settings-page,.management-overlay .plugins-page,.management-overlay .models-page{background:transparent!important}
+.management-return{position:absolute;right:26px;top:24px;z-index:80;min-height:48px;border-radius:24px;padding-inline:18px}
+.app-shell[data-management]>.top-islands,.app-shell[data-management]>.nav-handle{pointer-events:none}
+@media(max-width:1100px){.reader-question-orb,.reader-scope-composer{bottom:96px}.reader-next-companion{max-height:calc(100dvh - 210px)!important}.reader-page:has(.reader-scope-composer) .reader-next-companion{max-height:calc(100dvh - 345px)!important}}
+@media(prefers-reduced-motion:no-preference){.reader-question-orb,.reader-scope-composer,.management-overlay{animation:reader-panel-in .2s ease-out}}

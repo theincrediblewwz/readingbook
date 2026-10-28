@@ -9,6 +9,14 @@
   let selectionEnabled = false;
   let currentSource = '';
   let sourceDecorations = [];
+  let appliedDecorations = new Map();
+  let unmappedPassiveDecorations = new Map();
+  let sourceFocusRequest = null;
+  let decorationsDeferred = false;
+  let sourcePress = null;
+  let decorationBatchEpoch = 0;
+  let sourceDOMIndexes = null;
+  const mathClosingFailures = new WeakMap();
 
   function escapedAt(source, position) {
     let backslashes = 0;
@@ -25,12 +33,23 @@
     if (rest[0] === '$' && rest[1] && !/\s/.test(rest[1])) return { left: '$', right: '$', display: false };
     return null;
   }
-  function closing(source, start, delimiter, limit) {
+  function closing(source, start, delimiter, limit, state) {
+    // Repeated unclosed math openers must not each search the same suffix.
+    // $$ can overlap itself; keep its original search without a suffix memo.
+    const memoizable = delimiter.right !== '$$';
+    let failures, failure;
+    if (memoizable) {
+      failures = mathClosingFailures.get(state);
+      if (!failures) { failures = new Map(); mathClosingFailures.set(state, failures); }
+      failure = failures.get(delimiter.right);
+      if (failure && start >= failure.start && limit <= failure.limit) return -1;
+    }
     let position = start;
     while ((position = source.indexOf(delimiter.right, position)) !== -1 && position < limit) {
       if (!escapedAt(source, position) && !(delimiter.right === '$' && (/\s/.test(source[position - 1] || '') || /\d/.test(source[position + 1] || '')))) return position;
       position += delimiter.right.length;
     }
+    if (memoizable) failures.set(delimiter.right, { start, limit });
     return -1;
   }
   function mathHTML(source, display, original) {
@@ -51,7 +70,7 @@
     const start = state.pos;
     const delimiter = opening(state.src, start);
     if (!delimiter) return false;
-    const end = closing(state.src, start + delimiter.left.length, delimiter, state.posMax);
+    const end = closing(state.src, start + delimiter.left.length, delimiter, state.posMax, state);
     if (end < 0) return false;
     if (!silent) {
       const token = state.push('readingbook_math', '', 0);
@@ -70,10 +89,16 @@
     if (state.sCount[startLine] - state.blkIndent >= 4) return false;
     const delimiter = opening(state.src, start);
     if (!delimiter || !delimiter.display) return false;
-    const end = closing(state.src, start + delimiter.left.length, delimiter, state.eMarks[endLine - 1]);
+    const end = closing(state.src, start + delimiter.left.length, delimiter, state.eMarks[endLine - 1], state);
     if (end < 0) return false;
     let finalLine = startLine;
-    while (finalLine + 1 < endLine && state.bMarks[finalLine + 1] <= end) finalLine++;
+    while (finalLine + 1 < endLine && state.bMarks[finalLine + 1] <= end) {
+      finalLine++;
+      // A list/quote parser may pass the rest of the document as endLine.
+      // Like a fenced code block, math cannot consume a nonempty line that
+      // has already left its containing item/quote (including lazy lines).
+      if (state.sCount[finalLine] < state.blkIndent && state.bMarks[finalLine] < state.eMarks[finalLine]) return false;
+    }
     if (state.src.slice(end + delimiter.right.length, state.eMarks[finalLine]).trim()) return false;
     if (silent) return true;
     const token = state.push('readingbook_math', '', 0);
@@ -204,26 +229,93 @@
     return html;
   }
 
-  function validatedRange(item) {
+  function validatedRange(item, quoteRanges) {
     if (!item || typeof item.id !== 'string' || typeof item.targetID !== 'string' || typeof item.quote !== 'string' || !item.quote || item.quote.length > 32_768) return null;
     const start = item.rangeLocation, length = item.rangeLength;
     if (Number.isSafeInteger(start) && Number.isSafeInteger(length) && start >= 0 && length > 0 && currentSource.slice(start, start + length) === item.quote) return [start, start + length];
+    if (quoteRanges.has(item.quote)) return quoteRanges.get(item.quote);
     const found = currentSource.indexOf(item.quote);
-    if (found < 0 || currentSource.indexOf(item.quote, found + 1) >= 0) return null;
-    return [found, found + item.quote.length];
+    const result = found < 0 || currentSource.indexOf(item.quote, found + 1) >= 0 ? null : [found, found + item.quote.length];
+    quoteRanges.set(item.quote, result);
+    return result;
   }
-  function addSourceDecorations(root) {
-    const ranges = Array.from(root.querySelectorAll('[data-source-start]'));
+  // Build once from the original trusted DOM. Marks inserted below do not add
+  // source ranges. Preserve DOM order for literal hosts and shortest-block /
+  // DOM-order ties for the honest paragraph fallback.
+  function sourceIntervalIndex(nodes, startKey, endKey, shortest) {
+    const entries = Array.from(nodes, (node, order) => ({ node, order, start: Number(node.dataset[startKey]), end: Number(node.dataset[endKey]) }))
+      .filter(entry => Number.isFinite(entry.start) && Number.isFinite(entry.end))
+      .sort((a, b) => a.start - b.start || a.order - b.order);
+    const compare = shortest ? (a, b) => (a.end - a.start) - (b.end - b.start) || a.order - b.order : (a, b) => a.order - b.order;
+    function build(first, last) {
+      if (first >= last) return null;
+      const middle = (first + last) >> 1, entry = entries[middle];
+      const left = build(first, middle), right = build(middle + 1, last);
+      let best = entry;
+      if (left && compare(left.best, best) < 0) best = left.best;
+      if (right && compare(right.best, best) < 0) best = right.best;
+      return { entry, left, right, best, minStart: entries[first].start, maxEnd: Math.max(entry.end, left?.maxEnd ?? -Infinity, right?.maxEnd ?? -Infinity) };
+    }
+    const tree = build(0, entries.length);
+    return (from, to) => {
+      let best = null;
+      function visit(branch) {
+        if (!branch || branch.minStart > from || branch.maxEnd < to || (best && compare(branch.best, best) >= 0)) return;
+        const entry = branch.entry;
+        if (entry.start <= from && entry.end >= to && (!best || compare(entry, best) < 0)) best = entry;
+        const a = branch.left, b = branch.right;
+        if (a && b && compare(b.best, a.best) < 0) { visit(b); visit(a); }
+        else { visit(a); visit(b); }
+      }
+      visit(tree);
+      return best?.node ?? null;
+    };
+  }
+  function addSourceDecorations(root, additions) {
+    const incoming = additions || sourceDecorations;
+    if (!incoming.length) return;
+    // Decoration spans only wrap text inside the original source hosts. They
+    // never add, replace or remove those hosts/blocks, so every progressive
+    // batch can share the same immutable indexes for this rendered document.
+    if (sourceDOMIndexes?.root !== root) {
+      sourceDOMIndexes = {
+        root,
+        findHost: sourceIntervalIndex(root.querySelectorAll('[data-source-start]'), 'sourceStart', 'sourceEnd', false),
+        findBlock: sourceIntervalIndex(root.querySelectorAll('[data-source-block-start]'), 'sourceBlockStart', 'sourceBlockEnd', true),
+        hostStates: new WeakMap()
+      };
+    }
+    const { findHost, findBlock } = sourceDOMIndexes;
+    const quoteRanges = new Map();
     let approximateCount = 0;
-    for (const item of sourceDecorations) {
-      const range = validatedRange(item);
+    for (const item of incoming) {
+      const range = validatedRange(item, quoteRanges);
       if (!range) continue;
-      const host = ranges.find(node => Number(node.dataset.sourceStart) <= range[0] && Number(node.dataset.sourceEnd) >= range[1]);
+      const host = findHost(range[0], range[1]);
       // One literal source span is sufficient. Never cross a math/link/code node.
       if (host) {
+        let state = sourceDOMIndexes.hostStates.get(host);
+        if (!state) {
+          state = { min: Infinity, max: -Infinity, cursor: null };
+          for (const marker of host.querySelectorAll('.source-mention')) {
+            state.min = Math.min(state.min, Number(marker.dataset.decorationStart));
+            state.max = Math.max(state.max, Number(marker.dataset.decorationEnd));
+          }
+          sourceDOMIndexes.hostStates.set(host, state);
+        }
         const from = range[0] - Number(host.dataset.sourceStart), to = range[1] - Number(host.dataset.sourceStart);
         const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
         let textNode, passed = 0, begin = null, finish = null;
+        // Monotone, disjoint marks are the common dense-page case. Resume at
+        // the last inserted wrapper instead of revisiting the whole prefix.
+        // Start at its original offset: nextNode visits its text once, then
+        // advances to the remaining source. Arbitrary/nested order uses the
+        // unchanged full walker. No selection or source node is pre-split.
+        const cursor = state.cursor;
+        if (cursor && range[0] >= cursor.to && cursor.node.isConnected && host.contains(cursor.node)) {
+          walker.currentNode = cursor.node;
+          passed = cursor.from - Number(host.dataset.sourceStart);
+        }
         while ((textNode = walker.nextNode())) {
           const next = passed + textNode.length;
           if (!begin && from >= passed && from < next) begin = [textNode, from - passed];
@@ -232,43 +324,186 @@
         }
         if (begin && finish) {
           const domRange = document.createRange(); domRange.setStart(...begin); domRange.setEnd(...finish);
-          if (domRange.toString() === item.quote && !begin[0].parentElement.closest('.source-mention') && !finish[0].parentElement.closest('.source-mention') && !domRange.cloneContents().querySelector('.source-mention')) {
+          // Containment can be represented without changing source bytes or
+          // cloning an existing mark: a sentence may contain clickable terms.
+          // Crossing intervals have no honest nested DOM representation.
+          const disjointExtent = range[0] >= state.max || range[1] <= state.min;
+          const crosses = !disjointExtent && Array.from(host.querySelectorAll('.source-mention')).some(marker => {
+            const start = Number(marker.dataset.decorationStart), end = Number(marker.dataset.decorationEnd);
+            return (range[0] < start && start < range[1] && range[1] < end) ||
+              (start < range[0] && range[0] < end && end < range[1]);
+          });
+          // If a new outer range ends at a nested mark's text boundary,
+          // extractContents would otherwise clone that partly selected wrapper.
+          // Promote exact boundaries to include the existing node itself.
+          let startMark = begin[0].parentElement.closest('.source-mention');
+          while (startMark && host.contains(startMark)) {
+            if (Number(startMark.dataset.decorationStart) === range[0] && Number(startMark.dataset.decorationEnd) <= range[1]) domRange.setStartBefore(startMark);
+            startMark = startMark.parentElement.closest('.source-mention');
+          }
+          let endMark = finish[0].parentElement.closest('.source-mention');
+          while (endMark && host.contains(endMark)) {
+            if (Number(endMark.dataset.decorationEnd) === range[1] && Number(endMark.dataset.decorationStart) >= range[0]) domRange.setEndAfter(endMark);
+            endMark = endMark.parentElement.closest('.source-mention');
+          }
+          if (domRange.toString() === item.quote && !crosses) {
             const marker = document.createElement('span'); marker.className = 'source-mention';
-            marker.dataset.sourceDecoration = item.id; marker.dataset.sourceTarget = item.targetID;
+            describeDecoration(marker, item, range);
             marker.tabIndex = 0; marker.setAttribute('role', 'button'); marker.setAttribute('aria-label', '查看“' + item.quote + '”的关联内容');
             marker.title = '查看关联内容';
-            marker.appendChild(domRange.extractContents()); domRange.insertNode(marker); continue;
+            marker.appendChild(domRange.extractContents()); domRange.insertNode(marker);
+            state.min = Math.min(state.min, range[0]); state.max = Math.max(state.max, range[1]);
+            state.cursor = { node: marker, from: range[0], to: range[1] };
+            unmappedPassiveDecorations.delete(item.id);
+            if (sourceFocusRequest?.id === item.id) focusSourceNode(marker, sourceFocusRequest);
+            continue;
           }
         }
       }
-      const blocks = Array.from(root.querySelectorAll('[data-source-block-start]'));
-      const block = blocks.filter(node => Number(node.dataset.sourceBlockStart) <= range[0] && Number(node.dataset.sourceBlockEnd) >= range[1]).sort((a, b) => (Number(a.dataset.sourceBlockEnd) - Number(a.dataset.sourceBlockStart)) - (Number(b.dataset.sourceBlockEnd) - Number(b.dataset.sourceBlockStart)))[0];
+      // A derived sentence is an optional hover affordance. Complex Markdown
+      // must not gain a paragraph button for every unmappable sentence.
+      if (item.passive) { unmappedPassiveDecorations.set(item.id, { identity: decorationIdentity(item), range }); continue; }
+      const block = findBlock(range[0], range[1]);
       if (block) {
         const marker = document.createElement('button'); marker.className = 'source-paragraph-link';
-        marker.dataset.sourceDecoration = item.id; marker.dataset.sourceTarget = item.targetID;
+        describeDecoration(marker, item, range);
         marker.textContent = item.quote.length > 22 ? item.quote.slice(0, 22) + '…' : item.quote;
         marker.title = '定位到本段；此处的 Markdown 结构不支持可靠词位映射';
         marker.setAttribute('aria-label', marker.textContent + '，段落关联，非精确词位'); block.appendChild(marker); approximateCount++;
+        if (sourceFocusRequest?.id === item.id) focusSourceNode(marker, sourceFocusRequest);
       }
     }
-    if (approximateCount) {
+    if (approximateCount && !root.querySelector('.source-location-note')) {
       const note = document.createElement('p'); note.className = 'source-location-note';
       note.textContent = '部分关联显示在对应段落末尾；公式、链接或复杂排版保留原样，未推测词语位置。'; root.appendChild(note);
     }
   }
+  function describeDecoration(marker, item, range) {
+    marker.dataset.sourceDecoration = item.id; marker.dataset.sourceTarget = item.targetID;
+    marker.dataset.sourceRole = item.interaction === 'term' ? 'term' : 'passage';
+    marker.dataset.sourcePassive = item.passive ? 'true' : 'false';
+    marker.dataset.decorationStart = String(range[0]); marker.dataset.decorationEnd = String(range[1]);
+  }
+  function decorationIdentity(item) {
+    return JSON.stringify([item.id, item.targetID, item.quote, item.rangeLocation, item.rangeLength, item.interaction === 'term' ? 'term' : 'passage', !!item.passive]);
+  }
+  function appendDecorationBatches(root, additions, next) {
+    const epoch = ++decorationBatchEpoch, revision = currentRevision;
+    const pending = new Set(additions.map(item => item.id));
+    appliedDecorations = new Map(Array.from(next).filter(([id]) => !pending.has(id)));
+    let cursor = 0;
+    function step() {
+      if (epoch !== decorationBatchEpoch || revision !== currentRevision || !root.isConnected) return;
+      if (sourcePress || global.getSelection?.()?.isCollapsed === false) { decorationsDeferred = true; return; }
+      // Small changes remain synchronous. Large result bursts allow a frame
+      // between batches instead of blocking selection/scroll for the full list.
+      const end = Math.min(additions.length, cursor + (additions.length <= 64 ? 64 : 24));
+      const batch = additions.slice(cursor, end);
+      addSourceDecorations(root, batch);
+      for (const item of batch) appliedDecorations.set(item.id, next.get(item.id));
+      cursor = end; reportHeight();
+      if (cursor < additions.length) global.requestAnimationFrame(step);
+    }
+    step();
+  }
+  function applyDecorations() {
+    const root = global.document?.getElementById('content');
+    if (!root) return false;
+    // Do not detach a reader's live text selection or an in-progress click.
+    if (sourcePress || global.getSelection?.()?.isCollapsed === false) { decorationsDeferred = true; return false; }
+    decorationsDeferred = false;
+    // Removal/changed nesting may detach the old cursor or alter its extent.
+    // Rebuild these small traversal hints lazily once per update, while all
+    // progressive batches still share the immutable base source indexes.
+    if (sourceDOMIndexes?.root === root) sourceDOMIndexes.hostStates = new WeakMap();
+    const next = new Map(sourceDecorations.filter(item => item && typeof item.id === 'string').map(item => [item.id, decorationIdentity(item)]));
+    const changedRanges = [];
+    root.querySelectorAll('[data-source-decoration]').forEach(node => {
+      const id = node.dataset.sourceDecoration;
+      if (next.get(id) === appliedDecorations.get(id)) return;
+      changedRanges.push([Number(node.dataset.decorationStart), Number(node.dataset.decorationEnd)]);
+      if (node.classList.contains('source-mention')) node.replaceWith(...Array.from(node.childNodes));
+      else node.remove();
+    });
+    const additions = sourceDecorations.filter(item => item && typeof item.id === 'string' && next.get(item.id) !== appliedDecorations.get(item.id));
+    const quoteRanges = new Map();
+    for (const item of additions) { const range = validatedRange(item, quoteRanges); if (range) changedRanges.push(range); }
+    // A crossing neighbor may have forced an otherwise literal term into the
+    // paragraph fallback. Retry only affected fallbacks after neighbors change.
+    const retryIDs = new Set();
+    // Failed passive ranges have no fallback DOM node. Keep only those small
+    // unresolved records and retry when an overlapping neighbor changes, never
+    // on each animation frame or each progressive batch.
+    const merged = [];
+    for (const range of changedRanges.sort((a, b) => a[0] - b[0])) {
+      const last = merged[merged.length - 1];
+      if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]);
+      else merged.push(range.slice());
+    }
+    const intersectsChanges = (from, to) => {
+      let left = 0, right = merged.length;
+      while (left < right) { const middle = (left + right) >> 1; if (merged[middle][1] <= from) left = middle + 1; else right = middle; }
+      return left < merged.length && merged[left][0] < to;
+    };
+    for (const [id, failed] of unmappedPassiveDecorations) {
+      if (next.get(id) !== failed.identity) unmappedPassiveDecorations.delete(id);
+      else if (intersectsChanges(...failed.range)) retryIDs.add(id);
+    }
+    root.querySelectorAll('.source-paragraph-link').forEach(node => {
+      const from = Number(node.dataset.decorationStart), to = Number(node.dataset.decorationEnd);
+      if (intersectsChanges(from, to)) { retryIDs.add(node.dataset.sourceDecoration); node.remove(); }
+    });
+    const additionIDs = new Set(additions.map(item => item.id));
+    for (const item of sourceDecorations) if (item && retryIDs.has(item.id) && !additionIDs.has(item.id)) { additions.push(item); additionIDs.add(item.id); }
+    if (sourceFocusRequest && !next.has(sourceFocusRequest.id)) sourceFocusRequest = null;
+    appendDecorationBatches(root, additions, next);
+    if (!root.querySelector('.source-paragraph-link')) root.querySelectorAll('.source-location-note').forEach(node => node.remove());
+    reportHeight();
+    return true;
+  }
+  function updateDecorations(items, options) {
+    if (Number(options?.revision) !== currentRevision) return false;
+    sourceDecorations = Array.isArray(items) ? items.slice(0, 5_000) : [];
+    return applyDecorations();
+  }
+  function updatePresentation(options) {
+    if (Number(options?.revision) !== currentRevision) return false;
+    selectionEnabled = !!options.selectionEnabled;
+    document.documentElement.dataset.theme = options.theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.dataset.readingStyle = options.readingStyle === 'companion' ? 'companion' : 'body';
+    const role = ['source', 'companion', 'conversation', 'notes', 'knowledge'].includes(options.readingContext) ? options.readingContext : 'knowledge';
+    document.documentElement.dataset.readingContext = role;
+    const scale = Number.isFinite(Number(options.textScale)) ? Math.min(1.6, Math.max(0.8, Number(options.textScale))) : 1;
+    const size = Number.isFinite(options.fontSize) ? Math.min(36, Math.max(12, options.fontSize)) : (options.readingStyle === 'companion' ? 18 : 16) * scale;
+    const family = typeof options.fontFamily === 'string' && options.fontFamily.length <= 1024 ? options.fontFamily : '';
+    // Font settings are presentation only. Do not replace body nodes, clear a
+    // live selection or reset citation/KaTeX identity when the reader resizes.
+    document.documentElement.style.fontSize = size + 'px';
+    document.documentElement.style.fontFamily = family;
+    reportHeight();
+    document.fonts?.ready.then(reportHeight);
+    return true;
+  }
+  function focusSourceNode(node, request) {
+    if (request !== sourceFocusRequest || request.revision !== currentRevision) return;
+    node.classList.add('source-focused');
+    // First allow the fitted WebView to receive its new content height.
+    global.requestAnimationFrame(() => global.requestAnimationFrame(() => {
+      if (request !== sourceFocusRequest || request.revision !== currentRevision || !node.isConnected) return;
+      const rect = node.getBoundingClientRect(), parent = document.getElementById('content').getBoundingClientRect();
+      global.webkit?.messageHandlers?.readingbookSourceFocus?.postMessage({ y: Math.max(0, rect.top - parent.top - 12), height: rect.height + 24, revision: request.revision });
+    }));
+  }
   function focusDecoration(id) {
     const root = document.getElementById('content');
     root.querySelectorAll('.source-focused').forEach(node => node.classList.remove('source-focused'));
+    sourceFocusRequest = null;
+    if (id == null) return true;
+    if (typeof id !== 'string' || !sourceDecorations.some(item => item?.id === id)) return false;
+    const request = { id, revision: currentRevision }; sourceFocusRequest = request;
     const node = Array.from(root.querySelectorAll('[data-source-decoration]')).find(node => node.dataset.sourceDecoration === id);
-    if (!node) return false;
-    node.classList.add('source-focused');
-    const revision = currentRevision;
-    // First allow the fitted WebView to receive its new content height.
-    global.requestAnimationFrame(() => global.requestAnimationFrame(() => {
-      if (revision !== currentRevision || !node.isConnected) return;
-      const rect = node.getBoundingClientRect(), parent = root.getBoundingClientRect();
-      global.webkit?.messageHandlers?.readingbookSourceFocus?.postMessage({ y: Math.max(0, rect.top - parent.top - 12), height: rect.height + 24, revision });
-    }));
+    if (node) focusSourceNode(node, request);
+    // A later progressive batch applies this same revision-bound request.
     return true;
   }
   let heightScheduled = false;
@@ -286,12 +521,18 @@
     currentRevision = Number(settings.revision) || 0;
     selectionEnabled = !!settings.selectionEnabled;
     currentSource = typeof settings.sourceText === 'string' ? settings.sourceText : String(markdown || '');
-    sourceDecorations = Array.isArray(settings.sourceDecorations) ? settings.sourceDecorations.slice(0, 1_000) : [];
+    sourceDecorations = Array.isArray(settings.sourceDecorations) ? settings.sourceDecorations.slice(0, 5_000) : [];
     global.getSelection?.()?.removeAllRanges();
     document.documentElement.dataset.theme = settings.theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.dataset.readingStyle = settings.readingStyle === 'companion' ? 'companion' : 'body';
+    updatePresentation(settings);
     const root = document.getElementById('content');
+    // render() may be called again with the same external revision. Its new
+    // DOM must never reuse indexes pointing into the detached previous body.
+    sourceDOMIndexes = null;
     root.innerHTML = renderHTML(markdown, settings);
-    addSourceDecorations(root);
+    appliedDecorations = new Map(); unmappedPassiveDecorations = new Map(); sourceFocusRequest = null; decorationsDeferred = false; sourcePress = null;
+    applyDecorations();
     root.querySelectorAll('img').forEach(image => {
       image.addEventListener('load', reportHeight, { once: true });
       image.addEventListener('error', () => {
@@ -304,15 +545,42 @@
     reportHeight();
     document.fonts?.ready.then(reportHeight);
   }
-  global.ReadingBookMarkdown = Object.freeze({ render, renderHTML, focusDecoration });
+  global.ReadingBookMarkdown = Object.freeze({ render, renderHTML, focusDecoration, updateDecorations, updatePresentation });
   if (global.document) {
     let selectionTimer = null;
     let lastSelectionKey = '';
-    let sourcePress = null;
+    function sourceMarker(target, interaction) {
+      if (!target?.closest) return null;
+      const nearest = target.closest('[data-source-decoration]');
+      if (!nearest) return null;
+      if (interaction === 'hover') {
+        // Moving over a named term in a translated sentence keeps the sentence
+        // translation steady; clicking the term opens its own entity card.
+        return nearest.closest('.source-mention[data-source-role="passage"]') || nearest;
+      }
+      return nearest.closest('[data-source-role="term"]') || nearest;
+    }
+    function reportSourceHover(node, activated, event) {
+      if (!node || (!activated && (sourcePress || global.getSelection()?.isCollapsed === false))) {
+        global.webkit?.messageHandlers?.readingbookSourceHover?.postMessage({leaving:true,revision:currentRevision}); return;
+      }
+      const rectangles=Array.from(node.getClientRects());
+      const rect=rectangles.find(rect=>event && event.clientX>=rect.left && event.clientX<=rect.right && event.clientY>=rect.top && event.clientY<=rect.bottom) || rectangles[0] || node.getBoundingClientRect();
+      global.webkit?.messageHandlers?.readingbookSourceHover?.postMessage({id:node.dataset.sourceDecoration,rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},activated:!!activated,revision:currentRevision});
+    }
+    document.addEventListener('mouseover', event => {
+      const node=sourceMarker(event.target,'hover');
+      if(node && node !== sourceMarker(event.relatedTarget,'hover')) reportSourceHover(node,false,event);
+    });
+    document.addEventListener('mouseout', event => {
+      const node=sourceMarker(event.target,'hover');
+      if(node && node !== sourceMarker(event.relatedTarget,'hover')) reportSourceHover(null,false);
+    });
     function finishSourcePress() {
       const press = sourcePress;
       if (press?.node.isConnected) press.node.tabIndex = 0;
       sourcePress = null;
+      if (decorationsDeferred) applyDecorations();
     }
     function reportSelection() {
       if (!selectionEnabled) return;
@@ -346,7 +614,7 @@
           }
         }
       }
-      const key = currentRevision + ':' + containsMath + ':' + text;
+      const key = JSON.stringify([currentRevision, containsMath, text, sourceLocation, sourceLength]);
       if (key === lastSelectionKey) return;
       lastSelectionKey = key;
       global.webkit?.messageHandlers?.readingbookSelection?.postMessage({ text, containsMath, sourceLocation, sourceLength, revision: currentRevision });
@@ -354,6 +622,7 @@
     document.addEventListener('selectionchange', () => {
       clearTimeout(selectionTimer);
       selectionTimer = setTimeout(reportSelection, 80);
+      if (decorationsDeferred && global.getSelection()?.isCollapsed !== false) applyDecorations();
     });
     new ResizeObserver(reportHeight).observe(document.getElementById('content'));
     global.addEventListener('resize', reportHeight);
@@ -362,6 +631,7 @@
     // uses ordinary text behavior. No pointer capture or manual text offsets.
     document.addEventListener('mousedown', event => {
       finishSourcePress();
+      reportSourceHover(null,false);
       const node = event.target.closest?.('.source-mention');
       if (!node || event.button !== 0) return;
       sourcePress = { node, x: event.clientX, y: event.clientY, dragged: false };
@@ -377,11 +647,12 @@
     }, true);
     global.addEventListener('blur', finishSourcePress);
     document.addEventListener('click', event => {
-      const marker = event.target.closest?.('[data-source-decoration]');
+      const marker = sourceMarker(event.target,'click');
       if (marker) {
         // A drag selection ending on a mention should remain a selection.
         if (event.detail !== 0 && (sourcePress?.dragged || global.getSelection()?.isCollapsed === false)) return;
         event.preventDefault();
+        reportSourceHover(marker,true,event);
         global.webkit?.messageHandlers?.readingbookSourceTap?.postMessage({ id: marker.dataset.sourceDecoration, targetID: marker.dataset.sourceTarget, revision: currentRevision });
         return;
       }

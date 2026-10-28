@@ -5,22 +5,25 @@ import ReadingCore
 struct ReadingParallelView: View {
     @EnvironmentObject var store: AppStore
     var mode: String
+    var onSourceDecorationTap: ((String) -> Void)? = nil
+    var onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil
     var body: some View {
         GeometryReader { geometry in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 28) {
-                    HStack {
-                        Label(mode == "layers" ? "译注阅读" : "原文与译注", systemImage: "rectangle.split.2x1").font(.subheadline.weight(.semibold))
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    HStack(spacing: 16) {
+                        Label(mode == "layers" ? "译注阅读" : "原文与译注", systemImage: "rectangle.split.2x1").font(.system(size: 17, weight: .semibold))
                         Spacer()
-                        Button("回到原书") { store.readingSourceMode = "original" }.buttonStyle(.borderless).font(.caption)
-                    }
+                        Button { store.readingSourceMode = "original" } label: { Label("原书", systemImage: "arrow.uturn.backward") }.buttonStyle(ReadingToolbarButtonStyle())
+                    }.padding(.leading, 18).padding(.trailing, 6).padding(.vertical, 6).readingGlass(radius: 18)
                     Text("对照按原文片段排列。AI 译注另列来源；没有译注的片段保留原文，不把局部翻译算成整页已译。")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.system(size: 14)).foregroundStyle(.secondary).lineSpacing(5)
                     ForEach(store.visibleSourceUnits) { unit in
-                        ReadingParallelUnit(unit: unit, mode: mode, sideBySide: mode == "parallel" && geometry.size.width >= 820)
+                        ReadingParallelUnit(unit: unit, mode: mode, sideBySide: mode == "parallel" && geometry.size.width >= 820,
+                            onSourceDecorationTap: onSourceDecorationTap, onSourceDecorationHover: onSourceDecorationHover)
                     }
-                }.padding(.horizontal, 28).padding(.top, 86).padding(.bottom, 32).frame(maxWidth: mode == "parallel" ? 1180 : 790).frame(maxWidth: .infinity)
-            }.background(Palette.paper)
+                }.padding(.horizontal, 28).padding(.top, 100).padding(.bottom, 100).frame(maxWidth: mode == "parallel" ? 1320 : 890).frame(maxWidth: .infinity)
+            }.background(Palette.canvas)
         }
     }
 }
@@ -30,6 +33,8 @@ private struct ReadingParallelUnit: View {
     let unit: SourceUnit
     let mode: String
     let sideBySide: Bool
+    var onSourceDecorationTap: ((String) -> Void)?
+    var onSourceDecorationHover: ((SourceReadingHover?) -> Void)?
     private var layers: [ReadingLayer] {
         let ids = Set(store.readingExperienceIndex.anchors.filter { $0.unitID == unit.id }.map(\.id))
         return store.readingExperienceIndex.layers.filter { !ids.isDisjoint(with: $0.sourceAnchorIDs) }
@@ -49,9 +54,9 @@ private struct ReadingParallelUnit: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(unit.locator).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+            Text(unit.locator).font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary).padding(.horizontal, 4)
             if sideBySide {
-                HStack(alignment: .top, spacing: 28) {
+                HStack(alignment: .top, spacing: 32) {
                     original.frame(maxWidth: .infinity, alignment: .leading)
                     translated.frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -63,34 +68,34 @@ private struct ReadingParallelUnit: View {
     }
     private var original: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("原文").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            Label("原文", systemImage: "book.pages").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
             RichMarkdownView(markdown: unit.text, sourceText: unit.text,
                              plainText: !["md", "markdown"].contains(store.sourceFileURL?.pathExtension.lowercased() ?? "") && store.book?.ocrPages?.contains(where: { $0.page == unit.page }) != true,
                              sourceDecorations: decorations, focusedDecorationID: store.focusedReadingAnchorID,
-                             onSourceDecorationTap: store.sourceDecorationTapped,
+                             onSourceDecorationTap: onSourceDecorationTap ?? store.sourceDecorationTapped,
                              onSourceSelection: { selection in
                                 var adjusted = selection; adjusted?.rangeLocation = selection?.rangeLocation.map { $0 + offset }
                                 store.sourceReadingSelection = adjusted; if selection != nil { store.focusedReadingAnchorID = nil }
-                             })
-        }
+                             }, onSourceDecorationHover: onSourceDecorationHover)
+        }.frame(maxWidth: .infinity, alignment: .leading).readingTextContext(.source)
     }
     private var translated: some View {
         VStack(alignment: .leading, spacing: 18) {
             if layers.isEmpty {
-                Text("此片段暂无译注").font(.caption).foregroundStyle(.secondary)
+                Label("此片段暂无译注", systemImage: "text.bubble").font(.system(size: 15)).foregroundStyle(.secondary).padding(.vertical, 20)
             }
             ForEach(layers) { layer in
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack { Text(layer.title).font(.subheadline.weight(.medium)); Spacer(); Text(layer.kind == "translation" ? "译文" : "译注").font(.caption2).foregroundStyle(.secondary) }
-                    Text(layer.sourceLabel).font(.caption2).foregroundStyle(.secondary)
+                    HStack { Text(layer.title).font(.system(size: 18, weight: .medium)); Spacer(); Text(layer.kind == "translation" ? "译文" : "译注").font(.system(size: 13)).foregroundStyle(.secondary) }
+                    Text(layer.sourceLabel).font(.system(size: 13)).foregroundStyle(.secondary)
                     MarkdownText(markdown: layer.markdown)
                     HStack {
-                        Button("回到对应原句") { if let id = layer.sourceAnchorIDs.first { store.readingSourceMode = "original"; store.focusReadingAnchor(id) } }
+                        Button { if let id = layer.sourceAnchorIDs.first { store.readingSourceMode = "original"; store.focusReadingAnchor(id) } } label: { Label("对应原句", systemImage: "arrow.uturn.backward") }
                         Spacer()
-                        Button("记一笔") { store.newReadingNote(title: layer.title, markdown: layer.markdown, anchorIDs: layer.sourceAnchorIDs) }.disabled(store.isBusy)
-                    }.font(.caption).buttonStyle(.borderless)
-                }.padding(16).background(Palette.accent.opacity(0.04), in: RoundedRectangle(cornerRadius: 14))
+                        Button { store.newReadingNote(title: layer.title, markdown: layer.markdown, anchorIDs: layer.sourceAnchorIDs) } label: { Label("记一笔", systemImage: "square.and.pencil") }.disabled(store.isBusy)
+                    }.font(.system(size: 14)).buttonStyle(ReadingToolbarButtonStyle())
+                }
             }
-        }
+        }.frame(maxWidth: .infinity, alignment: .leading).readingTextContext(.companion)
     }
 }

@@ -27,13 +27,9 @@ public enum ReadingExperienceTools {
         let alignment = object(["id": id, "sourceAnchorIDs": anchorIDs, "title": short, "markdown": markdown, "provenance": provenance,
                                 "status": ["type": "string", "enum": ["needs-review"], "description": "AI资料对齐保留待核对，不能假称外部来源已联网验证。"]],
                                required: ["id", "sourceAnchorIDs", "title", "markdown", "provenance", "status"])
-        let option = object(["id": id, "title": short, "markdown": markdown], required: ["id", "title", "markdown"])
-        let decision = object(["id": id, "title": short, "contextMarkdown": markdown, "options": list(option, minimum: 2, maximum: 12),
-                               "historicalOutcomeMarkdown": ["type": "string", "maxLength": 16000], "sourceAnchorIDs": anchorIDs, "sourceLabel": short],
-                              required: ["id", "title", "contextMarkdown", "options", "historicalOutcomeMarkdown", "sourceAnchorIDs", "sourceLabel"])
-        return ["type": "function", "function": ["name": "reading_enrich", "description": "依据当前已通过全部逐段回执的原文，原子保存稳定原文锚点、词语提及、译文/释义/评注、真实资料对齐和思考卡。先创建实体，再以mentions关联。anchor.id仅为请求内别名，宿主生成真实稳定ID；引用可用该别名或已保存hostID。重复词句必须prefix/suffix精确消歧。不同内容不能覆盖已有ID，不能删改旧层或用户Markdown。AI产物标注待核对；资料对齐至少引用两个不同原文单元的真实锚点。没有新增适用内容时单独提供noChangesReason。",
+        return ["type": "function", "function": ["name": "reading_enrich", "description": "依据当前已通过全部逐段回执的原文，原子保存稳定原文锚点、词语提及、译文/释义/评注与真实资料对齐。先创建实体，再以mentions关联。anchor.id仅为请求内别名，宿主生成真实稳定ID；引用可用该别名或已保存hostID。重复词句必须prefix/suffix精确消歧。不同内容不能覆盖已有ID，不能删改旧层或用户Markdown。AI产物标注待核对；资料对齐至少引用两个不同原文单元的真实锚点。没有新增适用内容时单独提供noChangesReason。",
             "parameters": object(["anchors": list(anchor, maximum: 64), "mentions": list(object(["targetID": id, "anchorID": id], required: ["targetID", "anchorID"]), maximum: 128),
-                                   "layers": list(layer, maximum: 32), "alignments": list(alignment, maximum: 16), "decisions": list(decision, maximum: 16),
+                                   "layers": list(layer, maximum: 32), "alignments": list(alignment, maximum: 16),
                                    "noChangesReason": ["type": "string", "minLength": 1, "maxLength": 400]], required: [])]]
     }
 
@@ -42,29 +38,29 @@ public enum ReadingExperienceTools {
     }
     private struct Submission: Decodable {
         var anchors: [AnchorRequest]?; var mentions: [SourceMention]?; var layers: [ReadingLayer]?
-        var alignments: [ReferenceAlignment]?; var decisions: [DecisionCard]?; var noChangesReason: String?
+        var alignments: [ReferenceAlignment]?; var noChangesReason: String?
     }
 
     public static func apply(arguments: Data, to project: inout BookProject, allowedUnitIDs: Set<String>) throws -> String {
         guard arguments.count <= 262_144, let object = try JSONSerialization.jsonObject(with: arguments) as? [String: Any],
-              Set(object.keys).isSubset(of: ["anchors", "mentions", "layers", "alignments", "decisions", "noChangesReason"]) else {
+              Set(object.keys).isSubset(of: ["anchors", "mentions", "layers", "alignments", "noChangesReason"]) else {
             throw ReadingError.invalid("阅读增强参数必须是小于256 KiB的合法JSON对象，不能包含未知字段。")
         }
-        try ReadingLedger.requireComplete(unitIDs: allowedUnitIDs, in: project)
+        try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
         let value = try JSONDecoder().decode(Submission.self, from: arguments)
         let requests = value.anchors ?? [], mentions = value.mentions ?? [], layers = value.layers ?? []
-        let alignments = value.alignments ?? [], decisions = value.decisions ?? []
-        guard requests.count <= 64, mentions.count <= 128, layers.count <= 32, alignments.count <= 16, decisions.count <= 16,
+        let alignments = value.alignments ?? []
+        guard requests.count <= 64, mentions.count <= 128, layers.count <= 32, alignments.count <= 16,
               Set(requests.map(\.id)).count == requests.count else { throw ReadingError.invalid("阅读增强条目过多或请求内锚点别名重复。") }
         if let reason = value.noChangesReason {
             guard !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, reason.count <= 400,
-                  requests.isEmpty, mentions.isEmpty, layers.isEmpty, alignments.isEmpty, decisions.isEmpty else {
+                  requests.isEmpty, mentions.isEmpty, layers.isEmpty, alignments.isEmpty else {
                 throw ReadingError.invalid("无新增内容说明只能单独提交，且不能超过400字。")
             }
             return "无新增阅读层：\(reason)；既有产物、原文及阅读覆盖保留。"
         }
-        guard !mentions.isEmpty || !layers.isEmpty || !alignments.isEmpty || !decisions.isEmpty else {
-            throw ReadingError.invalid("阅读增强须包含可展示的提及、阅读层、资料对齐或思考卡，或明确说明无新增内容。")
+        guard !mentions.isEmpty || !layers.isEmpty || !alignments.isEmpty else {
+            throw ReadingError.invalid("阅读增强须包含可展示的提及、阅读层或资料对齐，或明确说明无新增内容。")
         }
         var candidate = project
         var state = project.readingExperience ?? ReadingExperienceState()
@@ -97,16 +93,11 @@ public enum ReadingExperienceTools {
             alignment.status = "needs-review"
             try append(alignment, to: &state.alignments, id: { $0.id })
         }
-        for var decision in decisions {
-            decision.sourceAnchorIDs = remapped(decision.sourceAnchorIDs)
-            decision.sourceLabel = "AI 生成 · 待核对"
-            try append(decision, to: &state.decisions, id: { $0.id })
-        }
         candidate.readingExperience = state
         try validateTransition(from: project.readingExperience, to: state, allowedUnitIDs: allowedUnitIDs, in: candidate)
         project = candidate
         let anchorMap = aliases.keys.sorted().map { "\($0)=\(aliases[$0] ?? "")" }.joined(separator: "；")
-        return "阅读增强批次已校验保存（已有相同条目保留）：\(requests.count)处锚点请求、\(mentions.count)条提及、\(layers.count)层释义/译文、\(alignments.count)组资料对齐、\(decisions.count)张思考卡；宿主原文锚点已核验，AI内容仍待核对。锚点别名对应：\(anchorMap)"
+        return "阅读增强批次已校验保存（已有相同条目保留）：\(requests.count)处锚点请求、\(mentions.count)条提及、\(layers.count)层释义/译文、\(alignments.count)组资料对齐；宿主原文锚点已核验，AI内容仍待核对。锚点别名对应：\(anchorMap)"
     }
 
     /// All native plugins obey the same write boundary, including future ones.
@@ -115,12 +106,13 @@ public enum ReadingExperienceTools {
         guard let new else { throw ReadingError.invalid("AI插件不能删除整套阅读增强记录。") }
         let old = old ?? ReadingExperienceState()
         guard old.trash == new.trash else { throw ReadingError.invalid("AI 插件不能更改用户的伴读回收站。") }
+        guard old.decisions == new.decisions else { throw ReadingError.invalid("思考卡能力已停用，插件不能追加或改写历史思考卡。") }
         try retained(old.anchors, in: new.anchors, id: { $0.id })
         try retained(old.mentions, in: new.mentions, id: { $0.id })
         try retained(old.layers, in: new.layers, id: { $0.id })
         try retained(old.alignments, in: new.alignments, id: { $0.id })
         try retained(old.decisions, in: new.decisions, id: { $0.id })
-        try ReadingLedger.requireComplete(unitIDs: allowedUnitIDs, in: project)
+        try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project)
         let oldAnchorIDs = Set(old.anchors.map(\.id))
         for anchor in new.anchors where !oldAnchorIDs.contains(anchor.id) {
             guard allowedUnitIDs.contains(anchor.unitID) else { throw ReadingError.invalid("插件新增锚点不属于本次已获准原文。") }

@@ -9,19 +9,27 @@ struct GraphPointerBridge: NSViewRepresentable {
     var reservePorts = false
     var resetID = 0
     var exclusion: CGRect? = nil
+    var additionalExclusions: [CGRect] = []
+    var canvasID: UUID? = nil
+    var requiresUnobscuredDragEnd = false
     var click: (Bool) -> Void
     var drag: (CGSize, Bool) -> Void
     var cancel: () -> Void
     func makeNSView(context: Context) -> PointerView { PointerView() }
     func updateNSView(_ view: PointerView, context: Context) {
-        view.configure(enabled: enabled, movable: movable, reservePorts: reservePorts, resetID: resetID, exclusion: exclusion)
+        view.configure(enabled: enabled, movable: movable, reservePorts: reservePorts, resetID: resetID, exclusion: exclusion,
+                       additionalExclusions: additionalExclusions, canvasID: canvasID, requiresUnobscuredDragEnd: requiresUnobscuredDragEnd)
         view.click = click; view.drag = drag; view.cancel = cancel
     }
-    final class PointerView: NSView {
+    static func dismantleNSView(_ view: PointerView, coordinator: ()) { view.invalidate() }
+    final class PointerView: NSView, WorkspaceCanvasInputTarget {
         var enabled = true
         var movable = false
         var reservePorts = false
         var exclusion: CGRect?
+        var additionalExclusions: [CGRect] = []
+        var canvasInputID: UUID?
+        var requiresUnobscuredDragEnd = false
         var click: ((Bool) -> Void)?
         var drag: ((CGSize, Bool) -> Void)?
         var cancel: (() -> Void)?
@@ -35,16 +43,18 @@ struct GraphPointerBridge: NSViewRepresentable {
         override func hitTest(_ point: NSPoint) -> NSView? {
             guard enabled else { return nil }
             let local = convert(point, from: superview)
-            guard exclusion?.contains(local) != true else { return nil }
+            guard permitsHit(local) else { return nil }
             if reservePorts, abs(local.y - bounds.midY) <= 14, local.x <= 14 || local.x >= bounds.width - 14 { return nil }
             return super.hitTest(point)
         }
         override func mouseDown(with event: NSEvent) {
-            guard enabled else { return }
+            guard enabled, permitsHit(convert(event.locationInWindow, from: nil)) else { stopTracking(); return }
             stopTracking()
             origin = event.locationInWindow; didDrag = false
             escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard event.keyCode == 53, let self, self.origin != nil else { return event }
+                guard event.keyCode == 53, let self, self.origin != nil,
+                      let window = self.window, event.window === window,
+                      window.attachedSheet == nil, NSApp.modalWindow == nil else { return event }
                 self.stopTracking(); self.cancel?(); return nil
             }
             for (name, object) in [(NSWindow.didResignKeyNotification, window as AnyObject?), (NSApplication.didResignActiveNotification, NSApplication.shared as AnyObject?)] {
@@ -62,6 +72,9 @@ struct GraphPointerBridge: NSViewRepresentable {
         }
         override func mouseUp(with event: NSEvent) {
             guard let start = origin else { return }
+            if didDrag, requiresUnobscuredDragEnd, !permitsHit(convert(event.locationInWindow, from: nil)) {
+                stopTracking(); cancel?(); return
+            }
             origin = nil
             if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor); self.escapeMonitor = nil }
             for observer in focusObservers { NotificationCenter.default.removeObserver(observer) }; focusObservers = []
@@ -75,18 +88,27 @@ struct GraphPointerBridge: NSViewRepresentable {
             if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor); self.escapeMonitor = nil }
             for observer in focusObservers { NotificationCenter.default.removeObserver(observer) }; focusObservers = []
         }
-        func configure(enabled: Bool, movable: Bool, reservePorts: Bool, resetID: Int, exclusion: CGRect?) {
-            if self.resetID != resetID || (self.enabled && !enabled) || (self.movable && !movable) { stopTracking() }
+        private func permitsHit(_ local: CGPoint) -> Bool {
+            guard exclusion?.contains(local) != true, !additionalExclusions.contains(where: { $0.contains(local) }) else { return false }
+            guard let canvasInputID else { return true }
+            return WorkspaceCanvasInputRegions.permits(local, in: self, canvasID: canvasInputID)
+        }
+        func configure(enabled: Bool, movable: Bool, reservePorts: Bool, resetID: Int, exclusion: CGRect?, additionalExclusions: [CGRect], canvasID: UUID?, requiresUnobscuredDragEnd: Bool) {
+            if self.resetID != resetID || self.canvasInputID != canvasID || (self.enabled && !enabled) || (self.movable && !movable) { stopTracking() }
             self.resetID = resetID; self.exclusion = exclusion
+            self.additionalExclusions = additionalExclusions; self.canvasInputID = canvasID
+            self.requiresUnobscuredDragEnd = requiresUnobscuredDragEnd
             self.enabled = enabled; self.movable = movable; self.reservePorts = reservePorts
         }
         override func cancelOperation(_ sender: Any?) { stopTracking(); cancel?() }
         override func viewDidMoveToWindow() { if window == nil { stopTracking() } }
+        func invalidate() { stopTracking(); click = nil; drag = nil; cancel = nil; canvasInputID = nil }
         deinit {
             if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
             for observer in focusObservers { NotificationCenter.default.removeObserver(observer) }
         }
         override func menu(for event: NSEvent) -> NSMenu? {
+            guard enabled, permitsHit(convert(event.locationInWindow, from: nil)) else { return nil }
             // The SwiftUI node owns its contextual actions. Forward right-click
             // lookup to its hosting ancestors rather than swallowing the menu.
             var ancestor = superview

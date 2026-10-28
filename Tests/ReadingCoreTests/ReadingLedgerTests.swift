@@ -35,6 +35,43 @@ final class ReadingLedgerTests: XCTestCase {
         XCTAssertTrue(try ReadingLedger.paragraphs(for: blank.units[0], in: blank).isEmpty)
     }
 
+    func testManifestRejectsCanonicallyEquivalentReplacementSourceBytes() throws {
+        for (literal, replacement) in [("e\u{301}", "é"), ("é", "e\u{301}")] {
+            let value = project("中文\(literal)。\n\n尾句\(literal)。")
+            var substituted = value.units[0]
+            substituted.text = "中文\(replacement)。\n\n尾句\(replacement)。"
+            XCTAssertEqual(substituted.text, value.units[0].text)
+            XCTAssertFalse(substituted.text.utf8.elementsEqual(value.units[0].text.utf8))
+            XCTAssertThrowsError(try ReadingLedger.paragraphs(for: substituted, in: value), "同 ID 的规范等价文本不能代替 canonical 原字节。")
+            let manifest = try ReadingLedger.paragraphs(for: value.units[0], in: value)
+            XCTAssertTrue(manifest.map(\.text).joined().utf8.elementsEqual(value.units[0].text.utf8))
+        }
+    }
+
+    func testNewReceiptAnchorsRequireOriginalUnicodeBytesWithoutPartialWrites() throws {
+        for (literal, replacement) in [("e\u{301}", "é"), ("é", "e\u{301}")] {
+            var value = project(literal + "开头" + String(repeating: "中文", count: 30) + literal + "结尾。")
+            let paragraphs = try ReadingLedger.paragraphs(for: value.units[0], in: value)
+            value.receiptBatch = try ReadingLedger.makeBatch(unit: value.units[0], paragraphs: paragraphs)
+            let valid = receiptArguments(value, paragraphs)
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            let before = try encoder.encode(value)
+            for field in ["startQuote", "endQuote"] {
+                var arguments = valid, rows = valid["receipts"] as! [[String: Any]]
+                let original = try XCTUnwrap(rows[0][field] as? String)
+                let substituted = original.replacingOccurrences(of: literal, with: replacement, options: .literal)
+                XCTAssertEqual(original, substituted)
+                XCTAssertFalse(original.utf8.elementsEqual(substituted.utf8))
+                rows[0][field] = substituted; arguments["receipts"] = rows
+                XCTAssertThrowsError(try apply("read_receipt", arguments, to: &value), field)
+                XCTAssertEqual(try encoder.encode(value), before)
+            }
+            try apply("read_receipt", valid, to: &value)
+            XCTAssertTrue(try XCTUnwrap(value.paragraphReceipts?.first).startQuote.utf8.elementsEqual(paragraphs[0].startQuote.utf8))
+            XCTAssertTrue(try XCTUnwrap(value.paragraphReceipts?.first).endQuote.utf8.elementsEqual(paragraphs[0].endQuote.utf8))
+        }
+    }
+
     func testReceiptGateRejectsMissingDuplicateHashAndAnchorWithoutPartialWrites() throws {
         var value = project()
         let paragraphs = try ReadingLedger.paragraphs(for: value.units[0], in: value)
