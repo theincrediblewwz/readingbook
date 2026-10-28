@@ -16,9 +16,11 @@ python3 scripts/clean-workspace.py --apply
 python3 scripts/clean-workspace.py --apply --legacy-artifacts
 ```
 
-默认范围只包括脚本列出的 helper 模块缓存，以及 `.build/ui-layout-regression/run-*/cache`。不扫描其他名字像缓存的目录，也不清共享模块缓存。缓存按需重建；helper 二进制、manifest、dSYM 仍保留。
+默认范围只包括脚本列出的 helper 模块缓存、已被共享参数替代的两个SwiftPM默认SDK缓存，以及 `.build/ui-layout-regression/run-*/cache`。不扫描其他名字像缓存的目录，也不清共享模块缓存。缓存按需重建；当前Debug/Release编译对象、helper二进制、manifest、dSYM仍保留。
 
 `--legacy-artifacts` 是一次性历史白名单，限定 2026-10-28 已弃用的 `local-release`、旧缩略图诊断与旧 FPS 基线的 SwiftPM `build`，以及代码明确列出的已结束测试。它不代表未来的 Release 构建均可删除。原生测试只清复制的 app/隔离 library；性能测试只清复制的 library/input。**不删除整个 runs**，保留原始 events、system.log、采样、控制记录和 OS 状态。缺少结束报告或所属路径不符的测试会跳过。
+
+同一日期任务收尾追加了代码逐名列出的Debug13、导航小修与最终f0性能测试副本，仍须结束报告匹配。最终Release的app、源码、归档、编译目录与旧b164/关闭缩略图的对照app均保留，供尚未解决的FPS问题接续使用；只删每轮复制的书库/输入和原生测试app。
 
 每次运行都在工作区 `logs/workspace-cleanup/` 新建报告，列出绝对路径、分配字节数、理由、跳过项及删除结果。测试副本另存每文件 SHA-256、文件模式与符号链接元数据；可重建缓存不逐文件哈希。分配字节是估算，APFS 共享块使实际释放空间可能不同。报告不是书库内容备份，不能用于恢复已删测试副本。
 

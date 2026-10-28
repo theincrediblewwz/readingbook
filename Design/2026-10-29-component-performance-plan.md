@@ -30,7 +30,7 @@
 | 8. 要素卡片与知识库 | [SpatialGraphViews](../Sources/ReadingBook/SpatialGraphViews.swift)、[EntityEditView](../Sources/ReadingBook/EntityEditView.swift) | 大对象集筛选/排序、文档摘要、列表失效 | 数据量→首屏/筛选/继续加载曲线、详情响应、来源和稳定 ID 保留 |
 | 9. 思维导图、关系图谱 | [GraphCanvas](../Sources/ReadingBook/GraphCanvas.swift)、[SpatialGraphViews](../Sources/ReadingBook/SpatialGraphViews.swift)、[GraphCamera](../Sources/ReadingBook/GraphCamera.swift) | 全量快照/连线构建、视口绘制、命中 | 节点/边/可见比例、快照与绘制分别计时、拖动/缩放、坐标/连线/撤销正确性 |
 | 10. 时间、地图、轨迹 | [SpatialTimelineView](../Sources/ReadingBook/SpatialTimelineView.swift)、[TemporalWorkspace](../Sources/ReadingBook/TemporalWorkspace.swift)、[TemporalKnowledge](../Sources/ReadingCore/TemporalKnowledge.swift) | 时间指针重复筛选、分组、轨迹/标记构建 | 本地筛选与 MapKit/瓦片延迟分开、更新次数、选择联动、未知时间/坐标处理 |
-| 11. 笔记编辑与预览 | [NoteMarkdownEditor](../Sources/ReadingBook/NoteMarkdownEditor.swift)、[ReadingNoteLinkFolds](../Sources/ReadingCore/ReadingNoteLinkFolds.swift)、[ReadingViews](../Sources/ReadingBook/ReadingViews.swift) | AppStore 发布、预览、超长链接集、持久化 | 输入→Binding→AppStore→保存分段；字节/选区/IME/Undo、跨库同 ID；隔离编辑器数据不代替整链路 |
+| 11. 笔记编辑与预览 | [NoteMarkdownEditor](../Sources/ReadingBook/NoteMarkdownEditor.swift)、[ReadingNoteLinkFolds](../Sources/ReadingCore/ReadingNoteLinkFolds.swift)、[ReadingViews](../Sources/ReadingBook/ReadingViews.swift) | AppStore 发布、预览、超长链接集、持久化 | 输入→Binding→AppStore→保存分段；主进程与WebKit辅助进程分别统计；字节/选区/IME/Undo、跨库同 ID；隔离编辑器数据不代替整链路 |
 | 12. 搜索与目录 | [LibrarySearchView](../Sources/ReadingBook/LibrarySearchView.swift)、[LibrarySearch](../Sources/ReadingCore/LibrarySearch.swift)、[ReaderOutlinePanel](../Sources/ReadingBook/ReaderOutlinePanel.swift)、[GraphNodeBrowser](../Sources/ReadingBook/GraphNodeBrowser.swift) | 大库原文扫描、结果摘要、目录树 | 书数/字数→扫描/排序/首屏耗时、快速输入取消、结果精确回跳；样式统一不算算法收益 |
 | 13. 组合组件与全书总览 | [CompositionWorkspaceView](../Sources/ReadingBook/CompositionWorkspaceView.swift)、[CompositionRuntime](../Sources/ReadingCore/CompositionRuntime.swift)、[ReadingAtlasView](../Sources/ReadingBook/ReadingAtlasView.swift) | 多 part 重复查询、依赖失效过宽、共享投影重复 | 选择器/投影次数、局部变化影响集合、全量/缓存/增量结果一致性与总耗时 |
 | 14. 插件、注册、书本方案 | [WorkspaceComponentRegistry](../Sources/ReadingBook/WorkspaceComponentRegistry.swift)、[PluginEngine](../Sources/ReadingCore/PluginEngine.swift)、[BookSchemeRuntime](../Sources/ReadingCore/BookSchemeRuntime.swift) | 大声明包核验、工具 schema 构造、启停失效 | 定义规模/核验耗时、冲突与失败回滚、旧数据兼容；不恢复数学核查或退役原文索引入口 |
@@ -46,9 +46,11 @@
 - **组合依赖**：把选择、时间窗、节点、附件与各 part 列为输入/输出依赖；比较全量、缓存和增量执行的一致性、取消语义及总成本。算法名称不作为性能证据。
 - **背压与持久化**：请求额度和仓库事务分别守护并发与数据。优化不得跳过确认、冲突检测、范围校验或必要成功阶段落盘；“并发更多”不等于更快。
 
-## 开源一手调研待办
+## 开源一手资料与后续验证
 
-尚未开展新一轮开源方案调查，本文不推荐未经核实的库。后续逐项查原仓库、官方文档或论文，记录：适用模块、算法/通信机制、许可证、维护情况、依赖与包体成本、macOS/SwiftUI/PDFKit 集成条件、迁移和数据兼容风险。先建立本项目基准，再用最小隔离原型对照；优先验证可提取的设计，不为采用框架而替换已有可靠组件。
+已完成一轮[7项官方资料核查](2026-10-29-component-open-source-references.md)，包含Apple、Skim、Readium Swift、Sioyek、Readest、markdown-it与GRDB，记录格式/架构、许可、可借鉴策略和适配限制。优先对照高频进度独立订阅、异步预览、导航/存储分层、请求缓存键及观察区域；未引入新依赖或复制开源实现，未做跨产品同机benchmark。
+
+后续仍须逐项核维护与依赖成本、包体、macOS/SwiftUI/PDFKit集成、迁移和数据兼容风险；Readium当前文档是iOS/UIKit，不能当作原生Mac直接依赖。先建立本项目基准，再用最小隔离原型对照，优先验证局部设计，不为采用框架而替换已有可靠组件。
 
 ## 验收与数据保护
 

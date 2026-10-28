@@ -28,6 +28,9 @@ CACHE_PATHS = (
     "layout-probe/module-cache", "perf-tool-validation/modules",
     "hover-delivery-probe/module-cache", "scroll-frame-capture/module-cache",
     "ai-concurrency-ui/cache",
+    # Retired SwiftPM defaults: current builders pass the shared cache explicitly.
+    "mac-debug/arm64-apple-macosx/debug/ModuleCache",
+    "perf-refinement-20261028-final/build/arm64-apple-macosx/release/ModuleCache",
 )
 # These are retired scratch builds, not a policy for future Release directories.
 LEGACY_BUILDS = (
@@ -43,6 +46,11 @@ LEGACY_NATIVE_RUNS = (
     "20261028-195857-pdf-lazy-thumbnails", "20261028-195938-pdf-lazy-thumbnails-2",
     "20261028-200001-pdf-lazy-thumbnails-3", "20261028-200049-pdf-lazy-thumbnails-4",
     "20261028-200132-pdf-lazy-thumbnails-5", "20261028-200150-workspace-120-after-pdf",
+    "20261028-232152-final-debug13-pdf8", "20261028-232226-final-debug13-workspace120",
+    "20261028-232346-final-debug13-real1484",
+    "20261029-002350-book-picker-hotfix-navigation1", "20261029-002635-book-picker-hotfix-navigation2",
+    "20261029-002845-book-picker-hotfix-navigation3",
+    "20261029-003443-book-picker-hotfix-shared-action", "20261029-003521-book-picker-hotfix-workspace24",
 )
 LEGACY_PERF_TAGS = (
     "formal-warm-wide", "baseline-narrow-roi-preview", "pilot-load-launchservices",
@@ -56,6 +64,19 @@ LEGACY_PERF_TAGS = (
     "formal-load-wide", "pilot-import-launchservices", "formal-load-narrow",
     "refinement-baseline-scroll-driver", "refinement-baseline-scroll-setup",
 )
+REFINEMENT_PERF_TAGS = (
+    "final-f0eabf7-diagnostic-scroll-sample", "final-f0eabf7-latency-import-narrow",
+    "final-f0eabf7-latency-import-wide", "final-f0eabf7-latency-load-narrow",
+    "final-f0eabf7-latency-load-wide", "final-f0eabf7-latency-warm-narrow",
+    "final-f0eabf7-latency-warm-wide", "final-f0eabf7-narrow-roi-preview",
+    "final-f0eabf7-narrow-run1", "final-f0eabf7-narrow-run2", "final-f0eabf7-narrow-run3",
+    "final-f0eabf7-wide-roi-preview", "final-f0eabf7-wide-run1",
+    "final-f0eabf7-wide-run2", "final-f0eabf7-wide-run3",
+)
+PERF_COPY_ALLOWLISTS = {
+    "perf-harness-20261028-release": LEGACY_PERF_TAGS,
+    "perf-refinement-20261028-final": REFINEMENT_PERF_TAGS,
+}
 PROTECTED = ("Sources", "Tests", "scripts", "Design", "logs", "private-books", "dist", ".git")
 
 
@@ -112,8 +133,8 @@ def allowed(relative: str, legacy: bool) -> bool:
     if any(relative == f".build/native-ui-harness/runs/{run}/{leaf}"
            for run in LEGACY_NATIVE_RUNS for leaf in ("Native UI Regression.app", "library")):
         return True
-    match = re.fullmatch(r"\.build/perf-harness-20261028-release/runs/([^/]+)/run-([1-9][0-9]*)/(library|input)", relative)
-    return bool(match and match.group(1) in LEGACY_PERF_TAGS)
+    match = re.fullmatch(r"\.build/([^/]+)/runs/([^/]+)/run-([1-9][0-9]*)/(library|input)", relative)
+    return bool(match and match.group(2) in PERF_COPY_ALLOWLISTS.get(match.group(1), ()))
 
 
 def read_metadata(path: Path) -> dict:
@@ -162,8 +183,8 @@ def candidate_paths(legacy: bool) -> tuple[list[dict], list[dict]]:
             continue
         for leaf in ("Native UI Regression.app", "library"):
             add(str((run / leaf).relative_to(ROOT)), "test-copy", "已结束的原生测试复制 app/隔离书库；报告、采样、截图及 OS 状态继续保留。", [str(summary_path)])
-    base = ROOT / ".build/perf-harness-20261028-release/runs"
-    for tag in LEGACY_PERF_TAGS:
+    for build_name, tag in ((name, tag) for name, tags in PERF_COPY_ALLOWLISTS.items() for tag in tags):
+        base = ROOT / ".build" / build_name / "runs"
         group = guarded_path(base / tag)
         if not group.exists():
             continue
@@ -239,7 +260,7 @@ def active_blockers() -> list[dict]:
     exact = {"swift", "swiftc", "swift-frontend", "swift-build", "swift-driver", "swift-package",
              "clang", "clang++", "ld", "ld64", "ld64.lld", "lld", "xcodebuild",
              "native-ui-harness", "ai-concurrency-probe", "ai-concurrency-ui-host",
-             "nativenoteeditorprobe", "scrollframecapture", "ui-layout-regression"}
+             "nativenoteeditorprobe", "scrollframecapture", "ui-layout-regression", "sample", "vmmap"}
     blockers = []
     for line in command.splitlines():
         parts = line.strip().split(None, 1)
