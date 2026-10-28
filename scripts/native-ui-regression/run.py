@@ -53,8 +53,13 @@ with (out/'console.log').open('w') as f:
  try:
   child.wait(timeout=max(45,a.cycles*1.5+25))
  except subprocess.TimeoutExpired:
-  subprocess.run(['/usr/bin/sample',str(child.pid),'5','10','-file',str(out/'timeout.sample.txt')],timeout=15,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-  child.kill(); child.wait()
+  try:
+   subprocess.run(['/usr/bin/sample',str(child.pid),'5','10','-file',str(out/'timeout.sample.txt')],timeout=15,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+  except (subprocess.TimeoutExpired,OSError) as error:
+   (out/'sampler-error.txt').write_text(str(error)+'\n')
+  finally:
+   if child.poll() is None: child.kill()
+   child.wait()
   (out/'timeout.json').write_text(json.dumps({'status':'timeout','pid':child.pid})+'\n')
  time.sleep(0.3)
  with (out/'unified.log').open('w') as log:

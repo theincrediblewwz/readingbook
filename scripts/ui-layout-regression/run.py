@@ -77,13 +77,15 @@ def run_case(name: str, flags: list[str], binary: Path, logs: Path,
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
+    system_log_ok = False
     with (logs / f"{name}-system.log").open("w") as output:
         try:
-            subprocess.run(
+            collected = subprocess.run(
                 ["/usr/bin/log", "show", "--last", "3m", "--style", "compact", "--predicate",
                  f"processIdentifier == {process.pid}"],
                 stdout=output, stderr=subprocess.STDOUT, timeout=15,
             )
+            system_log_ok = collected.returncode == 0
         except subprocess.TimeoutExpired:
             output.write("System log collection timed out.\n")
     text = output_path.read_text()
@@ -97,10 +99,10 @@ def run_case(name: str, flags: list[str], binary: Path, logs: Path,
     # chat ViewThatFits remains mounted; a bounded number of chat remounts is
     # expected. Thousands of mounts with a stalled timer reproduce the defect.
     if baseline:
-        passed = timed_out and made >= 256 and not completed
+        passed = timed_out and made >= 256 and not completed and system_log_ok and layout_warning
     else:
         passed = (not timed_out and process.returncode == 0 and completed
-                  and 0 < made <= 256 and not layout_warning and not publication_warning)
+                  and 0 < made <= 256 and system_log_ok and not layout_warning and not publication_warning)
     return {
         "case": name, "pid": process.pid, "passed": passed,
         "baseline_expected_stall": baseline, "timed_out": timed_out,
@@ -109,6 +111,7 @@ def run_case(name: str, flags: list[str], binary: Path, logs: Path,
         "native_menu_markers_made": made, "native_menu_markers_dismantled": removed,
         "layout_warning_300_iterations": layout_warning,
         "publication_warning": publication_warning,
+        "system_log_collection_succeeded": system_log_ok,
     }
 
 
