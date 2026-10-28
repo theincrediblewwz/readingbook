@@ -1,6 +1,16 @@
 name: Build macOS App
 
 on:
+  push:
+    branches:
+      - codex/reader-audit-after-0.23.8
+    paths:
+      - 'Sources/**'
+      - 'Tests/**'
+      - 'Package.swift'
+      - 'packaging/**'
+      - 'scripts/**'
+      - '.github/workflows/macos.yml'
   workflow_dispatch:
     inputs:
       runner:
@@ -34,6 +44,12 @@ jobs:
           swift --version
       - name: Core data and plugin checks
         run: swift test --scratch-path .build/tests
+      - name: Native companion layout regression
+        run: python3 scripts/ui-layout-regression/run.py
+      - name: Real workspace and draft regression
+        run: |
+          python3 scripts/native-ui-regression/build.py --bin-dir .build/tests/debug
+          python3 scripts/native-ui-regression/run.py --mode workspace --cycles 24 --tag ci-workspace
       - name: Build universal app and package
         run: bash scripts/build-macos.sh
       - uses: actions/upload-artifact@v7

@@ -1544,7 +1544,7 @@ struct PDFReaderView: NSViewRepresentable {
         sourceGeometries = [:]; sourceGeometryIDsByPage = [:]; sourceGeometryPages = [:]; sourceGeometryPageOrder = []
         renderedSourceInputGeneration = -1; renderedSourceWindow = []; lastVisiblePages = []
         sourcePreparationNeedsRetry = false
-        hoveredSourceID = nil; sourcePress = nil; onSourceDecorationHover?(nil); sourceCanvas.needsDisplay = true
+        hoveredSourceID = nil; sourcePress = nil; publishSourceHover(nil); sourceCanvas.needsDisplay = true
     }
     @objc private func visiblePagesChanged(_ notification: Notification) { scheduleVisiblePages() }
     private func scheduleVisiblePages() {
@@ -1610,7 +1610,7 @@ struct PDFReaderView: NSViewRepresentable {
         let desiredIDs = Set(window.flatMap { (groupedSourceDecorations[$0] ?? []).map(\.id) })
         sourceGeometries = sourceGeometries.filter { desiredIDs.contains($0.key) && $0.value.value == sourceDecorationValuesByID[$0.key] }
         if let hoveredSourceID, !desiredIDs.contains(hoveredSourceID) {
-            self.hoveredSourceID = nil; sourcePress = nil; onSourceDecorationHover?(nil)
+            self.hoveredSourceID = nil; sourcePress = nil; publishSourceHover(nil)
         }
         let grouped = groupedSourceDecorations
         sourceGeometryIDsByPage = grouped.mapValues { $0.map(\.id) }
@@ -2114,10 +2114,27 @@ struct PDFReaderView: NSViewRepresentable {
             let old = hoveredSourceID; hoveredSourceID = hit?.id
             invalidateSourceHover(old); invalidateSourceHover(hit?.id)
         }
-        guard let hit else { onSourceDecorationHover?(nil); return }
+        guard let hit else { publishSourceHover(nil); return }
         let rect = convert(hit.rect, from: pdfView)
         let topRect = isFlipped ? rect : CGRect(x: rect.minX, y: bounds.height - rect.maxY, width: rect.width, height: rect.height)
-        onSourceDecorationHover?(SourceReadingHover(id: hit.id, rect: topRect, point: CGPoint(x: topRect.midX, y: topRect.maxY), activated: activated))
+        publishSourceHover(SourceReadingHover(id: hit.id, rect: topRect, point: CGPoint(x: topRect.midX, y: topRect.maxY), activated: activated))
+    }
+    private func publishSourceHover(_ value: SourceReadingHover?) {
+        // Resets also run inside make/updateNSView. The SwiftUI recipient
+        // publishes observable card state, so every delivery must leave that
+        // update transaction. Preserve FIFO, including explicit activation.
+        let generation = documentGeneration, navigation = navigationRequestID, interaction = sourceInteractionGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // A reset carries no old source and still clears a card on reload.
+            // A positive hit must never arrive after a document/navigation change.
+            if let value {
+                guard self.documentGeneration == generation, self.navigationRequestID == navigation,
+                      self.sourceInteractionGeneration == interaction, self.hoveredSourceID == value.id,
+                      !self.interactionBlocked, !self.installingDocument else { return }
+            }
+            self.onSourceDecorationHover?(value)
+        }
     }
     private func invalidateSourceHover(_ id: String?) {
         guard let id, let geometry = sourceGeometries[id], let page = document?.page(at: geometry.page - 1) else { return }

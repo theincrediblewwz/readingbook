@@ -269,12 +269,9 @@ struct ReadingCompanionPanel: View {
                     if let onClose { Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("收起伴读") }
                 }.padding(.horizontal, 16).frame(height: 52)
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { companionSelectors; Spacer(minLength: 0); companionTools }
-                VStack(spacing: 0) {
-                    HStack(spacing: 8) { companionSelectors; Spacer(minLength: 0) }
-                    HStack(spacing: 8) { Spacer(minLength: 0); companionTools }
-                }
+            ReadingAdaptiveRows(rowSpacing: 0) {
+                HStack(spacing: 8) { companionSelectors; Spacer(minLength: 0) }
+                HStack(spacing: 8) { Spacer(minLength: 0); companionTools }
             }.padding(.horizontal, 16).padding(.bottom, 4)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
