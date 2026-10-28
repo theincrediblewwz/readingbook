@@ -56,7 +56,7 @@ for name in ['tmp','swiftpm-cache']:(base/name).mkdir(exist_ok=a.resume)
 shared=ROOT/'.build/shared-module-cache';swift_cache=shared/'swift';clang_cache=shared/'clang'
 for cache in [swift_cache,clang_cache]:cache.mkdir(parents=True,exist_ok=True)
 env=os.environ.copy();env.update(TMPDIR=str(base/'tmp'),CLANG_MODULE_CACHE_PATH=str(clang_cache),SWIFTPM_MODULECACHE_OVERRIDE=str(swift_cache),SWIFT_MODULE_CACHE_PATH=str(swift_cache))
-args=['swift','build','--configuration','release','--product','ReadingBook','--scratch-path',str(base/'build'),'--cache-path',str(base/'swiftpm-cache'),'--disable-sandbox','-Xlinker','-lproc']
+args=['swift','build','--configuration','release','--product','ReadingBook','--scratch-path',str(base/'build'),'--cache-path',str(base/'swiftpm-cache'),'--disable-sandbox','-Xswiftc','-module-cache-path','-Xswiftc',str(swift_cache),'-Xcc','-fmodules-cache-path='+str(clang_cache),'-Xlinker','-lproc']
 manifest={'sourceCommit':ref,'archiveSHA256':hashlib.sha256(archive.read_bytes()).hexdigest(),'buildRoot':str(base),'sourceRoot':str(source),'configuration':'release','enableTesting':False,'swiftBuildArguments':args,'instrumentationPatchSHA256':hashlib.sha256((logs/'instrumentation.patch').read_bytes()).hexdigest(),'probeSourcesSHA256':{x:hashlib.sha256((TOOLS/x).read_bytes()).hexdigest() for x in ['PerfTrace.swift','PerfProbe.swift']},'benchmarkExecuted':False}
 (logs/'build-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 with (logs/'build.log').open('w') as log:subprocess.run(args,cwd=source,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)

@@ -16,7 +16,7 @@ if a.bin_dir:
  assert bindir.is_relative_to(ROOT)
 else:
  scratch=WORK/'product'
- args=['swift','build','--scratch-path',str(scratch),'--cache-path',str(WORK/'swiftpm-cache'),'--disable-sandbox']
+ args=['swift','build','--scratch-path',str(scratch),'--cache-path',str(WORK/'swiftpm-cache'),'--disable-sandbox','-Xswiftc','-module-cache-path','-Xswiftc',str(swift_cache),'-Xcc','-fmodules-cache-path='+str(clang_cache)]
  with (WORK/'product-build.log').open('w') as log:subprocess.run(args,cwd=ROOT,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
  bindir=pathlib.Path(subprocess.check_output(args+['--show-bin-path'],cwd=ROOT,env=env,text=True).strip())
 linklist=bindir/'ReadingBook.product/Objects.LinkFileList'

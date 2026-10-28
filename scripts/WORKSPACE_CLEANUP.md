@@ -25,3 +25,5 @@ python3 scripts/clean-workspace.py --apply --legacy-artifacts
 脚本不接受任意删除路径；拒绝符号链接目标/祖先、越出工作区的内部链接及特殊文件。执行删除前及每个目标前检查活跃 Swift/Clang/链接器、ReadingBook、原生测试和采集进程，再核对目标未变化。只对白名单内 `.build` 子目录执行删除，**不碰 `Sources`、`Tests`、`scripts`、`Design`、`logs`、`private-books`、`dist` 和 `.git`**，也保留旧性能 app/source/archive/manifest 及当前 `.build/mac-debug`。
 
 后续 builder 应共用工作区内 `.build/shared-module-cache/swift` 和 `clang`，分别设置 Swift `-module-cache-path` 与 Clang `-fmodules-cache-path`，避免每个 helper 再存一份系统模块；临时文件、二进制和运行报告仍各自隔离。
+
+SwiftPM 会显式指定自己的模块缓存，单设环境变量不足以覆盖。走 `swift build` 的 builder 还须通过 `-Xswiftc -module-cache-path -Xswiftc <共享目录>` 和 `-Xcc -fmodules-cache-path=<共享目录>` 传递参数；构建 manifest 保留该轮实际参数，不能事后改写旧构建记录。
