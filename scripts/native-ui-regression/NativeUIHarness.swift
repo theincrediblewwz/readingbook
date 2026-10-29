@@ -182,6 +182,7 @@ struct PanelHarnessRoot: View {
         if mode == "boundary" { await runPDFBoundaryScenario(); return }
         if mode == "navigation" { await runBookPickerScenario(); return }
         if mode == "continuation" { await runContinuationScenario(); return }
+        if mode == "urgent-search-overlay" { await runUrgentSearchOverlayScenario(); return }
         if synthetic {
             store.books = [syntheticBook()]
             store.bookID = store.books[0].id
@@ -1517,6 +1518,351 @@ struct PanelHarnessRoot: View {
         } catch { assertions["status"] = "failed"; assertions["reason"] = error.localizedDescription }
         metrics.settling(); try? await Task.sleep(nanoseconds: 250_000_000)
         assertions["metrics"] = metrics.snapshot()
+        writeJSON("result.json", assertions); timer?.cancel(); window?.orderOut(nil); NSApp.terminate(nil)
+    }
+}
+
+/// Ignores cancellation until released, like a provider returning after input changed.
+private actor UrgentSearchExpansionGate {
+    private var continuation: CheckedContinuation<LibrarySearchExpansionPlan, Error>?
+    private(set) var started = false
+    private(set) var returned = false
+    private(set) var calls = 0
+    func request(_ query: String, _ language: LibrarySearchLanguageProfile) async throws -> LibrarySearchExpansionPlan {
+        guard !started else { throw ReadingError.invalid("Fixture expansion invoked twice") }
+        started = true; calls += 1
+        let plan: LibrarySearchExpansionPlan = try await withCheckedThrowingContinuation { continuation = $0 }
+        returned = true
+        return plan
+    }
+    func release(_ keywords: [String]) throws {
+        guard let continuation else { throw ReadingError.invalid("Fixture expansion was not waiting") }
+        self.continuation = nil
+        continuation.resume(returning: try LibrarySearchExpansionPlan(keywords: keywords))
+    }
+}
+
+@MainActor extension Runner {
+    private func urgentWait(_ description: String, _ condition: @MainActor () async -> Bool) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 8
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            window?.contentView?.layoutSubtreeIfNeeded()
+            if await condition() { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        throw ReadingError.invalid("Urgent search regression timeout: " + description)
+    }
+    private func urgentSearchSessionChecks(_ projects: [BookProject]) async throws -> [String: Any] {
+        let snapshots = projects.map { LibrarySourceSnapshot(project: $0) }
+        let firstID = projects[0].id, secondID = projects[1].id, root = library.standardizedFileURL.path
+        let session = LibrarySearchSession()
+        var assertions: [String: Any] = ["realNetworkRequests": 0]
+        func local(_ query: String, bookID: String?, root: String, snapshots input: [LibrarySourceSnapshot]? = nil) async throws {
+            session.schedule(query: query, snapshots: input ?? snapshots, bookID: bookID, root: root, debounce: false)
+            try await urgentWait("local query \(query)") { !session.searching && session.response?.query == query }
+            try pdfRequire(session.errorMessage.isEmpty, "Local fixture search failed: " + session.errorMessage)
+        }
+        func begin(_ gate: UrgentSearchExpansionGate) async throws {
+            session.expand { query, language in try await gate.request(query, language) }
+            try await urgentWait("controlled expansion started") { await gate.started }
+            try pdfRequire(session.expanding, "Expansion state did not remain active while waiting")
+        }
+        func release(_ gate: UrgentSearchExpansionGate, words: [String]) async throws {
+            try await gate.release(words)
+            try await urgentWait("controlled expansion returned") { await gate.returned }
+            try await Task.sleep(nanoseconds: 60_000_000)
+            try pdfRequire(await gate.calls == 1, "One explicit expansion invoked the operation more than once")
+        }
+        try await local("貂蝉", bookID: firstID, root: root)
+        let localIDs = session.response!.matches.map(\.id)
+        try pdfRequire(localIDs.count == 8, "Simplified query did not find eight real Traditional locations")
+        session.cancel()
+        try pdfRequire(session.response?.matches.map(\.id) == localIDs && !session.searching && !session.expanding,
+            "Cancel cleared verified local results")
+        assertions["cancelPreservesVerifiedLocalResults"] = true
+
+        let queryGate = UrgentSearchExpansionGate()
+        try await begin(queryGate)
+        try await local("安静", bookID: firstID, root: root)
+        let replacementIDs = session.response!.matches.map(\.id)
+        try await release(queryGate, words: ["貂蝉"])
+        try pdfRequire(session.response?.query == "安静" && session.response?.matches.map(\.id) == replacementIDs
+            && session.expandedKeywords.isEmpty && !session.expanding, "Late AI replaced the newer query")
+        assertions["lateExpansionCannotReplaceNewQuery"] = true
+
+        try await local("貂蝉", bookID: firstID, root: root)
+        let scopeGate = UrgentSearchExpansionGate()
+        try await begin(scopeGate)
+        try await local("貂蝉", bookID: secondID, root: root)
+        try pdfRequire(session.response?.matches.isEmpty == true, "Second-book fixture unexpectedly contains the keyword")
+        try await release(scopeGate, words: ["貂蝉"])
+        try pdfRequire(session.response?.matches.isEmpty == true && session.response?.searchedBookCount == 1
+            && session.expandedKeywords.isEmpty, "Late AI escaped the changed book scope")
+        assertions["lateExpansionCannotEscapeNewBookScope"] = true
+
+        try await local("貂蝉", bookID: firstID, root: root)
+        let rootGate = UrgentSearchExpansionGate()
+        try await begin(rootGate)
+        var otherRoot = snapshots
+        otherRoot[0].sourceHash = "different-root-source"
+        otherRoot[0].units = [SourceUnit(id: "different-root-unit", order: 0, chapter: "另一原文", text: "另一书库的独立原文。")]
+        try await local("貂蝉", bookID: firstID, root: root + "/other-root", snapshots: otherRoot)
+        try await release(rootGate, words: ["貂蝉"])
+        try pdfRequire(session.response?.matches.isEmpty == true && session.response?.scannedUnitCount == 1
+            && session.expandedKeywords.isEmpty, "Late AI published an old library's source")
+        assertions["lateExpansionCannotPublishOldLibrary"] = true
+
+        try await local("貂蝉", bookID: firstID, root: root)
+        let sourceGate = UrgentSearchExpansionGate()
+        try await begin(sourceGate)
+        var edited = snapshots
+        edited[0].units = [SourceUnit(id: "ocr-replaced-unit", order: 0, chapter: "OCR新版", text: "OCR版本已改变，不再包含旧词。")]
+        try await local("貂蝉", bookID: firstID, root: root, snapshots: edited)
+        try await release(sourceGate, words: ["貂蝉"])
+        try pdfRequire(session.response?.matches.isEmpty == true && session.response?.scannedUnitCount == 1,
+            "Late AI published an obsolete OCR snapshot with unchanged PDF hash")
+        assertions["lateExpansionCannotPublishOldOCRText"] = true
+
+        try await local("貂蝉", bookID: firstID, root: root)
+        let cancelGate = UrgentSearchExpansionGate()
+        try await begin(cancelGate)
+        let beforeCancel = session.response!.matches
+        session.cancel()
+        try await release(cancelGate, words: ["模型杜撰的不存在词"])
+        try pdfRequire(session.response?.matches == beforeCancel && !session.expanding && !session.searching
+            && session.expandedKeywords.isEmpty, "Canceled AI changed displayed local results")
+        assertions["lateCanceledExpansionPreservesDisplayedResults"] = true
+
+        try await local("貂蝉", bookID: firstID, root: root)
+        let oldGate = UrgentSearchExpansionGate(), newGate = UrgentSearchExpansionGate()
+        try await begin(oldGate)
+        try await local("貂禅", bookID: firstID, root: root)
+        try pdfRequire(session.response?.matches.isEmpty == true, "Typo silently became a source hit")
+        try await begin(newGate)
+        try await release(oldGate, words: ["貂蝉"])
+        try pdfRequire(session.expanding && session.response?.query == "貂禅" && session.response?.matches.isEmpty == true
+            && session.expandedKeywords.isEmpty, "Old completion cleared/replaced a newer expansion")
+        try await release(newGate, words: ["貂蝉", "模型杜撰的不存在词"])
+        try await urgentWait("new expansion finishes") { !session.expanding && session.response?.matches.count == 8 }
+        guard let expanded = session.response else { throw ReadingError.invalid("Expanded result missing") }
+        try pdfRequire(expanded.query == "貂禅" && expanded.matches.allSatisfy { $0.bookID == firstID && $0.quote == "貂蟬" && $0.matchedQuery == "貂蝉" },
+            "Expanded keywords became model quotes or escaped the frozen scope")
+        for match in expanded.matches { try match.validate(in: projects[0]) }
+        assertions["oldCompletionCannotClearNewExpansion"] = true
+        assertions["expandedKeywordsOnlyProduceActualScopedSourceMatches"] = true
+
+        session.schedule(query: "貂禅", snapshots: snapshots, bookID: firstID, root: root, debounce: true)
+        session.expand { _, _ in try LibrarySearchExpansionPlan.parse("{\"keywords\":[\"貂蝉\"]}") }
+        try await urgentWait("expansion wins over pending debounce") { !session.expanding && session.response?.matches.count == 8 }
+        let winningIDs = session.response!.matches.map(\.id)
+        try await Task.sleep(nanoseconds: 320_000_000)
+        try pdfRequire(session.response?.matches.map(\.id) == winningIDs && session.expandedKeywords == ["貂蝉"]
+            && session.response?.searchedQueries == ["貂禅", "貂蝉"], "Older local work overwrote expanded response")
+        assertions["pendingLocalWorkCannotOverwriteExpansion"] = true
+
+        let emptyGate = UrgentSearchExpansionGate()
+        try await begin(emptyGate)
+        session.schedule(query: "", snapshots: snapshots, bookID: firstID, root: root, debounce: false)
+        try await release(emptyGate, words: ["貂蝉"])
+        try pdfRequire(session.response == nil && !session.searching && !session.expanding
+            && session.expandedKeywords.isEmpty, "Cleared input received late results")
+        assertions["clearedInputCannotReceiveLateResults"] = true
+        session.cancel()
+        return assertions
+    }
+}
+
+@MainActor extension Runner {
+    func runUrgentSearchOverlayScenario() async {
+        var assertions: [String: Any] = ["mode": mode, "synthetic": true, "realNetworkRequests": 0]
+        var states: [[String: Any]] = []
+        do {
+            var projects: [BookProject] = [], originals: [String: Data] = [:]
+            for label in ["A", "B"] {
+                let source = output.appendingPathComponent("urgent-search-\(label).pdf")
+                let bytes = try sameBookPDF(source, label: "Urgent search fixture \(label)")
+                let units = (1...8).map { page in
+                    SourceUnit(id: "urgent-\(label)-u\(page)", order: page - 1, chapter: "合成章节", page: page,
+                        text: label == "A" ? "第\(page)頁：😀e\u{301} 貂蟬在此，安靜閱讀。" : "第\(page)頁：另一原書只有曹操，不含第一本的名字。")
+                }
+                var project = BookProject(title: "Urgent overlay fixture \(label)", originalName: source.lastPathComponent,
+                    sourceHash: try BookImporter.sha256(bytes), units: units)
+                PluginEngine.seed(&project)
+                project.insights.append(ReadingInsight(id: "urgent-saved-analysis-\(label)", unitIDs: [units[3].id],
+                    markdown: "## Saved analysis\n\nPreserve saved analysis, $x^2$, e\u{301} and 🙂."))
+                project = try await store.repository.create(project, sourceURL: source)
+                projects.append(project); originals[project.id] = bytes
+            }
+            let note = DocumentRecord(id: "urgent-preserved-note", title: "Preserved overlay note")
+            let noteBody = "# Preserved overlay note\n\nKeep e\u{301}, 🙂 and $x^2$ exactly.\n"
+            projects[0] = try await store.repository.saveDocument(project: projects[0], document: note, markdown: noteBody)
+            let projectBytes = try Dictionary(uniqueKeysWithValues: projects.map {
+                ($0.id, try Data(contentsOf: library.appendingPathComponent("books/\($0.id)/project.json")))
+            })
+            store.books = projects
+            await store.selectBook(projects[0].id, preferredRoute: "reader")
+            store.navigateToUnit(projects[0].units[3].id)
+            let root = WorkspaceView().environmentObject(store).environmentObject(ReadingTypographySettings())
+                .modifier(ReadingPreferencesEnvironment()).background(FrostWindowAppearance())
+            window = NSWindow(contentRect: NSRect(x: 70, y: 70, width: 1280, height: 860), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.title = "ReadingBook urgent search and overlay regression · Offline fixtures"
+            window.contentView = CountingHost(rootView: AnyView(root)); window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            metrics.scenario(); metrics.record("urgent-reader-initial-mount")
+            try await pdfWait("workspace real PDF page four") {
+                guard let pdf = self.pdfObjects()?.2, let document = pdf.document, let page = pdf.currentPage else { return false }
+                return document.index(for: page) + 1 == 4 && self.store.selectedUnit?.page == 4
+            }
+            guard var baseline = pdfObjects(), var baselineDocument = baseline.2.document else { throw ReadingError.invalid("Retained reader baseline missing") }
+            func retainedReader(_ label: String, page: Int = 4) throws {
+                guard let current = self.pdfObjects(), let document = current.2.document, let nativePage = current.2.currentPage else {
+                    throw ReadingError.invalid("Reader disappeared beneath overlay: " + label)
+                }
+                try self.pdfRequire(current.0 === baseline.0 && current.2 === baseline.2 && document === baselineDocument,
+                    "Overlay replaced retained native reader/document: " + label)
+                try self.pdfRequire(self.store.route == "reader" && self.store.selectedUnit?.page == page && document.index(for: nativePage) + 1 == page,
+                    "Overlay changed reader route/page: " + label)
+                states.append(["label": label, "route": self.store.route, "selectedPage": self.store.selectedUnit?.page ?? -1,
+                    "nativePage": document.index(for: nativePage) + 1, "pdfViewID": String(describing: ObjectIdentifier(current.2)),
+                    "documentID": String(describing: ObjectIdentifier(document)), "notesPresented": self.store.isNotesPresented,
+                    "auxiliaryKind": self.store.auxiliaryPresentation?.kind.rawValue ?? "", "editorDirty": self.store.editorDirty])
+            }
+            try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.route("librarySearch"), store: store), "Search presentation rejected")
+            guard let firstSearch = store.auxiliaryPresentation else { throw ReadingError.invalid("Search owner missing") }
+            try await Task.sleep(nanoseconds: 180_000_000)
+            try retainedReader("search-open")
+            try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.dismissAuxiliary(firstSearch.id), store: store), "Reader search close rejected")
+            try await Task.sleep(nanoseconds: 100_000_000)
+            try retainedReader("search-close-reader")
+            assertions["searchOpenCloseRetainsReaderDocumentAndPage"] = true
+            try capturePDFView("urgent-reader-after-search-close.png")
+
+            for priorRoute in ["library", "query"] {
+                try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.route(priorRoute), store: store), "Unable to enter prior route fixture")
+                try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.route("librarySearch"), store: store), "Prior-route search rejected")
+                guard let owner = store.auxiliaryPresentation else { throw ReadingError.invalid("Prior-route search owner missing") }
+                try pdfRequire(store.route == priorRoute && WorkspaceAuxiliaryNavigation.commit(.dismissAuxiliary(owner.id), store: store)
+                    && store.route == priorRoute, "Search close did not preserve its actual prior route")
+            }
+            assertions["searchCloseReturnsToLibraryAndQueryPriorRoutes"] = true
+            try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.route("reader"), store: store), "Restore reader rejected")
+            try await pdfWait("reader remount after deliberate base-route navigation") { self.pdfObjects()?.2.document != nil && self.store.route == "reader" }
+            guard let restored = pdfObjects(), let restoredDocument = restored.2.document else { throw ReadingError.invalid("Restored reader missing") }
+            baseline = restored; baselineDocument = restoredDocument
+            store.navigateToUnit(projects[0].units[3].id)
+            try await pdfWait("restored page four") { self.pdfObjects()?.2.currentPage.flatMap { page in self.pdfObjects()?.2.document?.index(for: page) } == 3 }
+
+            try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.route("librarySearch"), store: store), "Result search rejected")
+            guard let resultOwner = store.auxiliaryPresentation,
+                  let match = try LibraryTextSearch.search(query: "貂蝉", snapshots: [LibrarySourceSnapshot(project: projects[0])]).matches.first(where: { $0.page == 6 }) else {
+                throw ReadingError.invalid("Actual source result fixture missing")
+            }
+            try match.validate(in: store.book!)
+            store.navigateToUnit(match.unitID)
+            try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.searchResult(resultOwner.id), store: store), "Valid result callback rejected")
+            try await pdfWait("actual source result page six") { self.pdfObjects()?.2.currentPage.flatMap { page in self.pdfObjects()?.2.document?.index(for: page) } == 5 }
+            try retainedReader("source-result-commits-reader", page: 6)
+            try pdfRequire(store.auxiliaryPresentation == nil && !store.hasWorkspaceAuxiliary && store.route != "library", "Result callback overrode reader with library")
+            assertions["sourceResultCommitsReaderRatherThanLibrary"] = true
+            store.navigateToUnit(projects[0].units[3].id)
+            try await pdfWait("page four before notes") { self.pdfObjects()?.2.currentPage.flatMap { page in self.pdfObjects()?.2.document?.index(for: page) } == 3 }
+
+            await store.openDocument(note)
+            try await pdfWait("notes native editor mounted") {
+                guard let host = self.window.contentView else { return false }
+                return self.store.isNotesForeground && self.descendants(host, NSTextView.self).contains { String(describing: type(of: $0)).contains("NoteMarkdownTextView") }
+            }
+            guard let notesOwner = store.notesPresentation, let host = window.contentView,
+                  let editor = descendants(host, NSTextView.self).first(where: { String(describing: type(of: $0)).contains("NoteMarkdownTextView") }),
+                  let undo = editor.undoManager else { throw ReadingError.invalid("Owned note editor/Undo missing") }
+            let addition = "\nUnsaved native note draft 🙂 e\u{301}."
+            editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+            editor.breakUndoCoalescing(); editor.insertText(addition, replacementRange: editor.selectedRange()); editor.breakUndoCoalescing()
+            try await pdfWait("native edit reaches AppStore binding") { self.store.editorDirty && self.store.editorMarkdown == noteBody + addition }
+            let dirtyBody = store.editorMarkdown, selection = editor.selectedRange()
+            try pdfRequire(undo.canUndo, "Native note edit did not populate owned Undo")
+            for kind in [WorkspaceAuxiliaryKind.search, .trash] {
+                try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.route(kind.rawValue), store: store), "Dirty-note overlay admission rejected")
+                guard let owner = store.auxiliaryPresentation else { throw ReadingError.invalid("Covered-note overlay missing") }
+                try await Task.sleep(nanoseconds: 150_000_000)
+                try retainedReader("dirty-notes-covered-by-" + kind.rawValue)
+                try pdfRequire(store.notesPresentation?.id == notesOwner.id && !store.isNotesForeground, "Covering notes replaced presentation owner")
+                if kind == .search {
+                    let selectedBefore = store.selectedUnitID, tokenBefore = store.pdfNavigationToken
+                    let resultIntent = WorkspaceNavigationIntent.searchResult(owner.id)
+                    try pdfRequire(WorkspaceAuxiliaryNavigation.admission(for: resultIntent, store: store) == .requiresNotesDecision(notesOwner)
+                        && !WorkspaceAuxiliaryNavigation.commit(resultIntent, store: store) && store.selectedUnitID == selectedBefore
+                        && store.pdfNavigationToken == tokenBefore && store.editorMarkdown == dirtyBody && store.editorDirty,
+                        "Dirty search result navigated or discarded notes before its decision")
+                    assertions["dirtyResultCannotNavigateBeforeNotesDecision"] = true
+                }
+                try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.dismissAuxiliary(owner.id), store: store), "Covered-note overlay close rejected")
+                try await pdfWait("notes return after overlay") { self.store.isNotesForeground && editor.isEditable }
+                let current = descendants(host, NSTextView.self).first { String(describing: type(of: $0)).contains("NoteMarkdownTextView") }
+                try pdfRequire(current === editor && editor.undoManager === undo && undo.canUndo && editor.selectedRange() == selection
+                    && store.editorMarkdown == dirtyBody && store.editorDirty && store.notesPresentation?.id == notesOwner.id,
+                    "Overlay close destroyed note selection/Undo/draft/session")
+            }
+            assertions["searchAndTrashRetainNativeNoteSessionUndoSelectionAndDraft"] = true
+            let dirtyClose = WorkspaceNavigationIntent.dismissAuxiliary(notesOwner.id)
+            try pdfRequire(WorkspaceAuxiliaryNavigation.admission(for: dirtyClose, store: store) == .requiresNotesDecision(notesOwner)
+                && !WorkspaceAuxiliaryNavigation.commit(dirtyClose, store: store), "Dirty notes closed without a decision")
+            try await Task.sleep(nanoseconds: 80_000_000)
+            try pdfRequire(store.notesPresentation?.id == notesOwner.id && store.editorMarkdown == dirtyBody
+                && store.editorDirty && editor.undoManager === undo && undo.canUndo, "Continue editing lost dirty note state")
+            assertions["dirtyCloseContinueEditingPreservesDraft"] = true
+            try capturePDFView("urgent-dirty-notes-retained.png")
+            store.discardDraftForWorkspaceNavigation()
+            try pdfRequire(WorkspaceAuxiliaryNavigation.commit(dirtyClose, store: store) && store.notesPresentation == nil, "Resolved note close rejected")
+            await store.openDocument(note)
+            guard let freshNotes = store.notesPresentation else { throw ReadingError.invalid("Fresh notes presentation missing") }
+            try pdfRequire(freshNotes.id != notesOwner.id && WorkspaceAuxiliaryNavigation.admission(for: dirtyClose, store: store) == .ignored
+                && !WorkspaceAuxiliaryNavigation.commit(dirtyClose, store: store) && store.notesPresentation?.id == freshNotes.id, "Obsolete notes owner closed newer session")
+            assertions["obsoleteNotesOwnerCannotCloseNewSession"] = true
+            try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.dismissAuxiliary(freshNotes.id), store: store), "Clean notes close rejected")
+            try await Task.sleep(nanoseconds: 80_000_000)
+            try retainedReader("notes-close-reader")
+
+            store.presentWorkspaceAuxiliary(.search)
+            guard let crossBook = store.auxiliaryPresentation else { throw ReadingError.invalid("Cross-book search missing") }
+            // Match LibrarySearchView's cross-book admission: restoration may
+            // retain its base route, while the owned result callback commits reader.
+            await store.selectBook(projects[1].id)
+            try pdfRequire(store.bookID == projects[1].id && store.auxiliaryPresentation?.id == crossBook.id && crossBook.matches(store), "Root-owned search invalidated by permitted cross-book admission")
+            try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.searchResult(crossBook.id), store: store) && store.route == "reader" && store.auxiliaryPresentation == nil, "Cross-book result could not commit reader")
+            assertions["rootOwnedSearchCanCommitAfterCrossBookSelection"] = true
+            store.presentWorkspaceAuxiliary(.search)
+            guard let staleSearch = store.auxiliaryPresentation else { throw ReadingError.invalid("Stale search fixture missing") }
+            try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.dismissAuxiliary(staleSearch.id), store: store), "Search close rejected")
+            store.presentWorkspaceAuxiliary(.search)
+            guard let freshSearch = store.auxiliaryPresentation else { throw ReadingError.invalid("Fresh search fixture missing") }
+            try pdfRequire(freshSearch.id != staleSearch.id && WorkspaceAuxiliaryNavigation.admission(for: .searchResult(staleSearch.id), store: store) == .ignored
+                && !WorkspaceAuxiliaryNavigation.commit(.dismissAuxiliary(staleSearch.id), store: store) && store.auxiliaryPresentation?.id == freshSearch.id, "Obsolete search callback affected new search")
+            let beforeRootRoute = store.route
+            store.libraryRootURL = library.appendingPathComponent("different-owner-root", isDirectory: true)
+            try pdfRequire(!freshSearch.matches(store) && !store.hasWorkspaceAuxiliary
+                && !WorkspaceAuxiliaryNavigation.commit(.searchResult(freshSearch.id), store: store) && store.route == beforeRootRoute, "Old-library callback changed new owner")
+            store.libraryRootURL = library
+            assertions["obsoleteSearchAndLibraryOwnersAreRejected"] = true
+
+            metrics.record("urgent-controlled-search-session-workers")
+            assertions["searchSession"] = try await urgentSearchSessionChecks(projects)
+            for project in projects {
+                let canonical = await store.repository.sourceURL(for: project)
+                try pdfRequire(try Data(contentsOf: canonical) == originals[project.id]
+                    && Data(contentsOf: library.appendingPathComponent("books/\(project.id)/project.json")) == projectBytes[project.id], "Search/overlay changed original source/saved analysis")
+            }
+            try pdfRequire(try await store.repository.readDocument(bookID: projects[0].id, document: note) == noteBody, "Search/overlay changed saved note bytes")
+            try pdfRequire(!store.isQueryBusy && !store.isSmartReadingRunning && !store.isCompanionGenerating, "Offline regression started product AI lane")
+            assertions["originalSourceSavedNotesAndAnalysisBytesPreserved"] = true
+            assertions["status"] = "passed"
+        } catch {
+            assertions["status"] = "failed"; assertions["reason"] = error.localizedDescription
+            try? capturePDFView("urgent-search-overlay-failure.png")
+        }
+        metrics.settling(); try? await Task.sleep(nanoseconds: 250_000_000)
+        assertions["states"] = states; assertions["metrics"] = metrics.snapshot(); assertions["windowVisible"] = window?.isVisible ?? false
+        assertions["testScope"] = "Real AppStore/repository/Workspace native PDF and note/Undo identity; production admission/commit and actual search-session workers with delayed fake operations. Programmatic transitions, not pointer gestures, real providers or FPS."
         writeJSON("result.json", assertions); timer?.cancel(); window?.orderOut(nil); NSApp.terminate(nil)
     }
 }

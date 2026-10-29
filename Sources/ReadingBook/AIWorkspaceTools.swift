@@ -45,7 +45,8 @@ struct WorkspaceAICommand: Equatable {
             requestedWorkspaceRoute = route
             for _ in 0..<50 {
                 try Task.checkCancellation()
-                if self.route == route { return try viewToolResult("success", "已打开组件。", extra: ["rendererID": route]) }
+                let presented = route == "editor" ? isNotesForeground : (self.route == route && !hasWorkspaceAuxiliary)
+                if presented && requestedWorkspaceRoute == nil { return try viewToolResult("success", "已打开组件。", extra: ["rendererID": route]) }
                 try await Task.sleep(nanoseconds: 20_000_000)
             }
             return try viewToolResult("busy", "导航尚未完成，未宣称打开成功。")
@@ -53,7 +54,7 @@ struct WorkspaceAICommand: Equatable {
         if name == "view_focus" {
             guard !editorDirty else { return try viewToolResult("needs_confirmation", "请先处理未保存笔记。") }
             if let id = args["documentID"] as? String, let document = book.activeDocuments.first(where: { $0.id == id }) {
-                await openDocument(document); return try viewToolResult(selectedDocumentID == id ? "success" : "conflict", "文档聚焦结果。")
+                await openDocument(document); return try viewToolResult(selectedDocumentID == id && isNotesForeground ? "success" : "conflict", "文档聚焦结果。")
             }
             if let id = args["anchorID"] as? String {
                 let anchors = (book.readingExperience?.anchors ?? []) + (book.temporalKnowledge?.anchors ?? [])

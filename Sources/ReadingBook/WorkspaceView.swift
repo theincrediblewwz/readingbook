@@ -51,7 +51,10 @@ struct WorkspaceView: View {
     @State private var componentPickerOwner: WorkspacePickerOwner?
     @State private var transferPickerOwner: WorkspacePickerOwner?
     @State private var pendingTransferOwner: WorkspacePickerOwner?
-    @State private var pendingRoute: String?
+    @State private var pendingRoute: WorkspaceNavigationIntent?
+    @State private var pendingNotesOwner: WorkspaceAuxiliaryPresentation?
+    @State private var pendingSearchResultOwner: WorkspaceAuxiliaryPresentation?
+    @State private var pendingSearchResultAction: (() -> Void)?
     @State private var opensCompanionAfterNavigation = false
     @State private var pendingModelRoute: String?
     @State private var showsRouteConfirmation = false
@@ -61,19 +64,20 @@ struct WorkspaceView: View {
     @State private var managementRoute: String?
     @AppStorage("reading.showProgress") private var showReadingPosition = true
     @State private var readingPageCount = 0
+    private var hasWorkspaceOverlay: Bool { managementRoute != nil || store.hasWorkspaceAuxiliary }
     private var workspaceContent: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
                 Palette.canvas.ignoresSafeArea()
                 content
-                    .allowsHitTesting(managementRoute == nil)
+                    .allowsHitTesting(!hasWorkspaceOverlay)
                     .environment(\.workspaceCanvasBlocked, canvasInteractionBlocked)
                     .environment(\.workspaceCanvasExclusionRects, canvasExclusionRects)
                     .environment(\.workspaceProgressBounds, chromeBounds["smart-progress"] ?? .zero)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityHidden(managementRoute != nil)
+                    .accessibilityHidden(hasWorkspaceOverlay)
                     .overlay {
-                        if store.route == "reader", store.selectedUnit != nil, managementRoute == nil {
+                        if store.route == "reader", store.selectedUnit != nil, !hasWorkspaceOverlay {
                             FloatingReadingDock(id: "reader-tools", viewport: geometry.size, allowsDragging: !editingPDFPage) { readerControls }
                         }
                     }
@@ -83,17 +87,31 @@ struct WorkspaceView: View {
                         .padding(.trailing, 24).padding(.bottom, 86).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
                 topIslands(width: geometry.size.width).padding(.top, 14).padding(.leading, 104).padding(.trailing, 24)
-                    .allowsHitTesting(managementRoute == nil)
-                    .opacity(managementRoute == nil ? 1 : 0).accessibilityHidden(managementRoute != nil)
-                if (store.book?.smartReading != nil || (store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID && store.aiProgress.libraryRoot == store.libraryRootURL) || (store.isCompanionGenerating && store.companionProgress.bookID == store.bookID && store.companionProgress.libraryRoot == store.libraryRootURL) || (store.isQueryBusy && store.queryProgressState.value.bookID == store.bookID && store.queryProgressState.value.libraryRoot == store.libraryRootURL)) && !store.storageState.working && managementRoute == nil && !navigationExpanded && store.route != "library" {
+                    .allowsHitTesting(!hasWorkspaceOverlay)
+                    .opacity(hasWorkspaceOverlay ? 0 : 1).accessibilityHidden(hasWorkspaceOverlay)
+                if (store.book?.smartReading != nil || (store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID && store.aiProgress.libraryRoot == store.libraryRootURL) || (store.isCompanionGenerating && store.companionProgress.bookID == store.bookID && store.companionProgress.libraryRoot == store.libraryRootURL) || (store.isQueryBusy && store.queryProgressState.value.bookID == store.bookID && store.queryProgressState.value.libraryRoot == store.libraryRootURL)) && !store.storageState.working && !hasWorkspaceOverlay && !navigationExpanded && store.route != "library" {
                     floatingProgress(in: geometry).zIndex(6)
                 }
-                if store.route == "reader" && store.book != nil && managementRoute == nil {
+                if store.route == "reader" && store.book != nil && !hasWorkspaceOverlay {
                     readingPosition(in: geometry).zIndex(5)
+                }
+                if let notes = store.notesPresentation, notes.matches(store) {
+                    auxiliaryOverlay(notes, viewport: geometry.size).id(notes.id)
+                        .opacity(store.auxiliaryPresentation == nil && managementRoute == nil ? 1 : 0)
+                        .allowsHitTesting(store.auxiliaryPresentation == nil && managementRoute == nil)
+                        .accessibilityHidden(store.auxiliaryPresentation != nil || managementRoute != nil)
+                        .zIndex(7)
+                }
+                if let auxiliary = store.auxiliaryPresentation, auxiliary.matches(store) {
+                    auxiliaryOverlay(auxiliary, viewport: geometry.size).id(auxiliary.id)
+                        .opacity(managementRoute == nil ? 1 : 0)
+                        .allowsHitTesting(managementRoute == nil)
+                        .accessibilityHidden(managementRoute != nil)
+                        .zIndex(8)
                 }
                 if let managementRoute {
                     managementOverlay(managementRoute)
-                        .transition(.opacity.combined(with: .scale(scale: 0.985))).zIndex(8)
+                        .transition(.opacity.combined(with: .scale(scale: 0.985))).zIndex(9)
                 }
                 if navigationExpanded {
                     sidebar.frame(width: min(286, geometry.size.width - 96), height: min(navigationContentHeight, max(100, geometry.size.height - 126)))
@@ -126,10 +144,11 @@ struct WorkspaceView: View {
         .confirmationDialog("保存当前 Markdown 后离开？", isPresented: $showsRouteConfirmation, presenting: pendingRoute) { destination in
             Button("保存并继续") { saveDocumentAndNavigate(to: destination) }.disabled(store.isBusy)
             Button("放弃修改并继续", role: .destructive) {
-                pendingRoute = nil; showsRouteConfirmation = false
-                store.discardDraftForWorkspaceNavigation(); completeNavigation(to: destination)
+                guard pendingNotesOwner?.id == store.notesPresentation?.id, pendingNotesOwner?.matches(store) == true else { clearPendingSearchResult(); pendingRoute = nil; pendingNotesOwner = nil; return }
+                pendingRoute = nil; pendingNotesOwner = nil; showsRouteConfirmation = false
+                store.discardDraftForWorkspaceNavigation(); finishConfirmedNavigation(to: destination)
             }.disabled(store.isBusy)
-            Button("继续编辑", role: .cancel) { pendingRoute = nil; opensCompanionAfterNavigation = false; showsRouteConfirmation = false }
+            Button("继续编辑", role: .cancel) { clearPendingSearchResult(); pendingRoute = nil; pendingNotesOwner = nil; opensCompanionAfterNavigation = false; showsRouteConfirmation = false }
         } message: { _ in Text("已保存正文保留；本次未保存修改可保存或放弃。") }
         .confirmationDialog("当前模型配置尚未保存", isPresented: $showsModelRouteConfirmation, presenting: pendingModelRoute) { destination in
             Button("保存并继续") { resolveModelNavigation(to: destination, save: true) }.disabled(!store.canEditAISettings)
@@ -137,7 +156,7 @@ struct WorkspaceView: View {
             Button("继续编辑", role: .cancel) { pendingModelRoute = nil; opensCompanionAfterNavigation = false; showsModelRouteConfirmation = false }
         } message: { _ in Text("保存到本机配置；取消可继续编辑。") }
         .onChange(of: showsRouteConfirmation) { _, visible in
-            if !visible && !resolvingNavigation { pendingRoute = nil; opensCompanionAfterNavigation = false }
+            if !visible && !resolvingNavigation { clearPendingSearchResult(); pendingRoute = nil; pendingNotesOwner = nil; opensCompanionAfterNavigation = false }
         }
         .onChange(of: showsModelRouteConfirmation) { _, visible in
             if !visible && !resolvingNavigation { pendingModelRoute = nil; opensCompanionAfterNavigation = false }
@@ -149,9 +168,7 @@ struct WorkspaceView: View {
             switch sheet {
             case .settings: ProviderSettingsView(onClose: { closeSheet(.settings) }).environmentObject(store).frame(width: min(860, max(300, detailWidth - 40)), height: min(660, max(300, workspaceHeight - 40)))
             case .ocr: PDFOCRPanel().environmentObject(store).frame(width: 560, height: 460)
-            case .trash: LibraryTrashView().environmentObject(store).frame(width: 600, height: 500)
             case .plugins: PluginLibraryView(onClose: { closeSheet(.plugins) }, draftStore: pluginDefinitionDrafts).environmentObject(store).frame(width: min(900, max(300, detailWidth - 40)), height: min(680, max(300, workspaceHeight - 40)))
-            case .librarySearch: LibrarySearchView().environmentObject(store).frame(minWidth: 620, idealWidth: 800, minHeight: 500, idealHeight: 640)
             case .password(let request): PDFPasswordSheet(request: request).environmentObject(store)
             }
         }
@@ -159,6 +176,17 @@ struct WorkspaceView: View {
         .onChange(of: managementRoute) { _, route in
             if route != nil { dismissNavigationPickers(); readerPopover = nil; navigationExpanded = false; bookPopover = false; servicePopover = false; store.queryAllowsOrganizing = false }
         }
+        .onChange(of: store.notesPresentation?.id) { _, id in
+            if let pendingNotesOwner, pendingNotesOwner.id != id {
+                clearPendingSearchResult(); pendingRoute = nil; self.pendingNotesOwner = nil; showsRouteConfirmation = false
+            }
+        }
+        .onChange(of: store.activeAuxiliaryPresentation?.id) { _, id in
+            if let pendingSearchResultOwner, pendingSearchResultOwner.id != id { clearPendingSearchResult() }
+            if id != nil { dismissNavigationPickers(); readerPopover = nil; navigationExpanded = false; bookPopover = false; servicePopover = false; store.queryAllowsOrganizing = false }
+        }
+        .onChange(of: store.isSavingDocument) { _, saving in if !saving { reconcileSheet() } }
+        .onChange(of: resolvingNavigation) { _, resolving in if !resolving { reconcileSheet() } }
         .onChange(of: activeSheet?.id) { _, id in
             if id != nil { dismissNavigationPickers(); readerPopover = nil; navigationExpanded = false; bookPopover = false; servicePopover = false }
         }
@@ -176,6 +204,13 @@ struct WorkspaceView: View {
         .onChange(of: readerOutline) { _, value in store.updateWorkspaceMemory { $0.readerOutline = value } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in captureAndFlushWorkspace() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in captureAndFlushWorkspace() }
+        .onChange(of: store.requestedWorkspaceInternalURL) { _, url in
+            guard let url else { return }
+            let owner = store.requestedWorkspaceInternalURLOwner
+            store.requestedWorkspaceInternalURL = nil; store.requestedWorkspaceInternalURLOwner = nil
+            guard owner?.id == store.notesPresentation?.id, owner?.matches(store) == true else { return }
+            requestNavigation(.internalURL(url))
+        }
         .onChange(of: store.requestedWorkspaceRoute) { _, route in
             guard let route else { return }; store.requestedWorkspaceRoute = nil; navigate(route)
         }
@@ -208,7 +243,7 @@ struct WorkspaceView: View {
     var body: some View {
         guardedWorkspace
         .onChange(of: store.bookID) { _, _ in dismissNavigationPickers(); showsInspector = false; compactInspector = false; readerPopover = nil; readerBookmarks = false; progressSize = CGSize(width: 260, height: 52); refreshReadingPageCount() }
-        .onChange(of: store.libraryRootURL) { _, _ in dismissNavigationPickers() }
+        .onChange(of: store.libraryRootURL) { _, _ in clearPendingSearchResult(); dismissNavigationPickers() }
         .onChange(of: navigationExpanded) { _, visible in if !visible { dismissNavigationPickers() } }
         .onChange(of: store.route) { old, next in
             readerPopover = nil
@@ -418,7 +453,7 @@ struct WorkspaceView: View {
         if pendingTransferOwner?.id == owner.id { pendingTransferOwner = nil }
     }
     private func pickerOwnerIsCurrent(_ owner: WorkspacePickerOwner) -> Bool {
-        owner.matches(store) && navigationExpanded && managementRoute == nil && activeSheet == nil && !sheetClosing && navigationPickerEnabled
+        owner.matches(store) && navigationExpanded && !hasWorkspaceOverlay && activeSheet == nil && !sheetClosing && navigationPickerEnabled
     }
     private func selectComponent(_ descriptor: WorkspaceComponentDescriptor, owner: WorkspacePickerOwner) {
         guard componentPickerOwner?.id == owner.id else { return }
@@ -492,7 +527,7 @@ struct WorkspaceView: View {
     /// Exclusion rectangles stay in SwiftUI global coordinates. GraphSurface
     /// converts them once into its own canvas coordinates.
     private var canvasInteractionBlocked: Bool {
-        navigationExpanded || bookPopover || readerPopover != nil || compactInspector || activeSheet != nil || sheetClosing || managementRoute != nil
+        navigationExpanded || bookPopover || readerPopover != nil || compactInspector || activeSheet != nil || sheetClosing || hasWorkspaceOverlay
             || showsRouteConfirmation || showsModelRouteConfirmation || resolvingNavigation || store.deletionRequest != nil
             || store.errorMessage != nil || store.serviceProfileDraft.pendingChange != nil
     }
@@ -597,7 +632,7 @@ struct WorkspaceView: View {
         }
     }
     private func toggleReadingCompanion() {
-        if store.route == "reader" && managementRoute == nil {
+        if store.route == "reader" && !hasWorkspaceOverlay {
             navigationExpanded = false; servicePopover = false; bookPopover = false; readerPopover = nil
             store.readingCompanionVisible.toggle()
         } else { navigate("reader", openingCompanion: true) }
@@ -606,15 +641,73 @@ struct WorkspaceView: View {
         guard !store.isSavingDocument, !resolvingNavigation else { return }
         opensCompanionAfterNavigation = openingCompanion
         navigationExpanded = false; servicePopover = false; bookPopover = false; readerPopover = nil
-        if store.serviceProfileDraft.isDirty(in: store) && managementRoute == "models" && route != "models" { pendingModelRoute = route; showsModelRouteConfirmation = true }
-        else if store.editorDirty && store.route == "editor" && route != "editor" && !["models", "plugins", "book.scheme", "preferences"].contains(route) { pendingRoute = route; showsRouteConfirmation = true }
-        else { completeNavigation(to: route) }
+        if store.serviceProfileDraft.isDirty(in: store) && managementRoute == "models" && route != "models" {
+            pendingModelRoute = route; showsModelRouteConfirmation = true
+        } else { requestNavigation(.route(route)) }
     }
-    private func completeNavigation(to route: String) {
-        if ["models", "plugins", "book.scheme", "preferences"].contains(route) { presentManagement(route) }
-        else { closeManagement(); store.route = route }
-        if route == "reader" && opensCompanionAfterNavigation { store.readingCompanionVisible = true }
+    private func requestNavigation(_ intent: WorkspaceNavigationIntent) {
+        guard !resolvingNavigation else { return }
+        clearPendingSearchResult()
+        switch WorkspaceAuxiliaryNavigation.admission(for: intent, store: store) {
+        case .requiresNotesDecision(let owner):
+            pendingRoute = intent; pendingNotesOwner = owner; showsRouteConfirmation = true
+        case .allowed: completeNavigation(to: intent)
+        case .ignored: break
+        }
+    }
+    private func clearPendingSearchResult() {
+        pendingSearchResultAction = nil; pendingSearchResultOwner = nil
+        if let pendingRoute, case .searchResult = pendingRoute {
+            self.pendingRoute = nil; pendingNotesOwner = nil; showsRouteConfirmation = false
+        }
+    }
+    private func prepareSearchResult(owner: WorkspaceAuxiliaryPresentation, action: @escaping () -> Void) {
+        guard !resolvingNavigation, store.auxiliaryPresentation?.id == owner.id, owner.matches(store) else { return }
+        clearPendingSearchResult()
+        let intent = WorkspaceNavigationIntent.searchResult(owner.id)
+        switch WorkspaceAuxiliaryNavigation.admission(for: intent, store: store) {
+        case .allowed: action()
+        case .requiresNotesDecision(let notes):
+            pendingSearchResultOwner = owner; pendingSearchResultAction = action
+            pendingRoute = intent; pendingNotesOwner = notes; showsRouteConfirmation = true
+        case .ignored: break
+        }
+    }
+    private func finishConfirmedNavigation(to intent: WorkspaceNavigationIntent) {
+        if let action = pendingSearchResultAction, let owner = pendingSearchResultOwner {
+            pendingSearchResultAction = nil; pendingSearchResultOwner = nil
+            guard case .searchResult(let id) = intent, id == owner.id,
+                  store.auxiliaryPresentation?.id == owner.id, owner.matches(store),
+                  WorkspaceAuxiliaryNavigation.admission(for: intent, store: store) == .allowed else { return }
+            // Start the retained Search view's validated navigation only now.
+            // It commits reader after exact match/admission succeeds, not here.
+            action()
+        } else { completeNavigation(to: intent) }
+    }
+    private func completeNavigation(to route: String) { completeNavigation(to: .route(route)) }
+    private func completeNavigation(to intent: WorkspaceNavigationIntent) {
+        if case .route(let route) = intent, ["models", "plugins", "book.scheme", "preferences"].contains(route) {
+            presentManagement(route)
+        } else {
+            guard WorkspaceAuxiliaryNavigation.commit(intent, store: store) else { return }
+            if case .route = intent { closeManagement() }
+        }
+        if case .route("reader") = intent, opensCompanionAfterNavigation { store.readingCompanionVisible = true }
         opensCompanionAfterNavigation = false
+    }
+    @ViewBuilder private func auxiliaryOverlay(_ owner: WorkspaceAuxiliaryPresentation, viewport: CGSize) -> some View {
+        WorkspaceAuxiliaryShell(kind: owner.kind, viewport: viewport, dismiss: { requestNavigation(.dismissAuxiliary(owner.id)) }) {
+            if owner.kind == .search {
+                LibrarySearchView(embedded: true,
+                    onClose: { requestNavigation(.dismissAuxiliary(owner.id)) },
+                    onPrepareResultNavigation: { action in prepareSearchResult(owner: owner, action: action) },
+                    onNavigateToResult: { requestNavigation(.searchResult(owner.id)) })
+            } else if owner.kind == .trash {
+                LibraryTrashView(embedded: true, onClose: { requestNavigation(.dismissAuxiliary(owner.id)) })
+            } else {
+                DocumentEditorView(embedded: true, active: store.auxiliaryPresentation == nil && managementRoute == nil, onClose: { requestNavigation(.dismissAuxiliary(owner.id)) })
+            }
+        }
     }
     private func presentManagement(_ route: String) {
         store.queryAllowsOrganizing = false
@@ -639,14 +732,14 @@ struct WorkspaceView: View {
             else { BookSchemeWorkspaceView(onClose: closeManagement).environmentObject(store) }
         }.accessibilityAddTraits(.isModal)
     }
-    private func saveDocumentAndNavigate(to destination: String) {
-        guard !resolvingNavigation else { return }
+    private func saveDocumentAndNavigate(to destination: WorkspaceNavigationIntent) {
+        guard !resolvingNavigation, let owner = pendingNotesOwner, owner.id == store.notesPresentation?.id, owner.matches(store) else { return }
         pendingRoute = destination; resolvingNavigation = true; showsRouteConfirmation = false
         Task {
             await store.saveCurrentDocument()
             resolvingNavigation = false
-            guard pendingRoute == destination else { return }
-            if !store.editorDirty { pendingRoute = nil; completeNavigation(to: destination) }
+            guard pendingRoute == destination, owner.id == store.notesPresentation?.id, owner.matches(store) else { return }
+            if !store.editorDirty { pendingRoute = nil; pendingNotesOwner = nil; finishConfirmedNavigation(to: destination) }
             else { showsRouteConfirmation = true }
         }
     }
@@ -761,9 +854,7 @@ struct WorkspaceView: View {
         switch sheet {
         case .settings: store.showingSettings = false
         case .ocr: store.showingOCR = false
-        case .trash: store.showingTrash = false
         case .plugins: store.showingPlugins = false
-        case .librarySearch: store.showingLibrarySearch = false
         case .password(let request):
             if store.pdfPasswordRequest?.id == request.id { store.cancelPDFPasswordRequest(request.id) }
         }
@@ -784,11 +875,17 @@ struct WorkspaceView: View {
         }
         let next: WorkspaceSheet?
         if let request = store.pdfPasswordRequest { next = .password(request) }
-        else if store.showingSettings { managementRoute = "models"; return }
+        else if store.showingSettings { guard store.finishWorkspaceNotesEditing() else { store.showingSettings = false; return }; managementRoute = "models"; return }
         else if store.showingOCR { next = .ocr }
-        else if store.showingTrash { next = .trash }
-        else if store.showingPlugins { managementRoute = "plugins"; return }
-        else if store.showingLibrarySearch { next = .librarySearch }
+        else if store.showingTrash {
+            guard !store.isSavingDocument, !resolvingNavigation else { return }
+            store.showingTrash = false; navigate("trash"); return
+        }
+        else if store.showingPlugins { guard store.finishWorkspaceNotesEditing() else { store.showingPlugins = false; return }; managementRoute = "plugins"; return }
+        else if store.showingLibrarySearch {
+            guard !store.isSavingDocument, !resolvingNavigation else { return }
+            store.showingLibrarySearch = false; navigate("librarySearch"); return
+        }
         else { next = nil }
         lastSheet = next; activeSheet = next
     }
@@ -797,9 +894,7 @@ struct WorkspaceView: View {
             switch lastSheet {
             case .settings: store.showingSettings = false
             case .ocr: store.showingOCR = false
-            case .trash: store.showingTrash = false
             case .plugins: store.showingPlugins = false
-            case .librarySearch: store.showingLibrarySearch = false
             case .password(let request):
                 if store.pdfPasswordRequest?.id == request.id { store.cancelPDFPasswordRequest(request.id) }
             }
@@ -811,8 +906,6 @@ struct WorkspaceView: View {
     }
     @ViewBuilder private var content: some View {
         if store.route == "library" { FrostLibraryView() }
-        else if store.route == "trash" { LibraryTrashView(onClose: { navigate("library") }).padding(.top, 88) }
-        else if store.route == "librarySearch" { LibrarySearchView(embedded: true, onClose: { navigate("library") }).padding(.top, 88) }
         else if store.book == nil { WelcomeView().padding(.top, 88) }
         else if store.route == "reader" { ReaderWorkspaceView(showPDF: $readerShowsPDF, showOutline: $readerOutline, bookmarksOnly: $readerBookmarks).id(store.bookID) }
         else if let component = WorkspaceComponentRegistry.shared.render(id: store.route) { component }
@@ -872,14 +965,12 @@ extension View {
 }
 
 private enum WorkspaceSheet: Identifiable {
-    case settings, ocr, trash, plugins, librarySearch, password(PDFPasswordRequest)
+    case settings, ocr, plugins, password(PDFPasswordRequest)
     var id: String {
         switch self {
         case .settings: return "settings"
         case .ocr: return "ocr"
-        case .trash: return "trash"
         case .plugins: return "plugins"
-        case .librarySearch: return "librarySearch"
         case .password(let request): return "password-\(request.id)"
         }
     }
@@ -887,9 +978,7 @@ private enum WorkspaceSheet: Identifiable {
         switch self {
         case .settings: return store.showingSettings
         case .ocr: return store.showingOCR
-        case .trash: return store.showingTrash
         case .plugins: return store.showingPlugins
-        case .librarySearch: return store.showingLibrarySearch
         case .password(let request): return store.pdfPasswordRequest?.id == request.id
         }
     }

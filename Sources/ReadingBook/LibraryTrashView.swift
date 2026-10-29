@@ -6,6 +6,7 @@ import ReadingCore
 @MainActor struct LibraryTrashView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    var embedded = false
     var onClose: (() -> Void)? = nil
     @State private var query = ""
     @State private var filter: TrashFilter = .all
@@ -13,6 +14,7 @@ import ReadingCore
     @State private var localError: String?
     @State private var restoring = false
     @State private var checking = false
+    @State private var showingRecoveryInfo = false
 
     private var removedRows: [BookProject] {
         guard filter == .all || filter == .books else { return [] }
@@ -45,55 +47,76 @@ import ReadingCore
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                Image(systemName: "trash").foregroundStyle(Palette.accent).font(.system(size: 22))
-                Text("回收站").font(.system(size: 25, weight: .semibold))
-                Spacer(minLength: 0)
-                Button { close() } label: { Image(systemName: "xmark") }
-                    .buttonStyle(SettingsActionButtonStyle()).keyboardShortcut(.cancelAction).accessibilityLabel("关闭回收站").help("关闭回收站")
-            }
-            Text("按书保留回收内容及关联。恢复前会核对当前版本；另行回收的笔记需要单独恢复。")
-                .font(.system(size: 14)).foregroundStyle(.secondary).lineSpacing(4)
-            searchBar
-            if let localError { errorBanner(localError) }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    if !removedRows.isEmpty {
-                        sectionHeading("已移出书库 · 文件保留", count: removedRows.count)
-                        ForEach(removedRows) { book in
-                            HStack(spacing: 12) {
-                                Image(systemName: "books.vertical").foregroundStyle(Palette.accent)
-                                Text(book.title).font(.system(size: 15, weight: .medium)).lineLimit(2)
-                                Spacer(minLength: 8)
-                                Button("重新加入") { Task { await store.restoreRemovedBook(book.id) } }.buttonStyle(SettingsActionButtonStyle()).disabled(store.isBusy || store.editorDirty)
-                                    .help(store.editorDirty ? "请先保存正在编辑的 Markdown" : "将保留在本机的《\(book.title)》重新加入书库")
-                            }.padding(14).readingGlass(radius: 16)
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider().opacity(0.5)
+            VStack(alignment: .leading, spacing: 12) {
+                searchBar
+                if let localError { errorBanner(localError) }
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        if !removedRows.isEmpty {
+                            sectionHeading("已移出书库 · 文件保留", count: removedRows.count)
+                            ForEach(removedRows) { book in
+                                HStack(spacing: 12) {
+                                    Image(systemName: "books.vertical").foregroundStyle(Palette.accent)
+                                    Text(book.title).font(.system(size: 15, weight: .medium)).lineLimit(2)
+                                    Spacer(minLength: 8)
+                                    Button("重新加入") { Task { await store.restoreRemovedBook(book.id) } }.buttonStyle(SettingsActionButtonStyle()).disabled(store.isBusy || store.editorDirty)
+                                        .help(store.editorDirty ? "请先保存正在编辑的 Markdown" : "将保留在本机的《\(book.title)》重新加入书库")
+                                }.padding(12).frame(maxWidth: .infinity, minHeight: 64)
+                                    .background(Palette.paper, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Palette.line.opacity(0.8), lineWidth: 0.8))
+                            }
                         }
-                    }
-                    if !archivedRows.isEmpty {
-                        sectionHeading("已回收的书籍", count: archivedRows.count)
-                        ForEach(archivedRows) { item in trashRow(item) }
-                    }
-                    ForEach(bookSections) { section in
-                        sectionHeading(section.title, count: section.rows.count).padding(.top, 10)
-                        ForEach(section.rows) { item in trashRow(item) }
-                    }
-                    if archivedRows.isEmpty && bookSections.isEmpty && removedRows.isEmpty {
-                        EmptyState(title: query.isEmpty && filter == .all ? "回收站是空的" : "没有匹配的内容",
-                                   detail: query.isEmpty && filter == .all ? "回收的书籍、笔记、对象、连线和组件会保留在这里。" : "换一个标题、书名或类型试试。", icon: "trash")
-                            .frame(minHeight: 190)
-                    }
-                }.padding(.bottom, 4)
-            }
-            HStack(spacing: 8) {
-                if checking { ProgressView().controlSize(.small); Text("正在核对恢复关联…") }
-                else { Label("保留恢复入口，不提供永久清空。", systemImage: "arrow.uturn.backward.circle") }
-            }.font(.system(size: 13)).foregroundStyle(.secondary)
+                        if !archivedRows.isEmpty {
+                            sectionHeading("已回收的书籍", count: archivedRows.count)
+                            ForEach(archivedRows) { item in trashRow(item) }
+                        }
+                        ForEach(bookSections) { section in
+                            sectionHeading(section.title, count: section.rows.count).padding(.top, 8)
+                            ForEach(section.rows) { item in trashRow(item) }
+                        }
+                        if archivedRows.isEmpty && bookSections.isEmpty && removedRows.isEmpty {
+                            EmptyState(title: query.isEmpty && filter == .all ? "回收站是空的" : "没有匹配的内容",
+                                       detail: query.isEmpty && filter == .all ? "回收的书籍、笔记、对象、连线和组件会保留在这里。" : "换一个标题、书名或类型试试。", icon: "trash")
+                                .frame(minHeight: 190)
+                        }
+                    }.padding(.bottom, 4)
+                }
+                if checking {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("正在核对恢复关联…")
+                    }.font(.system(size: 13)).foregroundStyle(.secondary).frame(minHeight: 24)
+                }
+            }.padding(16)
         }
-        .padding(24).background(Palette.canvas).controlSize(.large)
+        .background(embedded ? Color.clear : Palette.canvas).controlSize(.large)
         .task { await store.reloadTrash() }
         .sheet(item: $restorePreview) { preview in restorationSheet(preview) }
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "trash").foregroundStyle(Palette.accent).font(.system(size: 18))
+            Text("回收站").font(.system(size: 16, weight: .semibold)).lineLimit(1)
+            Spacer(minLength: 8)
+            Button { showingRecoveryInfo.toggle() } label: { Image(systemName: "info.circle") }
+                .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("查看回收与恢复说明").help("查看回收内容、恢复关联和保留方式")
+                .popover(isPresented: $showingRecoveryInfo, arrowEdge: .top) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("回收与恢复").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
+                        Text("按书保留回收内容及关联，原文件会继续保留。恢复前会核对当前版本与必要关联。")
+                        Text("另行回收的 Markdown 笔记需要单独恢复，不会随其他内容自动恢复。")
+                        Text("这里保留恢复入口，不提供永久清空。")
+                    }.font(.system(size: 13)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true).padding(18).frame(width: 310)
+                }
+            Button { close() } label: { Image(systemName: "xmark") }
+                .buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction)
+                .accessibilityLabel("关闭回收站").help("关闭回收站，回到之前的界面")
+        }.padding(.leading, 18).padding(.trailing, 6).frame(height: 56)
     }
 
     private var searchBar: some View {
@@ -103,7 +126,7 @@ import ReadingCore
                 .frame(minWidth: 60)
             if !query.isEmpty {
                 Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(SettingsActionButtonStyle()).accessibilityLabel("清空回收站搜索").help("清空回收站搜索")
+                    .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("清空回收站搜索").help("清空回收站搜索")
             }
             Divider().frame(height: 20)
             Menu {
@@ -113,7 +136,9 @@ import ReadingCore
             } label: { ManagementMenuLabel(title: filter.title) }
                 .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).frame(width: 126)
                 .accessibilityLabel("筛选回收内容类型").help("按书籍、笔记、对象、连线或组件筛选回收内容")
-        }.padding(.leading, 14).padding(.trailing, 8).frame(minHeight: 48).readingGlass(radius: 14)
+        }.padding(.leading, 14).padding(.trailing, 8).frame(minHeight: 48)
+            .background(Palette.paper, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
     }
     private func sectionHeading(_ title: String, count: Int) -> some View {
         HStack(spacing: 8) {
@@ -124,23 +149,23 @@ import ReadingCore
     }
     private func trashRow(_ item: TrashDisplayItem) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: item.category.icon).font(.system(size: 21)).foregroundStyle(Palette.accent)
-                .frame(width: 42, height: 46).background(Palette.accent.opacity(0.065), in: RoundedRectangle(cornerRadius: 12))
-            VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: item.category.icon).font(.system(size: 19)).foregroundStyle(Palette.accent)
+                .frame(width: 36, height: 36).background(Palette.accent.opacity(0.065), in: RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 4) {
                 Text(item.title).font(.system(size: 15, weight: .medium)).lineLimit(2)
                 Text(item.category.title + " · " + item.detail).font(.system(size: 12)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let date = item.date {
                     Text("回收于 " + date.formatted(date: .abbreviated, time: .shortened))
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
             Button { beginRestore(item.action) } label: { Label("恢复", systemImage: "arrow.uturn.backward") }
                 .buttonStyle(SettingsActionButtonStyle()).disabled(store.isBusy || restoring || checking || store.editorDirty)
                 .help(store.editorDirty ? "请先保存正在编辑的 Markdown" : "恢复\(item.title)")
-        }.padding(14).frame(maxWidth: .infinity, minHeight: 88)
-            .background(Palette.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Palette.line.opacity(0.75), lineWidth: 0.8))
+        }.padding(12).frame(maxWidth: .infinity, minHeight: 80)
+            .background(Palette.paper, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Palette.line.opacity(0.8), lineWidth: 0.8))
     }
     private func errorBanner(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 8) {

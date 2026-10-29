@@ -34,6 +34,8 @@ public struct LibraryTextMatch: Identifiable, Hashable, Sendable {
     public var snippetAfter: String
     public var hasEarlierText: Bool
     public var hasLaterText: Bool
+    /// The user's original or explicitly expanded keyword, never a model quote.
+    public var matchedQuery: String = ""
     public var range: NSRange { NSRange(location: utf16Location, length: utf16Length) }
 
     /// A stale result cannot silently acquire a different source position.
@@ -57,6 +59,7 @@ public struct LibraryEntityMatch: Identifiable, Hashable, Sendable {
     public var sourceHash: String
     public var entity: KnowledgeEntity
     public var matchedName: String
+    public var matchedQuery: String = ""
 }
 
 public struct LibrarySearchResponse: Sendable {
@@ -67,34 +70,58 @@ public struct LibrarySearchResponse: Sendable {
     public var scannedUnitCount: Int
     /// Reaching a bound stops scanning; counts must not be presented as whole-library totals.
     public var bounded: Bool
-    public init(query: String, matches: [LibraryTextMatch] = [], entityMatches: [LibraryEntityMatch] = [], searchedBookCount: Int = 0, scannedUnitCount: Int = 0, bounded: Bool = false) {
+    public var searchedQueries: [String]
+    public init(query: String, matches: [LibraryTextMatch] = [], entityMatches: [LibraryEntityMatch] = [], searchedBookCount: Int = 0, scannedUnitCount: Int = 0, bounded: Bool = false, searchedQueries: [String]? = nil) {
         self.query = query; self.matches = matches; self.entityMatches = entityMatches
         self.searchedBookCount = searchedBookCount; self.scannedUnitCount = scannedUnitCount; self.bounded = bounded
+        self.searchedQueries = searchedQueries ?? (query.isEmpty ? [] : [query])
     }
 }
 
 public enum LibraryTextSearch {
-    /// Literal Unicode text search over original strings. Case folding is used
-    /// only to find a range; returned quotes and offsets always come from the source.
+    private struct Term {
+        let query: String
+        let literals: [String]
+        let canonical: [String]
+    }
+    private struct Found { let range: Range<String.Index>; let query: String }
+
+    /// Offline script/case/width equivalence over original strings. A temporary
+    /// character-boundary map keeps returned quotes and UTF-16 offsets exact.
+    /// Contextual ICU phrase variants supplement, but do not promise all synonyms.
     public static func search(query: String, snapshots: [LibrarySourceSnapshot], bookID: String? = nil,
-                              resultLimit: Int = 150, entityLimit: Int = 36) throws -> LibrarySearchResponse {
+                              resultLimit: Int = 150, entityLimit: Int = 36,
+                              additionalQueries: [String] = []) throws -> LibrarySearchResponse {
         try Task.checkCancellation()
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard query.count <= 400, (1...500).contains(resultLimit), (0...100).contains(entityLimit) else {
             throw ReadingError.invalid("检索词最多400字，原文结果上限须在1–500之间。")
         }
+        guard additionalQueries.count <= 8 else { throw ReadingError.invalid("扩展检索最多8个关键词。") }
+        let additional = additionalQueries.isEmpty ? [] : try LibrarySearchExpansionPlan(keywords: additionalQueries).keywords
         let books = snapshots.filter { bookID == nil || $0.bookID == bookID }
         guard !query.isEmpty else { return LibrarySearchResponse(query: query, searchedBookCount: books.count) }
-        var response = LibrarySearchResponse(query: query, searchedBookCount: books.count)
+        var canonicalizer = LibrarySearchCanonicalizer()
+        var queryIdentities = Set<String>(), queries: [String] = []
+        for word in [query] + additional {
+            let identity = word.folding(options: [.caseInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            if queryIdentities.insert(identity).inserted { queries.append(word) }
+        }
+        let terms = try queries.map { try term($0, canonicalizer: &canonicalizer) }
+        let needsCanonical = terms.contains { !$0.canonical.isEmpty }
+        var response = LibrarySearchResponse(query: query, searchedBookCount: books.count, searchedQueries: queries)
         sourceScan: for book in books {
             try Task.checkCancellation()
             for unit in book.units.sorted(by: { $0.order == $1.order ? $0.id < $1.id : $0.order < $1.order }) {
                 try Task.checkCancellation()
                 response.scannedUnitCount += 1
+                let mapped = needsCanonical && LibrarySearchCanonicalizer.containsHan(unit.text)
+                    ? try LibrarySearchMappedText(unit.text, canonicalizer: &canonicalizer) : nil
                 var remaining = unit.text.startIndex..<unit.text.endIndex
                 var unitHash: String?
-                while let found = unit.text.range(of: query, options: [.caseInsensitive], range: remaining) {
+                while let candidate = try next(in: unit.text, remaining: remaining, terms: terms, mapped: mapped, canonicalizer: &canonicalizer) {
                     try Task.checkCancellation()
+                    let found = candidate.range
                     guard !found.isEmpty else { break }
                     if unitHash == nil { unitHash = try BookImporter.sha256(Data(unit.text.utf8)) }
                     let snippetStart = unit.text.index(found.lowerBound, offsetBy: -80, limitedBy: unit.text.startIndex) ?? unit.text.startIndex
@@ -108,7 +135,7 @@ public enum LibraryTextSearch {
                                                              utf16Location: range.location, utf16Length: range.length,
                                                              snippetBefore: before, snippetAfter: after,
                                                              hasEarlierText: snippetStart > unit.text.startIndex,
-                                                             hasLaterText: snippetEnd < unit.text.endIndex))
+                                                             hasLaterText: snippetEnd < unit.text.endIndex, matchedQuery: candidate.query))
                     if response.matches.count == resultLimit { response.bounded = true; break sourceScan }
                     remaining = found.upperBound..<unit.text.endIndex
                 }
@@ -119,12 +146,71 @@ public enum LibraryTextSearch {
                 try Task.checkCancellation()
                 for entity in book.entities {
                     try Task.checkCancellation()
-                    guard let matched = ([entity.name] + entity.aliases).first(where: { $0.range(of: query, options: [.caseInsensitive]) != nil }) else { continue }
-                    response.entityMatches.append(LibraryEntityMatch(bookID: book.bookID, bookTitle: book.title, sourceHash: book.sourceHash, entity: entity, matchedName: matched))
+                    var matched: (String, String)?
+                    for name in [entity.name] + entity.aliases {
+                        let mapped = needsCanonical && LibrarySearchCanonicalizer.containsHan(name)
+                            ? try LibrarySearchMappedText(name, canonicalizer: &canonicalizer) : nil
+                        if let found = try next(in: name, remaining: name.startIndex..<name.endIndex, terms: terms, mapped: mapped, canonicalizer: &canonicalizer) {
+                            matched = (name, found.query); break
+                        }
+                    }
+                    guard let matched else { continue }
+                    response.entityMatches.append(LibraryEntityMatch(bookID: book.bookID, bookTitle: book.title, sourceHash: book.sourceHash, entity: entity, matchedName: matched.0, matchedQuery: matched.1))
                     if response.entityMatches.count == entityLimit { response.bounded = true; break entityScan }
                 }
             }
         }
         return response
+    }
+
+    private static func term(_ query: String, canonicalizer: inout LibrarySearchCanonicalizer) throws -> Term {
+        guard LibrarySearchCanonicalizer.containsHan(query) else { return Term(query: query, literals: [query], canonical: []) }
+        var variants = [query]
+        for transform in ["Traditional-Simplified", "Simplified-Traditional"] {
+            if let variant = query.applyingTransform(StringTransform(rawValue: transform), reverse: false), !variants.contains(variant) {
+                variants.append(variant)
+            }
+        }
+        var canonical: [String] = []
+        for variant in variants {
+            let folded = try canonicalizer.fold(variant)
+            if !folded.isEmpty, !canonical.contains(folded) { canonical.append(folded) }
+        }
+        return Term(query: query, literals: variants, canonical: canonical)
+    }
+
+    private static func next(in text: String, remaining: Range<String.Index>, terms: [Term],
+                             mapped: LibrarySearchMappedText?, canonicalizer: inout LibrarySearchCanonicalizer) throws -> Found? {
+        guard !remaining.isEmpty else { return nil }
+        var best: Found?
+        func consider(_ range: Range<String.Index>, query: String) {
+            guard !range.isEmpty else { return }
+            if best == nil || range.lowerBound < best!.range.lowerBound { best = Found(range: range, query: query) }
+        }
+        for term in terms {
+            try Task.checkCancellation()
+            for literal in term.literals {
+                if let found = text.range(of: literal, options: [.caseInsensitive, .widthInsensitive], range: remaining) { consider(found, query: term.query) }
+            }
+            guard let mapped, !term.canonical.isEmpty else { continue }
+            let offset = NSRange(remaining, in: text).location
+            let start = mapped.canonicalStart(atOrAfter: offset)
+            guard let searchStart = Range(NSRange(location: start, length: 0), in: mapped.text)?.lowerBound else { continue }
+            for needle in term.canonical {
+                var canonicalRemaining = searchStart..<mapped.text.endIndex
+                while let found = mapped.text.range(of: needle, options: [.caseInsensitive], range: canonicalRemaining) {
+                    try Task.checkCancellation()
+                    guard !found.isEmpty else { break }
+                    if let range = mapped.originalRange(NSRange(found, in: mapped.text)), let original = Range(range, in: text),
+                       original.lowerBound >= remaining.lowerBound,
+                       try canonicalizer.fold(String(text[original])).compare(needle, options: [.caseInsensitive]) == .orderedSame {
+                        consider(original, query: term.query); break
+                    }
+                    // A hit inside an expanded Character is not a source range.
+                    canonicalRemaining = found.upperBound..<mapped.text.endIndex
+                }
+            }
+        }
+        return best
     }
 }

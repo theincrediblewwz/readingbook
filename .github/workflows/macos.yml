@@ -66,6 +66,7 @@ jobs:
           HARNESS_PDF_SCROLLER_STYLE=overlay python3 scripts/native-ui-regression/run.py --mode boundary --cycles 1 --tag ci-boundary-overlay
           python3 scripts/native-ui-regression/run.py --mode navigation --cycles 1 --tag ci-book-picker
           python3 scripts/native-ui-regression/run.py --mode continuation --cycles 12 --tag ci-continuation
+          python3 scripts/native-ui-regression/run.py --mode urgent-search-overlay --cycles 3 --tag ci-urgent-search-overlay
       - name: Native reading continuation and preservation regression
         run: |
           python3 scripts/native-ui-regression/build-reading-continuation.py --bin-dir .build/tests/debug

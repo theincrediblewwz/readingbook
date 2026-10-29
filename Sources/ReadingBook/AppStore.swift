@@ -10,6 +10,7 @@ import ReadingCore
     @Published var bookID: String? {
         didSet {
             if oldValue != bookID {
+                clearWorkspaceAuxiliaryForNewSource()
                 queryTask?.cancel(); companionTask?.cancel()
                 pendingPlanRegeneration = nil
                 readingPreparationState.reset()
@@ -25,8 +26,27 @@ import ReadingCore
             }
         }
     }
-    @Published var route = "reader" { didSet { if route != "query" { queryAllowsOrganizing = false }; rememberWorkspaceNavigation() } }
+    @Published var baseWorkspaceRoute = "reader"
+    @Published var auxiliaryPresentation: WorkspaceAuxiliaryPresentation?
+    @Published var notesPresentation: WorkspaceAuxiliaryPresentation?
+    let workspaceAuxiliaryFocus = WorkspaceAuxiliaryFocus()
+    let workspaceCoveredNotesFocus = WorkspaceAuxiliaryFocus()
+    var route: String {
+        get { baseWorkspaceRoute }
+        set {
+            guard finishWorkspaceNotesEditing() else { return }
+            if let kind = WorkspaceAuxiliaryKind(rawValue: newValue) {
+                presentWorkspaceAuxiliary(kind)
+            } else if ["models", "plugins", "book.scheme", "preferences"].contains(newValue) {
+                requestedWorkspaceRoute = newValue
+            } else if editorDirty && isNotesPresented && !restoringWorkspaceMemory {
+                requestedWorkspaceRoute = newValue
+            } else { commitWorkspaceRoute(newValue) }
+        }
+    }
     @Published var requestedWorkspaceRoute: String?
+    @Published var requestedWorkspaceInternalURL: URL?
+    var requestedWorkspaceInternalURLOwner: WorkspaceAuxiliaryPresentation?
     @Published var workspaceMemory = BookWorkspaceMemory()
     @Published var workspaceMemoryRevision = 0
     var restoringWorkspaceMemory = false
@@ -188,7 +208,7 @@ import ReadingCore
     }
     @Published var catalogOperations = 0
     @Published var libraryRootURL: URL {
-        didSet { if oldValue != libraryRootURL { teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
+        didSet { if oldValue != libraryRootURL { auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
     }
     @Published var lastTrashedProjectURL: URL?
     let storageState = StorageSettingsState()
@@ -329,7 +349,8 @@ import ReadingCore
         // send it a spurious explicit jump before the new selection is ready.
         pdfNavigationToken += 1
         pdfInteractionResetID = UUID()
-        bookID = id; route = "reader"; sourceFileURL = retainDisplay ? url : nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil; documentBaseHash = nil
+        clearWorkspaceAuxiliaryForNewSource()
+        bookID = id; commitWorkspaceRoute("reader", preservingAuxiliary: true); sourceFileURL = retainDisplay ? url : nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil; documentBaseHash = nil
         readingIndexTask?.cancel(); readingIndexTask = nil; readingIndexGeneration &+= 1; readingPageSnapshots.reset()
         readingExperienceIndex = book?.readingExperience ?? ReadingExperienceState()
         readingContextCacheKey = nil; readingContextCache = ReadingContextItems()
@@ -401,7 +422,7 @@ import ReadingCore
         guard book != nil, !isRecognizingPDF else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档。"; return }
         documentGeneration += 1; documentError = nil; documentBaseHash = nil
-        selectedDocumentID = nil; editorTitle = "新的理解"; editorMarkdown = "# 新的理解\n\n"; draftEvidence = []; editorDirty = true; route = "editor"
+        selectedDocumentID = nil; editorTitle = "新的理解"; editorMarkdown = "# 新的理解\n\n"; draftEvidence = []; editorDirty = true; presentWorkspaceAuxiliary(.notes)
     }
     func discardDraftForWorkspaceNavigation() {
         guard !isSavingDocument, let bookID else { return }
@@ -421,11 +442,11 @@ import ReadingCore
         if let document { Task { await openDocument(document) } }
         activity = "未保存修改已放弃；已保存的文档保留。"
     }
-    func openDocument(_ document: DocumentRecord) async {
+    func openDocument(_ document: DocumentRecord, present: Bool = true) async {
         guard let current = book else { return }
         guard document.trashedAt == nil else { errorMessage = "文档已在回收站，请先恢复。"; showingTrash = true; return }
         guard !editorDirty else {
-            if selectedDocumentID == document.id { route = "editor"; return }
+            if selectedDocumentID == document.id { if present { presentWorkspaceAuxiliary(.notes) }; return }
             errorMessage = "请先保存当前文档。"; return
         }
         documentGeneration += 1
@@ -435,8 +456,8 @@ import ReadingCore
             guard current.id == bookID, generation == documentGeneration, !editorDirty else { return }
             editorMarkdown = snapshot.markdown; documentBaseHash = snapshot.contentHash
             documentError = nil
-            editorTitle = document.title; selectedDocumentID = document.id; draftEvidence = document.evidence; editorDirty = false; route = "editor"
-            selectedObjectID = document.id; readingContextDocumentID = document.id
+            editorTitle = document.title; selectedDocumentID = document.id; draftEvidence = document.evidence; editorDirty = false
+            if present { presentWorkspaceAuxiliary(.notes); selectedObjectID = document.id; readingContextDocumentID = document.id }
         } catch { if current.id == bookID && generation == documentGeneration { errorMessage = error.localizedDescription } }
     }
     func saveCurrentDocument(asNew: Bool = false) async {
@@ -613,14 +634,18 @@ import ReadingCore
     }
     func follow(_ evidence: Evidence) { followReadingEvidence(evidence) }
     func openInternalURL(_ url: URL) async {
-        guard url.scheme == "readingbook" else { return }
+        guard url.scheme == "readingbook", finishWorkspaceNotesEditing() else { return }
+        if editorDirty && isNotesPresented {
+            requestedWorkspaceInternalURLOwner = notesPresentation; requestedWorkspaceInternalURL = url; return
+        }
+        let requestRoot = libraryRootURL
         let parts = url.pathComponents.filter { $0 != "/" }
         let kind: String, id: String
         if url.host == "book", parts.count == 3 {
             let targetBook = parts[0]
             guard books.contains(where: { $0.id == targetBook }) else { errorMessage = "此引用所属的书籍尚未导入当前书库。"; return }
             if bookID != targetBook { await selectBook(targetBook) }
-            guard bookID == targetBook else { return }
+            guard bookID == targetBook, libraryRootURL == requestRoot else { return }
             kind = parts[1]; id = parts[2]
         } else { kind = url.host ?? ""; id = parts.last ?? "" }
         if kind == "anchor" { focusReadingAnchor(id) }
@@ -636,7 +661,7 @@ import ReadingCore
         }
         else if kind == "message" {
             guard book?.chats.contains(where: { $0.id == id }) == true else { errorMessage = "引用的历史对话不存在于这本书中。"; return }
-            if route == "reader" { readingCompanionVisible = true; readingCompanionTab = "chat" }
+            if route == "reader" { commitWorkspaceRoute("reader"); readingCompanionVisible = true; readingCompanionTab = "chat" }
             else { route = "query" }
             queryHistoryMessageID = id
         }
@@ -859,7 +884,7 @@ import ReadingCore
         guard let bookID, let data = UserDefaults.standard.data(forKey: "draft-\(bookID)"), let draft = try? JSONDecoder().decode(DocumentDraft.self, from: data) else { return }
         selectedDocumentID = book?.activeDocuments.contains(where: { $0.id == draft.documentID }) == true ? draft.documentID : nil
         documentBaseHash = selectedDocumentID == nil ? nil : draft.baseHash
-        editorTitle = draft.title; editorMarkdown = draft.markdown; draftEvidence = draft.evidence; editorDirty = true; route = "editor"; activity = "已恢复上次尚未保存的文档草稿。"
+        editorTitle = draft.title; editorMarkdown = draft.markdown; draftEvidence = draft.evidence; editorDirty = true; presentWorkspaceAuxiliary(.notes); activity = "已恢复上次尚未保存的文档草稿。"
     }
     func libraryLoadIssueSummary(_ issues: [LibraryLoadIssue]) -> String {
         "有 \(issues.count) 个目录未载入，其他书籍仍可使用；原文件保留。\n" + issues.prefix(8).map { "\($0.folder)：\($0.message)" }.joined(separator: "\n")

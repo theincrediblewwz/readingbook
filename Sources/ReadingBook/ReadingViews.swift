@@ -411,6 +411,9 @@ struct MarkdownText: View {
 }
 
 struct DocumentEditorView: View {
+    var embedded = false
+    var active = true
+    var onClose: (() -> Void)? = nil
     @EnvironmentObject var store: AppStore
     @EnvironmentObject private var typography: ReadingTypographySettings
     @State private var preview = true
@@ -423,8 +426,16 @@ struct DocumentEditorView: View {
         let id = UUID()
         let workspace: WorkspacePickerOwner
         let documentID: String?
-        @MainActor init(store: AppStore) { workspace = WorkspacePickerOwner(store: store); documentID = store.selectedDocumentID }
-        @MainActor func matches(_ store: AppStore) -> Bool { workspace.matches(store) && documentID == store.selectedDocumentID && store.route == "editor" }
+        let presentationID: UUID?
+        let sessionID: ObjectIdentifier
+        @MainActor init(store: AppStore, session: NoteMarkdownEditorSession) {
+            workspace = WorkspacePickerOwner(store: store); documentID = store.selectedDocumentID
+            presentationID = store.notesPresentation?.id; sessionID = ObjectIdentifier(session)
+        }
+        @MainActor func matches(_ store: AppStore, session: NoteMarkdownEditorSession) -> Bool {
+            workspace.matches(store) && documentID == store.selectedDocumentID && store.isNotesForeground
+                && presentationID == store.notesPresentation?.id && sessionID == ObjectIdentifier(session)
+        }
     }
     @State private var showingDocuments = true
     @State private var listCollapsed = false
@@ -450,15 +461,24 @@ struct DocumentEditorView: View {
             // releases the old space immediately; the viewport itself stays full.
             let leftInset: CGFloat = showingDocuments && wide && !listCollapsed && listFrame.x < 40 ? listFrame.x + 360 : 24
             ZStack(alignment: .topLeading) {
-                Palette.canvas.ignoresSafeArea()
+                if !embedded { Palette.canvas.ignoresSafeArea() }
                 documentPaper
-                    .padding(.leading, leftInset).padding(.trailing, 24).padding(.top, 80).padding(.bottom, 88)
+                    .padding(.leading, leftInset).padding(.trailing, 24).padding(.top, embedded ? 64 : 80).padding(.bottom, 88)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if showingDocuments {
                     documentPanel(viewport: geometry.size)
                 }
                 FloatingReadingDock(id: "notes-tools", viewport: geometry.size) { editorToolbar(compact: geometry.size.width < 960) }
                     .environmentObject(store)
+                if embedded {
+                    HStack(spacing: 10) {
+                        Label("我的笔记", systemImage: "square.and.pencil").font(.system(size: 17, weight: .semibold))
+                        Spacer(minLength: 8)
+                        Button { onClose?() } label: { Image(systemName: "xmark") }
+                            .buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction)
+                            .accessibilityLabel("关闭我的笔记").help("关闭笔记，返回下面的界面；未保存修改会先提醒")
+                    }.padding(.horizontal, 20).frame(height: 56)
+                }
             }
             .background {
                 let stable = clampedListOrigin(listDragging ? dragOrigin : listOrigin, viewport: geometry.size)
@@ -481,7 +501,7 @@ struct DocumentEditorView: View {
         }
         .confirmationDialog("放弃尚未保存的修改？", isPresented: Binding(get: { discardActionOwner != nil }, set: { if !$0 { discardActionOwner = nil } })) {
             Button("放弃修改", role: .destructive) {
-                guard let owner = discardActionOwner, owner.matches(store), store.editorDirty, !store.isSavingDocument else { discardActionOwner = nil; return }
+                guard let owner = discardActionOwner, owner.matches(store, session: markdownSession), store.editorDirty, !store.isSavingDocument else { discardActionOwner = nil; return }
                 discardActionOwner = nil; store.discardDraft()
             }
         } message: { Text("清除当前草稿，恢复最近保存的内容；已保存的 Markdown 不会删除。") }
@@ -496,7 +516,12 @@ struct DocumentEditorView: View {
         .onChange(of: listOrigin) { _, _ in if !listDragging { saveListMemory() } }
         .onChange(of: store.libraryRootURL) { _, _ in dismissDocumentActions() }
         .onChange(of: store.selectedDocumentID) { _, _ in dismissDocumentActions() }
-        .onChange(of: store.route) { _, route in if route != "editor" { dismissDocumentActions() } }
+        .disabled(!active)
+        .onChange(of: active) { _, visible in
+            if !visible { dismissDocumentActions() }
+        }
+        .onChange(of: store.isNotesForeground) { _, visible in if !visible { dismissDocumentActions() } }
+        .onChange(of: store.notesPresentation?.id) { _, _ in dismissDocumentActions() }
         .onDisappear { dismissDocumentActions(); saveListMemory() }
     }
     private func restoreListMemory(viewport: CGSize, defaultShown: Bool) {
@@ -556,7 +581,7 @@ struct DocumentEditorView: View {
                             markdown: Binding(get: { store.editorMarkdown }, set: { store.editorMarkdown = $0; store.editorDirty = true }),
                             libraryRoot: store.libraryRootURL, bookID: store.bookID, documentID: store.selectedDocumentID,
                             font: typography.nsFont(for: .notes), expanded: expandsNoteLinks,
-                            editable: !store.isRecognizingPDF, visible: !preview)
+                            editable: !store.isRecognizingPDF && active, visible: !preview && active)
                             .padding(.horizontal, 22).padding(.bottom, 22)
                     }
                     .opacity(preview ? 0 : 1).allowsHitTesting(!preview).accessibilityHidden(preview)
@@ -600,7 +625,7 @@ struct DocumentEditorView: View {
     private var documentMenu: some View {
         DockIconButton(title: "笔记操作：新建、导出与草稿管理", icon: "ellipsis", isSelected: documentActionOwner != nil) {
             pendingDocumentActionOwner = nil
-            documentActionOwner = NoteActionOwner(store: store)
+            documentActionOwner = NoteActionOwner(store: store, session: markdownSession)
         }
         .popover(item: $documentActionOwner, arrowEdge: .bottom) { owner in
             ManagementActionPopover(title: "笔记操作", options: documentActions,
@@ -625,12 +650,12 @@ struct DocumentEditorView: View {
     }
     private func dismissDocumentActions() { documentActionOwner = nil; pendingDocumentActionOwner = nil; discardActionOwner = nil }
     private func performDocumentAction(_ id: String, owner: NoteActionOwner) {
-        guard documentActionOwner?.id == owner.id, owner.matches(store), documentActions.contains(where: { $0.id == id && $0.enabled }) else { return }
+        guard documentActionOwner?.id == owner.id, owner.matches(store, session: markdownSession), documentActions.contains(where: { $0.id == id && $0.enabled }) else { return }
         documentActionOwner = nil; pendingDocumentActionOwner = owner
         // Let the popover close before presenting a confirmation or file panel.
         Task { @MainActor in
             await Task.yield()
-            guard pendingDocumentActionOwner?.id == owner.id, owner.matches(store), documentActions.contains(where: { $0.id == id && $0.enabled }) else { return }
+            guard pendingDocumentActionOwner?.id == owner.id, owner.matches(store, session: markdownSession), documentActions.contains(where: { $0.id == id && $0.enabled }) else { return }
             pendingDocumentActionOwner = nil
             switch id {
             case "new": store.newDocument(); preview = false
@@ -660,11 +685,11 @@ struct DocumentEditorView: View {
         }.frame(width: 340, height: height).readingGlass(radius: 20).position(x: origin.x + 170, y: origin.y + height / 2)
     }
     private func listPanelHeight(viewport: CGSize) -> CGFloat {
-        listCollapsed ? ReadingLayout.panelHeaderHeight : min(640, max(180, viewport.height - 96 - 88))
+        listCollapsed ? ReadingLayout.panelHeaderHeight : min(640, max(180, viewport.height - (embedded ? 64 : 96) - 88))
     }
     private func clampedListOrigin(_ value: CGPoint, viewport: CGSize) -> CGPoint {
         let height = listPanelHeight(viewport: viewport)
-        return CGPoint(x: min(max(12, value.x), max(12, viewport.width - 352)), y: min(max(96, value.y), max(96, viewport.height - height - 88)))
+        return CGPoint(x: min(max(12, value.x), max(12, viewport.width - 352)), y: min(max(embedded ? 64 : 96, value.y), max(embedded ? 64 : 96, viewport.height - height - 88)))
     }
     private var documentPicker: some View {
         VStack(alignment: .leading, spacing: 12) {

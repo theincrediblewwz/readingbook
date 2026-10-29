@@ -59,15 +59,22 @@ import ReadingCore
         // An unsaved draft always wins. Restoration never discards or overwrites its Markdown.
         guard !editorDirty else { return }
         if let id = memory.documentID, let document = book.activeDocuments.first(where: { $0.id == id }) {
-            await openDocument(document)
+            await openDocument(document, present: false)
             guard bookID == expectedBookID, generation == navigationGeneration else { return }
         }
         let permanent: Set<String> = ["reader", "editor", "workflow", "query", "library", "models", "plugins", "trash", "librarySearch", "book.scheme"]
         let retiredView = book.views.contains { $0.id == memory.route && PluginEngine.isRetiredRenderer($0.rendererID ?? $0.id) }
         let routeExists = !PluginEngine.isRetiredRenderer(memory.route) && !retiredView && (permanent.contains(memory.route) || book.views.contains { $0.id == memory.route } || ComponentKind(rawValue: memory.route) != nil)
-        route = routeExists ? memory.route : "reader"
-        if route == "editor", selectedDocumentID == nil { route = "reader" }
-        if route != "editor" { readingContextDocumentID = nil; selectedObjectID = nil }
+        // Legacy auxiliary routes become panels over a truthful base canvas.
+        // Loading a remembered document selection above never opens Notes by itself.
+        if let auxiliary = WorkspaceAuxiliaryKind(rawValue: memory.route) {
+            commitWorkspaceRoute("reader", preservingAuxiliary: true)
+            if auxiliary == .notes, selectedDocumentID != nil, auxiliaryPresentation == nil { presentWorkspaceAuxiliary(.notes) }
+        } else if ["models", "plugins", "book.scheme", "preferences"].contains(memory.route) {
+            commitWorkspaceRoute("reader", preservingAuxiliary: true)
+            if !hasWorkspaceAuxiliary { requestedWorkspaceRoute = memory.route }
+        } else { commitWorkspaceRoute(routeExists ? memory.route : "reader", preservingAuxiliary: true) }
+        if !isNotesPresented { readingContextDocumentID = nil; selectedObjectID = nil }
     }
     /// Reset disposable layout only; keep reading page, document selection and all content.
     func resetWorkspaceLayout() {
