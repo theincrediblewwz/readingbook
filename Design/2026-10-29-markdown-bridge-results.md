@@ -1,10 +1,10 @@
-# Markdown/WebKit 参数对照与两项来源交互修复
+# Markdown/WebKit 参数对照与来源交互修复
 
 ## 决定与交付范围
 
 本轮没有采用 presentation/delta 的参数裁剪。参数字符串体积虽然减少，但正式对照未通过预先冻结的前台与收益门槛，不能据此宣称提速。产品仍保留原有完整参数构造、单次在途更新、合并请求和 Native State 校验。
 
-0.23.15/build46 交付两项在预检中独立复现的功能修复：聚焦取消后残留高亮，以及规范等价但 UTF-8 不同的正文/来源未传到原生渲染器。完整 CI、包验证和本机安装结果在交付后补记；当前不把本地通过写成远端完成。
+0.23.15/build46 包含两项在预检中独立复现的 Markdown 功能修复：聚焦取消后残留高亮，以及规范等价但 UTF-8 不同的正文/来源未传到原生渲染器。完整 CI 又发现新系统上的旧 PDF 坐标恢复问题，追加真实 clip 视口对齐候选，详见末节。完整 CI、包验证和本机安装结果在交付后补记；当前不把本地通过写成远端完成。
 
 ## 聚焦取消的真实失败与修复
 
@@ -62,3 +62,9 @@
 首次 main 源码 `3b74969fcfc0cab7ec0c9aff2e6a7662b3024a0b` 的 [CI40860705947](https://github.com/theincrediblewwz/readingbook/actions/runs/40860705947) 通过664项Core及原生布局，在既有PDF边界测试的旧负坐标恢复场景超时，后续步骤未执行，未打包或安装。最后一条旧快照位于准入前，不能据其scale0推断超时现场没有PDF；旧版和本机通过结果也有相同快照。
 
 本机相同产品先完整通过该边界场景，再加入轻量准入后/超时原生、controller、selected、workspace、owner、窗口状态诊断后再次通过，三类运行警告均零。诊断没有修改8秒期限、原断言、PDF产品代码或强行导航。相关PDF/Core生产源码相较0.23.14未变，但这仍不足以证明根因无关；保留首轮失败，由下一次完整CI的实际状态继续判断，不将一次重过写成已经修复该偶发超时。
+
+第二次 [CI40862947723](https://github.com/theincrediblewwz/readingbook/actions/runs/40862947723) 在 macOS26.6.2 同样失败，新增现场明确为：已挂载1个PDF/doc8，缩放3.43且ready，Native/controller/selected/workspace全为3；destination仍为页3的负y坐标，owner/source/token匹配，busy/restoring/storage均false。已排除把准入前无PDF误当失败原因。本机macOS26.5.2的独立边界及相同顺序workspace/PDF/samebook/boundary均过，说明不能只靠本机一次通过交付。
+
+恢复补偿改为以真实 `NSClipView.bounds` 左上角作为实际基准，目标点仍用页面→PDFView→clip的原有坐标变换。两点在同一clip坐标系，用同一bounds快照相减修正origin，保留翻转、缩放、rotation/crop转换、有限范围校验及全部owner/revision/receipt守护；不猜页码、不改期限或强跳下一页。原实现依赖destination元数据是否反映实际clamp；其具体回显行为仍是假说，新的补偿直接使用物理视口测量。
+
+旧实现本机几何正控确认零insets/unflipped时getter投影与实际clip角点相符。候选本机原样边界、PDF和samebook均通过，legacy固定landmark误差小于1e-8点；90/270旋转、非零crop原点、横向、异常锚点、首末页及原书/笔记/分析字节检查保留，三类警告零。非零insets未单独实测，不作所有内部布局均已覆盖的声明。最终仍以候选完整CI为交付门槛，不将该功能修复计入参数优化收益。

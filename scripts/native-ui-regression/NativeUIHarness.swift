@@ -633,6 +633,23 @@ struct PanelHarnessRoot: View {
             "workspaceY": store.workspaceMemory.pdf?.location?.y ?? -1,
             "scale": Double(pdf?.scaleFactor ?? 0), "ready": controller.isReady]
     }
+    private func pdfViewportGeometry(_ pdf: PDFView) -> [String: Any] {
+        guard let clip = pdf.documentView?.enclosingScrollView?.contentView else { return ["clipPresent": false] }
+        let box = clip.bounds
+        let corner = CGPoint(x: box.minX, y: clip.isFlipped ? box.minY : box.maxY)
+        var value: [String: Any] = ["clipPresent": true, "clipBounds": NSStringFromRect(box), "clipFlipped": clip.isFlipped,
+            "viewportCornerX": Double(corner.x), "viewportCornerY": Double(corner.y),
+            "contentInsets": String(describing: clip.enclosingScrollView?.contentInsets)]
+        if let destination = pdf.currentDestination, let page = destination.page {
+            let getter = clip.convert(pdf.convert(destination.point, from: page), from: pdf)
+            value["getterOffsetFromViewportX"] = Double(getter.x - corner.x)
+            value["getterOffsetFromViewportY"] = Double(getter.y - corner.y)
+        }
+        if let page = pdf.page(for: CGPoint(x: pdf.bounds.midX, y: pdf.bounds.midY), nearest: false), let doc = pdf.document {
+            value["geometricCenterPage"] = doc.index(for: page) + 1
+        }
+        return value
+    }
     private func pdfLifecycleState(_ label: String, controller: PDFReaderController) -> [String: Any] {
         var value = sameBookState(label, controller: controller)
         let root = window?.contentView
@@ -661,7 +678,8 @@ struct PanelHarnessRoot: View {
                 "currentPage": pdf.currentPage.flatMap { page in doc.map { $0.index(for: page) + 1 } } ?? -1,
                 "destinationPage": pdf.currentDestination?.page.flatMap { page in doc.map { $0.index(for: page) + 1 } } ?? -1,
                 "scale": Double(pdf.scaleFactor), "bounds": NSStringFromRect(pdf.bounds), "frame": NSStringFromRect(pdf.frame),
-                "attachedToTestWindow": pdf.window === window, "displayMode": pdf.displayMode.rawValue]
+                "attachedToTestWindow": pdf.window === window, "displayMode": pdf.displayMode.rawValue,
+                "viewportGeometry": self.pdfViewportGeometry(pdf)]
         }
         return value
     }
@@ -716,6 +734,7 @@ struct PanelHarnessRoot: View {
                 if let pdf = self.pdfObjects()?.2, let point = try? anchor(pdf, page: page) {
                     row["targetPage"] = page; row["targetAnchorX"] = Double(point.x); row["targetAnchorY"] = Double(point.y)
                     row["pdfViewBounds"] = NSStringFromRect(pdf.bounds)
+                    row["viewportGeometry"] = self.pdfViewportGeometry(pdf)
                     if let mark = try? landmark(pdf, page: page) {
                         row["landmarkViewportX"] = Double(mark.x); row["landmarkViewportY"] = Double(mark.y)
                     }
