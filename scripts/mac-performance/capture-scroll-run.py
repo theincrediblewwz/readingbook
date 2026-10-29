@@ -28,6 +28,14 @@ class FixedDwellError(RuntimeError):
     """A requested completed-run clock boundary could not be met."""
 
 
+def qualify_pointer_guard(trace):
+    guard = trace.get("pointerGuard", {})
+    return (guard.get("policy") == "stationary-and-native-hit-outside-PDF-subtree"
+            and guard.get("hitsPDFAtStart") is False
+            and guard.get("hitsPDFAtEnd") is False
+            and guard.get("movedDuringInput") is False)
+
+
 def mach_ticks():
     system = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
     system.mach_absolute_time.restype = ctypes.c_uint64
@@ -416,6 +424,10 @@ def main():
         trace = wait_json(control / "scroll-trace.json", timeout=2, failure=control / "driver-failure.json")
         if trace["status"] != "completed":
             raise RuntimeError("scroll input ineligible: " + trace["status"])
+        result["pointerGuard"] = trace.get("pointerGuard")
+        result["pointerTelemetryQualified"] = qualify_pointer_guard(trace)
+        if args.formal_fixed_dwell and not result["pointerTelemetryQualified"]:
+            raise RuntimeError("formal scrolling requires a stationary pointer outside the native PDF subtree")
         result["preScrollDwell"] = pre_scroll_dwell(run / "events.jsonl", trace["startMachTicks"])
         if protocol is not None:
             result["fixedDwellQualification"] = qualify_fixed_dwell(result["preScrollDwell"], protocol)

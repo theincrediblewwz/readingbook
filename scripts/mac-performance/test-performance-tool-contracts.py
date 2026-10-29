@@ -29,6 +29,19 @@ MATRIX = module("scroll_matrix", "summarize-scroll-matrix.py")
 
 
 class ScrollSetupContracts(unittest.TestCase):
+    def test_pointer_telemetry_requires_stationary_non_pdf_hit_and_exact_schema(self):
+        valid = dict(pointerGuard=dict(policy="stationary-and-native-hit-outside-PDF-subtree",
+                                      hitsPDFAtStart=False, hitsPDFAtEnd=False, movedDuringInput=False))
+        self.assertTrue(CAPTURE.qualify_pointer_guard(valid))
+        self.assertFalse(CAPTURE.qualify_pointer_guard({}))
+        for key in ["hitsPDFAtStart", "hitsPDFAtEnd", "movedDuringInput", "policy"]:
+            changed = copy.deepcopy(valid)
+            changed["pointerGuard"][key] = True if key != "policy" else "unknown"
+            with self.subTest(key=key):
+                self.assertFalse(CAPTURE.qualify_pointer_guard(changed))
+            changed["pointerGuard"].pop(key)
+            self.assertFalse(CAPTURE.qualify_pointer_guard(changed))
+
     def test_pre_scroll_dwell_uses_actual_mach_timebase_and_both_boundaries(self):
         with tempfile.TemporaryDirectory(prefix="scroll-dwell-contract-", dir=ROOT / ".build") as temporary:
             path = Path(temporary) / "events.jsonl"

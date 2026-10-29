@@ -36,6 +36,9 @@ static NSDictionary *RBRect(NSRect r) {
 @property(nonatomic, strong) PDFDocument *document;
 @property(nonatomic, strong) NSMutableArray<NSDictionary *> *ticks;
 @property(nonatomic) NSPoint initialOrigin;
+@property(nonatomic) NSPoint parkedPointer;
+@property(nonatomic) BOOL pointerMoved;
+@property(nonatomic) BOOL pointerHitsPDFAtStart;
 @property(nonatomic) NSRect lastClipBounds;
 @property(nonatomic) NSUInteger stablePolls;
 @property(nonatomic) BOOL ready;
@@ -100,6 +103,12 @@ static NSDictionary *RBRect(NSRect r) {
 - (BOOL)foregroundOK {
     return NSApp.active && self.window.keyWindow && self.window.visible &&
         (self.window.occlusionState & NSWindowOcclusionStateVisible) != 0;
+}
+- (BOOL)pointerHitsPDF {
+    NSView *content = self.window.contentView;
+    NSPoint windowPoint = [self.window convertPointFromScreen:NSEvent.mouseLocation];
+    NSView *hit = [content hitTest:[content convertPoint:windowPoint fromView:nil]];
+    return hit && (hit == self.pdf || [hit isDescendantOf:self.pdf]);
 }
 - (NSArray<NSNumber *> *)visiblePageNumbers {
     NSMutableArray<NSNumber *> *numbers = [NSMutableArray array];
@@ -169,6 +178,9 @@ static NSDictionary *RBRect(NSRect r) {
         self.finished = YES; return;
     }
     self.initialOrigin = self.clip.bounds.origin;
+    self.parkedPointer = NSEvent.mouseLocation;
+    self.pointerMoved = NO;
+    self.pointerHitsPDFAtStart = self.pointerHitsPDF;
     // Public geometry queries at the boundaries only. PDFView.currentPage can
     // remain cached after direct clip scrolling; it is not crossing evidence.
     self.initialVisiblePages = self.visiblePageNumbers; self.initialCenterPage = self.centerPageNumber;
@@ -195,6 +207,7 @@ static NSDictionary *RBRect(NSRect r) {
         [self finish:@"ineligible-pdf-or-clip-replaced"]; return;
     }
     if (![self foregroundOK]) { [self finish:@"ineligible-background"]; return; }
+    if (!NSEqualPoints(NSEvent.mouseLocation, self.parkedPointer)) self.pointerMoved = YES;
     NSView *documentView = self.clip.documentView;
     double sign = (documentView.flipped ? 1 : -1) * self.direction;
     NSRect proposed = self.clip.bounds;
@@ -225,6 +238,9 @@ static NSDictionary *RBRect(NSRect r) {
         @"initialVisiblePDFPages": self.initialVisiblePages ?: @[], @"finalVisiblePDFPages": self.visiblePageNumbers,
         @"initialCenterPDFPage": self.initialCenterPage ?: NSNull.null, @"finalCenterPDFPage": self.centerPageNumber,
         @"pageGeometryQueriedOutsideInputInterval": @YES,
+        @"pointerGuard": @{@"policy": @"stationary-and-native-hit-outside-PDF-subtree",
+            @"hitsPDFAtStart": @(self.pointerHitsPDFAtStart), @"hitsPDFAtEnd": @(self.pointerHitsPDF),
+            @"movedDuringInput": @(self.pointerMoved)},
         @"forcesDrawOrLayout": @NO, @"hardwareGesture": @NO, @"ticks": self.ticks ?: @[],
         @"finalForeground": self.foreground} name:@"scroll-trace.json"];
     [self write:@{@"status": status, @"intervals": @[@{@"label": @"programmatic-continuous-scroll",

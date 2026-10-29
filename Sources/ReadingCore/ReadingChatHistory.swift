@@ -37,6 +37,7 @@ public enum ReadingChatHistory {
         let matching = project.chats.filter {
             ($0.conversationMode ?? .functional) == preferences.interaction && ($0.answerStyle ?? .research) == preferences.style
         }
+        guard !matching.isEmpty else { return [] }
         guard let current = try? ReadingChatContext(snapshot: snapshot, avoidsSpoilers: preferences.avoidsSpoilers) else { return [] }
         let orders = Dictionary(project.units.map { ($0.id, $0.order) }, uniquingKeysWith: { first, _ in first })
         let cursor = current.unitIDs.compactMap { orders[$0] }.max()

@@ -16,6 +16,47 @@ final class ReadingChatHistoryTests: XCTestCase {
             return value
         }
     }
+    func testEmptyOrIncompatibleHistoryPreservesArchivesAndPreparedScopeGrants() throws {
+        let context = ReadingContext(unitID: "u2", page: 2)
+        let preferences = ReadingAnswerPreferences(interaction: .functional, style: .mentor)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        for scope in [ReadingQueryScope.page, .book] {
+            for archiveKind in ["empty", "other-mode", "other-style"] {
+                var project = book()
+                project.documents = [DocumentRecord(id: "shared-note", title: "已附加笔记"),
+                                     DocumentRecord(id: "private-note", title: "未附加笔记")]
+                project.nodes = [CanvasNode(id: "shared-layout", targetID: "u2"),
+                                 CanvasNode(id: "private-layout", targetID: "u3")]
+                let snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: project, context: context,
+                    appendedDocumentIDs: ["shared-note"], authorizedNodeIDs: ["shared-layout"])
+                let chatContext = try ReadingChatContext(snapshot: snapshot, avoidsSpoilers: true)
+                if archiveKind != "empty" {
+                    project.chats = pair(archiveKind, context: chatContext,
+                        mode: archiveKind == "other-mode" ? .reading : .functional)
+                    for index in project.chats.indices {
+                        if archiveKind == "other-style" { project.chats[index].answerStyle = .research }
+                        project.chats[index].createdAt = Date(timeIntervalSince1970: 1_700_000_000 + Double(index))
+                        project.chats[index].evidence = [Evidence(unitID: "u2", quote: "人物来到这里。")]
+                    }
+                }
+                let label = "\(scope.rawValue)/\(archiveKind)"
+                let archives = try encoder.encode(project.chats)
+                XCTAssertTrue(ReadingChatHistory.automaticHistory(in: project, preferences: preferences,
+                    snapshot: snapshot).isEmpty, label)
+                let prepared = try ReadingPreparedAnswer.freeze(project: project, scope: scope, context: context,
+                    appendedDocumentIDs: ["shared-note"], authorizedNodeIDs: ["shared-layout"], preferences: preferences)
+                XCTAssertTrue(prepared.history.isEmpty, label)
+                XCTAssertEqual(prepared.snapshot.unitIDs, scope == .page ? ["u2"] : ["u1", "u2", "u3"], label)
+                XCTAssertEqual(prepared.snapshot.documentIDs, ["shared-note"], label)
+                XCTAssertEqual(prepared.snapshot.authorizedNodeIDs, ["shared-layout"], label)
+                XCTAssertEqual(prepared.chatContext, chatContext, label)
+                XCTAssertEqual(try encoder.encode(project.chats), archives, label)
+                XCTAssertEqual(try encoder.encode(prepared.project.chats), archives, label)
+                XCTAssertThrowsError(try ReadingPreparedAnswer.freeze(project: project, scope: scope, context: context,
+                    authorizedNodeIDs: ["missing-layout"], preferences: preferences), label)
+            }
+        }
+    }
     func testAutomaticContextExcludesFutureOpenSpoilerLegacyAndOtherModeWithoutChangingHistory() throws {
         var book = book()
         func snapshot(_ id: String, _ page: Int) throws -> ReadingQuerySnapshot {

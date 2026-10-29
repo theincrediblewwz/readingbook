@@ -162,7 +162,7 @@ public enum CompositionRuntime {
                 let key = RelatedQueryKey(query: queryKey, relation: source.relation.rawValue, selected: selected)
                 if let cached = relatedCache[key] { related = cached }
                 else {
-                    related = try relatedIDs(source.relation, selected: selected, base: base, events: events, relations: relations, point: point, window: window)
+                    related = try relatedIDs(source.relation, selected: selected, base: base, events: events, relations: relations, point: point, window: window, scope: source.scope, queries: &queries)
                     relatedCache[key] = related
                 }
             }
@@ -232,7 +232,7 @@ public enum CompositionRuntime {
             }
             let total = items.count
             items = Array(items.prefix(source.limit))
-            if let point { items = try items.map { try timedItem($0, base: base, at: point) } }
+            if let point { items = try items.map { try timedItem($0, base: base, at: point, scope: source.scope, queries: &queries) } }
             let itemIDs = Set(items.map(\.id))
             var diagnostics = base.diagnostics
             if let expanded {
@@ -261,7 +261,7 @@ public enum CompositionRuntime {
                 if window != nil, footprintWindow == nil {
                     mapEvents = try queries.events(scope: source.scope, base: base, point: point, window: nil)
                 } else { mapEvents = eventResult }
-                allPoints = try points(for: items, base: base, events: mapEvents.byID, at: point, within: footprintWindow)
+                allPoints = try points(for: items, base: base, events: mapEvents.byID, at: point, within: footprintWindow, scope: source.scope, queries: &queries)
             }
             else { allPoints = [] }
             let pointTruncated = allPoints.count > 400
@@ -316,6 +316,10 @@ public enum CompositionRuntime {
         var partial = false
         var hasUncertainTime = false
     }
+    private struct EntitySnapshotQueryKey: Hashable {
+        var query: TemporalQueryKey
+        var entityID: String
+    }
     private struct EventProjection {
         var events: [TemporalEventSnapshot]
         var byID: [String: TemporalEventSnapshot]
@@ -326,6 +330,23 @@ public enum CompositionRuntime {
         var eventResults: [TemporalQueryKey: EventProjection] = [:]
         var relationResults: [TemporalQueryKey: [TemporalRelationSnapshot]] = [:]
         var graphResults: [TemporalQueryKey: TraversalGraph] = [:]
+        // Bounded to one immutable project() call. Scope and the actual point
+        // versus window operation are part of identity, never UI hints alone.
+        var entityResults: [EntitySnapshotQueryKey: EntityTimeSnapshot] = [:]
+        mutating func entity(id: String, scope: CompositionScope, base: ScopeBase,
+                             point: TemporalQueryPoint?, window: TemporalQueryWindow?) throws -> EntityTimeSnapshot {
+            try Task.checkCancellation()
+            let key = EntitySnapshotQueryKey(query: TemporalQueryKey(scope: scope, time: QueryTime(point: point, window: window)), entityID: id)
+            if let cached = entityResults[key] { return cached }
+            let value: EntityTimeSnapshot
+            if let window { value = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, within: window, boundary: .all) }
+            else { value = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, at: point, boundary: .all) }
+            try Task.checkCancellation()
+            // Each source already has a 200-row ceiling; do not retain an
+            // unbounded cross-source set of potentially large snapshots.
+            if entityResults.count < 200 { entityResults[key] = value }
+            return value
+        }
         mutating func events(scope: CompositionScope, base: ScopeBase, point: TemporalQueryPoint?, window: TemporalQueryWindow?) throws -> EventProjection {
             try Task.checkCancellation()
             let key = TemporalQueryKey(scope: scope, time: QueryTime(point: point, window: window))
@@ -487,10 +508,10 @@ public enum CompositionRuntime {
             latitude: object.latitude, longitude: object.longitude, extent: object.temporalExtent,
             sourceOrder: object.evidence.compactMap { order[$0.unitID] }.min())
     }
-    private static func timedItem(_ original: CompositionItem, base: ScopeBase, at point: TemporalQueryPoint) throws -> CompositionItem {
+    private static func timedItem(_ original: CompositionItem, base: ScopeBase, at point: TemporalQueryPoint, scope: CompositionScope, queries: inout TemporalQueryCache) throws -> CompositionItem {
         try Task.checkCancellation()
         guard original.kind == TypedObjectKind.entity.rawValue, let id = original.objectID else { return original }
-        let snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, at: point, boundary: .all)
+        let snapshot = try queries.entity(id: id, scope: scope, base: base, point: point, window: nil)
         var row = original
         func description(_ values: [EntityPresence]) -> String {
             values.prefix(8).map { value in
@@ -511,7 +532,7 @@ public enum CompositionRuntime {
     }
     private static func relatedIDs(_ relation: CompositionSelectionRelation, selected: Set<String>, base: ScopeBase,
                                    events: [TemporalEventSnapshot], relations: [TemporalRelationSnapshot], point: TemporalQueryPoint?,
-                                   window: TemporalQueryWindow?) throws -> Set<String> {
+                                   window: TemporalQueryWindow?, scope: CompositionScope, queries: inout TemporalQueryCache) throws -> Set<String> {
         if relation == .none { return base.objectIDs }
         guard !selected.isEmpty else { return [] }
         var result = Set<String>()
@@ -529,9 +550,7 @@ public enum CompositionRuntime {
             for event in events where selected.contains(event.object.id) { result.formUnion(event.object.references["places"] ?? []) }
             for id in selected where base.objectsByID[id]?.kind == .entity {
                 try Task.checkCancellation()
-                let snapshot: EntityTimeSnapshot
-                if let window { snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, within: window, boundary: .all) }
-                else { snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, at: point, boundary: .all) }
+                let snapshot = try queries.entity(id: id, scope: scope, base: base, point: point, window: window)
                 result.formUnion(snapshot.footprints.compactMap(\.placeID))
             }
         case .events:
@@ -551,7 +570,7 @@ public enum CompositionRuntime {
         return result.intersection(base.objectIDs)
     }
     private static func points(for items: [CompositionItem], base: ScopeBase, events: [String: TemporalEventSnapshot], at point: TemporalQueryPoint?,
-                               within window: TemporalQueryWindow?) throws -> [CompositionMapPoint] {
+                               within window: TemporalQueryWindow?, scope: CompositionScope, queries: inout TemporalQueryCache) throws -> [CompositionMapPoint] {
         var result: [CompositionMapPoint] = []
         var seen = Set<String>()
         func append(id: String, target: String, place: TypedObject, title: String, subtitle: String, evidence: [Evidence], kind: String) {
@@ -570,9 +589,7 @@ public enum CompositionRuntime {
                 if locations.contains(object.typeID) {
                     append(id: "entity." + id, target: id, place: object, title: object.name, subtitle: object.locationNote ?? "", evidence: object.evidence, kind: "entityLocation")
                 }
-                let snapshot: EntityTimeSnapshot
-                if let window { snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, within: window, boundary: .all) }
-                else { snapshot = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: base.project, at: point, boundary: .all) }
+                let snapshot = try queries.entity(id: id, scope: scope, base: base, point: point, window: window)
                 for presence in snapshot.footprints {
                     try Task.checkCancellation()
                     guard let placeID = presence.placeID, let place = base.objectsByID[placeID] else { continue }

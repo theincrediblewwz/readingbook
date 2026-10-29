@@ -3,6 +3,7 @@
 import argparse, datetime, difflib, hashlib, json, os, pathlib, plistlib, shutil, subprocess
 TOOLS=pathlib.Path(__file__).resolve().parent
 ROOT=pathlib.Path(subprocess.check_output(['git','-C',str(TOOLS),'rev-parse','--show-toplevel'],text=True).strip())
+ARCHIVE_PATHS=['Package.swift','Sources','Tests','packaging']
 p=argparse.ArgumentParser();p.add_argument('--resume',action='store_true');p.add_argument('--ref',default='b164f6c');p.add_argument('--build-id',default='perf-harness-'+datetime.datetime.now().strftime('%Y%m%d-%H%M%S'));a=p.parse_args()
 assert a.build_id.replace('-','').replace('_','').isalnum()
 base=ROOT/'.build'/a.build_id;base.mkdir(parents=True,exist_ok=a.resume)
@@ -10,7 +11,7 @@ source=base/'source';source.mkdir(exist_ok=a.resume);logs=ROOT/'logs'/a.build_id
 ref=subprocess.check_output(['git','rev-parse',a.ref+'^{commit}'],cwd=ROOT,text=True).strip()
 archive=base/'tracked-source.tar'
 if not a.resume:
- with archive.open('wb') as f:subprocess.run(['git','archive','--format=tar',ref],cwd=ROOT,stdout=f,check=True)
+ with archive.open('wb') as f:subprocess.run(['git','archive','--format=tar',ref,*ARCHIVE_PATHS],cwd=ROOT,stdout=f,check=True)
  subprocess.run(['tar','-xf',str(archive),'-C',str(source)],check=True)
 changes=[]
 def patch(rel,before,after):
@@ -57,7 +58,7 @@ shared=ROOT/'.build/shared-module-cache';swift_cache=shared/'swift';clang_cache=
 for cache in [swift_cache,clang_cache]:cache.mkdir(parents=True,exist_ok=True)
 env=os.environ.copy();env.update(TMPDIR=str(base/'tmp'),CLANG_MODULE_CACHE_PATH=str(clang_cache),SWIFTPM_MODULECACHE_OVERRIDE=str(swift_cache),SWIFT_MODULE_CACHE_PATH=str(swift_cache))
 args=['swift','build','--configuration','release','--product','ReadingBook','--scratch-path',str(base/'build'),'--cache-path',str(base/'swiftpm-cache'),'--disable-sandbox','-Xswiftc','-module-cache-path','-Xswiftc',str(swift_cache),'-Xcc','-fmodules-cache-path='+str(clang_cache),'-Xlinker','-lproc']
-manifest={'sourceCommit':ref,'archiveSHA256':hashlib.sha256(archive.read_bytes()).hexdigest(),'buildRoot':str(base),'sourceRoot':str(source),'configuration':'release','enableTesting':False,'swiftBuildArguments':args,'instrumentationPatchSHA256':hashlib.sha256((logs/'instrumentation.patch').read_bytes()).hexdigest(),'probeSourcesSHA256':{x:hashlib.sha256((TOOLS/x).read_bytes()).hexdigest() for x in ['PerfTrace.swift','PerfProbe.swift']},'benchmarkExecuted':False}
+manifest={'sourceCommit':ref,'archiveSHA256':hashlib.sha256(archive.read_bytes()).hexdigest(),'archivePaths':ARCHIVE_PATHS,'prepareScriptSHA256':hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),'buildRoot':str(base),'sourceRoot':str(source),'configuration':'release','enableTesting':False,'swiftBuildArguments':args,'instrumentationPatchSHA256':hashlib.sha256((logs/'instrumentation.patch').read_bytes()).hexdigest(),'probeSourcesSHA256':{x:hashlib.sha256((TOOLS/x).read_bytes()).hexdigest() for x in ['PerfTrace.swift','PerfProbe.swift']},'benchmarkExecuted':False}
 (logs/'build-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 with (logs/'build.log').open('w') as log:subprocess.run(args,cwd=source,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
 bindir=pathlib.Path(subprocess.check_output(args+['--show-bin-path'],cwd=source,env=env,text=True).strip())
