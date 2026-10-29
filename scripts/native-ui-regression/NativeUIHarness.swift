@@ -179,6 +179,7 @@ struct PanelHarnessRoot: View {
         store.settings = ProviderSettings(baseURL: "http://127.0.0.1:1/disabled", model: "")
         if mode == "pdf" { await runPDFScenario(); return }
         if mode == "samebook" { await runSameBookPDFScenario(); return }
+        if mode == "boundary" { await runPDFBoundaryScenario(); return }
         if mode == "navigation" { await runBookPickerScenario(); return }
         if mode == "continuation" { await runContinuationScenario(); return }
         if synthetic {
@@ -630,6 +631,330 @@ struct PanelHarnessRoot: View {
             "workspaceX": store.workspaceMemory.pdf?.location?.x ?? -1,
             "workspaceY": store.workspaceMemory.pdf?.location?.y ?? -1,
             "scale": Double(pdf?.scaleFactor ?? 0), "ready": controller.isReady]
+    }
+    func runPDFBoundaryScenario() async {
+        var assertions: [String: Any] = ["mode": mode, "realNetworkRequests": 0]
+        var states: [[String: Any]] = []
+        do {
+            let source = output.appendingPathComponent("boundary-8-pages.pdf")
+            let sourceBytes = try sameBookPDF(source, label: "Continuous boundary fixture")
+            let sourceHash = SHA256.hash(data: sourceBytes).map { String(format: "%02x", $0) }.joined()
+            var project = BookProject(title: "Continuous PDF boundary correctness", originalName: source.lastPathComponent,
+                sourceHash: sourceHash, units: (1...8).map { SourceUnit(id: "boundary-page-\($0)", order: $0 - 1,
+                    chapter: "Boundary", page: $0, text: "Continuous boundary fixture - page \($0)") })
+            PluginEngine.seed(&project)
+            project.insights.append(ReadingInsight(id: "boundary-saved-analysis", unitIDs: [project.units[3].id],
+                markdown: "## Saved analysis\n\nPreserve boundary analysis and $x^2$."))
+            project.readerAnnotations = [ReaderAnnotation(sourceHash: sourceHash, page: 4, text: "", rangeLocation: 0, rangeLength: 0,
+                quads: [ReaderQuadRect(x: 30, y: 450, width: 250, height: 70)], comment: "Keep boundary annotation", kind: .region)]
+            project = try await store.repository.create(project, sourceURL: source)
+            let note = DocumentRecord(id: "boundary-preserved-note", title: "Preserved boundary note")
+            let noteBody = "# Preserve boundary notes\n\nKeep e\u{301}, 🙂 and $x^2$.\n"
+            project = try await store.repository.saveDocument(project: project, document: note, markdown: noteBody)
+            let owner = store.repository, canonical = await owner.sourceURL(for: project)
+            let projectURL = library.appendingPathComponent("books/\(project.id)/project.json")
+            let projectBefore = try Data(contentsOf: projectURL)
+            store.books = [project]; await store.selectBook(project.id, preferredRoute: "reader")
+            store.queryComposerDraft.text = draft
+            let controller = PDFReaderController()
+            let root = ReaderWorkspaceView(showPDF: .constant(true), showOutline: .constant(false), bookmarksOnly: .constant(false))
+                .environmentObject(store).environmentObject(controller).environmentObject(ReadingTypographySettings())
+                .modifier(ReadingPreferencesEnvironment())
+            let host = CountingHost(rootView: AnyView(root))
+            window = NSWindow(contentRect: NSRect(x: 70, y: 70, width: 800, height: 600),
+                styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+            window.title = "ReadingBook isolated continuous PDF boundary regression"
+            window.contentView = host; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            metrics.scenario(); metrics.record("boundary-normal-admission")
+            try await pdfWait("boundary PDF initially ready") { controller.isReady && self.pdfObjects()?.2.document?.pageCount == 8 }
+            func anchor(_ pdf: PDFView, page: Int) throws -> CGPoint {
+                guard let destination = pdf.currentDestination, let destinationPage = destination.page,
+                      let target = pdf.document?.page(at: page - 1) else { throw ReadingError.invalid("Boundary anchor missing") }
+                return pdf.convert(pdf.convert(destination.point, from: destinationPage), to: target)
+            }
+            func landmark(_ pdf: PDFView, page: Int) throws -> CGPoint {
+                guard let target = pdf.document?.page(at: page - 1) else { throw ReadingError.invalid("Boundary landmark missing") }
+                let box = target.bounds(for: pdf.displayBox)
+                let point = pdf.convert(CGPoint(x: box.midX, y: box.midY), from: target)
+                return CGPoint(x: point.x - pdf.bounds.minX, y: point.y - pdf.bounds.minY)
+            }
+            func snapshot(_ label: String, page: Int) {
+                var row = self.sameBookState(label, controller: controller)
+                if let pdf = self.pdfObjects()?.2, let point = try? anchor(pdf, page: page) {
+                    row["targetPage"] = page; row["targetAnchorX"] = Double(point.x); row["targetAnchorY"] = Double(point.y)
+                    row["pdfViewBounds"] = NSStringFromRect(pdf.bounds)
+                    if let mark = try? landmark(pdf, page: page) {
+                        row["landmarkViewportX"] = Double(mark.x); row["landmarkViewportY"] = Double(mark.y)
+                    }
+                }
+                states.append(row); self.writeJSON("boundary-observations.json", ["states": states])
+            }
+            store.updateWorkspaceMemory { $0.pdf = WorkspacePDFMemory(page: 4, scale: 3.43, fitMode: "custom", continuous: true,
+                thumbnails: false, direction: .vertical) }
+            store.selectedUnitID = project.units[3].id; store.pdfNavigationToken += 1; store.workspaceMemoryRevision += 1
+            try await pdfWait("explicit continuous page four") {
+                controller.page == 4 && self.store.selectedUnit?.page == 4 && controller.isContinuous
+                    && controller.direction == .vertical && controller.fitMode == "custom" && abs(controller.zoomPercent - 343) <= 1
+            }
+            try await Task.sleep(nanoseconds: 350_000_000)
+            guard let initial = pdfObjects(), let initialDocument = initial.2.document else { throw ReadingError.invalid("Boundary PDF missing") }
+            snapshot("after-explicit-page-four", page: 4)
+            let defaultPageFourLandmark = try landmark(initial.2, page: 4)
+            // PDFKit clamps go(to:) destinations to the target page. Instead
+            // scroll its real document clip across the boundary, requiring
+            // PDFKit itself still reports page four as the current reading page.
+            guard let scroll = descendants(initial.2, NSScrollView.self).first(where: { $0.documentView != nil }) else {
+                throw ReadingError.invalid("Native PDF scroll view missing")
+            }
+            let clip = scroll.contentView, originalClipOrigin = clip.bounds.origin
+            var observedPredecessorDestination = false
+            for offset in [0.0, -0.25, -0.5, -1.0, -2.0, -4.0, -8.0, -16.0, -32.0, -64.0,
+                           0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0] {
+                if let current = initial.2.currentPage, let destination = initial.2.currentDestination?.page,
+                   initialDocument.index(for: current) == 3 && initialDocument.index(for: destination) == 2,
+                   controller.page == 4 && store.selectedUnit?.page == 4 {
+                    observedPredecessorDestination = true; break
+                }
+                clip.scroll(to: NSPoint(x: originalClipOrigin.x, y: originalClipOrigin.y + offset))
+                scroll.reflectScrolledClipView(clip)
+                try await Task.sleep(nanoseconds: 80_000_000)
+                snapshot("native-boundary-offset-\(offset)", page: 4)
+                states[states.count - 1]["clipOriginX"] = Double(clip.bounds.origin.x)
+                states[states.count - 1]["clipOriginY"] = Double(clip.bounds.origin.y)
+                states[states.count - 1]["requestedClipOffsetY"] = offset
+                writeJSON("boundary-observations.json", ["states": states])
+            }
+            if let current = initial.2.currentPage, let destination = initial.2.currentDestination?.page {
+                observedPredecessorDestination = initialDocument.index(for: current) == 3 && initialDocument.index(for: destination) == 2
+                    && controller.page == 4 && store.selectedUnit?.page == 4
+            }
+            try pdfRequire(observedPredecessorDestination, "Fixture did not exercise a real current-page-four/destination-page-three boundary")
+            snapshot("at-real-cross-page-boundary", page: 4)
+            assertions["realNativeCurrentPageFourDestinationPageThreeObserved"] = true
+            let beforeAnchor = try anchor(initial.2, page: 4), displayID = store.pdfDisplayReloadID
+            let beforeLandmark = try landmark(initial.2, page: 4)
+            guard let oldDestination = initial.2.currentDestination, let oldPage = oldDestination.page else {
+                throw ReadingError.invalid("Real legacy destination missing")
+            }
+            let oldBox = oldPage.bounds(for: initial.2.displayBox)
+            // This is exactly the pre-fix capture algorithm applied to the real
+            // native boundary already observed above. Do not fabricate a native
+            // currentPage or use a post-fix receipt as supposed legacy input.
+            let legacyMemory = WorkspacePDFMemory(page: initialDocument.index(for: oldPage) + 1,
+                location: WorkspacePoint(x: Double((oldDestination.point.x - oldBox.minX) / oldBox.width),
+                    y: Double((oldDestination.point.y - oldBox.minY) / oldBox.height)),
+                scale: Double(initial.2.scaleFactor), fitMode: "custom", continuous: true,
+                thumbnails: false, direction: .vertical)
+            try pdfRequire(legacyMemory.page == 3 && (legacyMemory.location?.y ?? 0) < 0 && legacyMemory.isValid,
+                "Legacy input must be the actual pre-fix page-three negative-y capture")
+            if let destinationPage = initial.2.currentDestination?.page {
+                assertions["initialDestinationPage"] = initialDocument.index(for: destinationPage) + 1
+            }
+            metrics.record("boundary-explicit-capture")
+            NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
+            store.flushWorkspaceMemory(); let beforeMemory = store.workspaceMemory.pdf
+            snapshot("after-capture-before-reselect", page: 4)
+            metrics.record("boundary-real-samebook-reselect")
+            await store.selectBook(project.id, preferredRoute: "reader")
+            try await pdfWait("boundary reselect ready") { controller.isReady && self.pdfObjects() != nil && !self.store.isBusy }
+            try await Task.sleep(nanoseconds: 350_000_000)
+            snapshot("after-samebook-reselect", page: 4)
+            try pdfRequire(beforeMemory?.page == 4, "Continuous capture saved predecessor instead of displayed page four")
+            try pdfRequire(controller.page == 4 && store.selectedUnit?.page == 4 && store.workspaceMemory.pdf?.page == 4,
+                "Continuous page-four reselect became predecessor")
+            try pdfRequire(pdfObjects()?.2.document === initialDocument && store.pdfDisplayReloadID == displayID,
+                "Boundary repair lost verified same-book document reuse")
+            let afterAnchor = try anchor(initial.2, page: 4)
+            let afterLandmark = try landmark(initial.2, page: 4)
+            try pdfRequire(abs(beforeAnchor.x - afterAnchor.x) < 2 && abs(beforeAnchor.y - afterAnchor.y) < 2,
+                "Same-book boundary reselect shifted viewport")
+            try pdfRequire(abs(beforeLandmark.x - afterLandmark.x) < 2 && abs(beforeLandmark.y - afterLandmark.y) < 2,
+                "Same-book boundary reselect moved the fixed page landmark in its viewport")
+            assertions["continuousCaptureAndReselectKeepPageViewportAndDocument"] = true
+            metrics.record("boundary-explicit-remount")
+            store.sourceFileURL = nil
+            try await pdfWait("boundary dismantled") { self.pdfObjects() == nil }
+            await store.selectBook(project.id, preferredRoute: "reader")
+            try await pdfWait("boundary remounted on saved page") { controller.isReady && controller.page == 4 && self.store.selectedUnit?.page == 4 && self.pdfObjects() != nil }
+            try await Task.sleep(nanoseconds: 350_000_000)
+            snapshot("after-explicit-remount", page: 4)
+            guard let remounted = pdfObjects()?.2 else { throw ReadingError.invalid("Remounted PDF missing") }
+            let remountedAnchor = try anchor(remounted, page: 4)
+            let remountedLandmark = try landmark(remounted, page: 4)
+            try pdfRequire(remounted.document !== initialDocument && store.workspaceMemory.pdf?.page == 4,
+                "Boundary remount lost saved page or reused removed document")
+            try pdfRequire(abs(beforeAnchor.x - remountedAnchor.x) < 2 && abs(beforeAnchor.y - remountedAnchor.y) < 2,
+                "Boundary disk restoration shifted persisted viewport")
+            try pdfRequire(abs(beforeLandmark.x - remountedLandmark.x) < 2 && abs(beforeLandmark.y - remountedLandmark.y) < 2,
+                "Boundary remount moved the fixed page landmark in its viewport")
+            assertions["continuousDiskRestorationKeepsPageAndViewport"] = true
+            let workspaceName = SHA256.hash(data: Data((project.id + "|" + project.sourceHash).utf8)).map { String(format: "%02x", $0) }.joined()
+            let workspaceURL = library.appendingPathComponent("Workspace/\(workspaceName).json")
+            func mountPersistedMemory(_ memory: WorkspacePDFMemory, label: String) async throws {
+                self.store.sourceFileURL = nil
+                try await self.pdfWait(label + " reader unmounted") { self.pdfObjects() == nil }
+                self.store.updateWorkspaceMemory { $0.pdf = memory }; self.store.flushWorkspaceMemory()
+                let onDisk = try JSONDecoder().decode(BookWorkspaceMemory.self, from: Data(contentsOf: workspaceURL))
+                try self.pdfRequire(onDisk.pdf == memory, label + " fixture was not persisted before source admission")
+                snapshot(label + "-persisted-before-admission", page: 4)
+                await self.store.selectBook(project.id, preferredRoute: "reader")
+            }
+            metrics.record("boundary-real-legacy-negative-page-three-memory")
+            try await mountPersistedMemory(legacyMemory, label: "legacy-page-three-negative-y")
+            try await pdfWait("legacy geometry restores physical page four and corrects saved identity") {
+                guard let pdf = self.pdfObjects()?.2, let current = pdf.currentPage, let doc = pdf.document else { return false }
+                return controller.isReady && controller.page == 4 && doc.index(for: current) == 3
+                    && self.store.selectedUnit?.page == 4 && self.store.workspaceMemory.pdf?.page == 4
+            }
+            snapshot("after-real-legacy-memory-restoration", page: 4)
+            guard let legacyRestored = pdfObjects()?.2 else { throw ReadingError.invalid("Legacy restored reader missing") }
+            let legacyLandmark = try landmark(legacyRestored, page: 4)
+            try pdfRequire(abs(beforeLandmark.x - legacyLandmark.x) < 2 && abs(beforeLandmark.y - legacyLandmark.y) < 2,
+                "Legacy predecessor memory no longer restores the original physical viewport")
+            assertions["actualLegacyPredecessorMemoryRestoresAndCorrectsLogicalPage"] = true
+            metrics.record("boundary-implausible-finite-anchor")
+            let implausible = WorkspacePDFMemory(page: 4, location: WorkspacePoint(x: 1e10, y: -1e10),
+                scale: 3.43, fitMode: "custom", continuous: true, thumbnails: false, direction: .vertical)
+            try pdfRequire(implausible.isValid, "Extreme-anchor fixture must pass the existing serialized model validity boundary")
+            try await mountPersistedMemory(implausible, label: "implausible-finite-anchor")
+            try await pdfWait("implausible location ignored while normal page-four position remains ready") {
+                guard let location = self.store.workspaceMemory.pdf?.location else { return false }
+                return controller.isReady && controller.page == 4 && self.store.selectedUnit?.page == 4
+                    && self.store.workspaceMemory.pdf?.page == 4 && abs(location.x) < 100 && abs(location.y) < 100
+            }
+            snapshot("after-implausible-anchor-ignored", page: 4)
+            guard let safeRestored = pdfObjects()?.2 else { throw ReadingError.invalid("Safe restored reader missing") }
+            let safeLandmark = try landmark(safeRestored, page: 4)
+            try pdfRequire(abs(defaultPageFourLandmark.x - safeLandmark.x) < 2
+                && abs(defaultPageFourLandmark.y - safeLandmark.y) < 2,
+                "Implausible anchor moved the viewport away from ordinary explicit page-four navigation")
+            assertions["implausibleFiniteSavedAnchorRejectedWithoutNativeJump"] = true
+            for page in [1, 8, 4] {
+                metrics.record("boundary-explicit-page-\(page)"); store.navigateToUnit(project.units[page - 1].id)
+                try await pdfWait("boundary explicit page \(page)") { controller.isReady && controller.page == page && self.store.selectedUnit?.page == page }
+                try await Task.sleep(nanoseconds: 300_000_000)
+                NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
+                store.flushWorkspaceMemory(); snapshot("after-explicit-page-and-capture-\(page)", page: page)
+                try pdfRequire(store.workspaceMemory.pdf?.page == page, "Boundary capture changed explicit page \(page)")
+            }
+            assertions["firstLastAndMiddleExplicitPagesPreserved"] = true
+            try pdfRequire(!controller.thumbnailsVisible && controller.isContinuous && controller.direction == .vertical
+                && abs(controller.zoomPercent - 343) <= 1 && store.queryComposerDraft.text == draft && !store.editorDirty,
+                "Boundary navigation changed preferences or question draft")
+            try pdfRequire(try Data(contentsOf: canonical) == sourceBytes && Data(contentsOf: source) == sourceBytes
+                && Data(contentsOf: projectURL) == projectBefore, "Boundary navigation rewrote source, analysis or annotations")
+            try pdfRequire(try await owner.readDocument(bookID: project.id, document: note) == noteBody, "Boundary navigation rewrote saved notes")
+            assertions["originalSourceProjectAnalysisAnnotationsNotesAndDraftPreserved"] = true
+            // A second immutable source carries actual file-level rotation and
+            // crop metadata. Do not mutate the already admitted PDFDocument.
+            let geometryBase = output.appendingPathComponent("boundary-geometry-base.pdf")
+            let geometrySource = output.appendingPathComponent("boundary-geometry-source.pdf")
+            let geometryBaseBytes = try sameBookPDF(geometryBase, label: "Geometry boundary fixture")
+            guard let geometryPDF = PDFDocument(data: geometryBaseBytes), geometryPDF.pageCount == 8 else {
+                throw ReadingError.invalid("Geometry PDF fixture unavailable")
+            }
+            geometryPDF.page(at: 3)?.rotation = 90
+            geometryPDF.page(at: 4)?.rotation = 270
+            geometryPDF.page(at: 5)?.setBounds(CGRect(x: 35, y: 45, width: 330, height: 490), for: .cropBox)
+            try pdfRequire(geometryPDF.write(to: geometrySource), "Geometry PDF metadata could not be persisted")
+            let geometryBytes = try Data(contentsOf: geometrySource)
+            let geometryHash = SHA256.hash(data: geometryBytes).map { String(format: "%02x", $0) }.joined()
+            var geometryProject = BookProject(title: "Rotation and crop PDF correctness", originalName: geometrySource.lastPathComponent,
+                sourceHash: geometryHash, units: (1...8).map { SourceUnit(id: "geometry-page-\($0)", order: $0 - 1,
+                    chapter: "Geometry", page: $0, text: "Geometry boundary fixture - page \($0)") })
+            PluginEngine.seed(&geometryProject)
+            geometryProject = try await owner.create(geometryProject, sourceURL: geometrySource)
+            store.books.append(geometryProject)
+            await store.selectBook(geometryProject.id, preferredRoute: "reader")
+            try await pdfWait("physical geometry source ready") { controller.isReady && self.store.bookID == geometryProject.id && self.pdfObjects() != nil }
+            let geometryCanonical = await owner.sourceURL(for: geometryProject)
+            let geometryProjectURL = library.appendingPathComponent("books/\(geometryProject.id)/project.json")
+            let geometryProjectBefore = try Data(contentsOf: geometryProjectURL)
+            func geometryRoundTrip(page: Int, direction: PDFReadingDirection, label: String, remount: Bool = false) async throws {
+                metrics.record("boundary-geometry-" + label)
+                self.store.updateWorkspaceMemory { $0.pdf = WorkspacePDFMemory(page: page, scale: 3.43, fitMode: "custom",
+                    continuous: true, thumbnails: false, direction: direction) }
+                self.store.selectedUnitID = geometryProject.units[page - 1].id
+                self.store.pdfNavigationToken += 1; self.store.workspaceMemoryRevision += 1
+                try await self.pdfWait(label + " explicit native navigation") {
+                    controller.isReady && controller.page == page && self.store.selectedUnit?.page == page
+                        && controller.direction == direction && controller.isContinuous && abs(controller.zoomPercent - 343) <= 1
+                }
+                try await Task.sleep(nanoseconds: 350_000_000)
+                guard let native = self.pdfObjects()?.2, let nativeDocument = native.document,
+                      let target = nativeDocument.page(at: page - 1) else { throw ReadingError.invalid(label + " native page missing") }
+                if label == "rotation-90" { try self.pdfRequire(target.rotation == 90, "90-degree rotation was not loaded from source") }
+                if label == "rotation-270" { try self.pdfRequire(target.rotation == 270, "270-degree rotation was not loaded from source") }
+                if label == "nonzero-crop" {
+                    let box = target.bounds(for: .cropBox)
+                    try self.pdfRequire(box.minX == 35 && box.minY == 45 && box.width == 330 && box.height == 490,
+                        "Nonzero crop origin was not loaded from source")
+                }
+                if direction == .horizontal {
+                    guard let scroll = self.descendants(native, NSScrollView.self).first(where: { $0.documentView != nil }) else {
+                        throw ReadingError.invalid("Horizontal native scroll view missing")
+                    }
+                    let clip = scroll.contentView, base = clip.bounds.origin
+                    clip.scroll(to: NSPoint(x: base.x + 12, y: base.y)); scroll.reflectScrolledClipView(clip)
+                    try await Task.sleep(nanoseconds: 120_000_000)
+                    try self.pdfRequire(abs(clip.bounds.origin.x - base.x) > 1,
+                        "Horizontal fixture did not actually move its native document clip")
+                }
+                try self.pdfRequire(native.currentPage === target && controller.page == page && self.store.selectedUnit?.page == page,
+                    label + " setup moved to another physical page")
+                let before = try landmark(native, page: page), nativeDisplayID = self.store.pdfDisplayReloadID
+                snapshot(label + "-before-capture", page: page)
+                NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
+                self.store.flushWorkspaceMemory()
+                try self.pdfRequire(self.store.workspaceMemory.pdf?.page == page, label + " capture changed logical page")
+                await self.store.selectBook(geometryProject.id, preferredRoute: "reader")
+                try await self.pdfWait(label + " reselect ready") { controller.isReady && controller.page == page && self.store.selectedUnit?.page == page }
+                try await Task.sleep(nanoseconds: 350_000_000)
+                snapshot(label + "-after-reselect", page: page)
+                guard let current = self.pdfObjects()?.2 else { throw ReadingError.invalid(label + " reselected reader missing") }
+                let after = try landmark(current, page: page)
+                try self.pdfRequire(abs(before.x - after.x) < 2 && abs(before.y - after.y) < 2,
+                    label + " reselect moved fixed page landmark")
+                try self.pdfRequire(current.document === nativeDocument && self.store.pdfDisplayReloadID == nativeDisplayID
+                    && self.store.workspaceMemory.pdf?.page == page && controller.direction == direction && controller.isContinuous,
+                    label + " reselect lost native reuse, page or display preferences")
+                if remount {
+                    self.store.sourceFileURL = nil
+                    try await self.pdfWait(label + " reader dismantled") { self.pdfObjects() == nil }
+                    await self.store.selectBook(geometryProject.id, preferredRoute: "reader")
+                    try await self.pdfWait(label + " reader remounted") { controller.isReady && controller.page == page && self.store.selectedUnit?.page == page }
+                    try await Task.sleep(nanoseconds: 350_000_000)
+                    snapshot(label + "-after-remount", page: page)
+                    guard let new = self.pdfObjects()?.2 else { throw ReadingError.invalid(label + " remounted reader missing") }
+                    let restored = try landmark(new, page: page)
+                    try self.pdfRequire(new.document !== nativeDocument && abs(before.x - restored.x) < 2 && abs(before.y - restored.y) < 2,
+                        label + " disk restore moved fixed landmark or reused dismantled document")
+                }
+                assertions[label + "PhysicalLandmarkAndLogicalPagePreserved"] = true
+            }
+            try await geometryRoundTrip(page: 4, direction: .vertical, label: "rotation-90")
+            try await geometryRoundTrip(page: 5, direction: .vertical, label: "rotation-270")
+            try await geometryRoundTrip(page: 6, direction: .vertical, label: "nonzero-crop", remount: true)
+            try await geometryRoundTrip(page: 3, direction: .horizontal, label: "horizontal-continuous", remount: true)
+            try pdfRequire(try Data(contentsOf: geometryCanonical) == geometryBytes && Data(contentsOf: geometrySource) == geometryBytes
+                && Data(contentsOf: geometryProjectURL) == geometryProjectBefore,
+                "Geometry restoration changed source rotation/crop bytes or project")
+            let originalNoteAfterGeometry = try await owner.readDocument(bookID: project.id, document: note)
+            try pdfRequire(try Data(contentsOf: canonical) == sourceBytes && Data(contentsOf: projectURL) == projectBefore
+                && originalNoteAfterGeometry == noteBody,
+                "Geometry source switching changed original analysis, annotations or notes")
+            assertions["geometrySourceAndOriginalContentPreserved"] = true
+            assertions["status"] = "passed"
+        } catch {
+            assertions["status"] = "failed"; assertions["reason"] = error.localizedDescription
+            try? capturePDFView("boundary-failure.png")
+        }
+        metrics.settling(); try? await Task.sleep(nanoseconds: 250_000_000)
+        assertions["states"] = states; assertions["metrics"] = metrics.snapshot()
+        assertions["windowVisible"] = window?.isVisible ?? false
+        assertions["testScope"] = "real continuous PDF capture/reselect/disk restoration; source/notes/analysis preserved; no FPS, AI or original user library"
+        writeJSON("result.json", assertions)
+        timer?.cancel(); window?.orderOut(nil); NSApp.terminate(nil)
     }
     func runSameBookPDFScenario() async {
         var assertions: [String: Any] = ["mode": mode, "realNetworkRequests": 0]

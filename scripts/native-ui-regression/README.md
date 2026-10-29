@@ -19,7 +19,7 @@ The timer queues a main-thread heartbeat every 50 ms. A pulse captures its phase
 
 The global peak is never cleared. Results retain startup and interactive peaks, per-phase peaks, the worst pulse, and the worst 100 pulses above 0.5 seconds with an uncapped count. The hard five-second watchdog applies in every phase: it samples the test child and fails. Interactive lag, including the first open, must stay below 1.5 seconds. Startup has a separate five-second budget. These are responsiveness gates, not FPS measurements; timer resolution is 50 ms.
 
-Passing also requires all actions to finish, preserved draft, no query/analysis running, visible native window and layout/heartbeat activity, readable same-PID logs, and zero `300 iterations` / publishing-during-view-update warnings. Failures return nonzero.
+Passing also requires all actions to finish, preserved draft, no query/analysis running, visible native window and layout/heartbeat activity, readable same-PID logs, and zero `300 iterations`, publishing-during-view-update or AttributeGraph-cycle warnings. Failures return nonzero.
 
 The first CI attempt `40635956572` remains a failed run: all 144 actions finished with no runtime warnings, but its undifferentiated global peak was 1.7156 seconds against the old global 1.5-second gate. It did not record enough attribution to establish whether the peak was initialization or an interaction. The phase-aware harness adds evidence and keeps the interactive gate unchanged; it does not retroactively convert that failure into a pass.
 
@@ -58,6 +58,45 @@ still apply. This is correctness coverage, not a scroll-FPS benchmark, cold-impo
 test, or full annotation/search test. `--library-copy` is intentionally rejected
 for this fixture-only mode. Run it separately from any performance capture or
 interactive UI session.
+
+## Continuous PDF boundary correctness
+
+After relinking the actual product, `--mode boundary --cycles 1` creates an isolated
+eight-page PDF, saved analysis, annotation and Markdown note. It uses 343% custom
+zoom and vertical continuous display in a requested 800×600 window, explicitly
+jumps to page four, captures and flushes the actual native viewport, then calls
+the real same-book `selectBook`. The logical current page and the stored page
+must remain four even when PDFKit's `currentDestination.page` names page three.
+`boundary-observations.json` records both page identities before capture and
+before/after reselect; it never fabricates the store receipt to create the bug.
+If the initial jump rounds inside page four, public `NSClipView.scroll(to:)`
+movements on the PDFView's real scroll view cross its top edge. Every offset is
+relative to the original clip origin rather than accumulated. Setup must observe native current page
+four with native destination page three; a run that never reaches that boundary
+fails instead of giving false passing coverage.
+
+It compares a fixed page-centre landmark in PDFView viewport coordinates before
+and after reselect and forced teardown/remount, within two logical view points.
+The converted native destination on the target page is also recorded separately.
+Verified live document reuse, persisted restore, first/last/middle page capture,
+closed thumbnails, reading preferences, question draft and exact source/project/
+analysis/annotation/Markdown bytes are checked. This is a correctness fixture,
+not a scroll-FPS measurement, paid-model test or action on the installed app.
+
+The same scenario derives a real legacy page-three/negative-y memory from the
+observed pre-fix native destination. It persists that memory only after the
+reader has been unmounted, then requires normal admission to restore the same
+physical page-four landmark and correct the logical page. An enormous finite
+anchor that passes the existing serialized-model validity boundary must instead
+be ignored without moving the ordinary page-four viewport. A second source has
+file-level 90/270-degree rotation and a nonzero crop origin; actual same-book
+capture/reselect and fresh mounts preserve its landmarks. Horizontal continuous
+display also performs a real document-clip scroll before the round trip. Source
+metadata is persisted before admission, never patched into an admitted document.
+
+```sh
+python3 scripts/native-ui-regression/run.py --mode boundary --cycles 1 --tag pdf-continuous-boundary
+```
 
 ## Title book-picker navigation correctness
 

@@ -660,6 +660,39 @@ extension ReadingContinuationRuntime {
             configurationHash: chunk.configurationHash, stepIDs: chunk.stepIDs,
             components: chunk.requiredComponentKinds ?? project.smartReading?.selection.execution?.componentKinds ?? []))
     }
+    private static func sourceDigest(_ source: SourceProof) throws -> String {
+        return try digest(source)
+    }
+    private static func sourceDigest(_ chunk: ReadingAnalysisChunk, in project: BookProject) throws -> String {
+        try sourceDigest(sourceProof(chunk, in: project))
+    }
+
+    // One immutable snapshot for this synchronous projection. Complete chunk
+    // values distinguish same-ID contracts; historical snapshots never share
+    // this memo. The context is private, transient and cannot be deserialized.
+    private final class ProjectionProofMemo {
+        let project: BookProject
+        private var rawKeys: [ReadingAnalysisChunk: String] = [:]
+        private var sources: [ReadingAnalysisChunk: String] = [:]
+        private var targets: [ReadingAnalysisChunk: (Set<String>, Set<ComponentKind>)] = [:]
+        init(in project: BookProject) { self.project = project }
+        func rawKey(_ chunk: ReadingAnalysisChunk) throws -> String {
+            if let value = rawKeys[chunk] { return value }
+            let value = try ReadingContinuationRuntime.rawKey(chunk, in: project)
+            rawKeys[chunk] = value; return value
+        }
+        func sourceID(_ chunk: ReadingAnalysisChunk) throws -> String {
+            if let value = sources[chunk] { return value }
+            let value = try ReadingContinuationRuntime.sourceDigest(chunk, in: project)
+            sources[chunk] = value; return value
+        }
+        func targetSets(_ chunk: ReadingAnalysisChunk) -> (Set<String>, Set<ComponentKind>) {
+            if let value = targets[chunk] { return value }
+            let value = (Set(chunk.stepIDs), Set(chunk.requiredComponentKinds ?? project.smartReading?.selection.execution?.componentKinds ?? []))
+            targets[chunk] = value; return value
+        }
+    }
+
     private static func materialize(_ archive: ReadingContinuationArchivedSession, checkpoints: [ReadingAnalysisCheckpoint]) -> SmartReadingSession {
         var session = SmartReadingSession(id: archive.id, selection: archive.selection, scopeTitle: archive.scopeTitle,
             unitIDs: archive.unitIDs, unitHashes: archive.unitHashes, sourceHash: archive.sourceHash,
@@ -680,7 +713,8 @@ extension ReadingContinuationRuntime {
     public static func projectLocalWork(_ chunks: [ReadingAnalysisChunk], in project: BookProject) throws -> [[ReadingAnalysisChunk]] {
         guard let session = project.smartReading, let configuration = session.selection.execution,
               let metadata = session.continuation, metadata.projectionVersion == 1 else { return chunks.map { [$0] } }
-        let keys = try chunks.map { try rawKey($0, in: project) }
+        let memo = ProjectionProofMemo(in: project)
+        let keys = try chunks.map { try memo.rawKey($0) }
         let inventoryHash = try digest(keys)
         if let inventory = metadata.localWorkInventory {
             guard metadata.inventoryFingerprint == inventoryHash else {
@@ -689,7 +723,7 @@ extension ReadingContinuationRuntime {
             guard inventory.count == chunks.count, zip(inventory, keys).allSatisfy({ $0.rawKey == $1 }) else {
                 throw ReadingError.invalid("本轮分析任务清单已改变，已保存内容保留。")
             }
-            try validateInventory(inventory, raw: chunks, in: project)
+            try validateInventory(inventory, raw: chunks, in: project, memo: memo)
         }
         if metadata.intent == .reanalyze {
             let result = chunks.map { [$0] }
@@ -708,16 +742,16 @@ extension ReadingContinuationRuntime {
                   Set(saved.unitIDs) == Set(saved.unitHashes.keys) else { continue }
             let source = SourceProof(bookID: project.id, sourceHash: project.sourceHash, unitIDs: saved.unitIDs,
                 unitHashes: saved.unitHashes, ranges: saved.sourceRanges, chapterID: saved.chapterID)
-            savedBySource[try digest(source), default: []].append(saved)
+            savedBySource[try sourceDigest(source), default: []].append(saved)
         }
         let currentPlan = try planFingerprint(in: project)
         var candidates: [String: [Candidate]] = [:]
-        func add(_ work: ReadingAnalysisChunk, configuration old: ReadingExecutionConfiguration, sourceProject: BookProject) throws {
+        func add(_ work: ReadingAnalysisChunk, configuration old: ReadingExecutionConfiguration, sourceProject: BookProject, currentSnapshot: Bool = false) throws {
             guard work.scopeJob == nil, old.precision == configuration.precision, proofIndex.isComplete(work) else { return }
-            let key = try digest(sourceProof(work, in: sourceProject))
+            let key = try currentSnapshot ? memo.sourceID(work) : sourceDigest(work, in: sourceProject)
             candidates[key, default: []].append(Candidate(work: work, configuration: old))
         }
-        for chunk in chunks { try add(chunk, configuration: configuration, sourceProject: project) }
+        for chunk in chunks { try add(chunk, configuration: configuration, sourceProject: project, currentSnapshot: true) }
         for archive in metadata.history {
             try Task.checkCancellation()
             guard archive.sourceHash == project.sourceHash, archive.generationID == metadata.generationID,
@@ -730,7 +764,7 @@ extension ReadingContinuationRuntime {
             guard let oldWork = try? SmartReadingRuntime.unprojectedLocalAnalysisChunks(in: previous) else { continue }
             for template in oldWork {
                 try add(template, configuration: oldConfiguration, sourceProject: previous)
-                let source = try digest(sourceProof(template, in: previous))
+                let source = try sourceDigest(template, in: previous)
                 for saved in savedBySource[source] ?? [] {
                     guard let components = saved.requiredComponentKinds,
                           Set(saved.completedStepIDs).count == saved.completedStepIDs.count,
@@ -755,7 +789,7 @@ extension ReadingContinuationRuntime {
             let requestedComponents = raw.requiredComponentKinds ?? configuration.componentKinds
             var missingComponents = Set(requestedComponents)
             var baseMissing = true, works: [ReadingAnalysisChunk] = [], seen = Set<String>()
-            let source = try digest(sourceProof(raw, in: project))
+            let source = try memo.sourceID(raw)
             let options = (candidates[source] ?? []).sorted {
                 let a = $0.work.stepIDs.count + ($0.work.requiredComponentKinds ?? $0.configuration.componentKinds).count
                 let b = $1.work.stepIDs.count + ($1.work.requiredComponentKinds ?? $1.configuration.componentKinds).count
@@ -788,7 +822,7 @@ extension ReadingContinuationRuntime {
             groups.append(works)
         }
         let inventory = zip(keys, groups).map { ReadingContinuationLocalWorkGroup(rawKey: $0, works: $1) }
-        try validateInventory(inventory, raw: chunks, in: project)
+        try validateInventory(inventory, raw: chunks, in: project, memo: memo)
         // Frozen proof IDs keep the regenerated inventory stable as outputs
         // arrive. Persisted descriptors cannot invent a source/step contract.
         guard metadata.localWorkInventory.map({ $0 == inventory }) ?? true else {
@@ -797,16 +831,16 @@ extension ReadingContinuationRuntime {
         return groups
     }
 
-    private static func validateInventory(_ groups: [ReadingContinuationLocalWorkGroup], raw: [ReadingAnalysisChunk], in project: BookProject) throws {
+    private static func validateInventory(_ groups: [ReadingContinuationLocalWorkGroup], raw: [ReadingAnalysisChunk], in project: BookProject, memo: ProjectionProofMemo? = nil) throws {
         guard groups.count == raw.count else { throw ReadingError.invalid("分析任务清单数量不一致。") }
         let configured = project.smartReading?.selection.execution?.componentKinds ?? []
         var allIDs = Set<String>()
         for (group, source) in zip(groups, raw) {
-            guard !group.works.isEmpty, group.works.count <= 40, group.rawKey == (try rawKey(source, in: project)) else {
+            guard !group.works.isEmpty, group.works.count <= 40, group.rawKey == (try memo?.rawKey(source) ?? rawKey(source, in: project)) else {
                 throw ReadingError.invalid("分析任务清单缺少原文或要求。")
             }
-            let sourceID = try digest(sourceProof(source, in: project))
-            let targetSteps = Set(source.stepIDs), targetComponents = Set(source.requiredComponentKinds ?? configured)
+            let sourceID = try memo?.sourceID(source) ?? sourceDigest(source, in: project)
+            let (targetSteps, targetComponents) = memo?.targetSets(source) ?? (Set(source.stepIDs), Set(source.requiredComponentKinds ?? configured))
             var providedSteps = Set<String>(), providedComponents = Set<ComponentKind>()
             for work in group.works {
                 guard work.scopeJob == nil, allIDs.insert(work.id).inserted,
@@ -815,7 +849,7 @@ extension ReadingContinuationRuntime {
                       Set(work.requiredComponentKinds ?? configured).count == (work.requiredComponentKinds ?? configured).count,
                       work.id.range(of: "^chunk-[a-f0-9]{48}$", options: .regularExpression) != nil,
                       work.configurationHash.count == 64,
-                      try digest(sourceProof(work, in: project)) == sourceID,
+                      try (memo?.sourceID(work) ?? sourceDigest(work, in: project)) == sourceID,
                       Set(work.stepIDs).isSubset(of: targetSteps),
                       Set(work.requiredComponentKinds ?? configured).isSubset(of: targetComponents) else {
                     throw ReadingError.invalid("本轮分析任务超出已确认原文或步骤，已有内容保留。")

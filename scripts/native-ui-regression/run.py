@@ -6,7 +6,7 @@ SOURCE=pathlib.Path(__file__).resolve().parent
 HARNESS=ROOT/'.build/native-ui-harness'
 p=argparse.ArgumentParser()
 p.add_argument('--library-copy',type=pathlib.Path)
-p.add_argument('--mode',choices=['panel','workspace','pdf','samebook','navigation','continuation'],default='workspace')
+p.add_argument('--mode',choices=['panel','workspace','pdf','samebook','boundary','navigation','continuation'],default='workspace')
 p.add_argument('--hold-seconds',type=int,default=0,help='Keep the isolated continuation fixture open for manual visual QA (0-300 seconds)')
 p.add_argument('--cycles',type=int,default=24)
 p.add_argument('--tag',default='run')
@@ -17,7 +17,7 @@ assert a.tag.replace('-','').replace('_','').isalnum()
 if a.library_copy:
  a.library_copy=a.library_copy.resolve()
  assert a.library_copy.is_relative_to(ROOT) and a.library_copy.is_dir(), 'Only workspace-local test library copies are allowed'
-assert a.mode not in {'pdf','samebook','navigation','continuation'} or not a.library_copy, 'Fixture correctness modes generate their own nonprivate libraries'
+assert a.mode not in {'pdf','samebook','boundary','navigation','continuation'} or not a.library_copy, 'Fixture correctness modes generate their own nonprivate libraries'
 stamp=datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
 out=ROOT/'logs'/f'native-ui-harness-{stamp}-{a.tag}'
 out.mkdir(parents=True,exist_ok=False)

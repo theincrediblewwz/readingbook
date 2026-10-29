@@ -553,7 +553,8 @@ struct PDFReaderView: NSViewRepresentable {
         onSourceDecorationHover = input.onSourceDecorationHover
         onVisiblePagesChange = input.onVisiblePagesChange
         onPreparationChanged = input.onPreparationChanged
-        if appliedInteractionResetID != input.interactionResetID {
+        let interactionResetChanged = appliedInteractionResetID != input.interactionResetID
+        if interactionResetChanged {
             appliedInteractionResetID = input.interactionResetID
             // Same-book selection resets transient interaction state just as
             // a reload did, while keeping the verified document and its caches.
@@ -619,7 +620,7 @@ struct PDFReaderView: NSViewRepresentable {
         let annotationsChanged = input.annotations != savedAnnotations
         savedAnnotations = input.annotations
         let canonical = url.standardizedFileURL
-        if canonical != loadedURL || sourceChanged || appliedMemoryRevision != input.memoryRevision {
+        if canonical != loadedURL || sourceChanged || appliedMemoryRevision != input.memoryRevision || interactionResetChanged {
             // Capture against the old callback before rebinding to another book.
             if canonical != loadedURL || sourceChanged { captureWorkspaceMemory(deferDelivery: true) }
             memoryCaptureTask?.cancel(); memoryCaptureTask = nil
@@ -1168,12 +1169,39 @@ struct PDFReaderView: NSViewRepresentable {
         observePDFViewport()
         guard let saved = pendingWorkspaceMemory else { scheduleWorkspaceCapture(); return }
         pendingWorkspaceMemory = nil
-        guard let page = document?.page(at: saved.page - 1), currentPageNumber == saved.page else { return }
+        guard let document, let page = document.page(at: saved.page - 1), currentPageNumber == saved.page else { return }
         if fitMode == .custom { pdfView.scaleFactor = CGFloat(saved.scale) } else { applyFit() }
         if let location = saved.location {
             let box = page.bounds(for: pdfView.displayBox)
-            let point = CGPoint(x: box.minX + min(1, max(0, location.x)) * box.width, y: box.minY + min(1, max(0, location.y)) * box.height)
-            pdfView.go(to: PDFDestination(page: page, at: point))
+            let point = CGPoint(x: box.minX + location.x * box.width, y: box.minY + location.y * box.height)
+            let viewport = pdfView.convert(pdfView.bounds, to: page)
+            // The viewport's origin can lie just outside the current page at
+            // a continuous-page boundary, or beside a centered narrow page.
+            // Preserve those coordinates; clamping to the crop box moves the
+            // visible text. Reject implausible saved geometry before PDFKit.
+            let allowed = box.insetBy(dx: -max(box.width, viewport.width), dy: -max(box.height, viewport.height))
+            let finiteGeometry = [box, viewport, allowed].allSatisfy {
+                $0.minX.isFinite && $0.minY.isFinite && $0.maxX.isFinite && $0.maxY.isFinite
+                    && $0.width > 0 && $0.height > 0
+            }
+            if finiteGeometry, point.x.isFinite, point.y.isFinite, allowed.contains(point) {
+                pdfView.go(to: PDFDestination(page: page, at: point))
+                pdfView.layoutDocumentView()
+                // PDFKit may clamp go(to:) to the page even for a legitimate
+                // viewport origin outside it. Finish the exact restoration in
+                // clip coordinates, which also account for flipped/scaled views.
+                observePDFViewport()
+                if let clip = observedClip, let actual = pdfView.currentDestination,
+                   let actualPage = actual.page, document.index(for: actualPage) != NSNotFound {
+                    let desiredPoint = clip.convert(pdfView.convert(point, from: page), from: pdfView)
+                    let actualPoint = clip.convert(pdfView.convert(actual.point, from: actualPage), from: pdfView)
+                    let origin = CGPoint(x: clip.bounds.origin.x + desiredPoint.x - actualPoint.x,
+                                         y: clip.bounds.origin.y + desiredPoint.y - actualPoint.y)
+                    if origin.x.isFinite, origin.y.isFinite {
+                        clip.scroll(to: origin); clip.enclosingScrollView?.reflectScrolledClipView(clip)
+                    }
+                }
+            }
         }
         scheduleWorkspaceCapture()
     }
@@ -1191,10 +1219,18 @@ struct PDFReaderView: NSViewRepresentable {
     }
     private func captureWorkspaceMemory(deferDelivery: Bool = false) {
         guard !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil,
-              let document, !document.isLocked, let destination = pdfView.currentDestination, let page = destination.page else { return }
+              let document, !document.isLocked, let page = pdfView.currentPage,
+              let destination = pdfView.currentDestination, let destinationPage = destination.page,
+              document.index(for: destinationPage) != NSNotFound else { return }
         let index = document.index(for: page), box = page.bounds(for: pdfView.displayBox)
         guard index != NSNotFound, box.width > 0, box.height > 0 else { return }
-        let location = WorkspacePoint(x: Double((destination.point.x - box.minX) / box.width), y: Double((destination.point.y - box.minY) / box.height))
+        // PDFKit chooses currentPage at the viewport center; currentDestination
+        // can belong to the preceding page at the same visible boundary. Store
+        // the displayed page identity and express that same viewport anchor in
+        // its coordinates, letting PDFKit handle rotation and crop origins.
+        let point = destinationPage === page ? destination.point
+            : pdfView.convert(pdfView.convert(destination.point, from: destinationPage), to: page)
+        let location = WorkspacePoint(x: Double((point.x - box.minX) / box.width), y: Double((point.y - box.minY) / box.height))
         let mode: String
         switch fitMode { case .page: mode = "page"; case .width: mode = "width"; case .actual: mode = "actual"; case .custom: mode = "custom" }
         let memory = WorkspacePDFMemory(page: index + 1, location: location, scale: Double(pdfView.scaleFactor), fitMode: mode, continuous: pdfView.displayMode == .singlePageContinuous, thumbnails: !thumbnailPanel.isHidden, direction: readingDirection)
