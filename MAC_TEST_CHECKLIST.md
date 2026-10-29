@@ -6,7 +6,7 @@
 
 [Release0.23.15](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.15)与本机`/Applications/ReadingBook.app`均为 **0.23.15/build46**。canonical`dist/ReadingBook-0.23.15-Mac.zip`，24,840,610字节，SHA256`64fd9fa534164c0486234e413aa70069c1a90ee760972a9eb657d03c058d9a2a`；Actions摘要/两层ZIP/精确源码与版本/arm64+x86_64/0755/严格签名/32离线资源均核验，Release附件摘要同值。安装App36文件与核验包一致；实际About、第103页同书重选与正常退出重启仍103、第102页既存句译及伴读/对话切换均通过，现留在原书103页/343%，未触发新生成或保存操作。
 
-安装前最新20文件原书库、偏好及旧14应用保留在`private-books/webkit-bridge-20261029/install-before-0.23.15/`。安装期间原库逐字节相同；启动检查后无文件增删，原书/笔记/分析字节保持，仅Workspace正常更新。明确比较3项生产服务相关偏好键及其余所有偏好，仅`NSWindow Frame main`窗口位置正常变化；旧substring检查把main/ReadingBook误匹配为ai的初次失败和脚本原样保留，未回写偏好。10秒913个主线程样本中911为事件等待，三类统一日志警告零；318.7M/峰值457.5M只属单次安装验收，非内存/FPS/泄漏或对照收益证明。
+安装前最新20文件原书库、偏好及旧14应用保留在`private-books/webkit-bridge-20261029/install-before-0.23.15/`。安装期间原库逐字节相同；启动检查后无文件增删，原书/笔记/分析字节保持，仅Workspace正常更新。明确比较3项生产服务相关偏好键及其余所有偏好，仅`NSWindow Frame main`横纵原点各1点正常变化；旧宽泛正则误纳Cocoa窗口及SwiftUI布局键的初次失败和脚本原样保留，未回写偏好。10秒913个主线程样本中911为事件等待，三类统一日志警告零；318.7M/峰值457.5M只属单次安装验收，非内存/FPS/泄漏或对照收益证明。
 
 本轮四批共101项精确清理；退役3,270,086,520B（3.05GiB）可再生/重复载荷，保留用户原数据、14回滚、15最新版、v4唯一重放App与源码、原始失败/DOM/调用栈及历史待续对照。工作区早期6,141,800KiB，测试/交付中峰值8,468,620KiB，最后清理后6,125,276KiB（约5.84GiB）；这些包含新增包与证据，不等于APFS可用块。四份清理记录在本机`logs/webkit-bridge-20261029/cleanup-inventory/`。原生helper与CI重复下载/解压载荷已退役，必要时从canonical包重新解压或按脚本重链，复用共享模块缓存，不再建每轮私有cache。
 
