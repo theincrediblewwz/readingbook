@@ -1,3 +1,11 @@
+# 0.23.15 功能修复待远端验证与安装（2026-10-29）
+
+先读[Markdown/WebKit对照与修复](Design/2026-10-29-markdown-bridge-results.md)。参数裁剪没有达到冻结的前台和端到端收益门槛，**未进入产品**；12行和失败完整保留，不用字符串代理字节量宣布提速。交付范围仅为两项有独立失败→修复证据的功能问题：focus调用缺return导致取消后旧高亮残留；SwiftUI规范等价String在传入Native前丢失精确新字节。
+
+本机最终tracked入口29/29原生桥接、24案例/152项字节身份全部通过，编译/运行警告零；保持Native完整State、revision、generation、授权、选区与原文完整保存，没有重挂或改数据格式。新增两组顺序CI，版本预备0.23.15/build46。**当前安装仍为0.23.14，CI、核包、GitHub Release及本机替换尚待完成**，不能把本地通过写成交付完成。原书库/偏好保护在`private-books/webkit-bridge-20261029/initial/`，所有新产物在工作区；运行状态`logs/webkit-bridge-20261029/RUN_STATUS.json`。后续其他16组件与滚动任务保留。
+
+---
+
 # 0.23.14 交付与解锁后验收完成（2026-10-29）
 
 产品源码`72842008afd4f0bf87f8478c065a4fe50f78fd9b`，main已同步；[CI40836796943](https://github.com/theincrediblewwz/readingbook/actions/runs/40836796943) **664项Core零失败/零编译警告**，全部原生/工具步骤成功。[Release0.23.14](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.14)及本机`/Applications/ReadingBook.app`均为 **0.23.14/build45**；解锁后实际About、原书102页书名菜单重选、正常退出再启动仍102、既存句译和伴读/对话切换均通过，应用留在原书102页。没有新AI生成，也不需再次安装/发布本版本。

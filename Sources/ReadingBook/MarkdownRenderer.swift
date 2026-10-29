@@ -58,6 +58,18 @@ enum ReaderInlineCoordinateSpace { static let name = "readingbook.inline.reader"
 /// A base directory is an explicit grant for relative raster images only, never file links.
 private struct MarkdownReadingStyleKey: EnvironmentKey { static let defaultValue = "body" }
 private struct MarkdownTextScaleKey: EnvironmentKey { static let defaultValue = 1.0 }
+// SwiftUI's String equality treats canonically equivalent Unicode as equal.
+// Both view boundaries must notice exact source-byte changes before the native
+// coordinator can replace its document and invalidate old source selections.
+// The strings share their existing storage; no full-body Data or hash is made.
+private struct MarkdownDocumentBytes: Equatable {
+    let markdown: String
+    let sourceText: String
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.markdown.utf8.elementsEqual(rhs.markdown.utf8)
+            && lhs.sourceText.utf8.elementsEqual(rhs.sourceText.utf8)
+    }
+}
 extension EnvironmentValues {
     var markdownReadingStyle: String {
         get { self[MarkdownReadingStyleKey.self] }
@@ -72,10 +84,13 @@ extension EnvironmentValues {
 struct RichMarkdownView: View {
     @EnvironmentObject private var typography: ReadingTypographySettings
     let markdown: String
+    private var documentBytes: MarkdownDocumentBytes
     var baseDirectory: URL?
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
     var onSelectionSave: ((RenderedMarkdownSelection) -> Void)?
-    var sourceText: String?
+    var sourceText: String? {
+        didSet { documentBytes = MarkdownDocumentBytes(markdown: markdown, sourceText: sourceText ?? markdown) }
+    }
     var plainText: Bool
     var sourceDecorations: [SourceReadingDecoration]
     var focusedDecorationID: String?
@@ -96,6 +111,7 @@ struct RichMarkdownView: View {
           onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil,
           onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil) {
         self.markdown = markdown
+        self.documentBytes = MarkdownDocumentBytes(markdown: markdown, sourceText: sourceText ?? markdown)
         self.baseDirectory = baseDirectory
         self.onSelectionChange = onSelectionChange
         self.onSelectionSave = onSelectionSave
@@ -110,7 +126,7 @@ struct RichMarkdownView: View {
         Group {
             if let resources = MarkdownResources.directory {
               GeometryReader { geometry in
-                MarkdownWebView(markdown: markdown, baseDirectory: baseDirectory,
+                MarkdownWebView(markdown: markdown, documentBytes: documentBytes, baseDirectory: baseDirectory,
                                 resources: resources, theme: colorScheme == .dark ? "dark" : "light",
                                 readingStyle: textContext == .companion ? "companion" : "body", readingContext: textContext.rawValue,
                                 fontFamily: typography.cssFamily(for: textContext), fontSize: style.pointSize,
@@ -150,6 +166,7 @@ private enum MarkdownResources {
 
 private struct MarkdownWebView: NSViewRepresentable {
     let markdown: String
+    let documentBytes: MarkdownDocumentBytes
     let baseDirectory: URL?
     let resources: URL
     let theme: String
@@ -363,7 +380,7 @@ private struct MarkdownWebView: NSViewRepresentable {
             // Track the dispatched target so a quick clear queues a matching
             // JS cancellation even before this acknowledgement returns.
             displayedFocusID = requestedID
-            webView.callAsyncJavaScript("window.ReadingBookMarkdown.focusDecoration(id)", arguments: ["id": requestedID.map { $0 as Any } ?? NSNull()], in: nil, in: .page) { [weak self] result in
+            webView.callAsyncJavaScript("return window.ReadingBookMarkdown.focusDecoration(id)", arguments: ["id": requestedID.map { $0 as Any } ?? NSNull()], in: nil, in: .page) { [weak self] result in
                 guard let self, self.revision == requestedRevision, self.focusedID == requestedID,
                       self.focusRequestGeneration == generation else { return }
                 if case .success(let accepted) = result, accepted as? Bool == true { return }

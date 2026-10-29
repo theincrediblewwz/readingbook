@@ -78,6 +78,10 @@ jobs:
         run: |
           python3 scripts/mac-note-editor/run-native-probe.py --build-dir .build/tests/debug --output logs/ci-note-editor/native-probe.json
           python3 scripts/mac-note-editor/run-hosted-undo-probe.py --build-dir .build/tests/debug --output logs/ci-note-editor/hosted-undo.json
+      - name: Native Markdown bridge and preservation regression
+        run: |
+          python3 scripts/mac-markdown/run-native-probe.py --workspace "$PWD" --build-dir .build/tests/debug --output-dir logs/ci-markdown-bridge/native-probe --run --show-window
+          python3 scripts/mac-markdown/run-input-identity-probe.py --workspace "$PWD" --build-dir .build/tests/debug --output-dir logs/ci-markdown-bridge/input-identity --run --show-window
       - name: Performance evidence tool contracts
         run: |
           python3 scripts/mac-performance/test-scroll-capture-analysis.py
