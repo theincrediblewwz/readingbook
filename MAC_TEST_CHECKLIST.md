@@ -1,3 +1,15 @@
+# 0.23.14 当前接续（2026-10-29；已发布安装，最终可见验收待解锁）
+
+产品源码`72842008afd4f0bf87f8478c065a4fe50f78fd9b`，main已同步；[CI40836796943](https://github.com/theincrediblewwz/readingbook/actions/runs/40836796943) **664项Core零失败/零编译警告**，全部原生/工具步骤成功。[Release0.23.14](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.14)已发布，**本机已替换为0.23.14/build45**；正式包/双架构/签名/32资源/完整App及最新20文件原数据离线核验通过，服务配置保持。原库和0.23.13 App最新回滚在`private-books/boundary-continuation-20261029/install-before-0.23.14/`，未用旧开发快照覆盖用户内容。
+
+先读[本轮修复与对照](Design/2026-10-29-boundary-continuation-results.md)及本机`logs/boundary-continuation-20261029/RUN_STATUS.json`。native4/3真实失败→修复后重选/remount/legacy/rotation/crop/horizontal/异常锚点回归全部通过且地标无漂移；真实1484页隔离Debug副本102重选及正常重启仍102，既有句译保留。65项本机相关Core实际测试函数通过，新增5项memo隔离/否定测试。最终无插桩Release Core新12进程：50–200准备0.505055→0.459226s（-9.07%），整书1.608747→1.170943s（-27.21%），整书lifetime峰值+0.80MiB；未当作PDF/UI/模型/FPS收益。
+
+**当前阻挡仅为Mac锁屏，已通过async问题请求用户手动解锁。不要重复安装/发布，也不要绕过锁屏。** 解锁后先重新记录`installed-ui-start.txt`的当前时间，再Cua检查实际`/Applications/ReadingBook.app` About0.23.14(45)、显式102→书名菜单重选仍102、既存句译/伴读切换；保存`installed-manual-ui.json`及`installed-ui-start.txt`后运行`logs/boundary-continuation-20261029/post-install-check.py`。再运行本轮`cleanup/`精确白名单脚本（默认dry-run，最终proof后apply），最后更新本段/结果/16组件计划并提交docs skipci。清理准备未视作已删除，原书/笔记/分析/回滚不得清理。Github已保持main唯一分支、14+13两Release及两Actions产物，旧12远端包/tag退役，提交历史保留。
+
+下一组件Markdown/WebKit只读审计已完成：已有状态去重/单flight/隐藏投影保护，最小待测候选是presentation/delta桥接冗余字段；先测端到端收益与来源/选区/公式/DOM守护后再改，不混入本轮冻结代码。其余16组件计划保留。下方均为历史接续。
+
+---
+
 # 0.23.13 同书PDF优化已交付（2026-10-29；GitHub及本机均更新）
 
 先读[本轮证据与交付](Design/2026-10-29-samebook-pdf-results.md)与[16组件接续计划](Design/2026-10-29-component-performance-plan.md)。产品源码`01811389c6433719aac76de325947c3610c21c24`，[CI40828098268](https://github.com/theincrediblewwz/readingbook/actions/runs/40828098268)为659项Core零失败/零编译警告，全部原生和工具检查通过；三类运行警告纳入失败门禁且最终均零。[Release0.23.13](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.13)已发布，已安装`/Applications/ReadingBook.app` **0.23.13/build44**，About和36文件/服务配置均核验。
