@@ -63,7 +63,7 @@ struct LibrarySearchView: View {
                 Spacer(minLength: 8)
                 if session.expanding {
                     ProgressView().controlSize(.small)
-                    Button("停止扩展") { session.cancel() }.buttonStyle(ReadingToolbarButtonStyle()).help("停止本次 AI 扩展，保留已经查到的结果")
+                    Button("停止扩展") { session.stopExpansion() }.buttonStyle(ReadingToolbarButtonStyle()).help("停止本次 AI 扩展，继续本地查找并保留已经查到的结果")
                 } else {
                     Button { expandSearch() } label: { Label("AI 扩展", systemImage: "sparkles") }
                         .buttonStyle(ReadingToolbarButtonStyle()).disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || opening)

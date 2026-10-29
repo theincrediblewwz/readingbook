@@ -141,7 +141,7 @@ struct WorkspaceView: View {
     private var navigationConfirmedWorkspace: some View {
         workspaceContent
         .onOpenURL { url in Task { await store.openInternalURL(url) } }
-        .confirmationDialog("保存当前 Markdown 后离开？", isPresented: $showsRouteConfirmation, presenting: pendingRoute) { destination in
+        .confirmationDialog("要保存笔记的修改吗？", isPresented: $showsRouteConfirmation, presenting: pendingRoute) { destination in
             Button("保存并继续") { saveDocumentAndNavigate(to: destination) }.disabled(store.isBusy)
             Button("放弃修改并继续", role: .destructive) {
                 guard pendingNotesOwner?.id == store.notesPresentation?.id, pendingNotesOwner?.matches(store) == true else { clearPendingSearchResult(); pendingRoute = nil; pendingNotesOwner = nil; return }
@@ -149,7 +149,7 @@ struct WorkspaceView: View {
                 store.discardDraftForWorkspaceNavigation(); finishConfirmedNavigation(to: destination)
             }.disabled(store.isBusy)
             Button("继续编辑", role: .cancel) { clearPendingSearchResult(); pendingRoute = nil; pendingNotesOwner = nil; opensCompanionAfterNavigation = false; showsRouteConfirmation = false }
-        } message: { _ in Text("已保存正文保留；本次未保存修改可保存或放弃。") }
+        } message: { _ in Text("保存后继续本次操作，也可以放弃本次未保存修改；已保存的笔记会保留。") }
         .confirmationDialog("当前模型配置尚未保存", isPresented: $showsModelRouteConfirmation, presenting: pendingModelRoute) { destination in
             Button("保存并继续") { resolveModelNavigation(to: destination, save: true) }.disabled(!store.canEditAISettings)
             Button("放弃更改并继续", role: .destructive) { resolveModelNavigation(to: destination, save: false) }.disabled(!store.canEditAISettings)

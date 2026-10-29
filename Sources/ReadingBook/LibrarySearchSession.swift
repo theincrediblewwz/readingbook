@@ -54,15 +54,25 @@ import ReadingCore
     /// model suggests words; only real matches from the frozen scope are shown.
     func expand(using operation: @escaping @Sendable (String, LibrarySearchLanguageProfile) async throws -> LibrarySearchExpansionPlan) {
         guard let input, !input.query.isEmpty, !expanding else { return }
+        let needsLocalResult = response == nil
         localTask?.cancel(); expansionTask?.cancel(); generation = UUID()
         let owner = generation
         searching = false; expanding = true; errorMessage = ""
         expansionTask = Task { [weak self] in
             do {
                 let languageWorker = Task.detached(priority: .userInitiated) {
-                    try LibrarySearchLanguageProfile.identify(in: input.snapshots, bookID: input.bookID)
+                    let local = needsLocalResult ? try LibraryTextSearch.search(query: input.query, snapshots: input.snapshots, bookID: input.bookID) : nil
+                    let language = try LibrarySearchLanguageProfile.identify(in: input.snapshots, bookID: input.bookID)
+                    return (local, language)
                 }
-                let language = try await withTaskCancellationHandler(operation: { try await languageWorker.value }, onCancel: { languageWorker.cancel() })
+                let (local, language) = try await withTaskCancellationHandler(operation: { try await languageWorker.value }, onCancel: { languageWorker.cancel() })
+                try Task.checkCancellation()
+                guard self?.generation == owner else { return }
+                // A quick AI click can precede the local debounce. Establish
+                // those real matches before dispatch so errors/offline service
+                // cannot hide results or require the user to type again.
+                if let local { self?.response = local }
+                self?.languageProfile = language
                 let plan = try await operation(input.query, language)
                 try Task.checkCancellation()
                 let worker = Task.detached(priority: .userInitiated) {
@@ -81,7 +91,16 @@ import ReadingCore
         }
     }
 
-    /// Stop does not erase already verified local results.
+    /// The explicit Stop button ends AI work while local discovery continues,
+    /// including a click made before the initial debounce had completed.
+    func stopExpansion() {
+        guard expanding else { return }
+        if response == nil, let input {
+            schedule(query: input.query, snapshots: input.snapshots, bookID: input.bookID, root: input.root, debounce: false)
+        } else { cancel() }
+    }
+
+    /// Closing/changing the owner cancels all work, retaining verified results.
     func cancel() {
         generation = UUID(); localTask?.cancel(); expansionTask?.cancel()
         localTask = nil; expansionTask = nil; searching = false; expanding = false

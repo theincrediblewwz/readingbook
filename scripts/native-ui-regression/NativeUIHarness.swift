@@ -1667,6 +1667,36 @@ private actor UrgentSearchExpansionGate {
         try pdfRequire(session.response == nil && !session.searching && !session.expanding
             && session.expandedKeywords.isEmpty, "Cleared input received late results")
         assertions["clearedInputCannotReceiveLateResults"] = true
+
+        // An explicit expansion may fail before the debounced local worker ran.
+        // Offline/provider failure must still leave the valid local source hits.
+        session.schedule(query: "貂蝉", snapshots: snapshots, bookID: firstID, root: root, debounce: true)
+        session.expand { _, _ in throw ReadingError.invalid("offline fixture") }
+        try await urgentWait("early failed expansion finishes") { !session.expanding }
+        try pdfRequire(session.response?.query == "貂蝉" && session.response?.matches.count == 8
+            && session.response?.matches.allSatisfy { $0.bookID == firstID && $0.quote == "貂蟬" } == true
+            && !session.errorMessage.isEmpty, "Early AI failure hid valid local matches before debounce completed")
+        for match in session.response!.matches { try match.validate(in: projects[0]) }
+        assertions["earlyExpansionFailureStillShowsLocalMatches"] = true
+
+        let earlyStopGate = UrgentSearchExpansionGate()
+        session.schedule(query: "貂蝉", snapshots: snapshots, bookID: firstID, root: root, debounce: true)
+        session.expand { query, language in try await earlyStopGate.request(query, language) }
+        session.stopExpansion()
+        try await urgentWait("early stop continues local search") {
+            !session.searching && !session.expanding && session.response?.query == "貂蝉"
+        }
+        try await Task.sleep(nanoseconds: 60_000_000)
+        let earlyStopDispatches = await earlyStopGate.calls
+        // Drain a wrongly dispatched fake before reporting the failure, without
+        // making that dispatch acceptable or leaving a checked continuation live.
+        if earlyStopDispatches > 0 { try await earlyStopGate.release(["貂蝉"]) }
+        try pdfRequire(earlyStopDispatches == 0 && session.response?.matches.count == 8
+            && session.response?.matches.allSatisfy { $0.bookID == firstID && $0.quote == "貂蟬" } == true
+            && session.expandedKeywords.isEmpty && session.errorMessage.isEmpty && !session.expanding,
+            "Early stop dispatched AI or failed to continue its valid local source search")
+        for match in session.response!.matches { try match.validate(in: projects[0]) }
+        assertions["earlyStopContinuesLocalSearchWithoutDispatch"] = true
         session.cancel()
         return assertions
     }

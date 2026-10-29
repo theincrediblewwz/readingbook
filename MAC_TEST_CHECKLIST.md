@@ -2,7 +2,7 @@
 
 先读[本轮实现与验证边界](Design/2026-10-30-search-overlays.md)。用户要求先修关闭搜索回错页、简繁及AI关键词扩展、搜索/笔记/回收站浮层，再更新GitHub与安装版，随后续性能计划。正式16原书103页已复现关闭搜索回library；现在真实base route保留，close/result分离。dirty Notes无损覆盖，真正离开前保存/放弃/继续；IME、编辑器Undo、旧owner、跨库跨书generation和精确原文hash/UTF16保护保持。
 
-候选17/build48本机Debug编译零警告，19搜索+11 AI扩词实际测试函数通过（CLT shim，非完整XCTest）；新增原生urgent-search-overlay门禁。完整CI、原生GUI和正式包/安装验收尚待补齐，当前安装版仍16。Mac锁屏时只做离线编译/回归，不改锁屏设置。所有新产物在工作区；保护20文件真库和偏好在`private-books/urgent-search-20261030/initial/`，不恢复覆盖用户后续变化。
+候选17/build48本机Debug编译零警告，19搜索+11 AI扩词实际测试函数通过（CLT shim，非完整XCTest）。原6b3f候选完整CI691零失败，但补测复现提前AI失败吞掉尚未完成的本地结果；已修并追加立即停止只停AI，须以修后新source重新完整CI，旧包不得采用。锁屏隔离urgent-search-overlay的10项原生+12项Session断言通过、警告零；不算实际可见GUI/硬件/原PDF像素验收。正式包/安装验收尚待补齐，当前安装版仍16。Mac锁屏时不改锁屏设置。所有新产物在工作区；保护20文件真库和偏好在`private-books/urgent-search-20261030/initial/`，不恢复覆盖用户后续变化。
 
 本轮不是性能收益实验，不取消下方组件优化，不恢复数学核查。结束后清理可再生/重复产物，保留原书、笔记、分析、草稿、关键证据、最新包和必要回滚。
 
