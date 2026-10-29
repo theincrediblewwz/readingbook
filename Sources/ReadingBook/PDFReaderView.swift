@@ -36,10 +36,10 @@ struct PDFReaderView: NSViewRepresentable {
     var onPreparationChanged: ((ReadingPreparationEvent) -> Void)?
     var workspaceMemory: WorkspacePDFMemory?
     var memoryRevision = 0
-    var onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)?
+    var onWorkspaceMemory: ((PDFWorkspaceMemoryReceipt) -> Void)?
     var interactionResetID: UUID?
 
-    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)? = nil, interactionResetID: UUID? = nil) {
+    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((PDFWorkspaceMemoryReceipt) -> Void)? = nil, interactionResetID: UUID? = nil) {
         self.controller = controller; self.url = url; self.sourceHash = sourceHash; self.password = password; self.annotations = annotations
         self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
         self.onUnlock = onUnlock; self.onSaveAnnotations = onSaveAnnotations; self.onTrashAnnotation = onTrashAnnotation
@@ -257,7 +257,7 @@ struct PDFReaderView: NSViewRepresentable {
     private var pendingWorkspaceMemory: WorkspacePDFMemory?
     private var appliedMemoryRevision: Int?
     private var appliedInteractionResetID: UUID?
-    private var memoryCallback: ((WorkspacePDFMemory) -> Void)?
+    private var memoryCallback: ((PDFWorkspaceMemoryReceipt) -> Void)?
     private var memoryCaptureTask: DispatchWorkItem?
     private weak var observedClip: NSClipView?
     private var sourceSelectionObservation = 0
@@ -558,7 +558,18 @@ struct PDFReaderView: NSViewRepresentable {
             // Same-book selection resets transient interaction state just as
             // a reload did, while keeping the verified document and its caches.
             resetPageGesture(); pdfView.cancelRegionSelection()
-            dismissSearch(restoreFocus: false)
+            clearSearchState()
+            let resetID = appliedInteractionResetID, generation = searchGeneration
+            // Hiding an active NSSearchField asks AppKit to find its next key
+            // view, which re-enters SwiftUI's focus graph. In updateNSView that
+            // causes AttributeGraph cycles. Invalidate results immediately,
+            // then hide the field after the current graph transaction ends.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.controller != nil,
+                      self.appliedInteractionResetID == resetID,
+                      self.searchGeneration == generation else { return }
+                self.dismissSearch(restoreFocus: false)
+            }
             cancelSourceQuotePreparation(); clearQuoteFocusHighlight()
             pdfView.clearSelection()
         }
@@ -610,7 +621,7 @@ struct PDFReaderView: NSViewRepresentable {
         let canonical = url.standardizedFileURL
         if canonical != loadedURL || sourceChanged || appliedMemoryRevision != input.memoryRevision {
             // Capture against the old callback before rebinding to another book.
-            if canonical != loadedURL || sourceChanged { captureWorkspaceMemory() }
+            if canonical != loadedURL || sourceChanged { captureWorkspaceMemory(deferDelivery: true) }
             memoryCaptureTask?.cancel(); memoryCaptureTask = nil
             appliedMemoryRevision = input.memoryRevision
             pendingWorkspaceMemory = input.workspaceMemory?.isValid == true ? input.workspaceMemory : nil
@@ -1178,7 +1189,7 @@ struct PDFReaderView: NSViewRepresentable {
         memoryCaptureTask?.cancel(); memoryCaptureTask = nil
         captureWorkspaceMemory()
     }
-    private func captureWorkspaceMemory() {
+    private func captureWorkspaceMemory(deferDelivery: Bool = false) {
         guard !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil,
               let document, !document.isLocked, let destination = pdfView.currentDestination, let page = destination.page else { return }
         let index = document.index(for: page), box = page.bounds(for: pdfView.displayBox)
@@ -1187,7 +1198,19 @@ struct PDFReaderView: NSViewRepresentable {
         let mode: String
         switch fitMode { case .page: mode = "page"; case .width: mode = "width"; case .actual: mode = "actual"; case .custom: mode = "custom" }
         let memory = WorkspacePDFMemory(page: index + 1, location: location, scale: Double(pdfView.scaleFactor), fitMode: mode, continuous: pdfView.displayMode == .singlePageContinuous, thumbnails: !thumbnailPanel.isHidden, direction: readingDirection)
-        if memory.isValid { memoryCallback?(memory) }
+        guard memory.isValid else { return }
+        let receipt = PDFWorkspaceMemoryReceipt(memory: memory)
+        let callback = memoryCallback
+        if deferDelivery {
+            // Representable update/dismantle can run inside a SwiftUI graph
+            // transaction. Freeze the scoped receipt before releasing the view;
+            // its owner is checked again by the store after this transaction.
+            DispatchQueue.main.async { callback?(receipt) }
+        } else {
+            // Explicit capture notifications must finish before select/quit
+            // flushes the latest reading position to disk.
+            callback?(receipt)
+        }
     }
 
     private func refreshControls() {
@@ -1349,7 +1372,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     func shutdown() {
         pendingControlSnapshot = nil; lastControlSnapshot = nil
-        memoryCaptureTask?.cancel(); captureWorkspaceMemory(); memoryCallback = nil; observedClip = nil
+        memoryCaptureTask?.cancel(); captureWorkspaceMemory(deferDelivery: true); memoryCallback = nil; observedClip = nil
         invalidateNavigation(); installingDocument = true
         removeSearchEscapeMonitor()
         removePageScrollMonitor(); removeSourcePointerMonitor(); resetPageGesture()

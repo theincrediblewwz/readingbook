@@ -68,7 +68,9 @@ with (out/'console.log').open('w') as f:
  with (out/'unified.log').open('w') as log:
   log_result=subprocess.run(['/usr/bin/log','show','--style','compact','--start',start,'--predicate',f'processIdentifier == {child.pid}'],stdout=log,stderr=subprocess.STDOUT,timeout=30)
 text=(out/'unified.log').read_text()
-warnings={'layout300':text.count('300 iterations'),'publishingDuringViewUpdates':text.count('Publishing changes from within view updates')}
+console_text=(out/'console.log').read_text()
+warnings={'layout300':text.count('300 iterations'),'publishingDuringViewUpdates':text.count('Publishing changes from within view updates'),
+          'attributeGraphCycles':max(text.count('AttributeGraph: cycle detected'),console_text.count('AttributeGraph: cycle detected'))}
 (out/'warnings.json').write_text(json.dumps(warnings,indent=2)+'\n')
 # Preserve the test app's standard OS state in the workspace, then remove its throwaway preferences domain.
 cleanup=work/'os-state'; cleanup.mkdir()

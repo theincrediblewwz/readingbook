@@ -35,7 +35,7 @@ struct ReaderWorkspaceView: View {
                             let sourceBookID = store.bookID
                             let preparationOwner = store.libraryRootURL.path + "|" + (sourceBookID ?? "")
                             let preparationSourceHash = store.book?.sourceHash ?? ""
-                            let memoryKey = store.workspaceMemoryKey
+                            let memoryOwner = store.pdfWorkspaceMemoryOwner
                             PDFReaderView(controller: pdfController, url: url, sourceHash: store.book?.sourceHash ?? "", page: unit.page, navigationToken: requestToken, password: store.pdfPassword(for: store.bookID), annotations: store.book?.readerAnnotations ?? [], canEditAnnotations: !store.isBusy, onPageChange: { page in
                                 guard store.pdfNavigationToken == requestToken else { return }
                                 if store.selectedUnit?.page != page {
@@ -78,7 +78,9 @@ struct ReaderWorkspaceView: View {
                                    }
                                },
                                workspaceMemory: store.workspaceMemory.pdf, memoryRevision: store.workspaceMemoryRevision,
-                               onWorkspaceMemory: { memory in store.updateWorkspaceMemory({ $0.pdf = memory }, expectedKey: memoryKey) },
+                               onWorkspaceMemory: { receipt in
+                                   if let memoryOwner { store.updatePDFWorkspaceMemory(receipt, owner: memoryOwner) }
+                               },
                                interactionResetID: store.pdfInteractionResetID)
                             .id(store.pdfDisplayReloadID)
                         } else if isPDF, showPDF {

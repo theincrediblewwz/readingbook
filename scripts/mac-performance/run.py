@@ -427,7 +427,8 @@ def main():
         result['layoutWarningMarkers']=list(LAYOUT_WARNING_MARKERS)
         result['layoutDirtyWarnings']=count_layout_warnings(text)
         result['publishingWarnings']=text.count('Publishing changes from within view updates')
-        if result['layoutDirtyWarnings'] or result['publishingWarnings']:result['status']='failed'
+        result['attributeGraphCycles']=text.count('AttributeGraph: cycle detected')
+        if result['layoutDirtyWarnings'] or result['publishingWarnings'] or result['attributeGraphCycles']:result['status']='failed'
         write(run/'result.json',result);results.append(result)
         write(logroot/('run-'+str(index+1)+'-result.json'),result)
         print(json.dumps({'run':index+1,'status':result['status'],'foregroundEligible':result.get('foregroundEligible',False),'processCreateBoundariesSeconds':result.get('processCreateBoundariesSeconds'),'maxMainQueueLagSeconds':result.get('maxMainQueueLagSeconds'),'heldPID':apppid if held else None}),flush=True)

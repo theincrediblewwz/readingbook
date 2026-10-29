@@ -31,6 +31,7 @@ import ReadingCore
     @Published var workspaceMemoryRevision = 0
     var restoringWorkspaceMemory = false
     var workspaceMemorySaveTask: Task<Void, Never>?
+    var pdfWorkspaceMemoryLatestCaptureSequence: UInt64 = 0
     @Published var selectedObjectID: String?
     @Published var selectedUnitID: String? {
         didSet {

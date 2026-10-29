@@ -33,7 +33,17 @@ final class Metrics: @unchecked Sendable {
         phase = "scenario"
     }
     func settling() { lock.lock(); phase = "settling"; lock.unlock() }
-    func record(_ label: String) { lock.lock(); lastAction = label; completed += 1; lock.unlock() }
+    func record(_ label: String) {
+        lock.lock(); lastAction = label; completed += 1; lock.unlock()
+        if ProcessInfo.processInfo.environment["HARNESS_MODE"] == "samebook" {
+            let event: [String: Any] = ["event": "native-samebook-phase", "action": label,
+                "wallTimeEpochSeconds": Date().timeIntervalSince1970,
+                "uptimeSeconds": ProcessInfo.processInfo.systemUptime]
+            if let data = try? JSONSerialization.data(withJSONObject: event, options: [.sortedKeys]) {
+                FileHandle.standardError.write(data); FileHandle.standardError.write(Data([0x0A]))
+            }
+        }
+    }
     func layout() { lock.lock(); layouts += 1; lock.unlock() }
     func pulse() -> Pulse {
         lock.lock(); defer { lock.unlock() }
@@ -664,6 +674,32 @@ struct PanelHarnessRoot: View {
             try pdfRequire(initialDocument.page(at: 3)?.annotations.contains(where: { $0.contents == annotation.comment }) == true,
                 "Saved annotation must be present in the actual native PDF")
             assertions["normalRepositoryAdmissionAndSavedAnnotationRendered"] = true
+            let rejectedReceiptMemory = WorkspacePDFMemory(page: 8, location: WorkspacePoint(x: 0.81, y: 0.17),
+                scale: 2.2, fitMode: "custom", continuous: true, thumbnails: true, direction: .vertical)
+            func rejectDeferredReceipt(_ owner: PDFWorkspaceMemoryOwner, label: String) async throws {
+                // Match the lifecycle callback's deferred delivery shape. Read
+                // the immediate before/after values inside the same main-queue
+                // turn so unrelated legitimate captures cannot mask a mutation.
+                let rejected: Bool = await withCheckedContinuation { continuation in
+                    DispatchQueue.main.async {
+                        let changedOwner = self.store.pdfWorkspaceMemoryOwner != owner
+                        let before = self.store.workspaceMemory
+                        self.store.updatePDFWorkspaceMemory(rejectedReceiptMemory, owner: owner)
+                        continuation.resume(returning: changedOwner && self.store.workspaceMemory == before)
+                    }
+                }
+                try self.pdfRequire(rejected, "A stale deferred viewport receipt changed the new owner: " + label)
+                assertions[label + "DeferredViewportReceiptRejected"] = true
+            }
+            guard let initialReceiptOwner = store.pdfWorkspaceMemoryOwner else { throw ReadingError.invalid("Initial PDF memory receipt owner missing") }
+            metrics.record("samebook-navigation-receipt-invalidation")
+            store.navigateToUnit(project.units[3].id)
+            try await pdfWait("explicit page-four navigation advances receipt ownership") {
+                controller.isReady && controller.page == 4 && self.store.selectedUnit?.page == 4
+                    && self.store.pdfWorkspaceMemoryOwner?.navigationToken != initialReceiptOwner.navigationToken
+            }
+            try await rejectDeferredReceipt(initialReceiptOwner, label: "oldNavigationToken")
+            try pdfRequire(pdfObjects()?.2.document === initialDocument, "Normal navigation receipt invalidation must not reload the document")
 
             // Deliberately choose a noninitial page and nondefault settings. No
             // PerfProbe normalization or rewrite-to-page-one hook exists here.
@@ -680,6 +716,95 @@ struct PanelHarnessRoot: View {
             store.flushWorkspaceMemory()
             let beforeMemory = store.workspaceMemory.pdf
             try pdfRequire(beforeMemory?.page == 4, "Discrete page-four setup must save page four")
+            guard let destination = initial.2.currentDestination, let destinationPage = destination.page,
+                  let currentReceiptOwner = store.pdfWorkspaceMemoryOwner, var staleMemory = beforeMemory else {
+                throw ReadingError.invalid("Page-four synchronous capture setup missing")
+            }
+            let box = destinationPage.bounds(for: initial.2.displayBox)
+            let nativeLocation = WorkspacePoint(x: Double((destination.point.x - box.minX) / box.width),
+                y: Double((destination.point.y - box.minY) / box.height))
+            staleMemory.page = 2; staleMemory.location = WorkspacePoint(x: 0.91, y: 0.11)
+            metrics.record("samebook-explicit-capture-is-synchronous")
+            // No await/layout/yield between poisoning the stored value and the
+            // explicit notification: select/quit must be able to flush now.
+            store.workspaceMemory.pdf = staleMemory
+            NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
+            guard let synchronous = store.workspaceMemory.pdf, let synchronousLocation = synchronous.location else {
+                throw ReadingError.invalid("Explicit capture did not immediately deliver its viewport")
+            }
+            try pdfRequire(synchronous.page == 4 && abs(synchronousLocation.x - nativeLocation.x) < 0.000001
+                && abs(synchronousLocation.y - nativeLocation.y) < 0.000001,
+                "Explicit capture was deferred or lost the noninitial native page/viewport")
+            store.flushWorkspaceMemory()
+            let workspaceName = SHA256.hash(data: Data((project.id + "|" + project.sourceHash).utf8)).map { String(format: "%02x", $0) }.joined()
+            let persistedWorkspace = try JSONDecoder().decode(BookWorkspaceMemory.self,
+                from: Data(contentsOf: library.appendingPathComponent("Workspace/\(workspaceName).json")))
+            try pdfRequire(persistedWorkspace.pdf == synchronous, "Immediate flush did not preserve the explicit synchronous capture")
+            assertions["explicitNotificationCapturesAndFlushesNoninitialViewportSynchronously"] = true
+            metrics.record("samebook-current-viewport-receipt-accepted")
+            var accepted = synchronous; accepted.location = WorkspacePoint(x: nativeLocation.x + 0.01, y: nativeLocation.y - 0.01)
+            store.updatePDFWorkspaceMemory(accepted, owner: currentReceiptOwner)
+            try pdfRequire(store.workspaceMemory.pdf == accepted, "A valid current-owner viewport receipt was ignored")
+            store.updatePDFWorkspaceMemory(synchronous, owner: currentReceiptOwner); store.flushWorkspaceMemory()
+            try pdfRequire(store.workspaceMemory.pdf == synchronous, "Valid receipt restoration failed")
+            assertions["currentOwnerViewportReceiptAccepted"] = true
+            metrics.record("samebook-increasing-viewport-capture-receipts")
+            var memoryA = synchronous; memoryA.location = WorkspacePoint(x: nativeLocation.x + 0.02, y: nativeLocation.y - 0.02)
+            var memoryB = synchronous; memoryB.location = WorkspacePoint(x: nativeLocation.x + 0.03, y: nativeLocation.y - 0.03)
+            let firstNormalReceipt = PDFWorkspaceMemoryReceipt(memory: memoryA)
+            let secondNormalReceipt = PDFWorkspaceMemoryReceipt(memory: memoryB)
+            try pdfRequire(secondNormalReceipt.captureSequence > firstNormalReceipt.captureSequence,
+                "Native capture sequence did not increase at capture time")
+            store.updatePDFWorkspaceMemory(firstNormalReceipt, owner: currentReceiptOwner)
+            try pdfRequire(store.workspaceMemory.pdf == memoryA && store.pdfWorkspaceMemoryLatestCaptureSequence == firstNormalReceipt.captureSequence,
+                "First normal current-owner receipt was not applied")
+            store.updatePDFWorkspaceMemory(secondNormalReceipt, owner: currentReceiptOwner)
+            try pdfRequire(store.workspaceMemory.pdf == memoryB && store.pdfWorkspaceMemoryLatestCaptureSequence == secondNormalReceipt.captureSequence,
+                "A later normal receipt was blocked by the ordering barrier")
+            assertions["increasingNormalViewportReceiptsAccepted"] = true
+            // A capture suppressed during restoration must still be consumed.
+            // Re-delivery after restoration cannot turn it into a fresh write.
+            let suppressedReceipt = PDFWorkspaceMemoryReceipt(memory: memoryA)
+            store.restoringWorkspaceMemory = true
+            store.updatePDFWorkspaceMemory(suppressedReceipt, owner: currentReceiptOwner)
+            let suppressedAtCapture = store.workspaceMemory.pdf == memoryB
+                && store.pdfWorkspaceMemoryLatestCaptureSequence == suppressedReceipt.captureSequence
+            store.restoringWorkspaceMemory = false
+            store.updatePDFWorkspaceMemory(suppressedReceipt, owner: currentReceiptOwner)
+            try pdfRequire(suppressedAtCapture && store.workspaceMemory.pdf == memoryB
+                && store.pdfWorkspaceMemoryLatestCaptureSequence == suppressedReceipt.captureSequence,
+                "A duplicate viewport receipt became writable after restoration")
+            assertions["duplicateSuppressedViewportReceiptCannotBecomeFresh"] = true
+            let restoredNormalReceipt = PDFWorkspaceMemoryReceipt(memory: synchronous)
+            store.updatePDFWorkspaceMemory(restoredNormalReceipt, owner: currentReceiptOwner)
+            try pdfRequire(store.workspaceMemory.pdf == synchronous, "Normal receipt after an ordering barrier was not applied")
+
+            metrics.record("samebook-old-deferred-versus-new-sync-capture")
+            let oldDeferredReceipt = PDFWorkspaceMemoryReceipt(memory: rejectedReceiptMemory)
+            let newSynchronousReceipt = PDFWorkspaceMemoryReceipt(memory: synchronous)
+            store.updatePDFWorkspaceMemory(newSynchronousReceipt, owner: currentReceiptOwner)
+            try pdfRequire(store.workspaceMemory.pdf == synchronous
+                && store.pdfWorkspaceMemoryLatestCaptureSequence == newSynchronousReceipt.captureSequence,
+                "The newer synchronous viewport capture was not accepted immediately")
+            let delayedReceiptRejected: Bool = await withCheckedContinuation { continuation in
+                DispatchQueue.main.async {
+                    let before = self.store.workspaceMemory
+                    let watermark = self.store.pdfWorkspaceMemoryLatestCaptureSequence
+                    self.store.updatePDFWorkspaceMemory(oldDeferredReceipt, owner: currentReceiptOwner)
+                    continuation.resume(returning: self.store.workspaceMemory == before
+                        && self.store.pdfWorkspaceMemoryLatestCaptureSequence == watermark
+                        && watermark >= newSynchronousReceipt.captureSequence)
+                }
+            }
+            try pdfRequire(delayedReceiptRejected && store.workspaceMemory.pdf?.page == 4
+                && store.workspaceMemory.pdf != rejectedReceiptMemory,
+                "An older same-owner deferred capture overwrote a newer synchronous position")
+            store.flushWorkspaceMemory()
+            let afterDeferredDrain = try JSONDecoder().decode(BookWorkspaceMemory.self,
+                from: Data(contentsOf: library.appendingPathComponent("Workspace/\(workspaceName).json")))
+            try pdfRequire(afterDeferredDrain.pdf?.page == 4 && afterDeferredDrain.pdf != rejectedReceiptMemory,
+                "The stale deferred capture reached the saved workspace")
+            assertions["oldSameOwnerDeferredReceiptCannotOverwriteNewSynchronousCapture"] = true
             states.append(sameBookState("before-verified-reselect", controller: controller))
             let stableDisplayID = store.pdfDisplayReloadID
             var memoryBeforeLastReselect = beforeMemory
@@ -714,12 +839,14 @@ struct PanelHarnessRoot: View {
                 states.append(sameBookState("with-native-find-and-selection-\(cycle)", controller: controller))
                 metrics.record("samebook-verified-reselect-\(cycle)")
                 let token = store.pdfNavigationToken, generation = store.navigationGeneration
+                guard let ownerBeforeReselect = store.pdfWorkspaceMemoryOwner else { throw ReadingError.invalid("Reselect receipt owner missing") }
                 await store.selectBook(project.id, preferredRoute: "reader")
                 try await pdfWait("verified same-book reselect clears native interaction and stays ready") {
                     controller.isReady && controller.page == 4 && self.store.selectedUnit?.page == 4
                         && initial.2.currentSelection == nil && initial.2.highlightedSelections?.isEmpty != false
                         && !initialDocument.isFinding && !controller.isSearchVisible && self.store.sourceReadingSelection == nil
                 }
+                try await rejectDeferredReceipt(ownerBeforeReselect, label: "oldVerifiedReselect")
                 try pdfRequire(pdfObjects()?.0 === initial.0 && pdfObjects()?.2 === initial.2 && pdfObjects()?.2.document === initialDocument,
                     "Verified unchanged source must retain its native container, PDFView and PDFDocument")
                 try pdfRequire(store.pdfDisplayReloadID == stableDisplayID && store.pdfNavigationToken > token && store.navigationGeneration > generation,
@@ -754,23 +881,28 @@ struct PanelHarnessRoot: View {
 
             // Keep the prior explicit teardown/reload semantics: this is a
             // user-visible remount, not an eligible mounted-reader retention.
+            metrics.record("samebook-explicit-nil-teardown")
+            guard let ownerBeforeTeardown = store.pdfWorkspaceMemoryOwner else { throw ReadingError.invalid("Teardown receipt owner missing") }
             store.sourceFileURL = nil
             try await pdfWait("explicit URL removal dismantles reader") { self.pdfObjects() == nil }
             await store.selectBook(project.id, preferredRoute: "reader")
             try await pdfWait("explicit remount ready") { self.pdfObjects() != nil && controller.isReady && controller.page == 4 }
             try pdfRequire(pdfObjects()?.0 !== initial.0 && pdfObjects()?.2.document !== initialDocument,
                 "Explicitly removed source must not resurrect the previous native document")
+            try await rejectDeferredReceipt(ownerBeforeTeardown, label: "oldExplicitDisplay")
             assertions["explicitNilStillForcesFreshMount"] = true
 
             func reselectExpectingFresh(_ label: String, ready: Bool) async throws {
                 guard let old = self.pdfObjects(), let oldDocument = old.2.document else { throw ReadingError.invalid("Missing old PDF for " + label) }
                 let reload = self.store.pdfDisplayReloadID
+                guard let ownerBeforeSourceChange = self.store.pdfWorkspaceMemoryOwner else { throw ReadingError.invalid("Source-change receipt owner missing") }
                 metrics.record("samebook-source-change-" + label)
                 await self.store.selectBook(project.id, preferredRoute: "reader")
                 try await self.pdfWait("forced source reload: " + label) {
                     guard let current = self.pdfObjects() else { return false }
                     return current.0 !== old.0 && current.2.document !== oldDocument && (!ready || controller.isReady)
                 }
+                try await rejectDeferredReceipt(ownerBeforeSourceChange, label: "oldSourceDisplay-" + label)
                 try self.pdfRequire(self.store.pdfDisplayReloadID != reload, "Source mismatch did not force a fresh display ID: " + label)
                 if !ready { try self.pdfRequire(self.pdfObjects()?.2.document == nil || !controller.isReady, "Invalid source kept a ready stale document: " + label) }
                 assertions[label + "InvalidatesOldDocument"] = true
@@ -814,6 +946,7 @@ struct PanelHarnessRoot: View {
 
             // Equal bookID/hash in another repository must not inherit a prior
             // library's lease, even while a reader for it remains mounted.
+            metrics.record("samebook-other-root-admission")
             let otherRoot = library.deletingLastPathComponent().appendingPathComponent("samebook-other-library", isDirectory: true)
             let otherOwner = LibraryRepository(rootURL: otherRoot)
             var other = BookProject(id: project.id, title: "Same identifiers, other owner", originalName: project.originalName,
@@ -821,11 +954,14 @@ struct PanelHarnessRoot: View {
             PluginEngine.seed(&other); other = try await otherOwner.create(other, sourceURL: source)
             guard let oldOwnerDocument = pdfObjects()?.2.document else { throw ReadingError.invalid("Missing pre-owner-change document") }
             let oldOwnerDisplay = store.pdfDisplayReloadID
+            guard let oldRootReceipt = store.pdfWorkspaceMemoryOwner else { throw ReadingError.invalid("Root-change receipt owner missing") }
             store.repository = otherOwner; store.libraryRootURL = otherRoot; store.books = [other]
             await store.selectBook(other.id, preferredRoute: "reader")
             try await pdfWait("new library reader") { controller.isReady && self.pdfObjects()?.2.document !== oldOwnerDocument }
+            try await rejectDeferredReceipt(oldRootReceipt, label: "oldLibraryRoot")
             try pdfRequire(store.pdfDisplayReloadID != oldOwnerDisplay && store.sourceFileURL?.path.hasPrefix(otherRoot.path + "/") == true,
                 "Same identifiers in another library reused an old source lease")
+            metrics.record("samebook-original-root-readmission")
             store.repository = originalOwner; store.libraryRootURL = originalRoot; store.books = [project]
             await store.selectBook(project.id, preferredRoute: "reader")
             try await pdfWait("original owner restored") { controller.isReady && self.store.sourceFileURL == canonical }
@@ -833,6 +969,7 @@ struct PanelHarnessRoot: View {
 
             // Replacing an already-unlocked source with a differently encrypted
             // file must not inherit its old bookID-based unlocked fast return.
+            metrics.record("samebook-encrypted-fixtures")
             let encryptedA = output.appendingPathComponent("encrypted-a.pdf"), encryptedB = output.appendingPathComponent("encrypted-b.pdf")
             guard let encryptorA = PDFDocument(data: sourceBytes), let encryptorB = PDFDocument(data: sourceBytes),
                   encryptorA.write(to: encryptedA, withOptions: [.ownerPasswordOption: "owner-a", .userPasswordOption: "fixture-pass-a"]),
@@ -844,22 +981,26 @@ struct PanelHarnessRoot: View {
             var encrypted = BookProject(title: "Encrypted same-book source fixture", originalName: encryptedA.lastPathComponent,
                 sourceHash: encryptedHash, units: (1...8).map { SourceUnit(id: "encrypted-page-\($0)", order: $0-1, chapter: "Encrypted", page: $0, text: "Encrypted fixture page \($0)") })
             PluginEngine.seed(&encrypted); encrypted = try await originalOwner.create(encrypted, sourceURL: encryptedA)
+            metrics.record("samebook-encrypted-initial-admission")
             store.books = [project, encrypted]
             await store.selectBook(encrypted.id, preferredRoute: "reader")
             try await pdfWait("encrypted source requests a password") { self.store.pdfPasswordRequest != nil && !self.store.isBusy }
             guard let passwordRequest = store.pdfPasswordRequest else { throw ReadingError.invalid("Missing encrypted source prompt") }
+            metrics.record("samebook-encrypted-unlock")
             store.submitPDFPassword("fixture-pass-a", for: passwordRequest)
             try await pdfWait("encrypted source unlocked") {
                 controller.isReady && self.store.pdfUnlockedBookIDs.contains(encrypted.id) && !self.store.isBusy
                     && self.pdfObjects()?.2.document?.isEncrypted == true && self.pdfObjects()?.2.document?.isLocked == false
             }
             guard let unlocked = pdfObjects()?.2.document else { throw ReadingError.invalid("Unlocked document missing") }
+            metrics.record("samebook-encrypted-verified-reselect")
             await store.selectBook(encrypted.id, preferredRoute: "reader")
             try await pdfWait("unchanged encrypted session stays ready") { controller.isReady && self.store.pdfPasswordRequest == nil }
             try pdfRequire(pdfObjects()?.2.document === unlocked, "Unchanged verified encrypted source must retain the same unlocked native document")
             let encryptedCanonical = await originalOwner.sourceURL(for: encrypted)
             try Data(contentsOf: encryptedB).write(to: encryptedCanonical, options: .atomic)
             let encryptedReload = store.pdfDisplayReloadID
+            metrics.record("samebook-encryption-replacement")
             await store.selectBook(encrypted.id, preferredRoute: "reader")
             try await pdfWait("changed encryption requests a new password") {
                 self.store.pdfPasswordRequest != nil && !self.store.isBusy && self.pdfObjects()?.2.document !== unlocked
@@ -870,9 +1011,11 @@ struct PanelHarnessRoot: View {
             if let request = store.pdfPasswordRequest { store.cancelPDFPasswordRequest(request.id) }
             try encryptedBytes.write(to: encryptedCanonical, options: .atomic)
             assertions["unchangedEncryptedSessionRetainedAndReplacementInvalidated"] = true
+            metrics.record("samebook-final-original-readmission")
             await store.selectBook(project.id, preferredRoute: "reader")
             try await pdfWait("final original ready") { controller.isReady && self.store.bookID == project.id }
 
+            metrics.record("samebook-final-preservation-checks")
             try pdfRequire(try Data(contentsOf: canonical) == sourceBytes && Data(contentsOf: source) == sourceBytes,
                 "Original PDF bytes were not restored and preserved")
             try pdfRequire(try Data(contentsOf: projectURL) == projectBefore, "Selection tests rewrote the original project/analysis/annotations")
