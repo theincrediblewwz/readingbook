@@ -4,7 +4,7 @@
 
 本轮没有采用 presentation/delta 的参数裁剪。参数字符串体积虽然减少，但正式对照未通过预先冻结的前台与收益门槛，不能据此宣称提速。产品仍保留原有完整参数构造、单次在途更新、合并请求和 Native State 校验。
 
-0.23.15/build46 包含两项在预检中独立复现的 Markdown 功能修复：聚焦取消后残留高亮，以及规范等价但 UTF-8 不同的正文/来源未传到原生渲染器。完整 CI 又发现新系统上的旧 PDF 坐标恢复问题，追加真实 clip 视口对齐候选，详见末节。完整 CI、包验证和本机安装结果在交付后补记；当前不把本地通过写成远端完成。
+0.23.15/build46 包含两项在预检中独立复现的 Markdown 功能修复：聚焦取消后残留高亮，以及规范等价但 UTF-8 不同的正文/来源未传到原生渲染器。完整 CI 又发现新系统上的旧 PDF 跨页坐标恢复问题，追加按实际视口几何确定目的地页的候选，详见末节。完整 CI、包验证和本机安装结果在交付后补记；当前不把本地通过写成远端完成。
 
 ## 聚焦取消的真实失败与修复
 
@@ -65,6 +65,8 @@
 
 第二次 [CI40862947723](https://github.com/theincrediblewwz/readingbook/actions/runs/40862947723) 在 macOS26.6.2 同样失败，新增现场明确为：已挂载1个PDF/doc8，缩放3.43且ready，Native/controller/selected/workspace全为3；destination仍为页3的负y坐标，owner/source/token匹配，busy/restoring/storage均false。已排除把准入前无PDF误当失败原因。本机macOS26.5.2的独立边界及相同顺序workspace/PDF/samebook/boundary均过，说明不能只靠本机一次通过交付。
 
-恢复补偿改为以真实 `NSClipView.bounds` 左上角作为实际基准，目标点仍用页面→PDFView→clip的原有坐标变换。两点在同一clip坐标系，用同一bounds快照相减修正origin，保留翻转、缩放、rotation/crop转换、有限范围校验及全部owner/revision/receipt守护；不猜页码、不改期限或强跳下一页。原实现依赖destination元数据是否反映实际clamp；其具体回显行为仍是假说，新的补偿直接使用物理视口测量。
+第三次 [CI40866118745](https://github.com/theincrediblewwz/readingbook/actions/runs/40866118745) 验证了仅替换clip角点补偿无效：实际视口几何中心属于页4，但Native页仍3；getter投影与实际clip角点误差约1e-10，反而否定了getter位置失真的假说。因此撤销该无效候选，保持原clip补偿。CI还显示17点传统滚动条占位，本机默认覆盖滚动条；本机强制传统样式的旧实现仍通过，所以不能把滚动条差异当作已证实根因。
 
-旧实现本机几何正控确认零insets/unflipped时getter投影与实际clip角点相符。候选本机原样边界、PDF和samebook均通过，legacy固定landmark误差小于1e-8点；90/270旋转、非零crop原点、横向、异常锚点、首末页及原书/笔记/分析字节检查保留，三类警告零。非零insets未单独实测，不作所有内部布局均已覆盖的声明。最终仍以候选完整CI为交付门槛，不将该功能修复计入参数优化收益。
+最终候选仅在连续模式且已验证的原锚点确实越出原页框时，用真实clip的半宽/半高预测恢复后视口中心，经clip→PDFView、`page(for:nearest:false)`精确命中同一文档的几何页。若与记录页不同，把**同一个原始锚点**转换到命中页，作为PDFDestination的页身份；不把中心当作新锚点，不夹坐标，不猜下一页。未命中、空隙、同页、非有限或异文档均回退原目标。普通页内记录、显式导航、原有限范围和owner/revision/receipt守护不变。
+
+本机覆盖/传统两种滚动条完整边界均通过，固定landmark误差小于1e-8点，普通PDF/samebook也通过，三类警告零。强制样式只修改测试窗口自己的NSScrollView，不改用户系统偏好；CI增加两样式各一新进程，仍保留原8秒及几何容差。90/270旋转、非零crop原点、横向、异常锚点、首末页及数据保留是未退化正控，未声称它们全部命中新跨页分支。非零insets未单独实测。最终仍以新系统完整CI为交付门槛，不将这项功能修复计入参数优化收益。

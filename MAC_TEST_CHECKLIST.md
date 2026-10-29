@@ -4,7 +4,7 @@
 
 本机最终tracked入口29/29原生桥接、24案例/152项字节身份全部通过，编译/运行警告零；保持Native完整State、revision、generation、授权、选区与原文完整保存，没有重挂或改数据格式。新增两组顺序CI，版本预备0.23.15/build46。**当前安装仍为0.23.14，CI、核包、GitHub Release及本机替换尚待完成**，不能把本地通过写成交付完成。原书库/偏好保护在`private-books/webkit-bridge-20261029/initial/`，所有新产物在工作区；运行状态`logs/webkit-bridge-20261029/RUN_STATUS.json`。后续其他16组件与滚动任务保留。
 
-完整CI两次在macOS26.6.2旧负坐标恢复场景失败，第二次现场已确认Native/controller/selected/workspace全页3，非未挂载。追加真实clip视口角点补偿候选，不靠destination元数据、不猜下一页、不改8秒或几何容差。本机26.5.2原样boundary/PDF/samebook通过、landmark误差<1e-8点、三类警告零；候选仍须完整CI通过后才安装。两轮旧CI和全部本机结果保留，不把初次无PDF的准入前快照误判为超时现场。
+完整CI三次在macOS26.6.2旧负坐标恢复场景失败；新现场确认实际几何中心页4但Native/controller/selected/workspace仍页3。单改clip补偿未解决且已撤销，getter失真假说也被观测否定。新候选只在连续越框锚点时按实际clip预测几何中心、精确命中同doc目的地页并转换**同一原始锚点**，nil/空隙保守回退，不猜下一页、不改8秒或几何容差。本机26.5.2 overlay/legacy两样式完整boundary及PDF/samebook通过、landmark误差<1e-8点、三类警告零；CI添加两样式各一新进程，候选仍须完整CI通过后安装。三轮旧CI和全部本机结果保留。
 
 ---
 

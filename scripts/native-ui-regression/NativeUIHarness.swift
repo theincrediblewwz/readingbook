@@ -390,6 +390,17 @@ struct PanelHarnessRoot: View {
         let deadline = ProcessInfo.processInfo.systemUptime + 8
         while ProcessInfo.processInfo.systemUptime < deadline {
             window?.contentView?.layoutSubtreeIfNeeded()
+            let forcedStyle = ProcessInfo.processInfo.environment["HARNESS_PDF_SCROLLER_STYLE"]
+                ?? (ProcessInfo.processInfo.environment["HARNESS_FORCE_LEGACY_SCROLLERS"] == "1" ? "legacy" : "")
+            if ["legacy", "overlay"].contains(forcedStyle), let root = window?.contentView {
+                let style: NSScroller.Style = forcedStyle == "legacy" ? .legacy : .overlay
+                for pdf in descendants(root, PDFView.self) {
+                    for scroll in descendants(pdf, NSScrollView.self) where scroll.scrollerStyle != style {
+                        scroll.scrollerStyle = style
+                    }
+                }
+                root.layoutSubtreeIfNeeded()
+            }
             if condition() { return }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
@@ -718,6 +729,15 @@ struct PanelHarnessRoot: View {
             window.contentView = host; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             metrics.scenario(); metrics.record("boundary-normal-admission")
             try await pdfWait("boundary PDF initially ready") { controller.isReady && self.pdfObjects()?.2.document?.pageCount == 8 }
+            if let pdf = pdfObjects()?.2, let target = pdf.document?.page(at: 3) {
+                pdf.layoutDocumentView()
+                let box = target.bounds(for: pdf.displayBox)
+                let projected = pdf.convert(CGPoint(x: box.midX, y: box.midY), from: target)
+                try pdfRequire(!pdf.bounds.contains(projected), "Offscreen lookup control must be outside the current viewport")
+                try pdfRequire(pdf.page(for: projected, nearest: false) === target,
+                    "Public geometric page lookup did not resolve the offscreen control")
+                assertions["offscreenGeometricPageLookupSupported"] = true
+            } else { throw ReadingError.invalid("Offscreen geometric lookup control missing") }
             func anchor(_ pdf: PDFView, page: Int) throws -> CGPoint {
                 guard let destination = pdf.currentDestination, let destinationPage = destination.page,
                       let target = pdf.document?.page(at: page - 1) else { throw ReadingError.invalid("Boundary anchor missing") }
@@ -1008,6 +1028,9 @@ struct PanelHarnessRoot: View {
         }
         metrics.settling(); try? await Task.sleep(nanoseconds: 250_000_000)
         assertions["states"] = states; assertions["metrics"] = metrics.snapshot()
+        assertions["forcedLegacyScrollers"] = ProcessInfo.processInfo.environment["HARNESS_FORCE_LEGACY_SCROLLERS"] == "1"
+        assertions["scrollerStyleOverride"] = ProcessInfo.processInfo.environment["HARNESS_PDF_SCROLLER_STYLE"]
+            ?? (ProcessInfo.processInfo.environment["HARNESS_FORCE_LEGACY_SCROLLERS"] == "1" ? "legacy" : "")
         assertions["windowVisible"] = window?.isVisible ?? false
         assertions["testScope"] = "real continuous PDF capture/reselect/disk restoration; source/notes/analysis preserved; no FPS, AI or original user library"
         writeJSON("result.json", assertions)

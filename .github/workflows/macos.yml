@@ -62,7 +62,8 @@ jobs:
           python3 scripts/native-ui-regression/run.py --mode workspace --cycles 24 --tag ci-workspace
           python3 scripts/native-ui-regression/run.py --mode pdf --cycles 3 --tag ci-pdf
           python3 scripts/native-ui-regression/run.py --mode samebook --cycles 3 --tag ci-samebook
-          python3 scripts/native-ui-regression/run.py --mode boundary --cycles 1 --tag ci-boundary
+          HARNESS_PDF_SCROLLER_STYLE=legacy python3 scripts/native-ui-regression/run.py --mode boundary --cycles 1 --tag ci-boundary-legacy
+          HARNESS_PDF_SCROLLER_STYLE=overlay python3 scripts/native-ui-regression/run.py --mode boundary --cycles 1 --tag ci-boundary-overlay
           python3 scripts/native-ui-regression/run.py --mode navigation --cycles 1 --tag ci-book-picker
           python3 scripts/native-ui-regression/run.py --mode continuation --cycles 12 --tag ci-continuation
       - name: Native reading continuation and preservation regression

@@ -1185,23 +1185,45 @@ struct PDFReaderView: NSViewRepresentable {
                     && $0.width > 0 && $0.height > 0
             }
             if finiteGeometry, point.x.isFinite, point.y.isFinite, allowed.contains(point) {
-                pdfView.go(to: PDFDestination(page: page, at: point))
+                var destinationPage = page, destinationPoint = point
+                // Old continuous-view records may name a neighbouring page
+                // while their out-of-page anchor displays another page.
+                // Resolve the expected viewport center geometrically, keeping
+                // the exact original anchor instead of guessing a page number.
+                if pdfView.displayMode == .singlePageContinuous,
+                   !box.insetBy(dx: -0.000_001, dy: -0.000_001).contains(point) {
+                    pdfView.layoutDocumentView()
+                    observePDFViewport()
+                    if let clip = observedClip {
+                        let bounds = clip.bounds
+                        let desired = clip.convert(pdfView.convert(point, from: page), from: pdfView)
+                        let center = CGPoint(x: desired.x + bounds.width / 2,
+                            y: desired.y + (clip.isFlipped ? bounds.height / 2 : -bounds.height / 2))
+                        let viewCenter = pdfView.convert(center, from: clip)
+                        if bounds.width.isFinite, bounds.height.isFinite, bounds.width > 0, bounds.height > 0,
+                           center.x.isFinite, center.y.isFinite, viewCenter.x.isFinite, viewCenter.y.isFinite,
+                           let resolved = pdfView.page(for: viewCenter, nearest: false),
+                           document.index(for: resolved) != NSNotFound, resolved !== page {
+                            let converted = pdfView.convert(pdfView.convert(point, from: page), to: resolved)
+                            if converted.x.isFinite, converted.y.isFinite {
+                                destinationPage = resolved; destinationPoint = converted
+                            }
+                        }
+                    }
+                }
+                pdfView.go(to: PDFDestination(page: destinationPage, at: destinationPoint))
                 pdfView.layoutDocumentView()
                 // PDFKit may clamp go(to:) to the page even for a legitimate
                 // viewport origin outside it. Finish the exact restoration in
                 // clip coordinates, which also account for flipped/scaled views.
                 observePDFViewport()
-                if let clip = observedClip {
+                if let clip = observedClip, let actual = pdfView.currentDestination,
+                   let actualPage = actual.page, document.index(for: actualPage) != NSNotFound {
                     let desiredPoint = clip.convert(pdfView.convert(point, from: page), from: pdfView)
-                    let bounds = clip.bounds
-                    // Align the measured viewport edge directly, keeping this
-                    // correction independent of navigation destination metadata.
-                    // Both points are in this clip's own coordinates.
-                    let actualPoint = CGPoint(x: bounds.minX, y: clip.isFlipped ? bounds.minY : bounds.maxY)
-                    let origin = CGPoint(x: bounds.origin.x + desiredPoint.x - actualPoint.x,
-                                         y: bounds.origin.y + desiredPoint.y - actualPoint.y)
-                    if bounds.width.isFinite, bounds.height.isFinite, bounds.width > 0, bounds.height > 0,
-                       origin.x.isFinite, origin.y.isFinite {
+                    let actualPoint = clip.convert(pdfView.convert(actual.point, from: actualPage), from: pdfView)
+                    let origin = CGPoint(x: clip.bounds.origin.x + desiredPoint.x - actualPoint.x,
+                                         y: clip.bounds.origin.y + desiredPoint.y - actualPoint.y)
+                    if origin.x.isFinite, origin.y.isFinite {
                         clip.scroll(to: origin); clip.enclosingScrollView?.reflectScrolledClipView(clip)
                     }
                 }
