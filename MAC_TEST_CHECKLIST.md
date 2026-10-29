@@ -1,10 +1,18 @@
-# 0.23.15 功能修复待远端验证与安装（2026-10-29）
+# 0.23.15 已发布、安装与原书验收完成（2026-10-29）
 
-先读[Markdown/WebKit对照与修复](Design/2026-10-29-markdown-bridge-results.md)。参数裁剪没有达到冻结的前台和端到端收益门槛，**未进入产品**；12行和失败完整保留，不用字符串代理字节量宣布提速。交付范围仅为两项有独立失败→修复证据的功能问题：focus调用缺return导致取消后旧高亮残留；SwiftUI规范等价String在传入Native前丢失精确新字节。
+先读[本轮Markdown/WebKit对照与修复](Design/2026-10-29-markdown-bridge-results.md)。**参数裁剪未达到冻结的前台与端到端收益门槛，未进入产品**；保留12行全部原始结果及失败，不把字符串代理体积当成提速。本次交付两项Markdown功能修复和一项PDF旧跨页坐标恢复修复：取消聚焦后残留高亮、SwiftUI规范等价String吞掉新UTF-8来源，以及新macOS中目的地页身份与实际视口几何不一致。没有改写书/笔记/分析格式或撤掉来源守护。
 
-本机最终tracked入口29/29原生桥接、24案例/152项字节身份全部通过，编译/运行警告零；保持Native完整State、revision、generation、授权、选区与原文完整保存，没有重挂或改数据格式。新增两组顺序CI，版本预备0.23.15/build46。**当前安装仍为0.23.14，CI、核包、GitHub Release及本机替换尚待完成**，不能把本地通过写成交付完成。原书库/偏好保护在`private-books/webkit-bridge-20261029/initial/`，所有新产物在工作区；运行状态`logs/webkit-bridge-20261029/RUN_STATUS.json`。后续其他16组件与滚动任务保留。
+产品源码`5b0d4a1447e347e676f18a8d2e4cd00ee94b86e1`，[完整CI40870093415](https://github.com/theincrediblewwz/readingbook/actions/runs/40870093415) **664项Core零失败/零编译警告**；原生工作区/PDF/传统及覆盖两样式边界、续读、独立AI、笔记、Markdown29项及24案例/152项精确字节、工具检查和双架构打包均通过。先前3次CI边界失败保留，未放宽8秒或几何断言；无效clip补偿候选已撤销。新修复保持同一原始锚点，只精确解析连续越框记录的目的地页，nil/空隙/非有限/异文档保守回退。
 
-完整CI三次在macOS26.6.2旧负坐标恢复场景失败；新现场确认实际几何中心页4但Native/controller/selected/workspace仍页3。单改clip补偿未解决且已撤销，getter失真假说也被观测否定。新候选只在连续越框锚点时按实际clip预测几何中心、精确命中同doc目的地页并转换**同一原始锚点**，nil/空隙保守回退，不猜下一页、不改8秒或几何容差。本机26.5.2 overlay/legacy两样式完整boundary及PDF/samebook通过、landmark误差<1e-8点、三类警告零；CI添加两样式各一新进程，候选仍须完整CI通过后安装。三轮旧CI和全部本机结果保留。
+[Release0.23.15](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.15)与本机`/Applications/ReadingBook.app`均为 **0.23.15/build46**。canonical`dist/ReadingBook-0.23.15-Mac.zip`，24,840,610字节，SHA256`64fd9fa534164c0486234e413aa70069c1a90ee760972a9eb657d03c058d9a2a`；Actions摘要/两层ZIP/精确源码与版本/arm64+x86_64/0755/严格签名/32离线资源均核验，Release附件摘要同值。安装App36文件与核验包一致；实际About、第103页同书重选与正常退出重启仍103、第102页既存句译及伴读/对话切换均通过，现留在原书103页/343%，未触发新生成或保存操作。
+
+安装前最新20文件原书库、偏好及旧14应用保留在`private-books/webkit-bridge-20261029/install-before-0.23.15/`。安装期间原库逐字节相同；启动检查后无文件增删，原书/笔记/分析字节保持，仅Workspace正常更新。明确比较3项生产服务相关偏好键及其余所有偏好，仅`NSWindow Frame main`窗口位置正常变化；旧substring检查把main/ReadingBook误匹配为ai的初次失败和脚本原样保留，未回写偏好。10秒913个主线程样本中911为事件等待，三类统一日志警告零；318.7M/峰值457.5M只属单次安装验收，非内存/FPS/泄漏或对照收益证明。
+
+本轮四批共101项精确清理；退役3,270,086,520B（3.05GiB）可再生/重复载荷，保留用户原数据、14回滚、15最新版、v4唯一重放App与源码、原始失败/DOM/调用栈及历史待续对照。工作区早期6,141,800KiB，测试/交付中峰值8,468,620KiB，最后清理后6,125,276KiB（约5.84GiB）；这些包含新增包与证据，不等于APFS可用块。四份清理记录在本机`logs/webkit-bridge-20261029/cleanup-inventory/`。原生helper与CI重复下载/解压载荷已退役，必要时从canonical包重新解压或按脚本重链，复用共享模块缓存，不再建每轮私有cache。
+
+GitHub main唯一分支，Release/tag/Actions包均保留最新15与14回滚，旧13载荷退役，提交历史保持。所有新源、构建、缓存、日志与备份仍在本工作区；不上传真实书、笔记、分析、偏好、密钥或用户截图。
+
+下一步分别采样**单一字号、单一主题**及长文布局/高度反馈；本轮每次实验同时改变二者，24请求/48presentation不直接认作产品冗余。其余16组件与滚动任务仍在[组件性能计划](Design/2026-10-29-component-performance-plan.md)，未取消。下方14及更早为历史接续。
 
 ---
 
