@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """One isolated, time-marked native PDF scrolling/capture run. No OS input injection."""
 import argparse
+import ctypes
 import datetime
 import hashlib
 import json
 import os
+import math
 from pathlib import Path
+import plistlib
 import selectors
 import subprocess
 import sys
@@ -19,6 +22,93 @@ MANUAL_SETUP_TIMEOUT_SECONDS = 90
 
 class ManualSetupError(RuntimeError):
     """Setup was not confirmed; the held run/control must remain unconsumed."""
+
+
+class FixedDwellError(RuntimeError):
+    """A requested completed-run clock boundary could not be met."""
+
+
+def mach_ticks():
+    system = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+    system.mach_absolute_time.restype = ctypes.c_uint64
+    return system.mach_absolute_time()
+
+
+def timing_protocol(args):
+    seconds, tolerance = args.completed_dwell_seconds, args.dwell_tolerance_seconds
+    if seconds is None:
+        if args.formal_fixed_dwell:
+            raise ValueError("formal fixed dwell requires --completed-dwell-seconds")
+        return None
+    if not math.isfinite(seconds) or not 2 <= seconds <= 90:
+        raise ValueError("completed dwell must be finite and between 2 and 90 seconds")
+    if not math.isfinite(tolerance) or not 0.05 <= tolerance <= 2:
+        raise ValueError("dwell tolerance must be finite and between 0.05 and 2 seconds")
+    if args.manual_setup and args.formal_fixed_dwell:
+        raise ValueError("formal fixed dwell cannot use variable manual setup")
+    if args.formal_fixed_dwell and (not args.pointer_park_confirmed or not args.no_overlay_confirmed
+            or not args.no_interaction_confirmed or not args.pointer_park_evidence.strip()
+            or not args.expected_source_commit):
+        raise ValueError("formal fixed dwell requires exact source and explicit pointer/overlay/interaction preflight evidence")
+    return dict(version=1, anchor="run.completed", requestedSeconds=seconds,
+                toleranceSeconds=tolerance, formalRequested=args.formal_fixed_dwell)
+
+
+def validate_source_identity(build, expected):
+    source = build.get("sourceCommit")
+    if expected is not None and (len(expected) != 40 or any(c not in "0123456789abcdef" for c in expected)
+                                 or source != expected):
+        raise ValueError("expected source must be the exact 40-character frozen build commit")
+    return source
+
+
+def pointer_protocol(args):
+    if not (args.pointer_park_confirmed and args.no_overlay_confirmed and args.no_interaction_confirmed):
+        return None
+    return dict(version=1, condition="pointer parked outside PDF; ROI clear before launch",
+                interactionPolicy="no operator UI interaction from preflight through capture",
+                verification="operator assertion only; no continuous pointer/overlay telemetry")
+
+
+def fixed_dwell_plan(events_path, protocol):
+    rows = [json.loads(line) for line in events_path.read_text().splitlines() if line]
+    main = next(row for row in rows if row["event"] == "main.entry")
+    completed = next(row for row in rows if row["event"] == "run.completed")
+    numer, denom = main["timebaseNumer"], main["timebaseDenom"]
+    if numer <= 0 or denom <= 0 or completed["ticks"] < main["ticks"]:
+        raise FixedDwellError("invalid completed-run Mach anchor/timebase")
+    factor = numer / denom / 1e9
+    return dict(anchorMachTicks=completed["ticks"], secondsPerMachTick=factor,
+                targetMachTicks=completed["ticks"] + round(protocol["requestedSeconds"] / factor))
+
+
+def wait_for_capture_boundary(plan, control):
+    # Four seconds permit collector initialization and driver arming. A missed
+    # target is rejected, never silently shifted from an early case to a warm one.
+    while True:
+        if (control / "driver-failure.json").exists() or (control / "start.json").exists():
+            raise FixedDwellError("fixed dwell control failed or was consumed before capture")
+        remaining = (plan["targetMachTicks"] - mach_ticks()) * plan["secondsPerMachTick"]
+        if remaining <= 0:
+            raise FixedDwellError("fixed dwell target passed before capture; no input was started")
+        if remaining <= 4:
+            return
+        time.sleep(min(0.1, remaining - 4))
+
+
+def command_delay(plan, now_ticks):
+    remaining = (plan["targetMachTicks"] - now_ticks) * plan["secondsPerMachTick"]
+    if remaining <= 0 or remaining > 30:
+        raise FixedDwellError("fixed dwell target cannot be armed within the driver's 0–30s delay")
+    return remaining
+
+
+def qualify_fixed_dwell(dwell, protocol):
+    actual = dwell["runCompletedToInputSeconds"]
+    error = actual - protocol["requestedSeconds"]
+    return dict(anchor="run.completed", requestedSeconds=protocol["requestedSeconds"],
+                actualSeconds=actual, errorSeconds=error, toleranceSeconds=protocol["toleranceSeconds"],
+                qualified=math.isfinite(actual) and abs(error) <= protocol["toleranceSeconds"])
 
 
 def diagnostic_environment(values):
@@ -160,6 +250,17 @@ def argument_parser():
     parser.add_argument("--roi-confirmed", action="store_true")
     parser.add_argument("--manual-setup", action="store_true",
                         help="wait up to 90s for nonce-bound ROI/overlay/interaction confirmation before collector launch")
+    parser.add_argument("--completed-dwell-seconds", type=float,
+                        help="target actual input this many Mach seconds after run.completed (2–90)")
+    parser.add_argument("--dwell-tolerance-seconds", type=float, default=0.5)
+    parser.add_argument("--formal-fixed-dwell", action="store_true")
+    parser.add_argument("--expected-source-commit", help="exact 40-character frozen source commit")
+    parser.add_argument("--pointer-park-confirmed", action="store_true")
+    parser.add_argument("--no-overlay-confirmed", action="store_true")
+    parser.add_argument("--no-interaction-confirmed", action="store_true",
+                        help="operator commitment to no UI interaction from preflight through capture; not telemetry")
+    parser.add_argument("--pointer-park-evidence", default="",
+                        help="operator description of preflight parking/ROI check; not automated full-duration proof")
     parser.add_argument("--diagnostic-env", action="append", default=[],
                         help="allowlisted scroll-diagnostic NAME=0/1; repeat for distinct keys")
     return parser
@@ -168,6 +269,7 @@ def argument_parser():
 def main():
     args = argument_parser().parse_args()
     diagnostic_env = diagnostic_environment(args.diagnostic_env)
+    protocol = timing_protocol(args)
     if not args.tag.replace("-", "").replace("_", "").isalnum():
         raise ValueError("tag must be alphanumeric with hyphens/underscores")
     if not args.roi_confirmed:
@@ -176,12 +278,18 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     source_manifest, fixture = local(args.manifest), local(args.fixture)
     build = read(source_manifest)
+    validate_source_identity(build, args.expected_source_commit)
     binary = local(build["app"]) / "Contents/MacOS/ReadingBook"
     driver, collector = local(args.driver), local(args.collector)
     before = manifest_tree(fixture)
     binary_before, driver_before, collector_before = sha(binary), sha(driver), sha(collector)
     if binary_before != build["binarySHA256"]:
         raise RuntimeError("frozen target binary does not match its build manifest")
+    info_path = binary.parent.parent / "Info.plist"
+    info = plistlib.loads(info_path.read_bytes()) if info_path.exists() else {}
+    if args.formal_fixed_dwell and (build.get("diagnosticOnly") or build.get("formalFPSBaselineExcluded")
+                                    or any(v == "1" for v in diagnostic_env.values())):
+        raise ValueError("formal fixed dwell cannot use component-disabled/diagnostic-only builds")
     run = local(build["buildRoot"]) / "runs" / args.tag / "run-1"
     held_path = run / "held-process.json"
     control = run / "scroll-control"
@@ -194,8 +302,15 @@ def main():
                   collectorSHA256=collector_before, fixtureFiles=len(before), inputMethod="programmatic-own-process-continuous-PDF-scroll",
                   latencyBaselineExcluded=True, hardwareGesture=False,
                   diagnosticEnvironment=diagnostic_env, manualSetupRequired=args.manual_setup,
+                  sourceCommit=build.get("sourceCommit"), buildManifestSHA256=sha(source_manifest),
+                  appVersion=info.get("CFBundleShortVersionString"), appBuild=info.get("CFBundleVersion"),
+                  timingProtocol=protocol, pointerProtocol=pointer_protocol(args),
+                  pointerParkEvidence=args.pointer_park_evidence,
                   manualSetupStatus="pending" if args.manual_setup else "not-requested",
                   **fps_diagnostic_metadata(build, diagnostic_env, args.manual_setup))
+    if protocol is not None and not args.formal_fixed_dwell:
+        result["formalFPSBaselineExcluded"] = True
+        result["formalFPSBaselineExclusionReasons"].append("fixed-dwell-without-formal-preflight")
     write(output / "setup.json", result)
     try:
         launch_args = [sys.executable, str(ROOT / "scripts/mac-performance/run.py"), "--manifest", str(source_manifest),
@@ -237,6 +352,14 @@ def main():
             ready = renewed_ready
             result.update(manualSetupStatus="confirmed", manualSetupConfirmation=confirmation)
             announce(status="setup-confirmed", pid=held["pid"], control=str(control), nonce=nonce)
+        plan = None
+        if protocol is not None:
+            plan = fixed_dwell_plan(run / "events.jsonl", protocol)
+            result["fixedDwellPlan"] = plan
+            announce(status="waiting-for-fixed-completed-dwell", pid=held["pid"], protocol=protocol, plan=plan)
+            wait_for_capture_boundary(plan, control)
+            ready = validate_fresh_control(control, held, nonce)
+            validate_held_identity(held)
         capture = output / "capture"
         capture_args = [str(collector), "--workspace", str(ROOT), "--output", str(capture), "--pid", str(held["pid"]),
                         "--expected-executable", held["executable"], "--bundle", "org.readingbook.perf-harness",
@@ -265,6 +388,8 @@ def main():
                         except json.JSONDecodeError:
                             continue
                         if event.get("status") == "waiting-for-target-foreground":
+                            if args.formal_fixed_dwell:
+                                raise FixedDwellError("target is not foreground; formal fixed dwell forbids Cua activation during capture setup")
                             preserve_held = True
                             announce(status="needs-cua-activation", pid=held["pid"], heldRecord=str(held_path),
                                      controlFresh=True, commandWritten=False, collectorWaitSeconds=60)
@@ -272,7 +397,8 @@ def main():
                             if (control / "driver-failure.json").exists():
                                 raise RuntimeError("driver expired before capture")
                             command = dict(nonce=nonce, durationSeconds=args.scroll_seconds, pointsPerSecond=args.points_per_second,
-                                           inputHz=args.input_hz, direction="down", startAfterSeconds=2)
+                                           inputHz=args.input_hz, direction="down",
+                                           startAfterSeconds=command_delay(plan, mach_ticks()) if plan else 2)
                             write(control / "start.json", command)
                             command_written = True; preserve_held = False
                             result["captureStartMachTicks"] = event["captureStartMachTicks"]
@@ -291,6 +417,10 @@ def main():
         if trace["status"] != "completed":
             raise RuntimeError("scroll input ineligible: " + trace["status"])
         result["preScrollDwell"] = pre_scroll_dwell(run / "events.jsonl", trace["startMachTicks"])
+        if protocol is not None:
+            result["fixedDwellQualification"] = qualify_fixed_dwell(result["preScrollDwell"], protocol)
+            if not result["fixedDwellQualification"]["qualified"]:
+                raise FixedDwellError("actual input missed the requested completed-run dwell tolerance")
         ticks = trace["ticks"]
         all_foreground = ticks and all(all(t["foreground"].get(k) for k in ["appActive", "keyWindow", "windowVisible", "occlusionVisible"]) for t in ticks)
         displacement = abs(ticks[-1]["actualY"] - ticks[0]["actualY"]) if ticks else 0
@@ -327,7 +457,10 @@ def main():
         if system_log.returncode or result["layoutWarningLines"] or result["publishingWarnings"]:
             result["status"] = "ineligible-log-gate"
     except Exception as error:
-        if args.manual_setup and held and result["manualSetupStatus"] != "confirmed":
+        if isinstance(error, FixedDwellError):
+            preserve_held = False
+            result["status"] = "ineligible-fixed-dwell"
+        elif args.manual_setup and held and result["manualSetupStatus"] != "confirmed":
             preserve_held = True
             result.update(status="ineligible-manual-setup", manualSetupStatus="ineligible")
         elif result["status"] == "incomplete":

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 from pathlib import Path
 import plistlib
 import statistics
@@ -27,6 +28,28 @@ def validate_formal_eligibility(result, source_manifest, operator_exclusion=None
             or (operator_exclusion and (operator_exclusion.get("formalFPSBaselineExcluded")
                                        or operator_exclusion.get("diagnosticComparisonExcluded")))):
         raise ValueError("diagnostic or operator-excluded run cannot enter a formal FPS matrix")
+    protocol = result.get("timingProtocol")
+    if protocol is not None:
+        pointer = result.get("pointerProtocol") or {}
+        actual = result.get("preScrollDwell", {}).get("runCompletedToInputSeconds")
+        desired, tolerance = protocol.get("requestedSeconds"), protocol.get("toleranceSeconds")
+        if (protocol.get("version") != 1 or protocol.get("anchor") != "run.completed"
+                or protocol.get("formalRequested") is not True
+                or type(desired) not in (int, float) or not math.isfinite(desired) or not 2 <= desired <= 90
+                or type(tolerance) not in (int, float) or not math.isfinite(tolerance) or not .05 <= tolerance <= 2
+                or type(actual) not in (int, float) or not math.isfinite(actual) or abs(actual - desired) > tolerance
+                or not isinstance(pointer, dict) or pointer.get("version") != 1
+                or pointer.get("verification") != "operator assertion only; no continuous pointer/overlay telemetry"
+                or not result.get("pointerParkEvidence", "").strip()
+                or result.get("sourceCommit") != source_manifest.get("sourceCommit")):
+            raise ValueError("fixed dwell/pointer/source protocol was not qualified")
+
+
+def matched_protocol(runs):
+    values = [(row.get("timingProtocol"), row.get("pointerProtocol")) for row in runs]
+    if not values or any(value != values[0] for value in values):
+        raise ValueError("mixed waiting/pointer protocols; historical unknown conditions cannot replace fixed dwell")
+    return dict(timingProtocol=values[0][0], pointerProtocol=values[0][1])
 
 
 def group(tags, expected_window, expected_roi):
@@ -78,6 +101,8 @@ def group(tags, expected_window, expected_roi):
             "collectorSHA256": result["collectorSHA256"], "sourceCommit": source_manifest["sourceCommit"],
             "fixtureManifestSHA256": fixture_digest,
             "appVersion": app_info["CFBundleShortVersionString"], "appBuild": app_info["CFBundleVersion"],
+            "timingProtocol": result.get("timingProtocol"), "pointerProtocol": result.get("pointerProtocol"),
+            "preScrollDwell": result.get("preScrollDwell"), "pointerParkEvidence": result.get("pointerParkEvidence"),
         })
     return {
         "qualifiedRunCount": len(runs), "actualWindowPixelsAtScale1": expected_window, "roiPixels": expected_roi,
@@ -112,6 +137,7 @@ def main():
     groups = {"wide": group(wide_tags, [1470, 843], [500, 160, 750, 450]),
               "narrow": group(narrow_tags, [800, 632], [120, 130, 580, 350])}
     all_runs = [r for g in groups.values() for r in g["runs"]]
+    protocols = matched_protocol(all_runs)
     for key in ["targetBinarySHA256", "driverSHA256", "collectorSHA256", "sourceCommit", "fixtureManifestSHA256", "appVersion", "appBuild"]:
         assert len(set(r[key] for r in all_runs)) == 1, "mixed builds/tools: " + key
     accepted = set(wide_tags + narrow_tags)
@@ -123,6 +149,7 @@ def main():
         "sourceCommit": all_runs[0]["sourceCommit"], "targetBinarySHA256": all_runs[0]["targetBinarySHA256"],
         "driverSHA256": all_runs[0]["driverSHA256"], "collectorSHA256": all_runs[0]["collectorSHA256"],
         "fixtureManifestSHA256": all_runs[0]["fixtureManifestSHA256"],
+        **protocols,
         "method": "independent ScreenCaptureKit complete-frame displayTime plus actual PDF-only ROI pixel changes",
         "input": {"method": "programmatic own-process NSClipView scrollToPoint; no OS events or Cua/AX during timing",
                   "requestedHz": 60, "durationSeconds": 12, "speedDocumentPointsPerSecond": 200, "zoom": 3.43,

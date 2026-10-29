@@ -1,14 +1,16 @@
-# 0.23.12 续读交付接续（2026-10-29；已发布核包，Mac待解锁安装）
+# 0.23.12 续读交付完成（2026-10-29；已发布并更新本机）
 
-用户已批准三种操作、默认继续补齐，并授权同步GitHub/main、更新本机安装及清理。代码、完整测试、正式包核验、Release与远端清理已完成，圆角分组/详情气泡及真实沿用/缺口区间均已实现。先读[实施与边界](Design/2026-10-29-smart-reading-continuation-results.md)。**当前安装版仍为0.23.11/build42，未退出或替换；Mac锁屏已向用户请求手动解锁，人工可见窗口/气泡/重做/历史检查与最终安装尚待继续。不要把GitHub发布写成本机已更新。**
+用户批准的三种操作已实现：默认继续补齐、继续并补充、重新分析。跨范围同终点误判完成已修复，旧分析与历史保留。范围详情、说明气泡、历史及重做确认采用圆角紧凑分组。见[实施与验证](Design/2026-10-29-smart-reading-continuation-results.md)。
 
-[最终Release](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.12)包内源码`9604287d99e34cb4be2fa88690aef31084dbca6d`，[main CI40766673006](https://github.com/theincrediblewwz/readingbook/actions/runs/40766673006)为650项Core零失败/零警告，所有原生及工具步骤成功。本机62项Core、10项AppStore与原生Release编译也通过。双ZIP摘要/CRC、0.23.12/build43/精确源码、arm64+x86_64/0755/两架构严格签名、32资源Git blob及resource-only CLI通过。包：`dist/ReadingBook-0.23.12-Mac.zip`，24,758,795字节，SHA256 `44ec1df819a86b5168d94ea9d4a2e401c09a2b8f49669b426f03dd0627b1a655`；待安装App：`dist/0.23.12-ci-40766673006/unpacked/ReadingBook.app`。该处重复ZIP已退役，canonical包与App保留。前一候选f1e/run40761818031虽成功但已替代，未发布/安装，不得混用旧包。
+[Release v0.23.12](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.12)源码`9604287d99e34cb4be2fa88690aef31084dbca6d`，[CI40766673006](https://github.com/theincrediblewwz/readingbook/actions/runs/40766673006)为650项Core零失败/零警告，全部原生回归与工具步骤通过；本机62项Core、10项AppStore与原生Release编译通过。canonical包`dist/ReadingBook-0.23.12-Mac.zip`，24,758,795字节，SHA256 `44ec1df819a86b5168d94ea9d4a2e401c09a2b8f49669b426f03dd0627b1a655`，双架构/严格签名/32资源均核验。
 
-远端与本地当前只保留main及v0.23.12标签；30个已合并分支删除带精确lease，Git历史保留。Actions包49→2：新artifact12853087696及0.23.11回滚12834448407；47旧包已删，Release资产上传后的摘要也匹配本机。证据均在`logs/continuation-release-20261029/`。本地清理前约4.26GiB→当前3.78GiB，含待安装App；原始报告、canonical回滚ZIP、Debug/共享缓存与三套FPS对照保留。
+解锁后已完成真实可见UI验收：50–200页沿用51/新增100、处理详情显示50–100与101–200区间；重做确认后取消未生成；历史正文与公式正确，660逻辑点窄窗无横向溢出。隔离fixture、零真实AI，原生布局/更新期发布警告零。实际Cua截图及两轮报告在`logs/continuation-release-20261029/ui-unlocked/`与相邻unlocked-run记录。
 
-所有新产物仍只放本工作区；本轮初始原库20文件/偏好保护副本位于`private-books/continuation-release-20261029/`，安装前还须正常退出后另做最新快照，不能用开发前备份覆盖期间的新内容。性能工作仍在本轮发布之后继续。
+**本机`/Applications/ReadingBook.app`现为0.23.12/build43**，36文件与已核验CI App逐一相同，实际About及进程PID7688确认。旧版正常退出后做了最新20文件原库/偏好与0.23.11 App回滚快照，位于`private-books/continuation-release-20261029/install-before-0.23.12/`，未覆盖开发期间用户新内容。安装及原书第102→103→102页、已有句译、伴读/对话、续读入口实测通过；原书/笔记/分析字节不变，无文件增删，仅正常Workspace状态更新，书库位置与服务偏好保持。10秒可见伴读主线程8581样本均为事件等待，physical footprint270.3M/峰值389.9M；这不是FPS或泄漏测试。
 
-解锁后：先用已重链9604对象的native UI harness隔离fixture完成可见宽窄窗、范围详情、历史、重做取消检查（空模型，零真实AI）；再正常退出原应用并保护未保存草稿，保存最新原库/偏好与0.23.11应用回滚，替换为上述已验证CI App，重开原书核版本/进程/数据及响应。之后接固定指针、固定等待的FPS和16组件计划。原库当前20文件无增删、原PDF/project/笔记/分析哈希未变，仅正常Workspace状态一份更新；详情见private保护记录。Cua锁屏不能绕过，不改系统锁屏/网络设置。
+GitHub已合并main；31→1分支，仅main，30个已合并分支按精确lease删除。Actions包49→2，保留最新与0.23.11回滚；仅v0.23.12 Release，Git提交历史保留。无需重复远端清理。当前已结束续读测试App/合成库/helper退役8项，释放368.8MiB，工作区4,362,824→3,985,152KiB；证据、原数据、回滚、共享缓存及三套旧FPS对照保留。
+
+**性能阶段已继续并建立[0.23.12当前基线](Design/2026-10-29-current-mac-performance-baseline.md)**：固定指针/等待窄窗6轮，3秒/60秒组中位58.49/58.65FPS，较低首轮保留；启动/导入各3进程约0.72/2.23s，6轮操作后30/60秒footprint约230MiB稳定。指标边界及未测项见报告；未把历史47→58称作修复收益。公开API审计和调用栈指向系统PDFKit识别、同书重建文档的后续候选，未修改产品。工具35+7项测试与复审通过。新增性能副本/cache311.4MiB也已清理，本轮合计680.18MiB，当前约3.88GiB；原数据、回滚、源/性能App/dSYM/关键证据及旧对照保留。所有新产物仍在本工作目录。
 
 ---
 

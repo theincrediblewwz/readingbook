@@ -213,6 +213,71 @@ WindowServer display timestamps. No frame rate may be claimed from driver ticks.
 
 ## One-run orchestration
 
+### Matched completed-run dwell (early versus settled)
+
+For new controlled cases use `--completed-dwell-seconds` to anchor the intended
+input start to the **actual `run.completed` Mach timestamp**. The wrapper waits
+before starting the collector, leaves a four-second arming margin, then computes
+the driver's remaining relative delay from that same clock. It checks actual
+`scroll-trace.startMachTicks` afterward against `--dwell-tolerance-seconds`
+(default0.5s). It records both main-entry and completed-run dwell. A missed target,
+foreground setup requiring Cua, or out-of-tolerance start is retained as
+`ineligible-fixed-dwell`; the target is never silently moved later. If even the
+two-second minimum is too early for setup on this host, retain the failure and
+choose a feasible, explicitly reported early target for **all** comparison arms.
+Do not describe `run.completed` as background-preparation-idle or a pixel boundary.
+
+`--formal-fixed-dwell` rejects `--manual-setup`, component-disabled/diagnostic-only
+builds and absent source/pointer preflight declarations. Supply the exact full
+`--expected-source-commit`; it must match the frozen manifest. Results also record
+the bundle's actual version/build and manifest digest, so a retained0.23.10/f0
+control cannot be labelled a0.23.12 measurement.
+
+Before each case, inspect the same geometry/ROI in an **untimed setup control**,
+close popovers and park the pointer outside PDF content (for example on a neutral
+titlebar position). Preserve that setup evidence. Finish all Cua/AX actions before
+launching the timed case. `--pointer-park-confirmed`, `--no-overlay-confirmed` and
+`--no-interaction-confirmed` are explicit **operator assertions and a commitment**,
+not automated pointer/overlay telemetry. `--pointer-park-evidence` must describe
+what was actually checked and where the pointer was parked. The protocol metadata
+states that continuous verification is absent. Do not pass the flags until the
+checks are true; if user/agent interaction or an overlay occurs later, save an
+`operator-exclusion.json` and exclude that case even when automatic gates pass.
+
+After that preflight, a settled narrow case can use this command. Replace the tag
+and evidence description for every run. The shown manifest intentionally measures
+the **retained f0/0.23.10 control**, not the current installed app:
+
+```sh
+PYTHONPYCACHEPREFIX="$PWD/.build/scroll-frame-capture/python-cache" \
+python3 scripts/mac-performance/capture-scroll-run.py \
+  --manifest .build/perf-refinement-20261028-final/build-manifest.json \
+  --expected-source-commit f0eabf77c413a01202370e5086ad733ebb6c6cd4 \
+  --fixture private-books/mac-refinement-20261028/library-before \
+  --tag UNIQUE-f0-narrow-settled --width 800 --height 600 \
+  --roi 120,130,580,350 --pixel-step 6 --roi-confirmed \
+  --completed-dwell-seconds 60 --dwell-tolerance-seconds 0.5 \
+  --formal-fixed-dwell --pointer-park-confirmed --no-overlay-confirmed \
+  --no-interaction-confirmed \
+  --pointer-park-evidence 'REPLACE with actual untimed setup evidence and parked position'
+```
+
+Use the same flags with `--completed-dwell-seconds 3` and a fresh tag for an early
+case. First establish whether this target is feasible; do not drop failed cases.
+Interleave early/settled cases, at least three per arm before interpretation, then
+repeat the required widths. `summarize-scroll-matrix.py` now preserves timing and
+pointer protocols and refuses mixed early/settled or historical-unknown rows.
+`compare-scroll-matrices.py` rejects mismatched protocols; historical matrices
+remain unchanged and cannot substitute for the new controlled cases. An explicit
+fixed-dwell case without `--formal-fixed-dwell` remains a diagnostic control and
+is excluded from formal aggregation. These tests have not themselves measured FPS.
+
+To measure a new committed source, first verify hooks, then prepare one frozen
+Release using `prepare.py --ref FULL_COMMIT --build-id UNIQUE_ID`; replace both
+manifest and expected commit. Keep compilation outside every measurement and
+retire unused reproducible build scratch after preserving required provenance.
+Do not inject the diagnostic driver into `/Applications/ReadingBook.app`.
+
 Manual setup adds variable dwell time before capture. Record both
 `main.entry → scroll-start` and `run.completed → scroll-start` using the shared
 Mach clock; a manually confirmed warm case must not replace an early-scroll

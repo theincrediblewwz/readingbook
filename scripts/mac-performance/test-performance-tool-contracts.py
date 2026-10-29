@@ -54,6 +54,105 @@ class ScrollSetupContracts(unittest.TestCase):
         args = CAPTURE.argument_parser().parse_args(["--tag", "synthetic-contract"])
         self.assertFalse(args.manual_setup)
         self.assertEqual(args.diagnostic_env, [])
+        self.assertIsNone(CAPTURE.timing_protocol(args))
+        self.assertIsNone(CAPTURE.pointer_protocol(args))
+
+    def test_fixed_dwell_options_require_finite_bounded_clocks_and_formal_preflight(self):
+        parser = CAPTURE.argument_parser()
+        base = ["--tag", "synthetic", "--completed-dwell-seconds", "60"]
+        self.assertEqual(CAPTURE.timing_protocol(parser.parse_args(base))["anchor"], "run.completed")
+        for value in ["nan", "inf", "-1", "91"]:
+            with self.subTest(seconds=value), self.assertRaises(ValueError):
+                CAPTURE.timing_protocol(parser.parse_args(["--tag", "synthetic", "--completed-dwell-seconds", value]))
+        for value in ["nan", "0", "3"]:
+            with self.subTest(tolerance=value), self.assertRaises(ValueError):
+                CAPTURE.timing_protocol(parser.parse_args(base + ["--dwell-tolerance-seconds", value]))
+        evidence = ["--formal-fixed-dwell", "--pointer-park-confirmed", "--no-overlay-confirmed",
+                    "--no-interaction-confirmed", "--pointer-park-evidence", "Cua preflight: pointer on titlebar, ROI clear",
+                    "--expected-source-commit", "a" * 40]
+        good = parser.parse_args(base + evidence)
+        self.assertTrue(CAPTURE.timing_protocol(good)["formalRequested"])
+        self.assertIn("no continuous", CAPTURE.pointer_protocol(good)["verification"])
+        for option in ["pointer_park_confirmed", "no_overlay_confirmed", "no_interaction_confirmed", "expected_source_commit"]:
+            bad = copy.copy(good); setattr(bad, option, False)
+            with self.subTest(option=option), self.assertRaises(ValueError): CAPTURE.timing_protocol(bad)
+        good.manual_setup = True
+        with self.assertRaisesRegex(ValueError, "variable manual"):
+            CAPTURE.timing_protocol(good)
+
+    def test_frozen_source_identity_rejects_wrong_version_and_abbreviated_commit(self):
+        self.assertEqual(CAPTURE.validate_source_identity(dict(sourceCommit="a" * 40), "a" * 40), "a" * 40)
+        for expected in ["b" * 40, "aaaaaaa", "A" * 40]:
+            with self.subTest(expected=expected), self.assertRaises(ValueError):
+                CAPTURE.validate_source_identity(dict(sourceCommit="a" * 40), expected)
+
+    def test_fixed_dwell_plan_anchors_completed_event_and_rejects_missed_arming(self):
+        with tempfile.TemporaryDirectory(prefix="scroll-fixed-contract-", dir=ROOT / ".build") as temporary:
+            path = Path(temporary) / "events.jsonl"
+            path.write_text('\n'.join(json.dumps(r) for r in [
+                dict(event="main.entry", ticks=100, timebaseNumer=125, timebaseDenom=3),
+                dict(event="run.completed", ticks=24_000_100)]) + '\n')
+            protocol = dict(requestedSeconds=60, toleranceSeconds=.5)
+            plan = CAPTURE.fixed_dwell_plan(path, protocol)
+            self.assertEqual(plan["anchorMachTicks"], 24_000_100)
+            self.assertEqual(plan["targetMachTicks"], 1_464_000_100)
+            self.assertAlmostEqual(CAPTURE.command_delay(plan, plan["targetMachTicks"] - 24_000_000), 1)
+            for now in [plan["targetMachTicks"], plan["targetMachTicks"] + 1, 100]:
+                with self.subTest(now=now), self.assertRaises(CAPTURE.FixedDwellError):
+                    CAPTURE.command_delay(plan, now)
+
+    def test_fixed_wait_stops_before_collector_margin_and_never_consumes_control(self):
+        with tempfile.TemporaryDirectory(prefix="scroll-fixed-contract-", dir=ROOT / ".build") as temporary:
+            control = Path(temporary); plan = dict(targetMachTicks=100, secondsPerMachTick=1)
+            with mock.patch.object(CAPTURE, "mach_ticks", side_effect=[90, 96]), mock.patch.object(CAPTURE.time, "sleep") as pause:
+                CAPTURE.wait_for_capture_boundary(plan, control)
+            pause.assert_called_once_with(.1)
+            self.assertFalse((control / "start.json").exists())
+            with mock.patch.object(CAPTURE, "mach_ticks", return_value=101), self.assertRaises(CAPTURE.FixedDwellError):
+                CAPTURE.wait_for_capture_boundary(plan, control)
+            CAPTURE.write(control / "driver-failure.json", {})
+            with self.assertRaises(CAPTURE.FixedDwellError): CAPTURE.wait_for_capture_boundary(plan, control)
+
+    def test_actual_dwell_tolerance_rejects_late_early_and_nonfinite_input(self):
+        protocol = dict(requestedSeconds=60, toleranceSeconds=.5)
+        for actual, expected in [(60, True), (60.5, True), (59.5, True), (60.501, False), (59.499, False), (float("nan"), False)]:
+            with self.subTest(actual=actual):
+                result = CAPTURE.qualify_fixed_dwell(dict(runCompletedToInputSeconds=actual), protocol)
+                self.assertEqual(result["qualified"], expected)
+
+    def test_missed_fixed_target_starts_no_collector_or_input_and_stops_only_owned_probe(self):
+        with tempfile.TemporaryDirectory(prefix="scroll-fixed-contract-", dir=ROOT / ".build") as temporary:
+            root = Path(temporary); binary = root / "Owned.app/Contents/MacOS/ReadingBook"
+            binary.parent.mkdir(parents=True); binary.write_bytes(b"synthetic-product")
+            fixture = root / "fixture"; fixture.mkdir()
+            driver = root / "driver"; driver.write_bytes(b"synthetic-driver")
+            collector = root / "collector"; collector.write_bytes(b"synthetic-collector")
+            tag = "synthetic-missed-dwell"; base = root / "build"; run = base / "runs" / tag / "run-1"
+            control = run / "scroll-control"; control.mkdir(parents=True)
+            CAPTURE.write(run / "held-process.json", dict(pid=123, executable=str(binary)))
+            CAPTURE.write(run / "launch.json", dict(scrollDiagnostic=dict(nonce="synthetic")))
+            CAPTURE.write(control / "driver-ready.json", dict(pid=123, nonce="synthetic", workspacePDFVerified=True, windowID=42))
+            CAPTURE.write(root / "manifest.json", dict(app=str(binary.parent.parent.parent), buildRoot=str(base),
+                                                      binarySHA256=CAPTURE.sha(binary), sourceCommit="a" * 40))
+            argv = ["capture-scroll-run.py", "--manifest", str(root / "manifest.json"), "--fixture", str(fixture),
+                    "--driver", str(driver), "--collector", str(collector), "--tag", tag, "--roi-confirmed",
+                    "--completed-dwell-seconds", "3", "--formal-fixed-dwell", "--expected-source-commit", "a" * 40,
+                    "--pointer-park-confirmed", "--no-overlay-confirmed", "--no-interaction-confirmed",
+                    "--pointer-park-evidence", "synthetic preflight, not an actual measurement"]
+            with mock.patch.object(CAPTURE, "ROOT", root), mock.patch.object(CAPTURE.sys, "argv", argv), \
+                    mock.patch.object(CAPTURE.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="", stderr="")) as launched, \
+                    mock.patch.object(CAPTURE.subprocess, "Popen") as process, mock.patch.object(CAPTURE, "announce"), \
+                    mock.patch.object(CAPTURE, "fixed_dwell_plan", return_value={}), \
+                    mock.patch.object(CAPTURE, "wait_for_capture_boundary", side_effect=CAPTURE.FixedDwellError("missed target")):
+                self.assertEqual(CAPTURE.main(), 1)
+            process.assert_not_called()
+            self.assertEqual(launched.call_count, 2)
+            self.assertEqual(launched.call_args.args[0][-2:], ["--stop-held", str(run / "held-process.json")])
+            self.assertFalse((control / "start.json").exists())
+            result = CAPTURE.read(root / "logs/mac-refinement-20261028/scroll-fps" / tag / "result.json")
+            self.assertEqual(result["status"], "ineligible-fixed-dwell")
+            self.assertTrue(result["ownedHeldStopped"])
+            self.assertFalse(result["commandWritten"])
 
     def test_diagnostic_environment_is_allowlisted_unique_and_binary(self):
         self.assertEqual(CAPTURE.DIAGNOSTIC_ENV_KEYS, RUN.DIAGNOSTIC_ENV_KEYS)
@@ -207,6 +306,32 @@ class ScrollSetupContracts(unittest.TestCase):
 
 
 class FormalFPSMatrixContracts(unittest.TestCase):
+    def test_fixed_dwell_cannot_be_promoted_when_actual_clock_or_pointer_evidence_missing(self):
+        args = CAPTURE.argument_parser().parse_args(["--tag", "synthetic", "--pointer-park-confirmed",
+                "--no-overlay-confirmed", "--no-interaction-confirmed"])
+        result = dict(sourceCommit="a" * 40,
+                      timingProtocol=dict(version=1, anchor="run.completed", requestedSeconds=60,
+                                          toleranceSeconds=.5, formalRequested=True),
+                      pointerProtocol=CAPTURE.pointer_protocol(args), pointerParkEvidence="Cua preflight; no later interaction",
+                      preScrollDwell=dict(runCompletedToInputSeconds=60.2))
+        manifest = dict(sourceCommit="a" * 40)
+        MATRIX.validate_formal_eligibility(result, manifest)
+        for key, value in [("pointerProtocol", None), ("pointerParkEvidence", ""),
+                           ("preScrollDwell", dict(runCompletedToInputSeconds=61)),
+                           ("sourceCommit", "b" * 40)]:
+            invalid = copy.deepcopy(result); invalid[key] = value
+            with self.subTest(key=key), self.assertRaises((ValueError, AttributeError)):
+                MATRIX.validate_formal_eligibility(invalid, manifest)
+
+    def test_matrix_refuses_mixed_wait_or_historical_unknown_pointer_protocol(self):
+        old = dict(timingProtocol=None, pointerProtocol=None)
+        new = dict(timingProtocol=dict(anchor="run.completed", requestedSeconds=60), pointerProtocol=dict(version=1))
+        self.assertEqual(MATRIX.matched_protocol([old, old]), old)
+        self.assertEqual(MATRIX.matched_protocol([new, new]), new)
+        for other in [old, dict(new, timingProtocol=dict(anchor="run.completed", requestedSeconds=3)),
+                      dict(new, pointerProtocol=None)]:
+            with self.assertRaises(ValueError): MATRIX.matched_protocol([new, other])
+
     def test_manual_pilots_cannot_silently_replace_early_scroll_matrices(self):
         with self.assertRaisesRegex(ValueError, "variable pre-scroll dwell"):
             MATRIX.validate_formal_eligibility(dict(manualSetupRequired=True), {})
@@ -307,6 +432,16 @@ class ScrollComparisonContracts(unittest.TestCase):
             self.assertEqual(result["groups"], {})
         after = copy.deepcopy(self.baseline); after["groups"]["narrow"]["roiPixels"][0] += 1
         self.assertIn("narrow.roiPixels", COMPARE.compare(self.baseline, after)["mismatches"])
+
+    def test_fixed_wait_pointer_protocols_must_match_and_cannot_replace_unknown_history(self):
+        before = copy.deepcopy(self.baseline)
+        before.update(timingProtocol=dict(anchor="run.completed", requestedSeconds=60), pointerProtocol=dict(version=1))
+        self.assertEqual(COMPARE.compare(before, before)["mismatches"], [])
+        for key in ["timingProtocol", "pointerProtocol"]:
+            after = copy.deepcopy(before); after.pop(key)
+            self.assertIn(key, COMPARE.compare(before, after)["mismatches"])
+        after = copy.deepcopy(before); after["timingProtocol"]["requestedSeconds"] = 3
+        self.assertIn("timingProtocol", COMPARE.compare(before, after)["mismatches"])
 
     def test_incomplete_or_unqualified_case_set_blocks_comparison(self):
         after = copy.deepcopy(self.baseline); after["qualifiedSamples"] = 5

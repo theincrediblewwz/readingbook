@@ -33,6 +33,11 @@ def compare(before, after, before_label=None, after_label=None):
     for key in ["driverSHA256", "collectorSHA256", "fixtureManifestSHA256", "input", "capture"]:
         if before.get(key) is None or before.get(key) != after.get(key):
             mismatches.append(key)
+    # Missing historical protocols stay comparable only to each other, never to
+    # a newly controlled early/settled or parked-pointer matrix.
+    for key in ["timingProtocol", "pointerProtocol"]:
+        if before.get(key) != after.get(key):
+            mismatches.append(key)
     for name in ["wide", "narrow"]:
         for key in ["actualWindowPixelsAtScale1", "roiPixels"]:
             if before.get("groups", {}).get(name, {}).get(key) != after.get("groups", {}).get(name, {}).get(key):
@@ -43,6 +48,8 @@ def compare(before, after, before_label=None, after_label=None):
         "afterLabel": after_label or after.get("productVersion") or after["sourceCommit"][:7],
         "beforeSourceCommit": before["sourceCommit"], "afterSourceCommit": after["sourceCommit"],
         "beforeBinarySHA256": before["targetBinarySHA256"], "afterBinarySHA256": after["targetBinarySHA256"],
+        "beforeTimingProtocol": before.get("timingProtocol"), "afterTimingProtocol": after.get("timingProtocol"),
+        "beforePointerProtocol": before.get("pointerProtocol"), "afterPointerProtocol": after.get("pointerProtocol"),
         "differentProductBinaries": before["targetBinarySHA256"] != after["targetBinarySHA256"],
         "mismatches": mismatches, "groups": {},
         "limits": ["Three runs per window, sequential before/after matrices rather than randomized/interleaved trials; small differences are not automatically a performance gain.",
