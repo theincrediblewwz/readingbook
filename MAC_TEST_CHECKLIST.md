@@ -1,8 +1,14 @@
-# 2026-10-30 · 当前优先：搜索与辅助浮层紧急修复，候选0.23.17
+# 2026-10-30 · 0.23.17已发布，Mac锁屏；本机仍16，待解锁安装验收
 
 先读[本轮实现与验证边界](Design/2026-10-30-search-overlays.md)。用户要求先修关闭搜索回错页、简繁及AI关键词扩展、搜索/笔记/回收站浮层，再更新GitHub与安装版，随后续性能计划。正式16原书103页已复现关闭搜索回library；现在真实base route保留，close/result分离。dirty Notes无损覆盖，真正离开前保存/放弃/继续；IME、编辑器Undo、旧owner、跨库跨书generation和精确原文hash/UTF16保护保持。
 
-候选17/build48本机Debug编译零警告，19搜索+11 AI扩词实际测试函数通过（CLT shim，非完整XCTest）。原6b3f候选完整CI691零失败，但补测复现提前AI失败吞掉尚未完成的本地结果；已修并追加立即停止只停AI，须以修后新source重新完整CI，旧包不得采用。锁屏隔离urgent-search-overlay的10项原生+12项Session断言通过、警告零；不算实际可见GUI/硬件/原PDF像素验收。正式包/安装验收尚待补齐，当前安装版仍16。Mac锁屏时不改锁屏设置。所有新产物在工作区；保护20文件真库和偏好在`private-books/urgent-search-20261030/initial/`，不恢复覆盖用户后续变化。
+最终源码`c80c204409128817785b64eda195ca1c2fb39b58`，[完整CI40949306759](https://github.com/theincrediblewwz/readingbook/actions/runs/40949306759) **691 Core零失败/零编译警告**，全部原生/工具门禁、10项搜索浮层+12项Session断言、双架构打包通过。提前AI失败吞本地结果与立即停止误停本地的边界已修，修复前真实失败保留；原6b3f包未采用，Actions附件已退役。fake transport无真实模型调用，不能声称模型建议必然准确。
+
+[Release0.23.17/build48](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.17)已发布；canonical`dist/ReadingBook-0.23.17-Mac.zip` **25,132,032B/SHA`9db24d4a9fe454a168fad93df9ae93c045485425aad33209d6a92baad34bee8f`**。源/两层ZIP/摘要/双架构/严格签名/32资源和36文件App清单均核验，远端附件同值。待安装App在`dist/0.23.17-ci-40949306759/unpacked/ReadingBook.app`，verification和完整CI摘要保留；外层及内层重复ZIP已退役，从canonical/Actions可重建。
+
+**本机仍是0.23.16/build47，没有替换。** 原生工具再次确认Mac锁屏，不能正常退出旧版或做实际可见按钮/原书验收；已向用户请求手动解锁，仍待回复，不改锁屏设置。锁屏隔离窗口断言不算前台/硬件/像素验收，缓存reader图不完整不据此修改颜色。解锁后读`logs/urgent-search-20261030/native-visible-qa-pending.md`，先确认最新书库/草稿，正常退出16，再用delivery/install-verified.py做全新`private-books/urgent-search-20261030/install-before-0.23.17/`保护、替换和post-install-check。手工report仍为null，不能填假通过。用户已授权安装/发布，不需再问许可。
+
+初始20文件真库与偏好保护在`private-books/urgent-search-20261030/initial/`；中途核对原书/笔记/分析字节和全部生产偏好保持，仅正常Workspace导航变更。结束时再核对。三批清理的工作区观察量合计约489MiB，关键失败的两App无损压为39,330,472B唯一重放ZIP，源码/原始结果/共享cache/活跃Debug和必要旧安装回滚保留；不能把清理量称为相对开工的净下降。GitHub保留17与16回滚，提交历史保留。所有新产物仍在本工作区。
 
 本轮不是性能收益实验，不取消下方组件优化，不恢复数学核查。结束后清理可再生/重复产物，保留原书、笔记、分析、草稿、关键证据、最新包和必要回滚。
 
