@@ -292,7 +292,6 @@ import ReadingCore
         flushWorkspaceMemory()
         restoringWorkspaceMemory = true
         navigationGeneration += 1; documentGeneration += 1
-        pdfNavigationToken += 1
         pdfPasswordRequest = nil
         queryHistoryMessageID = nil
         let generation = navigationGeneration
@@ -325,6 +324,9 @@ import ReadingCore
             pdfSourceAdmissionLeases[id] = admitted
             if !retainDisplay { pdfDisplayReloadID = UUID() }
         }
+        // Validation may suspend while the old reader is still mounted. Do not
+        // send it a spurious explicit jump before the new selection is ready.
+        pdfNavigationToken += 1
         pdfInteractionResetID = UUID()
         bookID = id; route = "reader"; sourceFileURL = retainDisplay ? url : nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil; documentBaseHash = nil
         readingIndexTask?.cancel(); readingIndexTask = nil; readingIndexGeneration &+= 1; readingPageSnapshots.reset()
