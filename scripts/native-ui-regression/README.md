@@ -180,3 +180,40 @@ controls reads a real key, calls a network service, or automatically saves notes
 Closing the window also terminates the app; use `control/quit` when a final
 assertion report is needed. An unfinished UI scenario is reported as `incomplete`.
 Source/object/binary hashes are recorded in the builder's `build-manifest.json`.
+
+
+## Verified same-book PDF display retention
+
+After rebuilding the actual product and relinking the harness, run separately from
+performance captures or interactive application use:
+
+```sh
+python3 scripts/native-ui-regression/run.py --mode samebook --cycles 3 --tag verified-samebook
+```
+
+This fixture-only mode creates an eight-page physical PDF, saved analysis, a user
+Markdown note and a saved PDF annotation. Initial admission and every reselect go
+through the real `AppStore.selectBook` path. It selects page four with a custom
+scale and discrete horizontal layout; no performance-probe page-one normalization
+is present. Repeated unchanged-source selections must preserve the actual
+container/PDFView/PDFDocument and display ID while navigation generations advance.
+Draft/busy gates, query draft, hidden thumbnails, saved viewport and annotation
+rendering remain checked. Each reselect is preceded by the real native PDF search
+and a page-local PDFSelection; selection, highlighted matches and search must clear
+in both native and store state while the document remains retained. An explicitly
+nil URL still tears down the old reader.
+
+Separate private mutations replace the same file path, change metadata with the
+same bytes, corrupt the same number of bytes, delete the file or insert a symlink.
+Every mismatch must invalidate the old display, and original bytes are restored
+before moving on. Equal book IDs/hashes in another library cannot inherit the old
+lease. A generated encrypted fixture verifies unchanged-session retention and
+requires a new password after replacing the source with another encrypted file.
+Canonical source/project/note/analysis/annotation preservation is verified at the
+end. These operations only touch the runner's synthetic workspace library.
+
+`result.json` records the selected page, controller/current PDF page, destination
+page and stored anchor. This is native correctness coverage, not FPS or a claim
+that the separate continuous-page boundary-anchor issue is resolved. The helper
+has a bounded 120-second process limit in this mode and the usual five-second
+main-thread watchdog/runtime-warning gates.

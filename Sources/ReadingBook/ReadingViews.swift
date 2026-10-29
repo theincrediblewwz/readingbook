@@ -78,7 +78,9 @@ struct ReaderWorkspaceView: View {
                                    }
                                },
                                workspaceMemory: store.workspaceMemory.pdf, memoryRevision: store.workspaceMemoryRevision,
-                               onWorkspaceMemory: { memory in store.updateWorkspaceMemory({ $0.pdf = memory }, expectedKey: memoryKey) })
+                               onWorkspaceMemory: { memory in store.updateWorkspaceMemory({ $0.pdf = memory }, expectedKey: memoryKey) },
+                               interactionResetID: store.pdfInteractionResetID)
+                            .id(store.pdfDisplayReloadID)
                         } else if isPDF, showPDF {
                             // The source URL arrives asynchronously after book
                             // selection. Do not mount a temporary text/WebKit

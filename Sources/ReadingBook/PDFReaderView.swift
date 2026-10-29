@@ -37,8 +37,9 @@ struct PDFReaderView: NSViewRepresentable {
     var workspaceMemory: WorkspacePDFMemory?
     var memoryRevision = 0
     var onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)?
+    var interactionResetID: UUID?
 
-    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)? = nil) {
+    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((WorkspacePDFMemory) -> Void)? = nil, interactionResetID: UUID? = nil) {
         self.controller = controller; self.url = url; self.sourceHash = sourceHash; self.password = password; self.annotations = annotations
         self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
         self.onUnlock = onUnlock; self.onSaveAnnotations = onSaveAnnotations; self.onTrashAnnotation = onTrashAnnotation
@@ -49,6 +50,7 @@ struct PDFReaderView: NSViewRepresentable {
         self.onSourceDecorationHover = onSourceDecorationHover; self.onVisiblePagesChange = onVisiblePagesChange
         self.onPreparationChanged = onPreparationChanged
         self.workspaceMemory = workspaceMemory; self.memoryRevision = memoryRevision; self.onWorkspaceMemory = onWorkspaceMemory
+        self.interactionResetID = interactionResetID
     }
 
     func makeNSView(context: Context) -> PDFReaderContainerView {
@@ -254,6 +256,7 @@ struct PDFReaderView: NSViewRepresentable {
     private var quoteFocusHighlight: PDFSelection?
     private var pendingWorkspaceMemory: WorkspacePDFMemory?
     private var appliedMemoryRevision: Int?
+    private var appliedInteractionResetID: UUID?
     private var memoryCallback: ((WorkspacePDFMemory) -> Void)?
     private var memoryCaptureTask: DispatchWorkItem?
     private weak var observedClip: NSClipView?
@@ -550,6 +553,15 @@ struct PDFReaderView: NSViewRepresentable {
         onSourceDecorationHover = input.onSourceDecorationHover
         onVisiblePagesChange = input.onVisiblePagesChange
         onPreparationChanged = input.onPreparationChanged
+        if appliedInteractionResetID != input.interactionResetID {
+            appliedInteractionResetID = input.interactionResetID
+            // Same-book selection resets transient interaction state just as
+            // a reload did, while keeping the verified document and its caches.
+            resetPageGesture(); pdfView.cancelRegionSelection()
+            dismissSearch(restoreFocus: false)
+            cancelSourceQuotePreparation(); clearQuoteFocusHighlight()
+            pdfView.clearSelection()
+        }
         // This optional acceleration metadata has its own lifetime. A normal
         // publication may briefly withhold it; keep existing marks/geometry
         // and fall back to unique matching rather than flashing the page.

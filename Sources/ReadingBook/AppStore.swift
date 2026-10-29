@@ -133,6 +133,12 @@ import ReadingCore
     @Published var documentError: String?
     @Published var draftEvidence: [Evidence] = []
     @Published var sourceFileURL: URL?
+    // Display identity is independent of page-navigation tokens. A changed
+    // source must rebuild the native document even if SwiftUI coalesces URL
+    // clearing and reassignment into one update.
+    @Published var pdfDisplayReloadID = UUID()
+    @Published var pdfInteractionResetID = UUID()
+    var pdfSourceAdmissionLeases: [String: PDFDisplaySourceLease] = [:]
     @Published var pdfPasswordRequest: PDFPasswordRequest?
     @Published var pdfSessionPasswords: [String: String] = [:]
     @Published var pdfUnlockedBookIDs: Set<String> = []
@@ -270,9 +276,18 @@ import ReadingCore
     func selectBook(_ id: String, preferredRoute: String? = nil) async {
         guard !isBusy else { return }
         guard !editorDirty else { errorMessage = "请先保存当前文档，再切换书籍。"; return }
-        guard books.contains(where: { $0.id == id }) else { errorMessage = "这本书当前不可用，请回到书库重新选择。"; return }
+        guard let selectedProject = books.first(where: { $0.id == id }) else { errorMessage = "这本书当前不可用，请回到书库重新选择。"; return }
+        let owner = repository, root = libraryRootURL
+        let previousBookID = bookID, previousRoute = route, previousURL = sourceFileURL
+        let previousSourceMode = readingSourceMode
+        var operationGeneration = navigationGeneration
         isBusy = true
-        defer { isBusy = false; restoringWorkspaceMemory = false }
+        defer {
+            if libraryRootURL == root, repository.publicationOwner == owner.publicationOwner,
+               navigationGeneration == operationGeneration {
+                isBusy = false; restoringWorkspaceMemory = false
+            }
+        }
         NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
         flushWorkspaceMemory()
         restoringWorkspaceMemory = true
@@ -281,7 +296,37 @@ import ReadingCore
         pdfPasswordRequest = nil
         queryHistoryMessageID = nil
         let generation = navigationGeneration
-        bookID = id; route = "reader"; sourceFileURL = nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil; documentBaseHash = nil
+        operationGeneration = generation
+        // Resolve and verify before deciding whether the already mounted PDF
+        // can stay alive. The complete selection/reset/restore path still runs.
+        let url = await owner.sourceURL(for: selectedProject)
+        guard libraryRootURL == root, repository.publicationOwner == owner.publicationOwner,
+              navigationGeneration == generation, bookID == previousBookID,
+              books.contains(where: { $0.id == id && $0.sourceHash == selectedProject.sourceHash && $0.originalName == selectedProject.originalName }) else { return }
+        let isPDF = selectedProject.originalName.lowercased().hasSuffix(".pdf") || url.pathExtension.lowercased() == "pdf"
+        let version = isPDF ? (try? await PDFDisplaySourceVersion.verify(at: url, expectedSourceHash: selectedProject.sourceHash)) : nil
+        guard !Task.isCancelled, libraryRootURL == root, repository.publicationOwner == owner.publicationOwner,
+              navigationGeneration == generation, bookID == previousBookID,
+              books.contains(where: { $0.id == id && $0.sourceHash == selectedProject.sourceHash && $0.originalName == selectedProject.originalName }) else { return }
+        let admitted = version.flatMap { value -> PDFDisplaySourceLease? in
+            guard (try? value.matchesCurrentFileMetadata()) == true else { return nil }
+            return PDFDisplaySourceLease(root: root, owner: owner.publicationOwner, project: selectedProject, version: value)
+        }
+        let previousAdmission = pdfSourceAdmissionLeases[id]
+        let retainDisplay = isPDF && previousBookID == id && previousRoute == "reader"
+            && previousSourceMode == "original" && previousURL?.standardizedFileURL == url.standardizedFileURL
+            && admitted != nil && admitted == previousAdmission
+        if isPDF {
+            if admitted == nil || (previousAdmission != nil && admitted != previousAdmission) {
+                // A replaced/re-encrypted source cannot inherit the old file's
+                // already-unlocked admission or in-memory password.
+                pdfUnlockedBookIDs.remove(id); pdfSessionPasswords.removeValue(forKey: id)
+            }
+            pdfSourceAdmissionLeases[id] = admitted
+            if !retainDisplay { pdfDisplayReloadID = UUID() }
+        }
+        pdfInteractionResetID = UUID()
+        bookID = id; route = "reader"; sourceFileURL = retainDisplay ? url : nil; selectedObjectID = nil; selectedDocumentID = nil; activeReadingUnitID = nil; editorMarkdown = ""; editorTitle = ""; draftEvidence = []; documentError = nil; documentBaseHash = nil
         readingIndexTask?.cancel(); readingIndexTask = nil; readingIndexGeneration &+= 1; readingPageSnapshots.reset()
         readingExperienceIndex = book?.readingExperience ?? ReadingExperienceState()
         readingContextCacheKey = nil; readingContextCache = ReadingContextItems()
@@ -290,24 +335,21 @@ import ReadingCore
         selectedUnitID = UserDefaults.standard.string(forKey: "position-\(id)") ?? book?.lastUnitID ?? book?.units.first?.id
         if book?.units.contains(where: { $0.id == selectedUnitID }) != true { selectedUnitID = book?.units.first?.id }
         if let page = workspaceMemory.activePDFPage, let unit = book?.units.first(where: { $0.page == page }) { selectedUnitID = unit.id }
-        if let project = book {
-            let url = await repository.sourceURL(for: project)
-            guard bookID == id && generation == navigationGeneration else { return }
-            sourceFileURL = url
-            await preparePDFSession(bookID: id, sourceURL: url)
-            guard bookID == id && generation == navigationGeneration else { return }
-        }
+        sourceFileURL = url
+        await preparePDFSession(bookID: id, sourceURL: url)
+        guard libraryRootURL == root, repository.publicationOwner == owner.publicationOwner,
+              bookID == id && generation == navigationGeneration else { return }
         let years = book?.events.flatMap { [$0.startYear, $0.endYear].compactMap { $0 } } ?? []
         timeFrom = Double((years.min() ?? -5000) - 1); timeTo = Double((years.max() ?? 3000) + 1)
         restoreDraft()
         await restoreWorkspaceNavigation(expectedBookID: id, generation: generation)
-        guard bookID == id && generation == navigationGeneration else { return }
+        guard libraryRootURL == root, repository.publicationOwner == owner.publicationOwner,
+              bookID == id && generation == navigationGeneration else { return }
         if let preferredRoute, !editorDirty { route = preferredRoute }
         restoringWorkspaceMemory = false
         workspaceMemoryRevision &+= 1
         rememberWorkspaceNavigation()
         refreshReadingExperienceIndex()
-        let owner = repository
         Task { try? await owner.refreshReadableViews(id: id, archived: false) }
     }
     @discardableResult

@@ -61,6 +61,7 @@ jobs:
           python3 scripts/native-ui-regression/build.py --bin-dir .build/tests/debug
           python3 scripts/native-ui-regression/run.py --mode workspace --cycles 24 --tag ci-workspace
           python3 scripts/native-ui-regression/run.py --mode pdf --cycles 3 --tag ci-pdf
+          python3 scripts/native-ui-regression/run.py --mode samebook --cycles 3 --tag ci-samebook
           python3 scripts/native-ui-regression/run.py --mode navigation --cycles 1 --tag ci-book-picker
           python3 scripts/native-ui-regression/run.py --mode continuation --cycles 12 --tag ci-continuation
       - name: Native reading continuation and preservation regression
@@ -80,6 +81,7 @@ jobs:
         run: |
           python3 scripts/mac-performance/test-scroll-capture-analysis.py
           python3 scripts/mac-performance/test-performance-tool-contracts.py
+          python3 scripts/mac-performance/test-samebook-experiment-tools.py
       - name: Build universal app and package
         if: github.event_name != 'pull_request'
         run: bash scripts/build-macos.sh

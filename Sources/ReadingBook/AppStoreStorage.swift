@@ -193,6 +193,7 @@ private final class StorageProgressRelay: @unchecked Sendable {
         readingIndexCache = [:]; readingIndexCacheOrder = []; readingExperienceIndex = ReadingExperienceState(); readingContextCacheKey = nil
         navigationGeneration &+= 1
         bookID = nil; selectedUnitID = nil; selectedDocumentID = nil; selectedObjectID = nil; sourceFileURL = nil
+        pdfSourceAdmissionLeases = [:]; pdfDisplayReloadID = UUID()
         pdfSessionPasswords = [:]; pdfUnlockedBookIDs = []
         workspaceMemory = BookWorkspaceMemory(); workspaceMemoryRevision &+= 1
         deletionRequest = nil; lastTrashedProjectURL = nil

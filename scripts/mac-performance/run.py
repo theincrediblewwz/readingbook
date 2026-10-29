@@ -9,6 +9,59 @@ SYSTEM.mach_absolute_time.restype = ctypes.c_uint64
 PROC=ctypes.CDLL('/usr/lib/libproc.dylib')
 LAYOUT_WARNING_MARKERS=('being marked as needing layout','300 iterations')
 DIAGNOSTIC_ENV_KEYS=frozenset(('READINGBOOK_DIAG_PAUSE_DOT','READINGBOOK_DIAG_SKIP_HIDDEN_WIDTH','READINGBOOK_DIAG_BIND_HIDDEN_THUMBNAILS'))
+SAMEBOOK_EXPERIMENT_ID='samebook-source-retention-v1'
+SAMEBOOK_VARIANT_ENV='READINGBOOK_SAMEBOOK_VARIANT'
+
+def samebook_experiment(manifest, variant):
+    """Require a finalized experiment and explicit arm; never promote it to baseline."""
+    definition_path=local(manifest['buildRoot'])/'samebook-experiment-definition.json'
+    declared=manifest.get('sameBookExperiment')
+    if variant is None and declared is None and not definition_path.exists():return None
+    if variant not in ('baseline','retain-source'):
+        raise ValueError('same-book experiment requires explicit --samebook-variant baseline|retain-source')
+    if (not isinstance(declared,dict) or declared.get('id')!=SAMEBOOK_EXPERIMENT_ID
+            or manifest.get('diagnosticOnly') is not True or manifest.get('formalFPSBaselineExcluded') is not True
+            or not definition_path.is_file()):
+        raise ValueError('same-book experiment manifest is absent or not finalized')
+    definition=json.loads(definition_path.read_text())
+    if (declared.get('definitionSHA256')!=sha(definition_path)
+            or definition.get('id')!=SAMEBOOK_EXPERIMENT_ID
+            or definition.get('sourceCommit')!=manifest.get('sourceCommit')
+            or declared.get('immutableFixtureRequired') is not True):
+        raise ValueError('same-book experiment provenance mismatch')
+    return {'id':SAMEBOOK_EXPERIMENT_ID,'variant':variant,
+        'definitionSHA256':sha(definition_path),'immutableFixtureRequired':True,
+        'semanticLimit':'immutable copied source only; retaining URL is not a product source-validity implementation'}
+
+def samebook_launch_environment(metadata):
+    # Reset the variable even in ordinary probes; shell inheritance must never
+    # silently select an experimental arm.
+    return {SAMEBOOK_VARIANT_ENV:metadata['variant'] if metadata is not None else 'disabled'}
+
+def validate_samebook_execution(rows, metadata, cycles):
+    if metadata is None:return None
+    completed=next((row['ticks'] for row in rows if row['event']=='run.completed'),None)
+    measured=[row for row in rows if completed is not None and row['ticks']<=completed]
+    decisions=[row for row in measured if row['event']=='samebook.retention-decision']
+    expected=[False]+[metadata['variant']=='retain-source']*(cycles-1)
+    errors=[]
+    if len(decisions)!=cycles:errors.append('selection-decision-count')
+    if any(row.get('variant')!=metadata['variant'] for row in decisions):errors.append('runtime-variant-mismatch')
+    if [row.get('retained') for row in decisions]!=expected:errors.append('runtime-retention-decision-mismatch')
+    if len(decisions)>1 and not all(row.get('sameBookReader') is True and row.get('ownPDF') is True for row in decisions[1:]):
+        errors.append('same-book-owned-reader-guard')
+    begins=sum(row['event']=='pdf.document-create.begin' for row in measured)
+    ends=sum(row['event']=='pdf.document-create.end' for row in measured)
+    if begins!=ends:errors.append('incomplete-document-construction')
+    expected_creates=1 if metadata['variant']=='retain-source' else cycles
+    return {'status':'qualified-explicit-runtime-arm' if not errors else 'ineligible-runtime-arm',
+        'errors':errors,'cycles':cycles,'retentionDecisions':decisions,
+        'documentCreateBeginCount':begins,'documentCreateEndCount':ends,
+        'expectedDocumentCreateCountForHypothesis':expected_creates,
+        'documentCreationMatchesHypothesis':begins==expected_creates and ends==expected_creates,
+        'hypothesisIsNotAcceptanceGate':'A qualified negative experiment remains valid; no reduction must not be called a benefit.',
+        'selectionStates':[row for row in measured if row['event']=='samebook.select.state'],
+        'workspaceCaptures':[row for row in measured if row['event']=='samebook.pdf-memory-capture']}
 
 def diagnostic_environment(values):
     result={}
@@ -23,15 +76,18 @@ def count_layout_warnings(value):
     # One warning line can contain both markers; count it once.
     return sum(any(marker in line for marker in LAYOUT_WARNING_MARKERS) for line in value.splitlines())
 
-def diagnostic_metadata(profiled=False, scroll_metadata=None):
+def diagnostic_metadata(profiled=False, scroll_metadata=None, samebook_metadata=None):
     # Keep the provenance on each result/summary, not only launch.json. Timing
     # aggregates remain available for diagnostics but are ineligible as ordinary
     # startup/action baselines when a sampler or injected scroll driver is present.
     reasons=[]
     if profiled:reasons.append('startup-sample')
     if scroll_metadata is not None:reasons.append('in-process-scroll-driver')
-    return {'profiled':bool(profiled),'scrollDiagnostic':scroll_metadata,
+    if samebook_metadata is not None:reasons.append('same-book-source-retention-experiment')
+    result={'profiled':bool(profiled),'scrollDiagnostic':scroll_metadata,
         'latencyBaselineExcluded':bool(reasons),'latencyBaselineExclusionReasons':reasons}
+    if samebook_metadata is not None:result['sameBookExperiment']=samebook_metadata
+    return result
 
 def process_start(pid):
     buffer=ctypes.create_string_buffer(1024)
@@ -60,6 +116,60 @@ def sha(path):
 
 def tree_manifest(path):
     return {p.relative_to(path).as_posix():sha(p) for p in sorted(path.rglob('*')) if p.is_file()}
+
+def samebook_book_bytes(library):
+    """Protect canonical/user bytes, distinguish only hash-proven generated views."""
+    books=library/'books'
+    files={p.relative_to(books).as_posix():{'sha256':sha(p),'bytes':p.stat().st_size,
+            'category':'unclassified-protected'} for p in sorted(books.rglob('*')) if p.is_file()}
+    for relative,record in files.items():
+        if pathlib.PurePosixPath(relative).name=='.DS_Store':record['category']='filesystem-metadata'
+    for project_path in sorted(books.glob('*/project.json')):
+        directory=project_path.parent;book_prefix=directory.name+'/'
+        try:project=json.loads(project_path.read_text())
+        except (OSError,json.JSONDecodeError):project={}
+        documents={record.get('relativePath') for record in project.get('documents',[]) if isinstance(record,dict)}
+        manifest_path=directory/'.readingbook-readable.json'
+        try:readable=json.loads(manifest_path.read_text())
+        except (OSError,json.JSONDecodeError):readable={}
+        readable_valid=isinstance(readable,dict) and readable.get('version')==1 and isinstance(readable.get('files'),dict)
+        generated={}
+        if readable_valid:
+            for name,record in readable['files'].items():
+                path=pathlib.PurePosixPath(name)
+                permitted=((name.startswith('AI分析/') and name.endswith('.md'))
+                           or (name.startswith('阅读导航') and name.endswith('.md') and '/' not in name))
+                if (permitted and not path.is_absolute() and '..' not in path.parts and isinstance(record,dict)
+                        and record.get('path')==name and isinstance(record.get('generatedHash'),str)):
+                    generated[name]=record['generatedHash']
+        for relative,record in files.items():
+            if not relative.startswith(book_prefix):continue
+            name=relative[len(book_prefix):]
+            if name=='project.json':record['category']='canonical-project'
+            elif name.startswith('source/'):record['category']='source'
+            elif name in documents:record['category']='user-document'
+            elif name=='.readingbook-readable.json' and readable_valid:record['category']='generated-readable-manifest'
+            elif name in generated and record['sha256']==generated[name]:record['category']='generated-readable'
+    return {'schema':1,'root':'books','files':files}
+
+def validate_samebook_book_bytes(before, after):
+    old,new=before['files'],after['files']
+    changes={'protectedChanges':[],'generatedReadableChanges':[],'filesystemMetadataChanges':[]}
+    derived={'generated-readable','generated-readable-manifest'}
+    changed=[name for name in sorted(old.keys()|new.keys())
+             if old.get(name,{}).get('sha256')!=new.get(name,{}).get('sha256')]
+    for name in changed:
+        prior,current=old.get(name),new.get(name)
+        categories={r['category'] for r in (prior,current) if r is not None}
+        detail={'path':name,'before':prior,'after':current}
+        if categories=={'filesystem-metadata'}:changes['filesystemMetadataChanges'].append(detail)
+        elif categories and categories<=derived:changes['generatedReadableChanges'].append(detail)
+        else:changes['protectedChanges'].append(detail)
+    sources=[name for name,record in old.items() if record['category']=='source' and name.lower().endswith('.pdf')]
+    return {'qualified':bool(sources) and not changes['protectedChanges'],
+        'originalPDFSourceCount':len(sources),'bookFileCountBefore':len(old),'bookFileCountAfter':len(new),
+        'canonicalSourceAndUserBytesUnchanged':not changes['protectedChanges'],**changes,
+        'classification':'project/source/registered documents and unknown files protected; only manifest hashes matching actual readable bytes are generated'}
 
 def write(path,value): path.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n')
 
@@ -191,6 +301,7 @@ def main():
     parser.add_argument('--profile-startup',action='store_true',help='separate diagnostic sample; must never be included in performance baseline')
     parser.add_argument('--scroll-driver',help='workspace-built in-process diagnostic dylib; requires one held run, excluded from latency baselines')
     parser.add_argument('--diagnostic-env',action='append',default=[],help='allowlisted scroll-diagnostic NAME=0/1; repeated values forbidden')
+    parser.add_argument('--samebook-variant',choices=['baseline','retain-source'],help='explicit arm of a finalized immutable-source experiment; both arms excluded from ordinary baselines')
     args=parser.parse_args()
     if args.stop_held:return stop_held(args.stop_held)
     scroll_driver=local(args.scroll_driver) if args.scroll_driver else None
@@ -202,6 +313,9 @@ def main():
     if not args.tag.replace('-','').replace('_','').isalnum():raise ValueError('tag must be alphanumeric with hyphens/underscores')
     manifest=json.loads(local(args.manifest).read_text());base=local(manifest['buildRoot']);app=local(manifest['app']);binary=app/'Contents/MacOS/ReadingBook'
     if manifest.get('configuration')!='release' or not manifest.get('buildSucceeded') or sha(binary)!=manifest['binarySHA256']:raise RuntimeError('successful unmodified Release build required')
+    samebook_metadata=samebook_experiment(manifest,args.samebook_variant)
+    if samebook_metadata and (args.mode!='warm' or args.warm_repeats<2 or scroll_driver or diagnostic_env):
+        raise ValueError('same-book experiment requires warm mode, at least two cycles, and no scroll/component switches')
     fixture=local(args.library_copy) if args.library_copy else None
     pdf=local(args.pdf) if args.pdf else None
     if args.mode!='import' and not fixture:raise ValueError('--library-copy required for load/warm')
@@ -228,10 +342,19 @@ def main():
         config={'workspace':str(ROOT),'output':str(run),'library':str(library),'mode':args.mode,'source':str(source) if source else None,
             'bookID':bookid,'width':args.width,'height':args.height,'scale':3.43,'warmRepeats':args.warm_repeats,
             'memoryOffsets':[float(x) for x in args.memory_offsets.split(',') if x], 'hold':args.hold_final and index==args.rounds-1}
+        if samebook_metadata:config['sameBookExperiment']=samebook_metadata
+        samebook_bytes_before=samebook_book_bytes(library) if samebook_metadata else None
+        if samebook_metadata:
+            if not validate_samebook_book_bytes(samebook_bytes_before,samebook_bytes_before)['qualified']:
+                raise ValueError('same-book experiment requires copied canonical PDF sources')
+            write(run/'samebook-book-bytes-before.json',samebook_bytes_before)
         write(run/'config.json',config);env=os.environ.copy();env['READINGBOOK_PERF_CONFIG']=str(run/'config.json');env['TMPDIR']=str(base/'tmp')
         start=datetime.datetime.now().astimezone();launcherlog=(run/'launcher.log').open('w')
         openargs=['/usr/bin/open','-n','-W','--env','READINGBOOK_PERF_CONFIG='+str(run/'config.json'),'--env','TMPDIR='+str(base/'tmp'),
             '--stdout',str(run/'stdout.log'),'--stderr',str(run/'stderr.log'),str(app)]
+        # Always reset this one variable, so a diagnostic shell cannot influence
+        # an ordinary probe. Only the finalized experiment understands it.
+        for key,value in samebook_launch_environment(samebook_metadata).items():openargs[-1:-1]=['--env',key+'='+value]
         scroll_metadata=None
         if scroll_driver:
             control=run/'scroll-control';control.mkdir()
@@ -245,6 +368,7 @@ def main():
         apppid=None;created=None;sampler=None;samplelog=None
         launchrecord={'launchRequestTicks':launch,'launcherPID':child.pid,'startedAt':start.isoformat(),'binarySHA256':manifest['binarySHA256'],'sourceCommit':manifest['sourceCommit'],'launchMethod':'LaunchServices open -n -W with per-process environment'}
         if scroll_metadata:launchrecord['scrollDiagnostic']=scroll_metadata
+        if samebook_metadata:launchrecord['sameBookExperiment']=samebook_metadata
         write(run/'launch.json',launchrecord)
         deadline=time.monotonic()+max(360,240+max(config['memoryOffsets'],default=0))
         held=False
@@ -273,7 +397,17 @@ def main():
             samplelog.close()
         launcherlog.close();rows=events(run/'events.jsonl');result=summarize(rows,launch,created)
         result.update(run=str(run),exitCode=child.poll(),held=held)
-        result.update(diagnostic_metadata(args.profile_startup,scroll_metadata))
+        result.update(diagnostic_metadata(args.profile_startup,scroll_metadata,samebook_metadata))
+        if samebook_metadata:
+            validation=validate_samebook_execution(rows,samebook_metadata,args.warm_repeats)
+            samebook_bytes_after=samebook_book_bytes(library)
+            write(run/'samebook-book-bytes-after.json',samebook_bytes_after)
+            validation['bookBytesValidation']=validate_samebook_book_bytes(samebook_bytes_before,samebook_bytes_after)
+            if not validation['bookBytesValidation']['qualified']:
+                validation['errors'].append('copied-canonical-or-user-book-bytes-mutated')
+                validation['status']='ineligible-runtime-arm'
+            result['sameBookExperimentValidation']=validation
+            if validation['status']!='qualified-explicit-runtime-arm':result['status']='ineligible-samebook-runtime-arm'
         if sampler:
             result['startupSampleReturnCode']=sampler.returncode
             if sampler.returncode!=0 or not (run/'startup.sample.txt').exists():result['status']='failed-startup-sample'
@@ -304,7 +438,7 @@ def main():
     summary={'status':'passed' if len(results)==args.rounds and all(r['status']=='passed' for r in results) and after==original and pdf_before==pdf_after else 'failed',
         'sourceLibraryUnchanged':after==original if fixture else None,'sourcePDFSHA256':pdf_before,'sourcePDFUnchanged':pdf_before==pdf_after if pdf else None,'mode':args.mode,'roundsRequested':args.rounds,'roundsCompleted':len(results),
         'window':[args.width,args.height],'aggregate':aggregate(results),'runs':[r['run'] for r in results],
-        **diagnostic_metadata(args.profile_startup,next((r.get('scrollDiagnostic') for r in results if r.get('scrollDiagnostic') is not None),None)),
+        **diagnostic_metadata(args.profile_startup,next((r.get('scrollDiagnostic') for r in results if r.get('scrollDiagnostic') is not None),None),samebook_metadata),
         'launchBoundary':'external mach_absolute_time before LaunchServices request; libproc ri_proc_start_abstime is separate process-create boundary; main.entry excludes pre-main',
         'diskColdCache':False,'pixelFirstScreenMeasured':False}
     write(logroot/'summary.json',summary);print('Summary:',logroot/'summary.json',flush=True)

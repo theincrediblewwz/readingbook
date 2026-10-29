@@ -168,6 +168,7 @@ struct PanelHarnessRoot: View {
         guard store.apiKey.isEmpty, store.savedServices.isEmpty else { fatalError("Harness service isolation failed") }
         store.settings = ProviderSettings(baseURL: "http://127.0.0.1:1/disabled", model: "")
         if mode == "pdf" { await runPDFScenario(); return }
+        if mode == "samebook" { await runSameBookPDFScenario(); return }
         if mode == "navigation" { await runBookPickerScenario(); return }
         if mode == "continuation" { await runContinuationScenario(); return }
         if synthetic {
@@ -578,6 +579,320 @@ struct PanelHarnessRoot: View {
         assertions["windowVisible"] = window?.isVisible ?? false
         assertions["metrics"] = metrics.snapshot()
         assertions["testScope"] = "real ReaderWorkspaceView/PDFKit, public native object binding, window-local thumbnail click, canonical workspace persistence; correctness, not FPS"
+        writeJSON("result.json", assertions)
+        timer?.cancel(); window?.orderOut(nil); NSApp.terminate(nil)
+    }
+}
+
+/// Source admission, not a synthetic nil-URL shortcut: exercise the production
+/// AppStore selection path with mounted public PDFKit objects and private fixtures.
+@MainActor extension Runner {
+    private func sameBookPDF(_ url: URL, label: String) throws -> Data {
+        var media = CGRect(x: 0, y: 0, width: 420, height: 595)
+        guard let graphics = CGContext(url as CFURL, mediaBox: &media, nil) else {
+            throw ReadingError.invalid("Unable to create same-book PDF fixture")
+        }
+        for number in 1...8 {
+            graphics.beginPDFPage(nil)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: graphics, flipped: false)
+            NSString(string: "\(label) - page \(number)").draw(at: NSPoint(x: 35, y: 500),
+                withAttributes: [.font: NSFont.systemFont(ofSize: 20), .foregroundColor: NSColor.black])
+            NSString(string: "Private test fixture. Keep notes, analysis and annotations.").draw(at: NSPoint(x: 35, y: 460),
+                withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.black])
+            NSGraphicsContext.restoreGraphicsState(); graphics.endPDFPage()
+        }
+        graphics.closePDF()
+        return try Data(contentsOf: url)
+    }
+    private func sameBookState(_ label: String, controller: PDFReaderController) -> [String: Any] {
+        let pdf = pdfObjects()?.2, document = pdf?.document
+        let current: Int
+        if let page = pdf?.currentPage, let document { current = document.index(for: page) + 1 } else { current = -1 }
+        let destination = pdf?.currentDestination
+        let destinationPage: Int
+        if let page = destination?.page, let document { destinationPage = document.index(for: page) + 1 } else { destinationPage = -1 }
+        return ["label": label, "selectedPage": store.selectedUnit?.page ?? -1,
+            "controllerPage": controller.page, "viewCurrentPage": current,
+            "destinationPage": destinationPage, "workspacePage": store.workspaceMemory.pdf?.page ?? -1,
+            "destinationX": destination.map { Double($0.point.x) } ?? -1,
+            "destinationY": destination.map { Double($0.point.y) } ?? -1,
+            "workspaceX": store.workspaceMemory.pdf?.location?.x ?? -1,
+            "workspaceY": store.workspaceMemory.pdf?.location?.y ?? -1,
+            "scale": Double(pdf?.scaleFactor ?? 0), "ready": controller.isReady]
+    }
+    func runSameBookPDFScenario() async {
+        var assertions: [String: Any] = ["mode": mode, "realNetworkRequests": 0]
+        var states: [[String: Any]] = []
+        do {
+            let source = output.appendingPathComponent("samebook-8-pages.pdf")
+            let sourceBytes = try sameBookPDF(source, label: "Original same-book fixture")
+            let sourceHash = SHA256.hash(data: sourceBytes).map { String(format: "%02x", $0) }.joined()
+            var project = BookProject(title: "Same-book source admission fixture", originalName: source.lastPathComponent, sourceHash: sourceHash,
+                units: (1...8).map { SourceUnit(id: "samebook-page-\($0)", order: $0 - 1, chapter: "Fixture", page: $0,
+                    text: "Original same-book fixture - page \($0)") })
+            PluginEngine.seed(&project)
+            project.insights.append(ReadingInsight(id: "samebook-saved-analysis", unitIDs: [project.units[3].id], markdown: "## Saved analysis\n\nKeep this old analysis and $x^2$."))
+            let annotation = ReaderAnnotation(sourceHash: sourceHash, page: 4, text: "", rangeLocation: 0, rangeLength: 0,
+                quads: [ReaderQuadRect(x: 30, y: 450, width: 250, height: 70)], comment: "Keep this saved region", kind: .region)
+            project.readerAnnotations = [annotation]
+            project = try await store.repository.create(project, sourceURL: source)
+            let note = DocumentRecord(id: "samebook-preserved-note", title: "Preserved same-book note")
+            let noteBody = "# Preserve me\n\nKeep e\u{301}, 🙂, source links and $x^2$.\n"
+            project = try await store.repository.saveDocument(project: project, document: note, markdown: noteBody)
+            let originalOwner = store.repository, originalRoot = store.libraryRootURL
+            let canonical = await originalOwner.sourceURL(for: project)
+            let projectURL = library.appendingPathComponent("books/\(project.id)/project.json")
+            let projectBefore = try Data(contentsOf: projectURL)
+            store.books = [project]
+            await store.selectBook(project.id, preferredRoute: "reader")
+            // Initial book admission legitimately clears the composer belonging
+            // to no book. Only the later same-book selections must retain this.
+            store.queryComposerDraft.text = draft
+            let controller = PDFReaderController()
+            let root = ReaderWorkspaceView(showPDF: .constant(true), showOutline: .constant(false), bookmarksOnly: .constant(false))
+                .environmentObject(store).environmentObject(controller).environmentObject(ReadingTypographySettings())
+                .modifier(ReadingPreferencesEnvironment())
+            let host = CountingHost(rootView: AnyView(root))
+            window = NSWindow(contentRect: NSRect(x: 70, y: 70, width: 1100, height: 760), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.title = "ReadingBook isolated same-book PDF admission regression"
+            window.contentView = host; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            metrics.scenario(); metrics.record("samebook-normal-initial-admission")
+            try await pdfWait("normal source admission mounts the physical PDF") { self.pdfObjects() != nil && controller.isReady && controller.pageCount == 8 }
+            guard let initial = pdfObjects(), let initialDocument = initial.2.document else { throw ReadingError.invalid("Same-book PDF object missing") }
+            try pdfRequire(initial.1.pdfView == nil && !controller.thumbnailsVisible, "Initial admission must leave hidden thumbnails detached")
+            try pdfRequire(initialDocument.page(at: 3)?.annotations.contains(where: { $0.contents == annotation.comment }) == true,
+                "Saved annotation must be present in the actual native PDF")
+            assertions["normalRepositoryAdmissionAndSavedAnnotationRendered"] = true
+
+            // Deliberately choose a noninitial page and nondefault settings. No
+            // PerfProbe normalization or rewrite-to-page-one hook exists here.
+            let requested = WorkspacePDFMemory(page: 4, location: WorkspacePoint(x: 0.15, y: 0.75), scale: 1.35,
+                fitMode: "custom", continuous: false, thumbnails: false, direction: .horizontal)
+            store.updateWorkspaceMemory { $0.pdf = requested }
+            store.selectedUnitID = project.units[3].id; store.pdfNavigationToken += 1; store.workspaceMemoryRevision += 1
+            try await pdfWait("arbitrary page and saved viewport ready") {
+                controller.page == 4 && self.store.selectedUnit?.page == 4 && controller.fitMode == "custom"
+                    && !controller.isContinuous && controller.direction == .horizontal && abs(controller.zoomPercent - 135) <= 1
+            }
+            try await Task.sleep(nanoseconds: 350_000_000)
+            NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
+            store.flushWorkspaceMemory()
+            let beforeMemory = store.workspaceMemory.pdf
+            try pdfRequire(beforeMemory?.page == 4, "Discrete page-four setup must save page four")
+            states.append(sameBookState("before-verified-reselect", controller: controller))
+            let stableDisplayID = store.pdfDisplayReloadID
+            var memoryBeforeLastReselect = beforeMemory
+            for cycle in 0..<max(2, min(cycles, 8)) {
+                metrics.record("samebook-seed-native-find-and-selection-\(cycle)")
+                controller.command(.showSearch)
+                try await pdfWait("native PDF search opens") { controller.isSearchVisible }
+                guard let search = descendants(initial.0, NSSearchField.self).first else {
+                    throw ReadingError.invalid("Native PDF search field missing")
+                }
+                search.stringValue = "page 4"
+                try pdfRequire(search.sendAction(search.action, to: search.target), "Native PDF search action was not delivered")
+                try await pdfWait("real PDF search produces a page-four match") {
+                    !initialDocument.isFinding && initial.2.highlightedSelections?.isEmpty == false && controller.page == 4
+                }
+                guard let page = initialDocument.page(at: 3), let text = page.string else {
+                    throw ReadingError.invalid("Page-four selection source missing")
+                }
+                let range = (text as NSString).range(of: "Original")
+                guard range.location != NSNotFound, let nativeSelection = page.selection(for: range) else {
+                    throw ReadingError.invalid("Native PDFSelection could not be created")
+                }
+                initial.2.setCurrentSelection(nativeSelection, animate: false)
+                try await pdfWait("native selection reaches product source state") {
+                    initial.2.currentSelection?.string == "Original" && controller.hasSelection
+                        && self.store.sourceReadingSelection?.text == "Original" && self.store.sourceReadingSelection?.page == 4
+                }
+                // Native find legitimately moves the viewport. Preserve this
+                // new user position, not the pre-search point from setup.
+                NotificationCenter.default.post(name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
+                store.flushWorkspaceMemory(); memoryBeforeLastReselect = store.workspaceMemory.pdf
+                states.append(sameBookState("with-native-find-and-selection-\(cycle)", controller: controller))
+                metrics.record("samebook-verified-reselect-\(cycle)")
+                let token = store.pdfNavigationToken, generation = store.navigationGeneration
+                await store.selectBook(project.id, preferredRoute: "reader")
+                try await pdfWait("verified same-book reselect clears native interaction and stays ready") {
+                    controller.isReady && controller.page == 4 && self.store.selectedUnit?.page == 4
+                        && initial.2.currentSelection == nil && initial.2.highlightedSelections?.isEmpty != false
+                        && !initialDocument.isFinding && !controller.isSearchVisible && self.store.sourceReadingSelection == nil
+                }
+                try pdfRequire(pdfObjects()?.0 === initial.0 && pdfObjects()?.2 === initial.2 && pdfObjects()?.2.document === initialDocument,
+                    "Verified unchanged source must retain its native container, PDFView and PDFDocument")
+                try pdfRequire(store.pdfDisplayReloadID == stableDisplayID && store.pdfNavigationToken > token && store.navigationGeneration > generation,
+                    "Retention must keep display identity while completing the real navigation generation flow")
+                try pdfRequire(!controller.isContinuous && controller.direction == .horizontal && controller.fitMode == "custom" && abs(controller.zoomPercent - 135) <= 1,
+                    "Reselect lost saved scale, direction or continuous mode")
+                try pdfRequire(initial.1.pdfView == nil && !controller.thumbnailsVisible, "Reselect rebound hidden thumbnails")
+                try pdfRequire(store.queryComposerDraft.text == draft && !store.editorDirty, "Reselect changed the question draft")
+                states.append(sameBookState("after-verified-reselect-\(cycle)", controller: controller))
+            }
+            if let old = memoryBeforeLastReselect?.location, let current = store.workspaceMemory.pdf?.location {
+                try pdfRequire(abs(old.x - current.x) < 0.02 && abs(old.y - current.y) < 0.02,
+                    "Verified reselect changed the saved viewport anchor")
+            }
+            assertions["verifiedReselectPreservesAllNativeIdentities"] = true
+            assertions["navigationGenerationsStillAdvance"] = true
+            assertions["arbitraryPageViewportAndPreferencesRestored"] = true
+            assertions["questionDraftAndHiddenThumbnailsPreserved"] = true
+            assertions["nativeSelectionStoreSelectionFindAndSearchResetWithoutDocumentReload"] = true
+
+            let guardedToken = store.pdfNavigationToken, guardedDisplay = store.pdfDisplayReloadID
+            store.isBusy = true; await store.selectBook(project.id, preferredRoute: "reader"); store.isBusy = false
+            try pdfRequire(store.pdfNavigationToken == guardedToken && store.pdfDisplayReloadID == guardedDisplay,
+                "Busy selection must not mutate source admission")
+            store.editorTitle = "Keep this unsaved draft"; store.editorMarkdown = "# Unsaved Markdown stays intact\n"; store.editorDirty = true
+            await store.selectBook(project.id, preferredRoute: "reader")
+            try pdfRequire(store.editorDirty && store.editorMarkdown == "# Unsaved Markdown stays intact\n"
+                && store.pdfNavigationToken == guardedToken && store.pdfDisplayReloadID == guardedDisplay,
+                "Dirty selection must preserve the edit and native source identity")
+            store.discardDraftForWorkspaceNavigation()
+            assertions["busyAndDirtySelectionProtection"] = true
+
+            // Keep the prior explicit teardown/reload semantics: this is a
+            // user-visible remount, not an eligible mounted-reader retention.
+            store.sourceFileURL = nil
+            try await pdfWait("explicit URL removal dismantles reader") { self.pdfObjects() == nil }
+            await store.selectBook(project.id, preferredRoute: "reader")
+            try await pdfWait("explicit remount ready") { self.pdfObjects() != nil && controller.isReady && controller.page == 4 }
+            try pdfRequire(pdfObjects()?.0 !== initial.0 && pdfObjects()?.2.document !== initialDocument,
+                "Explicitly removed source must not resurrect the previous native document")
+            assertions["explicitNilStillForcesFreshMount"] = true
+
+            func reselectExpectingFresh(_ label: String, ready: Bool) async throws {
+                guard let old = self.pdfObjects(), let oldDocument = old.2.document else { throw ReadingError.invalid("Missing old PDF for " + label) }
+                let reload = self.store.pdfDisplayReloadID
+                metrics.record("samebook-source-change-" + label)
+                await self.store.selectBook(project.id, preferredRoute: "reader")
+                try await self.pdfWait("forced source reload: " + label) {
+                    guard let current = self.pdfObjects() else { return false }
+                    return current.0 !== old.0 && current.2.document !== oldDocument && (!ready || controller.isReady)
+                }
+                try self.pdfRequire(self.store.pdfDisplayReloadID != reload, "Source mismatch did not force a fresh display ID: " + label)
+                if !ready { try self.pdfRequire(self.pdfObjects()?.2.document == nil || !controller.isReady, "Invalid source kept a ready stale document: " + label) }
+                assertions[label + "InvalidatesOldDocument"] = true
+            }
+            func restoreOriginal(_ label: String) async throws {
+                if FileManager.default.fileExists(atPath: canonical.path) { try FileManager.default.removeItem(at: canonical) }
+                try sourceBytes.write(to: canonical, options: .atomic)
+                self.store.errorMessage = nil
+                await self.store.selectBook(project.id, preferredRoute: "reader")
+                try await self.pdfWait("restored original: " + label) {
+                    controller.isReady && self.pdfObjects()?.2.document?.page(at: 0)?.string?.contains("Original same-book fixture") == true
+                }
+                try self.pdfRequire(try Data(contentsOf: canonical) == sourceBytes, "Restoration changed original bytes: " + label)
+            }
+
+            let alternate = output.appendingPathComponent("replacement-8-pages.pdf")
+            let alternateBytes = try sameBookPDF(alternate, label: "Replacement different source")
+            try alternateBytes.write(to: canonical, options: .atomic)
+            try await reselectExpectingFresh("samePathReplacement", ready: true)
+            try pdfRequire(pdfObjects()?.2.document?.page(at: 0)?.string?.contains("Replacement different source") == true,
+                "Replacement selection must display new bytes rather than the cached original")
+            try await restoreOriginal("replacement")
+
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 30)], ofItemAtPath: canonical.path)
+            try await reselectExpectingFresh("unchangedBytesChangedMetadata", ready: true)
+            try pdfRequire(try Data(contentsOf: canonical) == sourceBytes, "Metadata-only test changed source bytes")
+            try await restoreOriginal("metadata")
+
+            try Data(repeating: 0x5A, count: sourceBytes.count).write(to: canonical)
+            try await reselectExpectingFresh("sameSizeInPlaceCorruption", ready: false)
+            try await restoreOriginal("same-size corruption")
+
+            try FileManager.default.removeItem(at: canonical)
+            try await reselectExpectingFresh("deletedSource", ready: false)
+            try await restoreOriginal("deletion")
+
+            try FileManager.default.removeItem(at: canonical)
+            try FileManager.default.createSymbolicLink(at: canonical, withDestinationURL: source)
+            try await reselectExpectingFresh("symlinkSource", ready: false)
+            try await restoreOriginal("symlink")
+
+            // Equal bookID/hash in another repository must not inherit a prior
+            // library's lease, even while a reader for it remains mounted.
+            let otherRoot = library.deletingLastPathComponent().appendingPathComponent("samebook-other-library", isDirectory: true)
+            let otherOwner = LibraryRepository(rootURL: otherRoot)
+            var other = BookProject(id: project.id, title: "Same identifiers, other owner", originalName: project.originalName,
+                sourceHash: sourceHash, units: project.units)
+            PluginEngine.seed(&other); other = try await otherOwner.create(other, sourceURL: source)
+            guard let oldOwnerDocument = pdfObjects()?.2.document else { throw ReadingError.invalid("Missing pre-owner-change document") }
+            let oldOwnerDisplay = store.pdfDisplayReloadID
+            store.repository = otherOwner; store.libraryRootURL = otherRoot; store.books = [other]
+            await store.selectBook(other.id, preferredRoute: "reader")
+            try await pdfWait("new library reader") { controller.isReady && self.pdfObjects()?.2.document !== oldOwnerDocument }
+            try pdfRequire(store.pdfDisplayReloadID != oldOwnerDisplay && store.sourceFileURL?.path.hasPrefix(otherRoot.path + "/") == true,
+                "Same identifiers in another library reused an old source lease")
+            store.repository = originalOwner; store.libraryRootURL = originalRoot; store.books = [project]
+            await store.selectBook(project.id, preferredRoute: "reader")
+            try await pdfWait("original owner restored") { controller.isReady && self.store.sourceFileURL == canonical }
+            assertions["differentLibraryOwnerCannotReuseLease"] = true
+
+            // Replacing an already-unlocked source with a differently encrypted
+            // file must not inherit its old bookID-based unlocked fast return.
+            let encryptedA = output.appendingPathComponent("encrypted-a.pdf"), encryptedB = output.appendingPathComponent("encrypted-b.pdf")
+            guard let encryptorA = PDFDocument(data: sourceBytes), let encryptorB = PDFDocument(data: sourceBytes),
+                  encryptorA.write(to: encryptedA, withOptions: [.ownerPasswordOption: "owner-a", .userPasswordOption: "fixture-pass-a"]),
+                  encryptorB.write(to: encryptedB, withOptions: [.ownerPasswordOption: "owner-b", .userPasswordOption: "fixture-pass-b"]) else {
+                throw ReadingError.invalid("Unable to create encrypted source fixtures")
+            }
+            let encryptedBytes = try Data(contentsOf: encryptedA)
+            let encryptedHash = SHA256.hash(data: encryptedBytes).map { String(format: "%02x", $0) }.joined()
+            var encrypted = BookProject(title: "Encrypted same-book source fixture", originalName: encryptedA.lastPathComponent,
+                sourceHash: encryptedHash, units: (1...8).map { SourceUnit(id: "encrypted-page-\($0)", order: $0-1, chapter: "Encrypted", page: $0, text: "Encrypted fixture page \($0)") })
+            PluginEngine.seed(&encrypted); encrypted = try await originalOwner.create(encrypted, sourceURL: encryptedA)
+            store.books = [project, encrypted]
+            await store.selectBook(encrypted.id, preferredRoute: "reader")
+            try await pdfWait("encrypted source requests a password") { self.store.pdfPasswordRequest != nil && !self.store.isBusy }
+            guard let passwordRequest = store.pdfPasswordRequest else { throw ReadingError.invalid("Missing encrypted source prompt") }
+            store.submitPDFPassword("fixture-pass-a", for: passwordRequest)
+            try await pdfWait("encrypted source unlocked") {
+                controller.isReady && self.store.pdfUnlockedBookIDs.contains(encrypted.id) && !self.store.isBusy
+                    && self.pdfObjects()?.2.document?.isEncrypted == true && self.pdfObjects()?.2.document?.isLocked == false
+            }
+            guard let unlocked = pdfObjects()?.2.document else { throw ReadingError.invalid("Unlocked document missing") }
+            await store.selectBook(encrypted.id, preferredRoute: "reader")
+            try await pdfWait("unchanged encrypted session stays ready") { controller.isReady && self.store.pdfPasswordRequest == nil }
+            try pdfRequire(pdfObjects()?.2.document === unlocked, "Unchanged verified encrypted source must retain the same unlocked native document")
+            let encryptedCanonical = await originalOwner.sourceURL(for: encrypted)
+            try Data(contentsOf: encryptedB).write(to: encryptedCanonical, options: .atomic)
+            let encryptedReload = store.pdfDisplayReloadID
+            await store.selectBook(encrypted.id, preferredRoute: "reader")
+            try await pdfWait("changed encryption requests a new password") {
+                self.store.pdfPasswordRequest != nil && !self.store.isBusy && self.pdfObjects()?.2.document !== unlocked
+            }
+            try pdfRequire(store.pdfDisplayReloadID != encryptedReload && !store.pdfUnlockedBookIDs.contains(encrypted.id)
+                && store.pdfPassword(for: encrypted.id) == nil && pdfObjects()?.2.document !== unlocked,
+                "A replaced encrypted file inherited the stale unlocked source admission")
+            if let request = store.pdfPasswordRequest { store.cancelPDFPasswordRequest(request.id) }
+            try encryptedBytes.write(to: encryptedCanonical, options: .atomic)
+            assertions["unchangedEncryptedSessionRetainedAndReplacementInvalidated"] = true
+            await store.selectBook(project.id, preferredRoute: "reader")
+            try await pdfWait("final original ready") { controller.isReady && self.store.bookID == project.id }
+
+            try pdfRequire(try Data(contentsOf: canonical) == sourceBytes && Data(contentsOf: source) == sourceBytes,
+                "Original PDF bytes were not restored and preserved")
+            try pdfRequire(try Data(contentsOf: projectURL) == projectBefore, "Selection tests rewrote the original project/analysis/annotations")
+            try pdfRequire(try await originalOwner.readDocument(bookID: project.id, document: note) == noteBody,
+                "Selection tests changed saved user Markdown")
+            let analysisEncoder = JSONEncoder(); analysisEncoder.outputFormatting = [.sortedKeys]
+            try pdfRequire(try analysisEncoder.encode(store.book?.insights ?? []) == analysisEncoder.encode(project.insights)
+                && store.book?.readerAnnotations == project.readerAnnotations,
+                "Selection tests changed saved analysis or annotations")
+            assertions["originalProjectNotesAnalysisAndAnnotationsPreserved"] = true
+            assertions["queryAndAIIdle"] = !store.isQueryBusy && !store.isSmartReadingRunning
+            assertions["status"] = "passed"
+        } catch {
+            assertions["status"] = "failed"; assertions["reason"] = error.localizedDescription
+            try? capturePDFView("samebook-failure.png")
+        }
+        metrics.settling(); try? await Task.sleep(nanoseconds: 250_000_000)
+        assertions["states"] = states; assertions["metrics"] = metrics.snapshot()
+        assertions["windowVisible"] = window?.isVisible ?? false
+        assertions["testScope"] = "real selectBook + ReaderWorkspaceView/native PDF objects, arbitrary saved page/viewport, changed/missing/symlink/corrupt source invalidation and session ownership; no FPS, paid AI or user library"
         writeJSON("result.json", assertions)
         timer?.cancel(); window?.orderOut(nil); NSApp.terminate(nil)
     }
