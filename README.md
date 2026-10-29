@@ -1,4 +1,14 @@
-# 0.23.12 · 重叠范围续读（已发布并更新本机，2026-10-29）
+# ReadingBook 0.23.16 · 多组件优化（2026-10-30）
+
+[下载0.23.16/build47](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.16) · [本批结果与边界](Design/2026-10-30-batch-optimization-results.md) · [组件性能进度](Design/2026-10-29-performance-progress.md)。最新功能已合入main，本机正式安装版已更新；包内产品源码为`b57c28f82de090fac804c422cfb00c5879376606`。
+
+本次缩小对话草稿观察范围，输入新问题时减少重复准备旧回答；空兼容历史跳过无用索引；同一次时间/地图/组合查询复用已验证快照。原书、笔记、分析及现有功能保留。独立对照确认局部收益和小幅代价，完整668项Core及原生回归、双架构核包、实际原书与输入/Undo验收均通过。固定条件PDF基线已补齐，性能优化继续按实际瓶颈推进。
+
+原书库20文件逐字节核对保留，全部偏好相同，仅Workspace正常导航更新。开发产物全部留工作区，本轮完成可恢复证据归档和临时载荷清理；GitHub保留最新16与15回滚包，提交历史保留。历史交付说明如下。
+
+---
+
+# 0.23.12 · 重叠范围续读（历史交付，2026-10-29）
 
 [下载0.23.12/build43](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.12) · [本机安装包](dist/ReadingBook-0.23.12-Mac.zip)。源码与近期全部功能已合并main，包内源码为`9604287d99e34cb4be2fa88690aef31084dbca6d`。
 

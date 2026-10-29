@@ -1,8 +1,16 @@
-# 2026-10-30 · 多组件优化通过本机对照，0.23.16交付进行中
+# 2026-10-30 · 三项优化已发布安装0.23.16，继续减少准备阶段重复计算
 
-先读[本批结果](Design/2026-10-30-batch-optimization-results.md)与[批次计划](Design/2026-10-30-batch-optimization-plan.md)。三处产品改动：请求内限200条的时间实体快照复用、无兼容历史时跳过索引准备、对话草稿观察移到输入子视图。正式对照分开进行，当前均通过预先固定门槛；完整调用的组合列表/地图配对中位耗时下降23.1%/41.6%，固定4秒100次输入的应用CPU下降22.0%/71.9%。不是全软件、模型耗时或内存同比下降；数据与小幅代价见结果页。
+先读[本批结果](Design/2026-10-30-batch-optimization-results.md)及[组件进度](Design/2026-10-29-performance-progress.md)。三项已进入当前产品：草稿观察缩到输入区、空兼容历史提前返回、同次组合查询实体时间快照限200项复用。固定输入的App CPU配对中位下降22.0%/71.9%（20/512KiB历史），组合列表/地图完整prepare+project下降23.1%/41.6%。空历史局部约省1.1ms，完整freeze小幅收益；单source列表约2.2%回退、缓存及输入区少量footprint增加均在原定守护内，不声称全软件或模型同比提速。
 
-当前源码准备为0.23.16/build47，但**GitHub完整CI、Release与本机替换还未完成**；当前安装仍0.23.15/build46。本机Debug零编译警告，24轮144次工作区操作/草稿保留与运行警告检查通过；新增4个实际测试函数已在本机编译执行（轻量断言shim，非原生XCTest），完整668项CI继续验证。当前PDF固定指针/等待宽窄窗矩阵仍待补，不把pilot或历史条件混合成收益。所有输出在本工作区，原书/笔记/分析与原偏好保护副本在private-books/mac-batch-20261030/initial。
+产品源码`b57c28f82de090fac804c422cfb00c5879376606`，[完整CI40929517165](https://github.com/theincrediblewwz/readingbook/actions/runs/40929517165) **668项Core零失败、零编译警告**；所有原生、独立AI、笔记/Undo、Markdown29+152、工具及新原生指针10项均过。[Release0.23.16](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.16)与安装版均**0.23.16/build47**；canonical24,821,916字节/SHA`957c8840805b89c4c375b0c8512a601971b533a687e97a0d58289e67e67eb004`，两层ZIP、双架构、严格签名、32资源与附件摘要核验。未安装诊断App。
+
+实际About、103页重选/正常重启、102页既存译文、伴读/对话、建议填入、中文/组合Unicode粘贴、Undo/Redo、收起重开草稿和焦点、历史/记忆及模式菜单通过；没有生成或保存。清空验收文字后重启，现为原书103页/343%、面板收起。最新20文件原库、偏好与15旧App保护在`private-books/mac-batch-20261030/install-before-0.23.16/`；原书/笔记/分析字节与文件集合保留，只有Workspace正常更新，全部偏好完全相同。三个实际UI PID统一日志三类警告零；末PID71089十秒主线程912个样本均事件等待，footprint267.3M/峰362.8M只属静止验收。
+
+固定PDF基线仍是15/c554：指针实际停在正文外、10/45秒completed-dwell、宽窄各3，12全部合格；内容更新FPS中位56.89/56.73（10秒）与57.89/57.49（45秒），是含采集开销的像素更新，不是候选16收益或硬件手势FPS。新工具原生10项抓到旧hitTest坐标误报/漏报并修正；旧4条失败/中断及全组abort不重评分，新pilot不混入矩阵。另普通动作3进程仅2完整合格，第三在memory60失焦整行排除；启动约0.71–0.74秒，首次伴读0.31–0.33秒，30/60秒App footprint约280/287MiB稳定观察，不证明无泄漏。
+
+本机证据`logs/mac-batch-20261030/`；两个生成树无损去重重放后退役，扣归档净减1.77GiB；重复CI包和旧14载荷另减约0.28GiB，合计2.05GiB。工作区开工6,215,400KiB，收尾观察约6,142,376KiB（5.86GiB），净少约71MiB，不能把清理量当净下降。回放前按cleanup/README恢复旧路径；共享模块缓存、活跃Debug、原数据和必要15回滚保留。GitHub main唯一分支，仅16/15两Release/tag及Actions包；提交历史保留。
+
+下一批优先`ReadingSpoilerProjection.entity/event`重复canonicalEvidence检索，以及`ReadingPreparedAnswer.freeze`有效同范围历史重复chatContext/hash；最小方案已审计，先思考再做针对性对照，仍保留全部来源、范围、Unicode和授权守护。长笔记/搜索/隐藏布局/WebKit生命周期及16类组件不取消。不恢复退役数学核查，所有新产物仍在本工作区。下方15及更早为历史记录。
 
 ---
 
