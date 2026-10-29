@@ -88,6 +88,7 @@ jobs:
           python3 scripts/mac-performance/test-scroll-capture-analysis.py
           python3 scripts/mac-performance/test-performance-tool-contracts.py
           python3 scripts/mac-performance/test-samebook-experiment-tools.py
+          python3 scripts/mac-performance/test-scroll-pointer.py
       - name: Build universal app and package
         if: github.event_name != 'pull_request'
         run: bash scripts/build-macos.sh

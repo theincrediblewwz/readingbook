@@ -21,6 +21,9 @@ static NSString *RBExecutable(void) {
 static NSDictionary *RBRect(NSRect r) {
     return @{@"x": @(r.origin.x), @"y": @(r.origin.y), @"width": @(r.size.width), @"height": @(r.size.height)};
 }
+static NSDictionary *RBPoint(NSPoint p) {
+    return @{@"x": @(p.x), @"y": @(p.y)};
+}
 
 @interface RBScrollDrive : NSObject
 @property(nonatomic, copy) NSString *workspace;
@@ -39,6 +42,7 @@ static NSDictionary *RBRect(NSRect r) {
 @property(nonatomic) NSPoint parkedPointer;
 @property(nonatomic) BOOL pointerMoved;
 @property(nonatomic) BOOL pointerHitsPDFAtStart;
+@property(nonatomic, copy) NSDictionary *initialPointerGeometry;
 @property(nonatomic) NSRect lastClipBounds;
 @property(nonatomic) NSUInteger stablePolls;
 @property(nonatomic) BOOL ready;
@@ -53,6 +57,7 @@ static NSDictionary *RBRect(NSRect r) {
 @property(nonatomic) NSInteger direction;
 @property(nonatomic, copy) NSArray<NSNumber *> *initialVisiblePages;
 @property(nonatomic, strong) id initialCenterPage;
+- (NSDictionary *)pointerGeometryAtScreenPoint:(NSPoint)screenPoint;
 @end
 
 @implementation RBScrollDrive
@@ -104,11 +109,33 @@ static NSDictionary *RBRect(NSRect r) {
     return NSApp.active && self.window.keyWindow && self.window.visible &&
         (self.window.occlusionState & NSWindowOcclusionStateVisible) != 0;
 }
+- (NSDictionary *)pointerGeometryAtScreenPoint:(NSPoint)screenPoint {
+    NSWindow *window = self.window;
+    NSView *content = window.contentView;
+    if (!window || !content) {
+        return @{@"screenPoint": RBPoint(screenPoint), @"available": @NO,
+                 @"hitsPDF": @NO, @"hitClass": NSNull.null};
+    }
+    NSPoint windowPoint = [window convertPointFromScreen:screenPoint];
+    NSView *container = content.superview;
+    // NSView.hitTest: expects its superview's coordinates, not its own bounds.
+    // Passing content coordinates flips the point twice for flipped roots.
+    NSPoint hitTestPoint = container ? [container convertPoint:windowPoint fromView:nil] : windowPoint;
+    NSView *hit = [content hitTest:hitTestPoint];
+    BOOL hitsPDF = hit && (hit == self.pdf || [hit isDescendantOf:self.pdf]);
+    return @{@"available": @YES, @"screenPoint": RBPoint(screenPoint), @"windowPoint": RBPoint(windowPoint),
+        @"contentPoint": RBPoint([content convertPoint:windowPoint fromView:nil]), @"hitTestPoint": RBPoint(hitTestPoint),
+        @"hitTestCoordinateSpace": @"content-superview", @"windowFrameScreen": RBRect(window.frame),
+        @"contentClass": NSStringFromClass(content.class), @"contentFrameInSuperview": RBRect(content.frame),
+        @"contentBounds": RBRect(content.bounds), @"contentFlipped": @(content.flipped),
+        @"superviewClass": container ? NSStringFromClass(container.class) : (id)NSNull.null,
+        @"superviewFrame": RBRect(container ? container.frame : NSZeroRect),
+        @"superviewBounds": RBRect(container ? container.bounds : NSZeroRect), @"superviewFlipped": @(container.flipped),
+        @"pdfFrameInSuperview": RBRect(self.pdf.frame), @"pdfBounds": RBRect(self.pdf.bounds),
+        @"hitClass": hit ? NSStringFromClass(hit.class) : (id)NSNull.null, @"hitsPDF": @(hitsPDF)};
+}
 - (BOOL)pointerHitsPDF {
-    NSView *content = self.window.contentView;
-    NSPoint windowPoint = [self.window convertPointFromScreen:NSEvent.mouseLocation];
-    NSView *hit = [content hitTest:[content convertPoint:windowPoint fromView:nil]];
-    return hit && (hit == self.pdf || [hit isDescendantOf:self.pdf]);
+    return [[self pointerGeometryAtScreenPoint:NSEvent.mouseLocation][@"hitsPDF"] boolValue];
 }
 - (NSArray<NSNumber *> *)visiblePageNumbers {
     NSMutableArray<NSNumber *> *numbers = [NSMutableArray array];
@@ -150,7 +177,8 @@ static NSDictionary *RBRect(NSRect r) {
             @"timebaseNumer": @(timebase.numer), @"timebaseDenom": @(timebase.denom),
             @"clipBounds": RBRect(self.clip.bounds), @"documentBounds": RBRect(self.clip.documentView.bounds),
             @"documentIsFlipped": @(self.clip.documentView.flipped), @"pdfPageCount": @(self.document.pageCount),
-            @"workspacePDFVerified": @YES, @"foreground": self.foreground} name:@"driver-ready.json"];
+            @"workspacePDFVerified": @YES, @"foreground": self.foreground,
+            @"pointerGeometry": [self pointerGeometryAtScreenPoint:NSEvent.mouseLocation]} name:@"driver-ready.json"];
     }
     if (self.commandAccepted) return;
     NSData *data = [NSData dataWithContentsOfFile:[self.control stringByAppendingPathComponent:@"start.json"]];
@@ -180,7 +208,8 @@ static NSDictionary *RBRect(NSRect r) {
     self.initialOrigin = self.clip.bounds.origin;
     self.parkedPointer = NSEvent.mouseLocation;
     self.pointerMoved = NO;
-    self.pointerHitsPDFAtStart = self.pointerHitsPDF;
+    self.initialPointerGeometry = [self pointerGeometryAtScreenPoint:self.parkedPointer];
+    self.pointerHitsPDFAtStart = [self.initialPointerGeometry[@"hitsPDF"] boolValue];
     // Public geometry queries at the boundaries only. PDFView.currentPage can
     // remain cached after direct clip scrolling; it is not crossing evidence.
     self.initialVisiblePages = self.visiblePageNumbers; self.initialCenterPage = self.centerPageNumber;
@@ -190,7 +219,7 @@ static NSDictionary *RBRect(NSRect r) {
         @"requestedDurationSeconds": @(self.duration), @"pointsPerSecond": @(self.speed), @"inputHz": @(self.inputHz),
         @"direction": self.direction > 0 ? @"down" : @"up", @"initialClipBounds": RBRect(self.clip.bounds),
         @"initialVisiblePDFPages": self.initialVisiblePages, @"initialCenterPDFPage": self.initialCenterPage,
-        @"foreground": self.foreground} name:@"scroll-start.json"];
+        @"foreground": self.foreground, @"pointerGeometry": self.initialPointerGeometry} name:@"scroll-start.json"];
     self.ticker = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
     uint64_t interval = (uint64_t)llround(NSEC_PER_SEC / self.inputHz);
     dispatch_source_set_timer(self.ticker, DISPATCH_TIME_NOW, interval, NSEC_PER_MSEC);
@@ -228,6 +257,7 @@ static NSDictionary *RBRect(NSRect r) {
 - (void)finish:(NSString *)status {
     uint64_t end = mach_absolute_time(); self.finished = YES;
     if (self.ticker) { dispatch_source_cancel(self.ticker); self.ticker = nil; }
+    NSDictionary *finalPointerGeometry = [self pointerGeometryAtScreenPoint:NSEvent.mouseLocation];
     mach_timebase_info_data_t timebase; mach_timebase_info(&timebase);
     [self write:@{@"status": status, @"startMachTicks": @(self.startTicks), @"endMachTicks": @(end),
         @"timebaseNumer": @(timebase.numer), @"timebaseDenom": @(timebase.denom),
@@ -239,8 +269,9 @@ static NSDictionary *RBRect(NSRect r) {
         @"initialCenterPDFPage": self.initialCenterPage ?: NSNull.null, @"finalCenterPDFPage": self.centerPageNumber,
         @"pageGeometryQueriedOutsideInputInterval": @YES,
         @"pointerGuard": @{@"policy": @"stationary-and-native-hit-outside-PDF-subtree",
-            @"hitsPDFAtStart": @(self.pointerHitsPDFAtStart), @"hitsPDFAtEnd": @(self.pointerHitsPDF),
+            @"hitsPDFAtStart": @(self.pointerHitsPDFAtStart), @"hitsPDFAtEnd": finalPointerGeometry[@"hitsPDF"],
             @"movedDuringInput": @(self.pointerMoved)},
+        @"pointerGeometryAtStart": self.initialPointerGeometry ?: @{}, @"pointerGeometryAtEnd": finalPointerGeometry,
         @"forcesDrawOrLayout": @NO, @"hardwareGesture": @NO, @"ticks": self.ticks ?: @[],
         @"finalForeground": self.foreground} name:@"scroll-trace.json"];
     [self write:@{@"status": status, @"intervals": @[@{@"label": @"programmatic-continuous-scroll",
