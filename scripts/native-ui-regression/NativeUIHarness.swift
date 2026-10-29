@@ -1731,6 +1731,7 @@ private actor UrgentSearchExpansionGate {
             guard let firstSearch = store.auxiliaryPresentation else { throw ReadingError.invalid("Search owner missing") }
             try await Task.sleep(nanoseconds: 180_000_000)
             try retainedReader("search-open")
+            try capturePDFView("urgent-search-over-retained-reader.png")
             try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.dismissAuxiliary(firstSearch.id), store: store), "Reader search close rejected")
             try await Task.sleep(nanoseconds: 100_000_000)
             try retainedReader("search-close-reader")
@@ -1739,8 +1740,10 @@ private actor UrgentSearchExpansionGate {
 
             for priorRoute in ["library", "query"] {
                 try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.route(priorRoute), store: store), "Unable to enter prior route fixture")
+                try await Task.sleep(nanoseconds: 120_000_000)
                 try pdfRequire(WorkspaceAuxiliaryNavigation.commit(.route("librarySearch"), store: store), "Prior-route search rejected")
                 guard let owner = store.auxiliaryPresentation else { throw ReadingError.invalid("Prior-route search owner missing") }
+                try await Task.sleep(nanoseconds: 120_000_000)
                 try pdfRequire(store.route == priorRoute && WorkspaceAuxiliaryNavigation.commit(.dismissAuxiliary(owner.id), store: store)
                     && store.route == priorRoute, "Search close did not preserve its actual prior route")
             }
