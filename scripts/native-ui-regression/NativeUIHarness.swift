@@ -386,13 +386,14 @@ struct PanelHarnessRoot: View {
     private func pdfRequire(_ value: Bool, _ message: String) throws {
         guard value else { throw ReadingError.invalid(message) }
     }
-    private func pdfWait(_ description: String, _ condition: () -> Bool) async throws {
+    private func pdfWait(_ description: String, onTimeout: (() -> Void)? = nil, _ condition: () -> Bool) async throws {
         let deadline = ProcessInfo.processInfo.systemUptime + 8
         while ProcessInfo.processInfo.systemUptime < deadline {
             window?.contentView?.layoutSubtreeIfNeeded()
             if condition() { return }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
+        onTimeout?()
         throw ReadingError.invalid("PDF regression timeout: " + description)
     }
     private func descendants<T: NSView>(_ root: NSView, _ type: T.Type) -> [T] {
@@ -632,6 +633,38 @@ struct PanelHarnessRoot: View {
             "workspaceY": store.workspaceMemory.pdf?.location?.y ?? -1,
             "scale": Double(pdf?.scaleFactor ?? 0), "ready": controller.isReady]
     }
+    private func pdfLifecycleState(_ label: String, controller: PDFReaderController) -> [String: Any] {
+        var value = sameBookState(label, controller: controller)
+        let root = window?.contentView
+        let containers = root.map { descendants($0, PDFReaderContainerView.self) } ?? []
+        let thumbnails = root.map { descendants($0, PDFThumbnailView.self) } ?? []
+        let views = root.map { descendants($0, PDFView.self) } ?? []
+        value["containerCount"] = containers.count; value["thumbnailCount"] = thumbnails.count
+        value["pdfViewCount"] = views.count; value["pdfObjectsPresent"] = pdfObjects() != nil
+        value["sourceURL"] = store.sourceFileURL?.absoluteString ?? ""
+        value["bookID"] = store.bookID ?? ""; value["selectedUnitID"] = store.selectedUnitID ?? ""
+        value["sourceMode"] = store.readingSourceMode; value["route"] = store.route
+        value["isBusy"] = store.isBusy; value["restoringWorkspaceMemory"] = store.restoringWorkspaceMemory
+        value["storageWorking"] = store.storageState.working; value["editorDirty"] = store.editorDirty
+        value["navigationGeneration"] = store.navigationGeneration; value["navigationToken"] = store.pdfNavigationToken
+        value["displayID"] = store.pdfDisplayReloadID.uuidString
+        value["interactionResetID"] = store.pdfInteractionResetID.uuidString
+        value["workspaceRevision"] = store.workspaceMemoryRevision
+        value["latestCaptureSequence"] = store.pdfWorkspaceMemoryLatestCaptureSequence
+        value["memoryOwner"] = store.pdfWorkspaceMemoryOwner.map { String(describing: $0) } ?? ""
+        value["errorMessage"] = store.errorMessage ?? ""
+        value["windowVisible"] = window?.isVisible ?? false; value["windowKey"] = window?.isKeyWindow ?? false
+        value["nativeViews"] = views.map { pdf -> [String: Any] in
+            let doc = pdf.document
+            return ["viewID": String(describing: ObjectIdentifier(pdf)), "documentID": doc.map { String(describing: ObjectIdentifier($0)) } ?? "",
+                "documentPresent": doc != nil, "documentURL": doc?.documentURL?.absoluteString ?? "", "pageCount": doc?.pageCount ?? -1,
+                "currentPage": pdf.currentPage.flatMap { page in doc.map { $0.index(for: page) + 1 } } ?? -1,
+                "destinationPage": pdf.currentDestination?.page.flatMap { page in doc.map { $0.index(for: page) + 1 } } ?? -1,
+                "scale": Double(pdf.scaleFactor), "bounds": NSStringFromRect(pdf.bounds), "frame": NSStringFromRect(pdf.frame),
+                "attachedToTestWindow": pdf.window === window, "displayMode": pdf.displayMode.rawValue]
+        }
+        return value
+    }
     func runPDFBoundaryScenario() async {
         var assertions: [String: Any] = ["mode": mode, "realNetworkRequests": 0]
         var states: [[String: Any]] = []
@@ -798,10 +831,15 @@ struct PanelHarnessRoot: View {
                 try self.pdfRequire(onDisk.pdf == memory, label + " fixture was not persisted before source admission")
                 snapshot(label + "-persisted-before-admission", page: 4)
                 await self.store.selectBook(project.id, preferredRoute: "reader")
+                states.append(self.pdfLifecycleState(label + "-after-source-admission", controller: controller))
+                self.writeJSON("boundary-observations.json", ["states": states])
             }
             metrics.record("boundary-real-legacy-negative-page-three-memory")
             try await mountPersistedMemory(legacyMemory, label: "legacy-page-three-negative-y")
-            try await pdfWait("legacy geometry restores physical page four and corrects saved identity") {
+            try await pdfWait("legacy geometry restores physical page four and corrects saved identity", onTimeout: {
+                states.append(self.pdfLifecycleState("legacy-restoration-timeout", controller: controller))
+                self.writeJSON("boundary-observations.json", ["states": states])
+            }) {
                 guard let pdf = self.pdfObjects()?.2, let current = pdf.currentPage, let doc = pdf.document else { return false }
                 return controller.isReady && controller.page == 4 && doc.index(for: current) == 3
                     && self.store.selectedUnit?.page == 4 && self.store.workspaceMemory.pdf?.page == 4
