@@ -1,6 +1,6 @@
 # 连续页位置与续读准备优化
 
-产品源码冻结为 `72842008afd4f0bf87f8478c065a4fe50f78fd9b`，0.23.14/build45。已通过本机回归及[完整 CI 40836796943](https://github.com/theincrediblewwz/readingbook/actions/runs/40836796943)，664项Core零失败/零编译警告，全部原生与工具步骤通过；[Release v0.23.14](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.14)已发布，正式包已核验并实际替换本机安装版。Mac锁屏使最终安装版可见界面验收暂待手动解锁；已有Debug隔离真PDF检查通过。清理在最终安装验收后执行。
+产品源码冻结为 `72842008afd4f0bf87f8478c065a4fe50f78fd9b`，0.23.14/build45。已通过本机回归及[完整 CI 40836796943](https://github.com/theincrediblewwz/readingbook/actions/runs/40836796943)，664项Core零失败/零编译警告，全部原生与工具步骤通过；[Release v0.23.14](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.14)已发布，正式包已核验并实际替换本机安装版。解锁后已完成正式安装版About、第102页重选、正常重启恢复、既存句译及伴读/对话验收；原书数据与服务配置保持，过期测试载荷已清理。
 
 ## 102页重选后变成101页
 
@@ -42,6 +42,15 @@
 50–200计数151单元/沿用51/新增100/pending100；全书1484/100/1384/1384。每范围6进程的完整输入、preview、规范化完整candidate、exact work和inventory哈希一致；仅规范化合法的新请求session ID/updatedAt/requestedAt，源文、CP正文/证据、笔记引用、旧分析、历史、plan、范围和步骤组件均保留。原输入编码前后相等，公开完整验证通过。独立复核原始stdout/launch、二进制/module/archive与语义门禁全部通过。
 
 这是一种合成输入、两个范围的描述性Core成本结果，不等于PDF打开、界面响应、模型网络速度、FPS或系统总内存改善。原始矩阵、失败夹具、源码归档、指纹与复算保存在本机 `logs/boundary-continuation-20261029/`。
+
+## 正式安装版验收与清理完成
+
+- canonical包`dist/ReadingBook-0.23.14-Mac.zip`为24,837,725字节，SHA256 `f7c6067aa5449f4a800dd5d57987988e8f2fcdc0a18fa9bae9f6401b88eb22bb`。GitHub artifact摘要、两层ZIP CRC/SHA、精确源码/版本/build、arm64+x86_64、0755、所有架构严格签名、32资源Git blob及资源专用CLI核验通过；Release资产服务端digest一致。
+- 实际`/Applications/ReadingBook.app` About显示0.23.14(45)，36个文件与已核验CI App逐一相同。原书第102页经书名菜单重选仍102，正常退出再启动仍102，已保存句译和伴读/对话切换通过。安装版保持打开在该页，未触发新AI生成。
+- 安装前最新20文件原库、偏好与0.23.13 App回滚在`private-books/boundary-continuation-20261029/install-before-0.23.14/`。安装期间20文件完全相同；启动/操作后无文件增删，原书/笔记/分析字节不变，仅Workspace正常更新，7项服务偏好保持。没有恢复旧开发快照覆盖用户内容。
+- 10秒静止可见伴读采样的912个主线程样本均为普通事件等待；统一日志持续布局、更新期发布及AttributeGraph cycle三类记录均零。sample报告footprint239.4M/峰值436.0M，只是单次安装验收，不作版本性能、FPS或泄漏比较。
+- 精确白名单清理52项再生Core缓存、重复/过期测试App、helper及旧9/10/11/12安装载荷，释放1,293,647,872字节（约1.20GiB）；工作区7,397,004→6,133,740KiB（约7.05→5.85GiB）。原始证据/保留重放指纹重核未变。原书、笔记、分析、13回滚、14最新版、必要Core重放及旧3套FPS对照均保留；退役helper需要时按脚本重链。
+- GitHub保持main唯一分支，Release与Actions产物保留14最新及13回滚，旧12远端包/tag退役，提交历史保留。所有新源、构建、截图、日志和备份仍在工作目录；没有新增散落的用户数据目录。
 
 ## 其他组件接续
 

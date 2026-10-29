@@ -1,12 +1,14 @@
-# 0.23.14 当前接续（2026-10-29；已发布安装，最终可见验收待解锁）
+# 0.23.14 交付与解锁后验收完成（2026-10-29）
 
-产品源码`72842008afd4f0bf87f8478c065a4fe50f78fd9b`，main已同步；[CI40836796943](https://github.com/theincrediblewwz/readingbook/actions/runs/40836796943) **664项Core零失败/零编译警告**，全部原生/工具步骤成功。[Release0.23.14](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.14)已发布，**本机已替换为0.23.14/build45**；正式包/双架构/签名/32资源/完整App及最新20文件原数据离线核验通过，服务配置保持。原库和0.23.13 App最新回滚在`private-books/boundary-continuation-20261029/install-before-0.23.14/`，未用旧开发快照覆盖用户内容。
+产品源码`72842008afd4f0bf87f8478c065a4fe50f78fd9b`，main已同步；[CI40836796943](https://github.com/theincrediblewwz/readingbook/actions/runs/40836796943) **664项Core零失败/零编译警告**，全部原生/工具步骤成功。[Release0.23.14](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.14)及本机`/Applications/ReadingBook.app`均为 **0.23.14/build45**；解锁后实际About、原书102页书名菜单重选、正常退出再启动仍102、既存句译和伴读/对话切换均通过，应用留在原书102页。没有新AI生成，也不需再次安装/发布本版本。
 
-先读[本轮修复与对照](Design/2026-10-29-boundary-continuation-results.md)及本机`logs/boundary-continuation-20261029/RUN_STATUS.json`。native4/3真实失败→修复后重选/remount/legacy/rotation/crop/horizontal/异常锚点回归全部通过且地标无漂移；真实1484页隔离Debug副本102重选及正常重启仍102，既有句译保留。65项本机相关Core实际测试函数通过，新增5项memo隔离/否定测试。最终无插桩Release Core新12进程：50–200准备0.505055→0.459226s（-9.07%），整书1.608747→1.170943s（-27.21%），整书lifetime峰值+0.80MiB；未当作PDF/UI/模型/FPS收益。
+先读[本轮修复与对照](Design/2026-10-29-boundary-continuation-results.md)及[16组件接续计划](Design/2026-10-29-component-performance-plan.md)。native4/3真实失败→修复后重选/remount/legacy/rotation/crop/horizontal/异常锚点均通过且地标无漂移，65项本机实际Core测试函数通过。无插桩生产Core新12进程：50–200准备0.505055→0.459226s（-9.07%），整书1.608747→1.170943s（-27.21%），整书lifetime峰值+0.80MiB；不当作PDF/UI/模型/FPS收益。原有清单/来源/范围/成果/历史验证保留，新增5项隔离与否定测试，未引入跨调用全局缓存。
 
-**当前阻挡仅为Mac锁屏，已通过async问题请求用户手动解锁。不要重复安装/发布，也不要绕过锁屏。** 解锁后先重新记录`installed-ui-start.txt`的当前时间，再Cua检查实际`/Applications/ReadingBook.app` About0.23.14(45)、显式102→书名菜单重选仍102、既存句译/伴读切换；保存`installed-manual-ui.json`及`installed-ui-start.txt`后运行`logs/boundary-continuation-20261029/post-install-check.py`。再运行本轮`cleanup/`精确白名单脚本（默认dry-run，最终proof后apply），最后更新本段/结果/16组件计划并提交docs skipci。清理准备未视作已删除，原书/笔记/分析/回滚不得清理。Github已保持main唯一分支、14+13两Release及两Actions产物，旧12远端包/tag退役，提交历史保留。
+canonical`dist/ReadingBook-0.23.14-Mac.zip`为24,837,725字节，SHA256`f7c6067aa5449f4a800dd5d57987988e8f2fcdc0a18fa9bae9f6401b88eb22bb`；artifact摘要、两层ZIP、精确源码/版本、双架构、0755、严格签名、32资源均核验。安装App36文件一致，最新20文件原书库无增删，非Workspace内容逐字节保持，7项服务偏好保持。旧13 App/最新库和偏好回滚在`private-books/boundary-continuation-20261029/install-before-0.23.14/`，未覆盖用户新内容。10秒静止伴读912个主线程样本均为事件等待，统一日志三类警告零；footprint239.4M/峰值436.0M为单次安装验收，非对照/泄漏/FPS证明。
 
-下一组件Markdown/WebKit只读审计已完成：已有状态去重/单flight/隐藏投影保护，最小待测候选是presentation/delta桥接冗余字段；先测端到端收益与来源/选区/公式/DOM守护后再改，不混入本轮冻结代码。其余16组件计划保留。下方均为历史接续。
+本轮已清理52项再生Core缓存、重复/过期测试App/helper及旧9/10/11/12安装载荷，释放1,293,647,872B（1.20GiB），工作区7,397,004→6,133,740KiB（约7.05→5.85GiB）。保留原数据、13回滚、14最新版、原始证据/必要重放及旧3套FPS对照；源/保留payload指纹重核未变。native/Core helper已退役，需要时先按脚本重链，复用`.build/shared-module-cache`，不要为每次probe单建cache。清理记录在本机`logs/boundary-continuation-20261029/cleanup/cleanup-applied-20261029-172924.json`。Github main唯一分支、14+13两Release及两Actions产物，旧12远端包/tag退役，提交历史保留。所有新产物仍在工作区。
+
+下一组件Markdown/WebKit只读审计已完成：已有状态去重/单flight/隐藏投影保护，最小待测候选为presentation/delta桥接冗余字段；先测端到端收益与来源/选区/公式/DOM守护后再改。其余16组件计划保留。下方均为历史接续。
 
 ---
 
