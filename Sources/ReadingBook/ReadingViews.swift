@@ -590,6 +590,7 @@ struct DocumentEditorView: View {
                             VStack(alignment: .leading, spacing: 22) {
                                 Text(store.editorTitle.isEmpty ? "未命名笔记" : store.editorTitle).font(.system(size: 30, weight: .semibold)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                                 MarkdownText(markdown: previewBody).readingTextContext(.notes)
+                                    .environment(\.isReaderPanelActive, active)
                             }.padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 30)
                         }
                     }

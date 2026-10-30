@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "status": "expected-native-check-contract-not-an-execution-receipt",
+  "probe": "bounded-idle",
+  "sourceSHA256": "198206498ab318578e8675ec4e61251882bd1465d71c67218a03f2e0e593c098",
+  "verifiedAncestorSourceSHA256": "c8a526c6c4d92c229afeee28a8e78869d7d8b04a9f7eae0d34974863ca65df50",
+  "checkCount": 12,
+  "checkNames": [
+    "firstAndReplacedDocumentRequireActualAcknowledgementWithoutCSSIdle",
+    "idle120FlushesLatestExactPresentationAndPreservesDocument",
+    "continuousChangesFlushByFirst250WindowWithoutStarvation",
+    "sameTupleActualNativeRefreshDoesNotResetIdle",
+    "deadlineDuringRealWebKitFlightStaysDueAndFlushesAtNextSlot",
+    "activeAndRealFocusSetClearBypassIdle",
+    "sourceDirectoryPlainDecorationAndSelectionPermissionDoNotWait",
+    "saveOnlyRevocationImmediatelyDisablesCapturedNativeAction",
+    "oldGenerationCannotReapplyOldSourceAfterReplacement",
+    "nativeFailureAndDismantleCancelAllPendingWakes",
+    "independentSheetOverridePreservesInactiveParentAndDeniedSave",
+    "visibleAndNotesLeafScopesRemainExactInCompiledSource"
+  ]
+}

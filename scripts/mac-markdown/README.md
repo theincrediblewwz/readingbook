@@ -109,3 +109,40 @@ the actual WK owner fails closed on changed typed readiness/source State fields.
 Each fresh fake library has empty profiles and preserves complete project,
 canonical file, saved-note, source and unsent-draft bytes. No real library,
 installed App, AI, general clipboard, FPS or performance claim is involved.
+
+
+## Bounded hidden CSS regression
+
+    python3 scripts/mac-markdown/run-bounded-idle-probe.py \
+      --workspace "$PWD" --build-dir .build/tests/debug --product-source-root "$PWD" \
+      --output-dir logs/ci-markdown-bridge/bounded-idle --run --show-window
+
+This additional foreground native regression links the same completed testable
+Debug objects. The explicit source root is the actual compiled checkout;
+five source files and all linked objects are fingerprinted and checked for
+concurrent changes. The child receives only a probe-specific source-root
+environment binding, not any diagnostic control/candidate arm. Product code needs no benchmark router or same-file test appendix.
+
+The frozen12-name contract binds the exact Swift source. Checks are added only
+when actually executed, with actual results; partial execution cannot pass.
+The runner requires exact unique check and executed-name sets, exit0 and zero
+native warning patterns. Existing bridge29/input152/history70 commands remain independent and
+unchanged. No rejected byte-comparison candidate or extra internal kernel API
+is required by this standalone CSS regression.
+
+The probe uses real RichMarkdownView/WK, exact source/DOM/Range/native menu and
+read-only ownership/scheduler evidence. Integer native monotonic clocks observe
+idle120, first-window250, same-tuple refresh and deadline during a real unfinished
+WebKit call. A controlled750ms remote JS busy segment and one intentional JS
+failure exercise correctness paths only; neither is optimization evidence.
+The expected message "Owned bounded-idle failure control" is not an unexpected
+test failure. First-document acknowledgement, active/focus priority, source and
+permission cancellation, stale generations, teardown and an actual visible
+independent sheet are covered. Actual Notes/callsite leaf scope is static source
+evidence; existing native Notes/Undo and other source guards stay mandatory.
+
+Focus is held until its real native clip becomes naturally visible; the probe
+does not scroll the target into place. Raw intermediate geometry and uptime are
+preserved. Timing acceptance includes stated scheduling/observation jitter and
+is not a WebKit completion SLA or a performance claim. No installed App, real
+library, provider, general clipboard or physical input is used.

@@ -463,7 +463,7 @@ private struct SavedConversationHistory: View {
                                 Spacer()
                                 if let mode = message.conversationMode { Text(mode.title).font(.system(size: 12)).foregroundStyle(.secondary) }
                             }
-                            ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(message.content, bookID: project.id, project: project))
+                            ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(message.content, bookID: project.id, project: project), presentationActiveOverride: true)
                         }.padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
                             .background(message.id == focusedMessageID ? Palette.accent.opacity(0.055) : Color.clear).id(message.id)
                     }
@@ -604,7 +604,7 @@ private struct AnswerSaveSheet: View {
 
     private func documentPreview(_ composition: SavedAnswerComposition) -> some View {
         ScrollView {
-            ChatMarkdownBody(markdown: ChatMarkdownBody.prepare(previewMarkdown(composition), bookID: bookID, project: store.book), context: .notes)
+            ChatMarkdownBody(markdown: ChatMarkdownBody.prepare(previewMarkdown(composition), bookID: bookID, project: store.book), context: .notes, presentationActiveOverride: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -666,10 +666,12 @@ private struct ChatMarkdownBody: View {
     var context: ReadingTextContext = .conversation
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)? = nil
     var onSelectionSave: ((RenderedMarkdownSelection) -> Void)? = nil
+    var presentationActiveOverride: Bool? = nil
     var body: some View {
         RichMarkdownView(markdown: markdown,
                          baseDirectory: store.sourceFileURL?.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("docs", isDirectory: true),
-                         onSelectionChange: onSelectionChange, onSelectionSave: onSelectionSave)
+                         onSelectionChange: onSelectionChange, onSelectionSave: onSelectionSave,
+                         presentationActiveOverride: presentationActiveOverride)
             .frame(maxWidth: .infinity, alignment: .leading)
             .readingTextContext(context)
             .environment(\.openURL, OpenURLAction { url in

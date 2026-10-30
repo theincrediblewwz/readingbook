@@ -1,6 +1,6 @@
-# ReadingBook 0.23.20 · 历史引用定位（2026-10-30）
+# ReadingBook 0.23.21 · 后台 Markdown 更新（待发布）
 
-[下载0.23.20/build51](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.20) · [本批结果与边界](Design/2026-10-30-history-reference-results.md)。源码已同步main，本机安装版已替换并验收，产品源`6408ab4a4cd65deced124691fd92c2e5883ffd85`。
+本机正式对照和真实源码原生回归已通过；完整CI、发布和安装验收待完成。[本批结果与范围](Design/2026-10-30-bounded-markdown-results.md)。当前可下载[0.23.20/build51](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.20)。
 
 打开历史引用时优先显示目标回答，可分批查看更早和后续内容；字号、宽度变化及普通滚动不会反复拉回。原书、笔记、分析、全部历史与偏好保留。此前优化保持；隐藏Markdown延后排版方案因重新显示变慢未采用。
 

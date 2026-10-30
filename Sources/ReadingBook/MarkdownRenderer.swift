@@ -86,6 +86,8 @@ struct RichMarkdownView: View {
     let markdown: String
     private var documentBytes: MarkdownDocumentBytes
     var baseDirectory: URL?
+    /// An independent visible surface may override CSS coalescing only.
+    private let presentationActiveOverride: Bool?
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
     var onSelectionSave: ((RenderedMarkdownSelection) -> Void)?
     var sourceText: String? {
@@ -100,6 +102,7 @@ struct RichMarkdownView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.readingTextContext) private var textContext
+    @Environment(\.isReaderPanelActive) private var panelActive
     @State private var contentHeight: CGFloat = 40
 
     init(markdown: String, baseDirectory: URL? = nil,
@@ -109,10 +112,12 @@ struct RichMarkdownView: View {
          sourceDecorations: [SourceReadingDecoration] = [], focusedDecorationID: String? = nil,
          onSourceDecorationTap: ((String) -> Void)? = nil,
           onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil,
-          onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil) {
+          onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil,
+          presentationActiveOverride: Bool? = nil) {
         self.markdown = markdown
         self.documentBytes = MarkdownDocumentBytes(markdown: markdown, sourceText: sourceText ?? markdown)
         self.baseDirectory = baseDirectory
+        self.presentationActiveOverride = presentationActiveOverride
         self.onSelectionChange = onSelectionChange
         self.onSelectionSave = onSelectionSave
         self.sourceText = sourceText; self.plainText = plainText
@@ -130,6 +135,7 @@ struct RichMarkdownView: View {
                                 resources: resources, theme: colorScheme == .dark ? "dark" : "light",
                                 readingStyle: textContext == .companion ? "companion" : "body", readingContext: textContext.rawValue,
                                 fontFamily: typography.cssFamily(for: textContext), fontSize: style.pointSize,
+                                presentationActive: presentationActiveOverride ?? panelActive,
                                 height: $contentHeight, onOpenURL: { openURL($0) },
                                 onSelectionChange: onSelectionChange, onSelectionSave: onSelectionSave,
                                 sourceText: sourceText ?? markdown, plainText: plainText,
@@ -174,6 +180,7 @@ private struct MarkdownWebView: NSViewRepresentable {
     let readingContext: String
     let fontFamily: String
     let fontSize: Double
+    let presentationActive: Bool
     @Binding var height: CGFloat
     var onOpenURL: (URL) -> Void
     var onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?
@@ -228,7 +235,7 @@ private struct MarkdownWebView: NSViewRepresentable {
             } else { contentView.saveSelection = nil }
         }
         context.coordinator.update(markdown: markdown, baseDirectory: baseDirectory, theme: theme, readingStyle: readingStyle, readingContext: readingContext,
-                                   fontFamily: fontFamily, fontSize: fontSize,
+                                   fontFamily: fontFamily, fontSize: fontSize, presentationActive: presentationActive,
                                    sourceText: sourceText, plainText: plainText, decorations: sourceDecorations,
                                    focusedID: focusedDecorationID)
     }
@@ -248,6 +255,9 @@ private struct MarkdownWebView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        private struct CSSStamp: Equatable {
+            let theme: String; let family: String; let size: Double
+        }
         struct State: Equatable {
             let markdown: String; let directory: URL?; let theme: String; let readingStyle: String; let readingContext: String
             let fontFamily: String; let fontSize: Double; let selectionEnabled: Bool
@@ -280,6 +290,14 @@ private struct MarkdownWebView: NSViewRepresentable {
         private var displayedFocusID: String?
         private var focusRequestGeneration = 0
         private var rendering = false
+        private var presentationActive = true
+        private var confirmedDocumentRevision: Int?
+        private var presentationWake: DispatchWorkItem?
+        private var presentationGeneration: UInt64 = 0
+        private var presentationFirstChange: UInt64?
+        private var presentationLastChange: UInt64 = 0
+        private var presentationLastStamp: CSSStamp?
+        private var presentationFlushDue = false
 
         init(height: Binding<CGFloat>, onOpenURL: @escaping (URL) -> Void,
              onSelectionChange: ((RenderedMarkdownSelection?) -> Void)?) {
@@ -287,18 +305,21 @@ private struct MarkdownWebView: NSViewRepresentable {
         }
 
         func update(markdown: String, baseDirectory: URL?, theme: String, readingStyle: String, readingContext: String,
-                    fontFamily: String, fontSize: Double, sourceText: String,
+                    fontFamily: String, fontSize: Double, presentationActive: Bool = true, sourceText: String,
                     plainText: Bool, decorations: [SourceReadingDecoration], focusedID: String?) {
+            self.presentationActive = presentationActive
             pending = State(markdown: markdown, directory: baseDirectory, theme: theme, readingStyle: readingStyle, readingContext: readingContext,
                             fontFamily: fontFamily, fontSize: fontSize.isFinite ? min(36, max(12, fontSize)) : 18,
                             selectionEnabled: onSelectionChange != nil || onSourceSelection != nil,
                             sourceText: sourceText, plainText: plainText, decorations: Array(decorations.prefix(5_000)))
+            let focusChanged = self.focusedID != focusedID
             self.focusedID = focusedID
+            if focusChanged { cancelPresentationWindow(); presentationFlushDue = true }
             renderPending()
             focusPending()
         }
 
-        func invalidate() { ready = false; rendering = false; revision += 1; pending = nil; displayed = nil; lastSelection = nil; onSelectionChange = nil; onSelectionSave = nil; onSourceSelection = nil; onSourceDecorationTap = nil; onSourceDecorationHover = nil }
+        func invalidate() { cancelPresentationWindow(); confirmedDocumentRevision = nil; ready = false; rendering = false; revision += 1; pending = nil; displayed = nil; lastSelection = nil; onSelectionChange = nil; onSelectionSave = nil; onSourceSelection = nil; onSourceDecorationTap = nil; onSourceDecorationHover = nil }
 
         // Native menu/keyboard actions only reuse a selection admitted by the
         // existing main-frame bridge, and revalidate it when the action fires.
@@ -313,12 +334,75 @@ private struct MarkdownWebView: NSViewRepresentable {
             onSelectionSave?(selection)
         }
 
+        deinit { presentationWake?.cancel() }
+
+        private func cancelPresentationWindow() {
+            // Cancellation alone does not invalidate an already queued wake.
+            presentationGeneration &+= 1
+            presentationWake?.cancel(); presentationWake = nil
+            presentationFirstChange = nil; presentationLastChange = 0
+            presentationLastStamp = nil; presentationFlushDue = false
+        }
+
+        private func notePresentationChange(_ stamp: CSSStamp, webView: WKWebView) {
+            let now = DispatchTime.now().uptimeNanoseconds
+            let changed = presentationLastStamp != stamp
+            if presentationFirstChange == nil { presentationFirstChange = now }
+            if changed { presentationLastChange = now; presentationLastStamp = stamp }
+            guard !presentationFlushDue, let first = presentationFirstChange else { return }
+            let idle = (DispatchTime(uptimeNanoseconds: presentationLastChange) + .milliseconds(120)).uptimeNanoseconds
+            let limit = (DispatchTime(uptimeNanoseconds: first) + .milliseconds(250)).uptimeNanoseconds
+            let deadline = min(idle, limit)
+            if now >= deadline {
+                presentationGeneration &+= 1
+                presentationWake?.cancel(); presentationWake = nil
+                presentationFlushDue = true
+                return
+            }
+            // Layout/completion reentry with the same tuple cannot reset idle.
+            guard changed || presentationWake == nil else { return }
+            presentationGeneration &+= 1
+            presentationWake?.cancel()
+            let generation = presentationGeneration, scheduledRevision = revision
+            let wake = DispatchWorkItem { [weak self, weak expectedWebView = webView] in
+                guard let self, let expectedWebView,
+                      self.presentationGeneration == generation, self.revision == scheduledRevision,
+                      self.webView === expectedWebView, expectedWebView.navigationDelegate === self else { return }
+                self.presentationWake = nil
+                self.presentationFlushDue = true
+                // If an earlier render is still running, keep due latched. Its
+                // existing completion retries this latest pending state.
+                self.renderPending()
+                self.focusPending()
+            }
+            presentationWake = wake
+            DispatchQueue.main.asyncAfter(deadline: DispatchTime(uptimeNanoseconds: deadline), execute: wake)
+        }
+
         private func renderPending() {
-            guard ready, !rendering, let webView, let state = pending, state != displayed else { return }
+            guard ready, let webView, let state = pending else { cancelPresentationWindow(); return }
+            var preparedReplacement: Bool?
+            // Classification/first-change bookkeeping precedes !rendering:
+            // an existing JS flight must not restart the 250ms window later.
+            if !presentationActive, confirmedDocumentRevision == revision, let previous = displayed,
+               focusedID == nil, displayedFocusID == nil,
+               state.theme != previous.theme || state.fontFamily != previous.fontFamily || state.fontSize != previous.fontSize,
+               state.readingStyle == previous.readingStyle, state.readingContext == previous.readingContext,
+               state.selectionEnabled == previous.selectionEnabled, state.decorations == previous.decorations {
+                let replaces = !state.sharesDocument(with: previous)
+                preparedReplacement = replaces
+                if !replaces {
+                    notePresentationChange(CSSStamp(theme: state.theme, family: state.fontFamily, size: state.fontSize), webView: webView)
+                    if !presentationFlushDue { return }
+                } else { cancelPresentationWindow() }
+            } else { cancelPresentationWindow() }
+            guard !rendering else { presentationFlushDue = true; return }
+            guard state != displayed else { cancelPresentationWindow(); return }
             let previous = displayed
-            let replacesDocument = previous.map { !state.sharesDocument(with: $0) } ?? true
+            let replacesDocument = preparedReplacement ?? (previous.map { !state.sharesDocument(with: $0) } ?? true)
+            cancelPresentationWindow()
             displayed = state; rendering = true
-            if replacesDocument { revision += 1 }
+            if replacesDocument { revision += 1; confirmedDocumentRevision = nil }
             if replacesDocument { displayedFocusID = nil; lastSelection = nil }
             else if let focusedID,
                     state.decorations.contains(where: { $0.id == focusedID }) != (previous?.decorations.contains(where: { $0.id == focusedID }) ?? false) {
@@ -365,9 +449,10 @@ private struct MarkdownWebView: NSViewRepresentable {
                 guard let self, self.revision == renderedRevision else { return }
                 self.rendering = false
                 if case .failure(let error) = result {
+                    self.cancelPresentationWindow(); self.confirmedDocumentRevision = nil
                     self.displayed = nil
                     NSLog("ReadingBook offline renderer: %@", error.localizedDescription)
-                } else { self.renderPending(); self.focusPending() }
+                } else { self.confirmedDocumentRevision = renderedRevision; self.renderPending(); self.focusPending() }
             }
         }
 

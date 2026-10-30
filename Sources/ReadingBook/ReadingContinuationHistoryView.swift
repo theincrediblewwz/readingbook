@@ -149,7 +149,7 @@ struct ReadingContinuationHistoryView: View {
             }.padding(.horizontal, 12)
             if expandedRecords.contains(id) {
                 SettingsGroupDivider()
-                RichMarkdownView(markdown: markdown)
+                RichMarkdownView(markdown: markdown, presentationActiveOverride: true)
                     .environment(\.openURL, OpenURLAction { url in
                         // Historical prose cannot authorize a jump against a
                         // newer current unit ID. External links retain normal handling.

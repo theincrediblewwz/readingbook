@@ -85,6 +85,7 @@ jobs:
           python3 scripts/mac-markdown/run-native-probe.py --workspace "$PWD" --build-dir .build/tests/debug --output-dir logs/ci-markdown-bridge/native-probe --run --show-window
           python3 scripts/mac-markdown/run-input-identity-probe.py --workspace "$PWD" --build-dir .build/tests/debug --output-dir logs/ci-markdown-bridge/input-identity --run --show-window
           python3 scripts/mac-markdown/run-history-reference-probe.py --workspace "$PWD" --build-dir .build/tests/debug --output-dir logs/ci-markdown-bridge/history-reference --run --show-window
+          python3 scripts/mac-markdown/run-bounded-idle-probe.py --workspace "$PWD" --build-dir .build/tests/debug --product-source-root "$PWD" --output-dir logs/ci-markdown-bridge/bounded-idle --run --show-window
       - name: Performance evidence tool contracts
         run: |
           python3 scripts/mac-performance/test-scroll-capture-analysis.py
