@@ -92,6 +92,14 @@ jobs:
           python3 scripts/mac-performance/test-performance-tool-contracts.py
           python3 scripts/mac-performance/test-samebook-experiment-tools.py
           python3 scripts/mac-performance/test-scroll-pointer.py
+      - name: Preserve failed Markdown native evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-markdown-native-evidence
+          path: logs/ci-markdown-bridge
+          if-no-files-found: ignore
+          retention-days: 3
       - name: Build universal app and package
         if: github.event_name != 'pull_request'
         run: bash scripts/build-macos.sh

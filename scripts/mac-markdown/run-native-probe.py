@@ -164,6 +164,15 @@ def main(probe="bridge"):
         idle_actual = {"expectedCheckNames": names, "actualExecutedCheckNames": executed,
                        "exactNativeExecutionContractPassed": exact_execution,
                        "sourceInputsStillFrozenAfterRun": source_frozen}
+        if not passed:
+            observations = result.get("observations", {})
+            hard = observations.get("hard250", {})
+            idle_actual["failureDiagnostics"] = {
+                "error": observations.get("error"),
+                "hard250ObservedDeltaMs": hard.get("observedDeltaMs"),
+                "hard250FirstWindowPreserved": hard.get("firstWindowPreserved"),
+                "hard250Changes": hard.get("changes", []),
+            }
     print(json.dumps({"probe": probe, "status": "passed" if passed else "failed", "output": str(output), "runtimeExitCode": code,
                       "passed": bool(passed), "checkCount": len(checks), "checks": checks, "runtimeWarnings": warnings,
                       "identity": str(sidecars["identity"]), "log": str(sidecars["run"]), **idle_actual}))

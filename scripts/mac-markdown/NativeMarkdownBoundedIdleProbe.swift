@@ -5,7 +5,7 @@ import CryptoKit
 @testable import ReadingBook
 @testable import ReadingCore
 
-// UNBUILT native bounded-idle correctness draft. Real Rich/WK plus read-only timer witnesses.
+// Native bounded-idle correctness probe, V6: retain timing witnesses before assertions.
 // No shipping test API, private Coordinator access, AppStore, AI or clipboard.
 private final class BoundedIdleDefaults: UserDefaults, @unchecked Sendable {
     private let lock = NSLock()
@@ -671,9 +671,9 @@ private struct BoundedIdleHeightKey: PreferenceKey {
             if hardAt==0 {let result=try await dispatch(web,host:host,font:target);hardAt=result.1}
             _ = try await stable(web,model:model,host:host,font:target)
             let hardMs=ms(hardAt,hardFirst)
-            try check(2,firstStayed && hardRows.count>=5 && hardMs>=239 && hardMs<=310)
             observations["hard250"]=["first":hard.evidence,"changes":hardRows,"firstDispatchNs":hardAt,"observedDeltaMs":hardMs,
-                "acceptedSchedulerObservationJitterMs":60]
+                "acceptedSchedulerObservationJitterMs":60,"firstWindowPreserved":firstStayed]
+            try check(2,firstStayed && hardRows.count>=5 && hardMs>=239 && hardMs<=310)
 
             model.active=true;model.typography.setPointSize(18,for:.source)
             _ = try await stable(web,model:model,host:host,font:18)
