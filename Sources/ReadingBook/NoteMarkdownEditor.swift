@@ -255,10 +255,28 @@ import ReadingCore
         // Invalidate the display mapping, never NSTextStorage.string. Apple
         // defines .null glyphs as ignored for BOTH layout and display.
         let bounds = NSRange(location: 0, length: textView.textStorage?.length ?? 0)
-        for link in previous + next {
+        func invalidate(_ link: ReadingNoteLinkFolds.Link) {
             let range = NSIntersectionRange(bounds, link.destinationRange)
             if range.length > 0 { noteLayout.invalidateGlyphs(forCharacterRange: range, changeInLength: 0, actualCharacterRange: nil) }
         }
+        // Parsing emits source order; remapping and selection filtering retain
+        // it. Keep unchanged targets' cached glyphs when one target is revealed.
+        var oldIndex = 0, newIndex = 0
+        while oldIndex < previous.count && newIndex < next.count {
+            let old = previous[oldIndex], new = next[newIndex]
+            if old == new {
+                oldIndex += 1; newIndex += 1
+            } else if old.destinationRange.location < new.destinationRange.location {
+                invalidate(old); oldIndex += 1
+            } else if old.destinationRange.location > new.destinationRange.location {
+                invalidate(new); newIndex += 1
+            } else {
+                // A changed span at the same position still invalidates both.
+                invalidate(old); invalidate(new); oldIndex += 1; newIndex += 1
+            }
+        }
+        while oldIndex < previous.count { invalidate(previous[oldIndex]); oldIndex += 1 }
+        while newIndex < next.count { invalidate(next[newIndex]); newIndex += 1 }
     }
 
     func layoutManager(_ layoutManager: NSLayoutManager, shouldGenerateGlyphs glyphs: UnsafePointer<CGGlyph>,

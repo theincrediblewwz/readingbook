@@ -107,7 +107,18 @@ public enum LibraryTextSearch {
             let identity = word.folding(options: [.caseInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             if queryIdentities.insert(identity).inserted { queries.append(word) }
         }
-        let terms = try queries.map { try term($0, canonicalizer: &canonicalizer) }
+        var literalNeedles = Set<Data>(), canonicalNeedles = Set<Data>()
+        let terms = try queries.map { query in
+            let value = try term(query, canonicalizer: &canonicalizer)
+            guard queries.count > 1 else { return value }
+            // A later byte-identical operation searches the same text/range
+            // with the same options, so it cannot beat its first occurrence.
+            // Keep literal/canonical paths and their original term order apart
+            // to preserve same-position query attribution and source mapping.
+            return Term(query: value.query,
+                literals: value.literals.filter { literalNeedles.insert(Data($0.utf8)).inserted },
+                canonical: value.canonical.filter { canonicalNeedles.insert(Data($0.utf8)).inserted })
+        }
         let needsCanonical = terms.contains { !$0.canonical.isEmpty }
         var response = LibrarySearchResponse(query: query, searchedBookCount: books.count, searchedQueries: queries)
         sourceScan: for book in books {

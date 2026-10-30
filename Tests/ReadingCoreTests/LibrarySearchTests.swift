@@ -10,6 +10,186 @@ final class LibrarySearchTests: XCTestCase {
         return value
     }
 
+    private func encoded<T: Encodable>(_ value: T) throws -> Data {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(value)
+    }
+
+    private func completeResponseBytes(_ value: LibrarySearchResponse) throws -> Data {
+        XCTAssertEqual(Set(Mirror(reflecting: value).children.compactMap(\.label)),
+            Set(["query", "matches", "entityMatches", "searchedBookCount", "scannedUnitCount", "bounded", "searchedQueries"]))
+        let matches: [[String: Any]] = value.matches.map { match in
+            XCTAssertEqual(Set(Mirror(reflecting: match).children.compactMap(\.label)),
+                Set(["bookID", "bookTitle", "sourceHash", "unitID", "unitTextHash", "locator", "page", "quote", "prefix", "suffix",
+                     "utf16Location", "utf16Length", "snippetBefore", "snippetAfter", "hasEarlierText", "hasLaterText", "matchedQuery"]))
+            return ["id": match.id, "bookID": match.bookID, "bookTitle": match.bookTitle, "sourceHash": match.sourceHash,
+                "unitID": match.unitID, "unitTextHash": match.unitTextHash, "locator": match.locator, "page": match.page as Any? ?? NSNull(),
+                "quote": match.quote, "quoteUTF8": Data(match.quote.utf8).base64EncodedString(), "prefix": match.prefix, "suffix": match.suffix,
+                "utf16Location": match.utf16Location, "utf16Length": match.utf16Length,
+                "snippetBefore": match.snippetBefore, "snippetAfter": match.snippetAfter,
+                "hasEarlierText": match.hasEarlierText, "hasLaterText": match.hasLaterText, "matchedQuery": match.matchedQuery]
+        }
+        let entities: [[String: Any]] = try value.entityMatches.map { match in
+            XCTAssertEqual(Set(Mirror(reflecting: match).children.compactMap(\.label)),
+                Set(["bookID", "bookTitle", "sourceHash", "entity", "matchedName", "matchedQuery"]))
+            return ["id": match.id, "bookID": match.bookID, "bookTitle": match.bookTitle, "sourceHash": match.sourceHash,
+                "entity": try JSONSerialization.jsonObject(with: encoded(match.entity)),
+                "matchedName": match.matchedName, "matchedQuery": match.matchedQuery]
+        }
+        return try JSONSerialization.data(withJSONObject: ["query": value.query, "matches": matches, "entityMatches": entities,
+            "searchedBookCount": value.searchedBookCount, "scannedUnitCount": value.scannedUnitCount,
+            "bounded": value.bounded, "searchedQueries": value.searchedQueries], options: [.sortedKeys])
+    }
+
+    /// Expected positions/attribution are supplied by each fixture, never found
+    /// by the search algorithm being checked. Fill the complete public result.
+    private func expectedMatch(in project: BookProject, unitID: String = "unit-1", range: NSRange, query: String) throws -> LibraryTextMatch {
+        let unit = try XCTUnwrap(project.units.first { $0.id == unitID })
+        let found = try XCTUnwrap(Range(range, in: unit.text))
+        let start = unit.text.index(found.lowerBound, offsetBy: -80, limitedBy: unit.text.startIndex) ?? unit.text.startIndex
+        let end = unit.text.index(found.upperBound, offsetBy: 120, limitedBy: unit.text.endIndex) ?? unit.text.endIndex
+        let before = String(unit.text[start..<found.lowerBound]), after = String(unit.text[found.upperBound..<end])
+        return LibraryTextMatch(bookID: project.id, bookTitle: project.title, sourceHash: project.sourceHash,
+            unitID: unit.id, unitTextHash: try BookImporter.sha256(Data(unit.text.utf8)), locator: unit.locator, page: unit.page,
+            quote: String(unit.text[found]), prefix: String(before.suffix(64)), suffix: String(after.prefix(64)),
+            utf16Location: range.location, utf16Length: range.length, snippetBefore: before, snippetAfter: after,
+            hasEarlierText: start > unit.text.startIndex, hasLaterText: end < unit.text.endIndex, matchedQuery: query)
+    }
+
+    private func expectedEntity(in project: BookProject, index: Int = 0, name: String, query: String) -> LibraryEntityMatch {
+        LibraryEntityMatch(bookID: project.id, bookTitle: project.title, sourceHash: project.sourceHash,
+            entity: project.entities[index], matchedName: name, matchedQuery: query)
+    }
+
+    private func validateAnchors(_ response: LibrarySearchResponse, in projects: [BookProject]) throws {
+        for match in response.matches {
+            let project = try XCTUnwrap(projects.first { $0.id == match.bookID })
+            try match.validate(in: project)
+            let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: match.sourceHash, unitID: match.unitID,
+                quote: match.quote, prefix: match.prefix, suffix: match.suffix, in: project)
+            XCTAssertEqual(try ReadingExperienceRuntime.resolve(anchor, in: project).range, match.range)
+        }
+    }
+
+    func testRepeatedExpansionNeedlesPreserveTheCompleteResponseAndFirstQueryAttribution() throws {
+        var first = book(id: "one", name: "貂蟬")
+        first.units = [SourceUnit(id: "late", order: 1, chapter: "后文", page: 2, lineStart: 4, lineEnd: 9, text: "后记貂禅。"),
+            SourceUnit(id: "early", order: 0, chapter: "开篇", page: 1, lineEnd: 3,
+                text: String(repeating: "前", count: 90) + "😀e\u{301} Ａß貂蟬到此；貂蝉重逢。" + String(repeating: "後", count: 140))]
+        first.entities[0].aliases = ["貂蝉", "貂蟬", "另名"]
+        first.entities[0].evidence = [Evidence(unitID: "early", quote: "貂蟬")]
+        first.entities.append(KnowledgeEntity(id: "other-spelling", typeID: "person", name: "貂禅", aliases: ["貂禪"], evidence: [Evidence(unitID: "late", quote: "貂禅")]))
+        let second = book(id: "two", text: "貂蟬只在另书。", name: "貂蟬")
+        let projects = [first, second], snapshots = projects.map { LibrarySourceSnapshot(project: $0) }
+        let before = try encoded(projects)
+        let queries = ["貂禅", "貂蝉", "貂蟬", "貂禪"]
+        for onlyFirst in [true, false] {
+            let actual = try LibraryTextSearch.search(query: queries[0], snapshots: snapshots, bookID: onlyFirst ? "one" : nil,
+                additionalQueries: Array(queries.dropFirst()))
+            var matches = try [expectedMatch(in: first, unitID: "early", range: NSRange(location: 97, length: 2), query: "貂蝉"),
+                expectedMatch(in: first, unitID: "early", range: NSRange(location: 102, length: 2), query: "貂蝉"),
+                expectedMatch(in: first, unitID: "late", range: NSRange(location: 2, length: 2), query: "貂禅")]
+            var entities = [expectedEntity(in: first, name: "貂蟬", query: "貂蝉"),
+                expectedEntity(in: first, index: 1, name: "貂禅", query: "貂禅")]
+            if !onlyFirst {
+                matches.append(try expectedMatch(in: second, range: NSRange(location: 0, length: 2), query: "貂蝉"))
+                entities.append(expectedEntity(in: second, name: "貂蟬", query: "貂蝉"))
+            }
+            let expected = LibrarySearchResponse(query: queries[0], matches: matches, entityMatches: entities,
+                searchedBookCount: onlyFirst ? 1 : 2, scannedUnitCount: onlyFirst ? 2 : 3, searchedQueries: queries)
+            XCTAssertEqual(try completeResponseBytes(actual), try completeResponseBytes(expected))
+            try validateAnchors(actual, in: projects)
+        }
+        XCTAssertEqual(try encoded(projects), before)
+    }
+
+    func testSameStartRetainsTermOrderAcrossCanonicalLiteralAndDifferentLengthMatches() throws {
+        let cases: [(String, String, [String], [(Int, Int, String)])] = [
+            // The first canonical hit wins over a later, longer literal at the
+            // same position. Flattening all literals ahead of canonical breaks it.
+            ("檯面台上", "臺", ["檯面", "台", "檯"], [(0, 1, "臺"), (2, 1, "臺")]),
+            ("檯面台上", "檯面", ["臺", "台", "檯"], [(0, 2, "檯面"), (2, 1, "臺")]),
+            ("貂蟬", "貂蝉", ["貂蟬", "貂"], [(0, 2, "貂蝉")]),
+            ("貂蟬", "貂", ["貂蝉", "貂蟬"], [(0, 1, "貂")])
+        ]
+        for (text, query, additions, positions) in cases {
+            var project = book(text: text); project.entities = []
+            let before = try encoded(project)
+            let actual = try LibraryTextSearch.search(query: query, snapshots: [LibrarySourceSnapshot(project: project)], additionalQueries: additions)
+            let matches = try positions.map { try expectedMatch(in: project, range: NSRange(location: $0.0, length: $0.1), query: $0.2) }
+            let expected = LibrarySearchResponse(query: query, matches: matches, searchedBookCount: 1,
+                scannedUnitCount: 1, searchedQueries: [query] + additions)
+            XCTAssertEqual(try completeResponseBytes(actual), try completeResponseBytes(expected), query)
+            try validateAnchors(actual, in: [project])
+            XCTAssertEqual(try encoded(project), before, query)
+        }
+    }
+
+    func testDuplicateNeedlesKeepUnicodePhraseVariantsAndNonmatchesInOriginalCoordinates() throws {
+        let cases: [(String, String, [String], [(Int, Int)])] = [
+            ("😀e\u{301} 貂蟬 / e\u{301} 貂蝉", "é 貂蝉", ["é 貂蟬"], [(2, 5), (10, 5)]),
+            ("你說什么？", "甚麼", ["什么", "什麼"], [(2, 2)]),
+            ("裏面、裡面、里面", "裏面", ["裡面", "里面"], [(0, 2), (3, 2), (6, 2)]),
+            ("😀ß貂 蟬、貂\n蟬。", "貂蝉", ["貂蟬"], [])
+        ]
+        for (text, query, additions, positions) in cases {
+            var project = book(text: text); project.entities = []
+            let before = try encoded(project)
+            let actual = try LibraryTextSearch.search(query: query, snapshots: [LibrarySourceSnapshot(project: project)], additionalQueries: additions)
+            let matches = try positions.map { try expectedMatch(in: project, range: NSRange(location: $0.0, length: $0.1), query: query) }
+            let expected = LibrarySearchResponse(query: query, matches: matches, searchedBookCount: 1,
+                scannedUnitCount: 1, searchedQueries: [query] + additions)
+            XCTAssertEqual(try completeResponseBytes(actual), try completeResponseBytes(expected), query)
+            try validateAnchors(actual, in: [project])
+            XCTAssertEqual(try encoded(project), before, query)
+        }
+        var canonicalizer = LibrarySearchCanonicalizer()
+        let mapped = try LibrarySearchMappedText("😀ß貂蟬", canonicalizer: &canonicalizer)
+        let expansion = try XCTUnwrap(mapped.text.range(of: "ss"))
+        let expandedRange = NSRange(expansion, in: mapped.text)
+        XCTAssertEqual(mapped.originalRange(expandedRange), NSRange(location: 2, length: 1))
+        XCTAssertNil(mapped.originalRange(NSRange(location: expandedRange.location + 1, length: 1)),
+            "去重不能将展开Character的一部分变成可定位的原文。")
+    }
+
+    func testDuplicateExpansionKeepsBoundsAndRejectsStaleOCRAndUnicodeEquivalentSources() throws {
+        let first = book(id: "first", text: "😀e\u{301} " + String(repeating: "貂蟬。", count: 160), name: "貂蟬")
+        let second = book(id: "second", text: "貂蟬在另书。", name: "貂蟬")
+        let projects = [first, second], before = try encoded([first, second])
+        let actual = try LibraryTextSearch.search(query: "貂禅", snapshots: projects.map { LibrarySourceSnapshot(project: $0) },
+            resultLimit: 3, entityLimit: 1, additionalQueries: ["貂蝉", "貂蟬"])
+        let matches = try [5, 8, 11].map { try expectedMatch(in: first, range: NSRange(location: $0, length: 2), query: "貂蝉") }
+        let expected = LibrarySearchResponse(query: "貂禅", matches: matches,
+            entityMatches: [expectedEntity(in: first, name: "貂蟬", query: "貂蝉")],
+            searchedBookCount: 2, scannedUnitCount: 1, bounded: true, searchedQueries: ["貂禅", "貂蝉", "貂蟬"])
+        XCTAssertEqual(try completeResponseBytes(actual), try completeResponseBytes(expected))
+        try validateAnchors(actual, in: projects)
+        for mutation in ["ocr", "unicode", "other-book"] {
+            var changed = first
+            if mutation == "ocr" { changed.units[0].text += "OCR修订。" }
+            else if mutation == "unicode" {
+                changed.units[0].text = changed.units[0].text.precomposedStringWithCanonicalMapping
+                XCTAssertEqual(changed.units[0].text, first.units[0].text)
+                XCTAssertFalse(changed.units[0].text.utf8.elementsEqual(first.units[0].text.utf8))
+            } else { changed.id = "other-book" }
+            for match in actual.matches { XCTAssertThrowsError(try match.validate(in: changed), mutation) }
+        }
+        XCTAssertEqual(try encoded(projects), before)
+    }
+
+    func testCancelledDuplicateExpansionNeverReturnsResultsOrChangesInput() async throws {
+        let projects = [book(text: "😀e\u{301} 貂蟬。"), book(id: "two", text: "臺灣與裡面。")]
+        let before = try encoded(projects), snapshots = projects.map { LibrarySourceSnapshot(project: $0) }
+        let task = Task.detached { () throws -> LibrarySearchResponse in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try LibraryTextSearch.search(query: "貂禅", snapshots: snapshots,
+                additionalQueries: ["貂蝉", "貂蟬", "臺", "檯", "台", "裏面", "裡面", "里面"])
+        }
+        do { _ = try await task.value; XCTFail("取消的重复扩词计划不能返回结果。") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(try encoded(projects), before)
+    }
+
     func testUnicodeMatchUsesOriginalQuoteAndUTF16Range() throws {
         let project = book(text: "😀曹操屯兵。CAFÉ 与 e\u{301} 并列。")
         let snapshot = LibrarySourceSnapshot(project: project)
