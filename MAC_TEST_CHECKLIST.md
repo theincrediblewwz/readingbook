@@ -1,4 +1,4 @@
-# 2026-10-30 · 0.23.17已发布，Mac锁屏；本机仍16，待解锁安装验收
+# 2026-10-30 · 0.23.17已发布、安装与原书验收完成；回到性能准备链
 
 先读[本轮实现与验证边界](Design/2026-10-30-search-overlays.md)。用户要求先修关闭搜索回错页、简繁及AI关键词扩展、搜索/笔记/回收站浮层，再更新GitHub与安装版，随后续性能计划。正式16原书103页已复现关闭搜索回library；现在真实base route保留，close/result分离。dirty Notes无损覆盖，真正离开前保存/放弃/继续；IME、编辑器Undo、旧owner、跨库跨书generation和精确原文hash/UTF16保护保持。
 
@@ -6,9 +6,15 @@
 
 [Release0.23.17/build48](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.17)已发布；canonical`dist/ReadingBook-0.23.17-Mac.zip` **25,132,032B/SHA`9db24d4a9fe454a168fad93df9ae93c045485425aad33209d6a92baad34bee8f`**。源/两层ZIP/摘要/双架构/严格签名/32资源和36文件App清单均核验，远端附件同值。待安装App在`dist/0.23.17-ci-40949306759/unpacked/ReadingBook.app`，verification和完整CI摘要保留；外层及内层重复ZIP已退役，从canonical/Actions可重建。
 
-**本机仍是0.23.16/build47，没有替换。** 原生工具再次确认Mac锁屏，不能正常退出旧版或做实际可见按钮/原书验收；已向用户请求手动解锁，仍待回复，不改锁屏设置。锁屏隔离窗口断言不算前台/硬件/像素验收，缓存reader图不完整不据此修改颜色。解锁后读`logs/urgent-search-20261030/native-visible-qa-pending.md`，先确认最新书库/草稿，正常退出16，再用delivery/install-verified.py做全新`private-books/urgent-search-20261030/install-before-0.23.17/`保护、替换和post-install-check。手工report仍为null，不能填假通过。用户已授权安装/发布，不需再问许可。
+**本机现为0.23.17/build48，实际About与36文件清单均确认。** 用户解锁后正常退出16，重新读取当时书库并做最新20文件/偏好/旧16 App保护到`private-books/urgent-search-20261030/install-before-0.23.17/`，再安装核验CI App。原书实测简体“貂蝉”与繁体“貂蟬”各57处；Esc关闭返回原103页，实际点击首条进入92页reader、不回library。原阅读背景可见，结果平面样式、搜索对齐与黑色图标正常；macOS半屏窄窗控件/卡片、说明popover均可用，恢复原尺寸后仍343%。笔记/回收站从reader关闭回103、从library关闭回library。
 
-初始20文件真库与偏好保护在`private-books/urgent-search-20261030/initial/`；中途核对原书/笔记/分析字节和全部生产偏好保持，仅正常Workspace导航变更。结束时再核对。三批清理的工作区观察量合计约489MiB，关键失败的两App无损压为39,330,472B唯一重放ZIP，源码/原始结果/共享cache/活跃Debug和必要旧安装回滚保留；不能把清理量称为相对开工的净下降。GitHub保留17与16回滚，提交历史保留。所有新产物仍在本工作区。
+已有102页句译保留，伴读/对话、建议填入、NFD/emoji/中文粘贴、Undo/Redo、收起重开草稿及焦点、历史/记忆sheet通过；未请求真实模型或在真库新建/保存笔记。清空自有测试输入、恢复伴读标签并收起后，正常退出/重启仍103页/343%、空草稿。post-install-check通过：书库20文件无增删，原书/笔记/分析字节保持，仅正常Workspace变化；3项服务及其余偏好保持，仅NSWindow Frame main几何变化。实际两个UI PID80443/80719自启动时刻的统一日志三类警告均零；末PID10秒idle采样在后来自动锁屏状态，只作安装核对，不能推断前台CPU/FPS/泄漏收益。
+
+补充隔离笔记手工检查仅到创建草稿/改标题，随后Mac再次锁屏，正文粘贴和保存/放弃/继续三选择未计为手工通过（harness也未建立真实Edit菜单路由）。相关自动回归门禁已通过，不把额外中断误报为成功或产品缺陷；详情在`delivery/isolated-note-manual-supplement.json`。无需重复安装/发布；用户原书窗口留在103页、343%、伴读收起。安装与原书验收已完成，若将来补此额外GUI检查，再等解锁，不改锁屏设置。
+
+原始保护与最新安装回滚均保留，未用旧快照覆盖当前书库。五批清理观察量合计约865MiB；本次解锁交付约376MiB（旧15 App/ZIP、重复解包17、结束测试App/helper）。工作区本次约6.14→5.96GiB；整个urgent开工6,150,504KiB至约6,249,720KiB，净增约97MiB为保留的新包/共享构建缓存等，不能将清理量称作相对整个urgent开工净下降。关键失败的两App无损压为39,330,472B唯一重放ZIP；所有原数据、原始结果、活跃Debug、共享cache与16回滚保留。native helper和解包17 App已退役，先按对应RETIRED.md从现有对象重链/从canonical重解包再重跑。GitHub仅main与17/16两Release/tag/Actions产物，提交历史保留。所有新产物仍在工作区。
+
+**下一批两条性能准备链已重新只读复核：** `logs/urgent-search-20261030/next-perf-audit.md`。A只在同次ReadingSpoilerProjection中复用canonicalEvidence，端到端prepare+project；B只在fresh freeze内共享chatContext/证明，公共旧snapshot继续完整验证。先修v2 freeze driver只核.history的oracle缺口，核实际完整返回值、旧snapshot/OCR/UTF8/授权负控，再做两候选配对对照。尚未修改产品性能代码或声称本批提速；16组件及此前性能任务继续，不恢复数学核查。
 
 本轮不是性能收益实验，不取消下方组件优化，不恢复数学核查。结束后清理可再生/重复产物，保留原书、笔记、分析、草稿、关键证据、最新包和必要回滚。
 
