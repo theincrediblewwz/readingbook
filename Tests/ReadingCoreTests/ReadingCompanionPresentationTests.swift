@@ -3,6 +3,61 @@ import XCTest
 @testable import ReadingCore
 
 final class ReadingCompanionPresentationTests: XCTestCase {
+    func testSourcePresentationPreservesLiveIndexPriorityOrderAndMissingFallbacks() throws {
+        let unit = SourceUnit(id: "unit", order: 0, chapter: "一", page: 3, text: "原文")
+        let indexed = SourceAnchor(id: "a", sourceHash: "s", unitID: "unit", quote: "索引原句")
+        var stored = indexed; stored.quote = "持久化旧句"
+        let missing = SourceAnchor(id: "missing-unit", sourceHash: "s", unitID: "absent", quote: "旧原句")
+        let result = ReadingCompanionPresentation.sources(["missing-unit", "a", "absent", "a"],
+            indexedAnchors: [indexed], storedAnchors: [stored, missing], units: [unit])
+        XCTAssertEqual(result.map(\.id), ["missing-unit", "a"])
+        XCTAssertEqual(result.map(\.quote), ["旧原句", "索引原句"])
+        XCTAssertEqual(result.map(\.locator), ["原文片段", unit.locator])
+        XCTAssertTrue(ReadingCompanionPresentation.sources([], indexedAnchors: [indexed], storedAnchors: [stored], units: [unit]).isEmpty)
+    }
+
+    func testManySourcePresentationRetainsFirstAnchorAndUnitWithoutChangingInputBytes() throws {
+        let units = (0..<200).map { SourceUnit(id: "u\($0)", order: $0, chapter: "章", page: $0+1, text: "原文 e\u{301} 😀") }
+        let anchors = (0..<150).map { SourceAnchor(id: "a\($0)", sourceHash: "s", unitID: "u\($0)", quote: "第\($0)处 e\u{301}") }
+        var duplicate = anchors[12]; duplicate.quote = "不得覆盖首个同ID锚点"
+        var duplicateUnit = units[12]; duplicateUnit.page = 999
+        let indexed = Array(anchors.prefix(75)) + [duplicate]
+        let stored = [duplicate] + Array(anchors.suffix(100))
+        let allUnits = units + [duplicateUnit]
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(indexed) + encoder.encode(stored) + encoder.encode(allUnits)
+        for count in [1, 8, 32, 64, 65, 128, 150] {
+            let ids = (0..<count).reversed().map { "a\($0)" } + ["absent", "a12"]
+            var seen: Set<String> = []
+            let expected = ids.compactMap { id -> ReadingCompanionSource? in
+                guard seen.insert(id).inserted, let anchor = indexed.first(where: { $0.id == id }) ?? stored.first(where: { $0.id == id }) else { return nil }
+                return ReadingCompanionSource(id: anchor.id, quote: anchor.quote, locator: allUnits.first(where: { $0.id == anchor.unitID })?.locator ?? "原文片段")
+            }
+            let actual = ReadingCompanionPresentation.sources(ids, indexedAnchors: indexed, storedAnchors: stored, units: allUnits)
+            XCTAssertEqual(sourceBytes(actual), sourceBytes(expected), "\(count)处原文的顺序、完整引文和位置必须保持。")
+        }
+        XCTAssertEqual(try encoder.encode(indexed) + encoder.encode(stored) + encoder.encode(allUnits), before)
+    }
+
+    func testManySourcePresentationKeepsExactUTF8OfCanonicalEquivalentIDsAndQuotes() {
+        let composed = "\u{e9}", decomposed = "e\u{301}"
+        let unit = SourceUnit(id: decomposed, order: 0, chapter: "原始 e\u{301}", text: "原句")
+        let first = SourceAnchor(id: decomposed, sourceHash: "s", unitID: composed, quote: "原始 e\u{301} 😀")
+        var duplicate = first; duplicate.id = composed; duplicate.quote = "不应覆盖"
+        let more = (0..<80).map { SourceAnchor(id: "a\($0)", sourceHash: "s", unitID: decomposed, quote: "\($0)") }
+        let ids = [composed, decomposed] + more.reversed().map(\.id)
+        let result = ReadingCompanionPresentation.sources(ids, indexedAnchors: [first, duplicate] + more, storedAnchors: [duplicate], units: [unit])
+        XCTAssertEqual(result.count, 81)
+        XCTAssertEqual(Data(result[0].id.utf8), Data(decomposed.utf8))
+        XCTAssertEqual(Data(result[0].quote.utf8), Data(first.quote.utf8))
+        XCTAssertEqual(Data(result[0].locator.utf8), Data(unit.locator.utf8))
+        XCTAssertEqual(result.dropFirst().map(\.id), more.reversed().map(\.id))
+    }
+
+    private func sourceBytes(_ values: [ReadingCompanionSource]) -> [[Data]] {
+        values.map { [Data($0.id.utf8), Data($0.quote.utf8), Data($0.locator.utf8)] }
+    }
+
     func testNewestStoredAnswerLeadsWithoutSortingArbitraryIDsOrEditingRecords() {
         let old = layer("z-old", anchors: ["a"])
         let middle = layer("m-middle", anchors: ["b"])

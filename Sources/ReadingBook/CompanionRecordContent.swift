@@ -43,11 +43,7 @@ private struct CompanionRecordHeightPreference: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
-struct CompanionRecordSource: Identifiable {
-    let id: String
-    let quote: String
-    let locator: String
-}
+typealias CompanionRecordSource = ReadingCompanionSource
 
 /// One compact action row replaces separate full-width source and draft rows.
 /// Multiple sources share a single popover; each still targets its exact anchor.

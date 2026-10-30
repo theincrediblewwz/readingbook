@@ -857,14 +857,10 @@ struct ReadingCompanionPanel: View {
         return url
     }
     private func recordSources(_ ids: [String]) -> [CompanionRecordSource] {
-        var seen: Set<String> = []
-        return ids.compactMap { id in
-            guard seen.insert(id).inserted,
-                  let anchor = store.readingExperienceIndex.anchors.first(where: { $0.id == id }) ?? store.book?.readingExperience?.anchors.first(where: { $0.id == id }) else { return nil }
-            let locator = store.book?.units.first(where: { $0.id == anchor.unitID })?.locator ?? "原文片段"
-            return CompanionRecordSource(id: anchor.id, quote: anchor.quote, locator: locator)
-        }
+        ReadingCompanionPresentation.sources(ids, indexedAnchors: store.readingExperienceIndex.anchors,
+            storedAnchors: store.book?.readingExperience?.anchors ?? [], units: store.book?.units ?? [])
     }
+
     private func appearances(_ id: String, evidence: [Evidence]) -> some View {
         let allowed = Set(sourceUnits.map(\.id))
         let visible = avoidsSpoilers ? evidence.filter { allowed.contains($0.unitID) } : evidence

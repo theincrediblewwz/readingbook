@@ -70,18 +70,22 @@ public actor AIRequestCoordinator {
                 waiting.append(Waiter(id: id, lane: lane, reservation: reservation, continuation: continuation)); drain()
             }
         }, onCancel: { Task { await self.cancel(id) } })
+        var beganTransport = false
         do {
             try Task.checkCancellation()
             onStart(permit.number)
+            try Task.checkCancellation()
+            beganTransport = true
             let result: ProviderClient.Result
             if let transport { result = try await transport(prepared) }
             else { result = try await ProviderClient.perform(prepared, progress: progress) }
             release(permit.id, cost: max(0, result.tokenCost))
             return result
         } catch {
-            // Providers may bill requests cancelled after transmission. Retain
-            // the reservation if the transport did not report actual usage.
-            release(permit.id, cost: reservation)
+            // Before transport there can be no provider usage. Once entered,
+            // retain the reservation unless actual usage was reported: a
+            // provider may still bill a failed or cancelled transmission.
+            release(permit.id, cost: beganTransport ? reservation : 0)
             throw error
         }
     }

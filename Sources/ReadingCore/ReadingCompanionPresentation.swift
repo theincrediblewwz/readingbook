@@ -59,3 +59,50 @@ public struct ReadingCompanionGenerationReview: Equatable, Sendable {
             + project.events.filter { $0.evidence.contains { unitIDs.contains($0.unitID) } }.count
     }
 }
+
+/// Ephemeral presentation values; lookup never rewrites or retains library data.
+public struct ReadingCompanionSource: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let quote: String
+    public let locator: String
+    public init(id: String, quote: String, locator: String) {
+        self.id = id; self.quote = quote; self.locator = locator
+    }
+}
+
+extension ReadingCompanionPresentation {
+    public static func sources(_ ids: [String], indexedAnchors: [SourceAnchor],
+                               storedAnchors: [SourceAnchor], units: [SourceUnit]) -> [ReadingCompanionSource] {
+        var seen: Set<String> = []
+        let requested = ids.filter { seen.insert($0).inserted }
+        // Most sentence cards have one source. Keep their existing short path;
+        // build bounded temporary lookups only for multi-source records.
+        if requested.count <= 64 {
+            return requested.compactMap { id in
+                guard let anchor = indexedAnchors.first(where: { $0.id == id })
+                    ?? storedAnchors.first(where: { $0.id == id }) else { return nil }
+                return ReadingCompanionSource(id: anchor.id, quote: anchor.quote,
+                    locator: units.first(where: { $0.id == anchor.unitID })?.locator ?? "原文片段")
+            }
+        }
+        var anchors: [String: SourceAnchor] = [:]
+        for anchor in indexedAnchors where seen.contains(anchor.id) {
+            if anchors[anchor.id] == nil { anchors[anchor.id] = anchor }
+            if anchors.count == seen.count { break }
+        }
+        for anchor in storedAnchors where seen.contains(anchor.id) {
+            if anchors[anchor.id] == nil { anchors[anchor.id] = anchor }
+            if anchors.count == seen.count { break }
+        }
+        let neededUnits = Set(anchors.values.map(\.unitID))
+        var locators: [String: String] = [:]
+        for unit in units where neededUnits.contains(unit.id) {
+            if locators[unit.id] == nil { locators[unit.id] = unit.locator }
+            if locators.count == neededUnits.count { break }
+        }
+        return requested.compactMap { id in
+            guard let anchor = anchors[id] else { return nil }
+            return ReadingCompanionSource(id: anchor.id, quote: anchor.quote, locator: locators[anchor.unitID] ?? "原文片段")
+        }
+    }
+}

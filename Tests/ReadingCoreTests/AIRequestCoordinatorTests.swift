@@ -41,6 +41,56 @@ final class AIRequestCoordinatorTests: XCTestCase {
         throw ReadingError.invalid("离线调度未在预期时间推进。")
     }
 
+    func testCancellationFromStartCallbackDoesNotEnterTransportOrConsumeTokenReservation() async throws {
+        let gate = CoordinatorTransportGate(), result = response(), numbers = CoordinatorRequestNumbers()
+        await gate.releaseAll()
+        let coordinator = AIRequestCoordinator(transport: { prepared in await gate.wait(prepared.request.url!.lastPathComponent); return result })
+        let run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 1)
+        defer { run.finish() }
+        let request = try prepared("never-sent", input: 500)
+        let cancelled = Task {
+            try await coordinator.perform(request, lane: .foreground, progress: nil, onStart: { number in
+                numbers.append(number)
+                withUnsafeCurrentTask { $0?.cancel() }
+            })
+        }
+        do { _ = try await cancelled.value; XCTFail("发送前的取消必须停止传输。") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        _ = try await coordinator.perform(prepared("following", input: 500), lane: .foreground, progress: nil,
+            onStart: { numbers.append($0) })
+        let started = await gate.started, used = await coordinator.requestsUsed
+        XCTAssertEqual(started, ["following"])
+        XCTAssertEqual(numbers.values, [1, 2], "已分配的请求序号仍保持单调，不能回收后重复。")
+        XCTAssertEqual(used, 2)
+        await coordinator.endRun(run)
+    }
+
+    func testCancellationAfterEnteringTransportKeepsConservativeReservationAndReleasesSlot() async throws {
+        let gate = CoordinatorTransportGate(), result = response()
+        await gate.releaseAll()
+        let coordinator = AIRequestCoordinator(transport: { prepared in
+            let name = prepared.request.url!.lastPathComponent
+            await gate.wait(name)
+            if name == "sent" { throw CancellationError() }
+            return result
+        })
+        let run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 1)
+        defer { run.finish() }
+        do {
+            _ = try await coordinator.perform(prepared("sent", input: 500), lane: .foreground, progress: nil, onStart: { _ in })
+            XCTFail("传输取消必须向调用者报告。")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        do {
+            _ = try await coordinator.perform(prepared("over-budget", input: 500), lane: .foreground, progress: nil, onStart: { _ in })
+            XCTFail("已进入传输的未知用量不能释放为零。")
+        } catch { XCTAssertTrue(error is ReadingWorkflowBudgetPause) }
+        _ = try await coordinator.perform(prepared("small", input: 100), lane: .foreground, progress: nil, onStart: { _ in })
+        let started = await gate.started, used = await coordinator.requestsUsed
+        XCTAssertEqual(started, ["sent", "small"], "小请求获准说明取消后并发槽已释放。")
+        XCTAssertEqual(used, 2)
+        await coordinator.endRun(run)
+    }
+
     func testFinishedRunResetsBeforeDelayedCleanupAndCleanupCannotFinishAnotherRun() async throws {
         let result = response(), coordinator = AIRequestCoordinator(transport: { _ in result })
         var limited = settings; limited.maxRequestsPerRun = 1

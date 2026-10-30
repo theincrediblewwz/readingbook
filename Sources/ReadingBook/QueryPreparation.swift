@@ -59,13 +59,26 @@ actor QueryMemoryFiles {
         await QueryMemoryFiles.shared.read(snapshot: snapshot, history: history, root: root)
     }
     func prepareQueryMemoryDisplay() async -> QueryMemoryDisplay {
-        guard let original = book else { return QueryMemoryDisplay() }
+        // A valid derived memory must cite admitted history. With no messages
+        // there can be none; avoid outline/snapshot/file preparation entirely.
+        guard let original = book, !original.chats.isEmpty else { return QueryMemoryDisplay() }
         let key = queryMemoryPreparationKey, preferences = currentQueryPreferences
         let project: BookProject
         do { project = key.scope == .chapter ? try await ensureBookChapterOutline(project: original) : original }
         catch { return QueryMemoryDisplay() }
         guard !Task.isCancelled, bookID == original.id, libraryRootURL == key.root else { return QueryMemoryDisplay() }
-        let worker = Task.detached(priority: .userInitiated) { () throws -> (ReadingQuerySnapshot, [ChatMessage]) in
+        let worker = Task.detached(priority: .userInitiated) { () throws -> (ReadingQuerySnapshot, [ChatMessage])? in
+            guard project.chats.contains(where: {
+                ($0.conversationMode ?? .functional) == preferences.interaction && ($0.answerStyle ?? .research) == preferences.style
+            }) else { return nil }
+            if key.scope == .book {
+                // This proof belongs to this immutable preparation only. Public
+                // old snapshots and every other scope keep full revalidation.
+                let prepared = try ReadingPreparedAnswer.freeze(project: project, scope: key.scope, context: key.context,
+                    documentIDs: key.documents, appendedDocumentIDs: key.attachments,
+                    authorizedNodeIDs: key.nodes, preferences: preferences)
+                return (prepared.snapshot, prepared.history)
+            }
             let snapshot = try ReadingQuerySnapshot.freeze(scope: key.scope, in: project, context: key.context,
                 documentIDs: key.documents, appendedDocumentIDs: key.scope == .notes ? [] : key.attachments, authorizedNodeIDs: key.nodes)
                 .withContextIdentity(preferences.contextIdentity)

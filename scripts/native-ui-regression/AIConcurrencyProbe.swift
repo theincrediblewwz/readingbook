@@ -248,6 +248,7 @@ private actor OfflineConcurrentTransport {
             "同一AppStore应在目录恢复后重新load成功并清除旧加载错误。")
         try await checkFailedReplanning(in: directory, source: source, template: project)
         try await checkConnectionEditing(in: directory)
+        try await checkMemoryPreparation(in: directory)
         return ["companionAndChatActuallyOverlapped": true, "chatCompletedBeforeHeldCompanion": true,
             "companionCancellationPreservedChat": true, "lateProgressCleanupPreservedReplacement": true,
             "independentProgressRunIDs": true, "manualWriteBarrierPreserved": true, "settingsAllowedDuringCompanion": true,
@@ -258,7 +259,79 @@ private actor OfflineConcurrentTransport {
             "failedReplanPreservedConfirmedSessionPlanAndViews": true,
             "cancelledReplanPreservedConfirmedSessionPlanAndViews": true,
             "staleConnectionResultClearedOwnWaitingStatus": true,
-            "staleConnectionResultPreservedNewerEditorStatus": true]
+            "staleConnectionResultPreservedNewerEditorStatus": true,
+            "memoryPreparationScopeModeStyleCases": 12, "memoryPreparationPreservedCompleteMessages": true,
+            "emptyForeignAndStaleMemoryRejected": true, "cancelledMemoryNotPublished": true]
+    }
+
+    /// Actual AppStore + file actor, no model calls. A missing source/history
+    /// must never make an old sidecar visible under a new scope or mode.
+    @MainActor private static func checkMemoryPreparation(in directory: URL) async throws {
+        let root = directory.appendingPathComponent("memory-preparation-library")
+        let coordinator = AIRequestCoordinator(transport: { _ in throw ReadingError.invalid("记忆窗口不能发送模型请求。") })
+        let store = AppStore(sharedAIRequests: coordinator)
+        store.repository = LibraryRepository(rootURL: root); store.libraryRootURL = root
+        var project = BookProject(id: "memory-fixture", title: "记忆准备", originalName: "fixture.txt", sourceHash: "memory-source",
+            units: [SourceUnit(id: "u1", order: 0, chapter: "一", page: 1, text: "刘备在此。e\u{301} 😀"),
+                    SourceUnit(id: "u2", order: 1, chapter: "二", page: 2, text: "后页原文。")])
+        project.documents = [DocumentRecord(id: "note", title: "授权笔记", evidence: [Evidence(unitID: "u1", quote: "刘备在此。")])]
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        store.books = [project]; store.bookID = project.id; store.selectedUnitID = "u1"
+        for scope in [ReadingQueryScope.book, .page, .notes] {
+            for mode in [ReadingConversationMode.reading, .functional] {
+                for style in [ReadingAnswerStyle.mentor, .research] {
+                    store.queryScope = scope; store.queryInteractionMode = mode; store.queryAnswerStyle = style
+                    store.queryDocumentIDs = scope == .notes ? ["note"] : nil
+                    store.books = [project]
+                    let preferences = store.currentQueryPreferences
+                    let snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: project, context: store.queryReadingContext,
+                        documentIDs: scope == .notes ? ["note"] : nil).withContextIdentity(preferences.contextIdentity)
+                    let context = try ReadingChatContext(snapshot: snapshot, avoidsSpoilers: preferences.avoidsSpoilers)
+                    var current = project
+                    current.chats = ["user", "assistant"].map { role in
+                        var message = ChatMessage(id: "memory-"+role, role: role, content: "完整记忆 e\u{301} 😀 "+role)
+                        message.conversationMode = mode; message.answerStyle = style; message.readingContext = context
+                        message.createdAt = Date(timeIntervalSince1970: 1_700_000_000); return message
+                    }
+                    let history = ReadingChatHistory.automaticHistory(in: current, preferences: preferences, snapshot: snapshot)
+                    try require(history.count == 2, "记忆fixture必须真实获准两条完整历史。")
+                    let cursor = ConversationMemoryCursor(index: 2)
+                    let memory = ConversationMemory(id: snapshot.bookID+":"+snapshot.scopeFingerprint, bookID: snapshot.bookID,
+                        scopeFingerprint: snapshot.scopeFingerprint, fingerprint: try ConversationMemoryRuntime.prefixFingerprint(history, cursor: cursor),
+                        cursor: cursor, requirements: [.init(text: "保留用户要求", sources: ["memory-user"])],
+                        conclusions: [.init(text: "保留原回答", sources: ["memory-assistant"])], unresolved: [],
+                        updatedAt: Date(timeIntervalSince1970: 1_700_000_001), model: "offline")
+                    try require(ConversationMemoryRuntime.isValid(memory, snapshot: snapshot, history: history), "侧车必须先通过真实来源验证。")
+                    try await QueryMemoryFiles.shared.write(memory, snapshot: snapshot, root: root)
+                    store.books = [current]
+                    let before = try encoder.encode(current), display = await store.prepareQueryMemoryDisplay()
+                    try require(display.memory == memory && (try encoder.encode(display.messages)) == encoder.encode(Dictionary(uniqueKeysWithValues: history.map { ($0.id, $0) })),
+                        "记忆准备必须保留完整条目、来源消息和模式范围。")
+                    try require(try encoder.encode(store.books[0]) == before, "准备记忆不能改写原书、分析或聊天。")
+                    let cancelled = Task { @MainActor in
+                        withUnsafeCurrentTask { $0?.cancel() }
+                        return await store.prepareQueryMemoryDisplay()
+                    }
+                    let stopped = await cancelled.value
+                    try require(stopped.memory == nil && stopped.messages.isEmpty, "有效侧车存在时，取消也不能发布记忆。")
+                    store.books = [project]
+                    let empty = await store.prepareQueryMemoryDisplay()
+                    try require(empty.memory == nil && empty.messages.isEmpty, "空历史不能加载已存在的侧车。")
+                    var other = current
+                    for i in other.chats.indices { other.chats[i].conversationMode = mode == .reading ? .functional : .reading }
+                    store.books = [other]
+                    let mismatched = await store.prepareQueryMemoryDisplay()
+                    try require(mismatched.memory == nil && mismatched.messages.isEmpty, "其他对话模式不能加载旧记忆。")
+                    var changed = current
+                    if scope == .notes { changed.documents[0].updatedAt = changed.documents[0].updatedAt.addingTimeInterval(1) }
+                    else { changed.units[0].text += "原文更新" }
+                    store.books = [changed]
+                    let stale = await store.prepareQueryMemoryDisplay()
+                    try require(stale.memory == nil && stale.messages.isEmpty, "原文字节更新不能沿用旧记忆。")
+                    try await QueryMemoryFiles.shared.remove(snapshot: snapshot, root: root)
+                }
+            }
+        }
     }
 
     @MainActor private static func checkFailedReplanning(in directory: URL, source: URL, template: BookProject) async throws {
