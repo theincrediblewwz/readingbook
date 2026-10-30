@@ -172,6 +172,9 @@ def main(probe="bridge"):
                 "hard250ObservedDeltaMs": hard.get("observedDeltaMs"),
                 "hard250FirstWindowPreserved": hard.get("firstWindowPreserved"),
                 "hard250Changes": hard.get("changes", []),
+                "sameTupleDeltaMs": observations.get("sameTuple", {}).get("dispatchDeltaMs"),
+                "sameTuplePreserved": observations.get("sameTuple", {}).get("firstWindowPreserved"),
+                "sameTupleRefreshes": observations.get("sameTuple", {}).get("actualNativeRefreshes", []),
             }
     print(json.dumps({"probe": probe, "status": "passed" if passed else "failed", "output": str(output), "runtimeExitCode": code,
                       "passed": bool(passed), "checkCount": len(checks), "checks": checks, "runtimeWarnings": warnings,

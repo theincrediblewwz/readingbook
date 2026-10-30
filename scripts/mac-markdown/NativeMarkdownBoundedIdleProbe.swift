@@ -5,7 +5,7 @@ import CryptoKit
 @testable import ReadingBook
 @testable import ReadingCore
 
-// Native bounded-idle correctness probe, V7: absolute input pacing and pre-assertion timing witnesses.
+// Native bounded-idle correctness probe, V8: absolute pacing for both timed input sequences; pre-assertion witnesses.
 // No shipping test API, private Coordinator access, AppStore, AI or clipboard.
 private final class BoundedIdleDefaults: UserDefaults, @unchecked Sendable {
     private let lock = NSLock()
@@ -689,8 +689,13 @@ private struct BoundedIdleHeightKey: PreferenceKey {
             let same=try await firstWindow(web,model:model,host:host,font:24)
             guard let sameFirst=same.first else{throw Failure(message:"Same tuple window absent")}
             var sameRows:[[String:Any]]=[],sameKept=true
+            var nextSameRefresh=sameFirst+22_000_000
             for _ in 0..<3 {
-                try await Task.sleep(for:.milliseconds(22))
+                let beforeRefresh=now()
+                if beforeRefresh<nextSameRefresh {
+                    try await Task.sleep(for:.nanoseconds(Int64(nextSameRefresh-beforeRefresh)))
+                }
+                nextSameRefresh += 22_000_000
                 model.refreshToken += 1;let token=model.refreshToken
                 try await waitFast("actual host refresh body",host:host) {model.bodyPasses>0}
                 _ = try await js(web,"document.querySelector('a[href^=\"readingbook:\"]').click();return true")
@@ -702,8 +707,9 @@ private struct BoundedIdleHeightKey: PreferenceKey {
             let (_,sameAt)=try await dispatch(web,host:host,font:24)
             _ = try await stable(web,model:model,host:host,font:24)
             let sameMs=ms(sameAt,sameFirst)
+            observations["sameTuple"]=["first":same.evidence,"actualNativeRefreshes":sameRows,"dispatchNs":sameAt,"dispatchDeltaMs":sameMs,
+                "firstWindowPreserved":sameKept]
             try check(3,sameKept && sameRows.count==3 && sameMs>=119 && sameMs<=180)
-            observations["sameTuple"]=["first":same.evidence,"actualNativeRefreshes":sameRows,"dispatchNs":sameAt,"dispatchDeltaMs":sameMs]
 
             model.active=true;model.typography.setPointSize(18,for:.source)
             _ = try await stable(web,model:model,host:host,font:18)
