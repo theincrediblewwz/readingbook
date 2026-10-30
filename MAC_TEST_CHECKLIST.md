@@ -1,8 +1,16 @@
-> 2026-10-31：0.23.24/build55 已实现三处优化，本机正式Core60+原生54有效进程、105项回归通过；GitHub完整CI、发布、安装尚待本轮完成，勿误认为已交付。详见[本批结果](Design/2026-10-31-temporal-composition-optimization-results.md)。
+> 2026-10-31：0.23.24/build55 已同步main、发布、替换安装并完成原书验收。第三批时空/组合/总览/只读图谱三处采用，Core60+原生54有效Release进程，105本机回归，完整CI723/66与全部原生门槛、零警告。详见[本批结果](Design/2026-10-31-temporal-composition-optimization-results.md)。
 
-# 0.23.24 当前工作
+# 0.23.24 接续要点
 
-只改TemporalKnowledge.swift、ReadingAtlas.swift、GraphCanvas.swift，新增六项TemporalProjectionReuseTests。完整字节与48对图谱PNG保持；只读远缩放约−14%，可编辑交互保留。原生前台中断保留并整对续测，非锁屏结论，不改锁屏设置。Root用户progress文档SHA仍9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，不得修改或提交。当前安装仍23/54；本机所有新文件在logs/.build/private-books的temporal-composition-20261031。正式原生汇总native-formal-final，早期v1/v2有失败，不能拿早期不完整目录作最终通过证明。
+产品源32e5a5872dc2afcc4c2acb399b3f0dac836ea28f，CI41116326388、artifact13007816989、Release429440011及About24/55均完成，无需重发重装。当前App PID36204、原书104/1484与343%，102已有译文可见，伴读收起、空草稿。原书20文件/笔记/分析字节和全部偏好保持，仅Workspace正常更新。最新库/偏好/旧23 App保护在private-books/temporal-composition-20261031/install-before-0.23.24。
+
+只改TemporalKnowledge.swift、ReadingAtlas.swift、GraphCanvas.swift，新增六项TemporalProjectionReuseTests；本机实际产品增量19.96+7.46秒，GitHub双架构打包15分04秒，非相同工作量。完整输出与48对图谱PNG保持；千项人物快照约−39%～−42%，组合约−19%～−33%，总览约−33%～−34%，只读远缩放约−14%。全局地图未证实整体提速，可编辑图谱保留交互层并有小幅回退，详见结果边界。
+
+正式原生汇总native-formal-final，Core用core-formal-v1；早期v1/v2有失败与人物/历法恢复错误，已明确保留，不拿不完整目录冒充通过。两次前台失败并非锁屏证据，用户确认没有操作，完整有效配对复用，受中断整对重测；总114有效/118正式尝试。实际当前Debug产品对象还验只读选择/缩放、改名菜单/双击/取消/Unicode回车、删除专用路径；未把坐标拖动即时无变化算成功，不冒称粘贴/Undo或真实仓库写入。
+
+关键程序/输入/完整capture已入唯一replay-evidence.zip58,511,435B，SHA aed7f3319c3fea893fa62c10f1fe88bd73e83a544de8f890fb52a5526d10dd44，先按REPLAY_AND_RETIRED恢复。对象/dSYM/非关键大Debug程序已退役；24解包readyappPath/重复载荷亦退役，要用先从canonical恢复并核verification。保留24/23包和23 App回滚；旧22Release/tag/产物/App/ZIP精确退役，所有非App私人备份和提交历史保留。临时两阶段约1.38GiB退役，全批约4.77→4.87GiB、净增约102MiB为新保护和归档等，不能把删除量当净下降。
+
+下一轮第4批插件/方案、书库IO/导入导出/备份、设置/工作区、笔记/搜索剩余热点；全局地图游标全量更新和可编辑远缩放叶子传播优先跟进。只读审查next-batch-source-audit.md指出registry已static、工作区已有350ms合并、存储已有独立状态与进度节流，不能重做当新成果；工具声明反复JSON解析仍是待量候选。继续16类轮转，不恢复数学核查。用户未提交progress文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，不得修改或提交。
 
 下方23及更旧接续为历史。
 
