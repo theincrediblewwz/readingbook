@@ -5,7 +5,7 @@ import CryptoKit
 @testable import ReadingBook
 @testable import ReadingCore
 
-// Native bounded-idle correctness probe, V6: retain timing witnesses before assertions.
+// Native bounded-idle correctness probe, V7: absolute input pacing and pre-assertion timing witnesses.
 // No shipping test API, private Coordinator access, AppStore, AI or clipboard.
 private final class BoundedIdleDefaults: UserDefaults, @unchecked Sendable {
     private let lock = NSLock()
@@ -657,8 +657,16 @@ private struct BoundedIdleHeightKey: PreferenceKey {
             let hard=try await firstWindow(web,model:model,host:host,font:22)
             guard let hardFirst=hard.first else{throw Failure(message:"Hard window first time absent")}
             var hardRows:[[String:Any]]=[],target=22.0,hardAt:UInt64=0,firstStayed=true
+            // Observation/layout cost must not accumulate into each input gap.
+            // Keep the original >=5 changes and239..310ms acceptance unchanged.
+            var nextHardChange=hardFirst+32_000_000
             while ms(now(),hardFirst)<400 {
-                try await Task.sleep(for:.milliseconds(32));host.layoutSubtreeIfNeeded()
+                let beforeNextChange=now()
+                if beforeNextChange<nextHardChange {
+                    try await Task.sleep(for:.nanoseconds(Int64(nextHardChange-beforeNextChange)))
+                }
+                nextHardChange += 32_000_000
+                host.layoutSubtreeIfNeeded()
                 let prior=try scheduling(web)
                 if prior.first==nil,prior.displayed?.fontSize==target {hardAt=now();break}
                 firstStayed = firstStayed && prior.first==hardFirst
