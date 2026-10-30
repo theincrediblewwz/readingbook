@@ -1,16 +1,26 @@
-# ReadingBook 0.23.21 · 后台 Markdown 更新（待发布）
+# ReadingBook 0.23.21 · 后台样式更新优化
 
-本机正式对照和真实源码原生回归已通过；完整CI、发布和安装验收待完成。[本批结果与范围](Design/2026-10-30-bounded-markdown-results.md)。当前可下载[0.23.20/build51](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.20)。
+[下载0.23.21/build52](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.21) · [本批结果与边界](Design/2026-10-30-bounded-markdown-results.md) · [组件优化进度](Design/2026-10-29-performance-progress.md)。已同步main，并替换本机安装版；产品源码`6f36c65e549bd270d4973a381b88b4366471730f`。
 
-打开历史引用时优先显示目标回答，可分批查看更早和后续内容；字号、宽度变化及普通滚动不会反复拉回。原书、笔记、分析、全部历史与偏好保留。此前优化保持；隐藏Markdown延后排版方案因重新显示变慢未采用。
+隐藏Markdown连续切换字号时合并后台样式工作。在60个新进程的固定对照中，20/128KiB两场景完整App与所属Web进程合计CPU配对中位下降约69.77%/65.92%；主题和可见内容的小波动不作为收益。重显延迟、单进程内存、完整来源/DOM/选区/权限守护通过。其他已有功能与此前优化保留。
 
-[完整CI41024746938](https://github.com/theincrediblewwz/readingbook/actions/runs/41024746938)通过706 Core、全部旧门槛及新增70项历史原生守护，零编译警告。双架构核包、实际About、原书103页/343%、已有句译、输入/Undo和搜索/笔记/回收站均通过。清理后工作区全批约6.13→4.21GiB；保留原数据、最新19回滚与关键证据。GitHub仅main和20/19两版，提交历史保留，其他组件优化继续。
+[完整CI41061416891](https://github.com/theincrediblewwz/readingbook/actions/runs/41061416891)通过706项Core、49项重点回归、Markdown29/152、历史70和新增调度12项及全部原生/工具门槛，零编译警告。双架构、32资源/36文件和签名核验通过；实际About、新旧启动、原书103页/343%、102既有句译、输入/Undo、搜索/笔记/回收站均通过。原书、笔记、分析与全部偏好保持，只有正常Workspace导航更新。
+
+GitHub保留main及21/20两版，提交历史保留。原始测量与测试程序已校验压缩，展开实验树、再生编译物、重复载荷和旧19应用退役；主线Debug和共享缓存保留。工作区本批起点4.21GiB，清理后4.65GiB，净增约0.45GiB用于压缩复查证据和新回滚，未把清理删除量冒称全批净下降。原数据及必要保护均在原位置或本工作区内。
+
+---
+
+# ReadingBook 0.23.20 · 历史引用修复（历史交付，现为回滚版）
+
+[下载0.23.20/build51回滚版](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.20) · [该批记录](Design/2026-10-30-history-reference-results.md)。打开历史引用优先显示目标回答，前后分批可达全部历史，字号和宽度变化保留用户位置。该批完整CI及原书验收通过；无限延后隐藏CSS候选因重显回退拒绝，21采用的是另外独立验证的有界方案。
+
+下方保留各批历史记录，当前可用版本与保留情况以上方21/20为准。
 
 ---
 
 # ReadingBook 0.23.19 · 笔记与搜索优化（历史交付）
 
-[下载0.23.19/build50](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.19) · [本批实测与边界](Design/2026-10-30-note-search-optimization-results.md)。源码已同步main，本机正式安装版已替换；包内源码为`3f83696b1baf7e0d7daf889a4b17d9430f34d071`。此前功能和准备链优化继续保留。
+0.23.19/build50（历史包已退役） · [本批实测与边界](Design/2026-10-30-note-search-optimization-results.md)。源码已同步main，本机正式安装版已替换；包内源码为`3f83696b1baf7e0d7daf889a4b17d9430f34d071`。此前功能和准备链优化继续保留。
 
 减少长笔记单个来源链接展开/收起的重复局部布局，并跳过扩展搜索词中的重复扫描项。72个新进程配对中，6000单元重复词的完整搜索约省30–32%；512KiB/128链接笔记的进入/离开局部布局约省55–67%。更大压力场景及小量回退均有记录；不外推为整App、FPS或模型速度。
 
@@ -30,7 +40,7 @@
 
 # 0.23.12 · 重叠范围续读（历史交付，2026-10-29）
 
-[下载0.23.12/build43](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.12) · [本机安装包](dist/ReadingBook-0.23.12-Mac.zip)。源码与近期全部功能已合并main，包内源码为`9604287d99e34cb4be2fa88690aef31084dbca6d`。
+下载0.23.12/build43（历史包已退役） · 本机旧包已退役。源码与近期全部功能已合并main，包内源码为`9604287d99e34cb4be2fa88690aef31084dbca6d`。
 
 本轮新增默认“继续补齐”、显式“继续并补充”和保留历史的“重新分析”。先在本地预览真实可沿用成果与缺口，再开始AI；章节选择使用可信目录的同层起止章。修复同终点扩大范围时，旧范围总结被误判为已完成的问题；章末/本轮结束步骤等待相关前置成果保存齐全，未启用总结不自动增加请求。
 
@@ -46,7 +56,7 @@
 
 # 0.23.11 · 书名菜单返回阅读热修复（历史交付，2026-10-29）
 
-[本机安装包 · 0.23.11/build42](dist/ReadingBook-0.23.11-Mac.zip) 已同步对应源码到 GitHub，并实际替换 `/Applications/ReadingBook.app`。修复从书库重选顶端书名菜单中的当前书时只闪一下、仍停留书库的问题：菜单动作明确返回阅读；书库中的当前书显示“继续阅读”且不打勾，正在阅读的书才显示勾选。保留主界面的导入入口，移除书名弹层中的重复导入。
+本机旧包已退役 已同步对应源码到 GitHub，并实际替换 `/Applications/ReadingBook.app`。修复从书库重选顶端书名菜单中的当前书时只闪一下、仍停留书库的问题：菜单动作明确返回阅读；书库中的当前书显示“继续阅读”且不打勾，正在阅读的书才显示勾选。保留主界面的导入入口，移除书名弹层中的重复导入。
 
 [Actions 40728552393](https://github.com/theincrediblewwz/readingbook/actions/runs/40728552393) 成功：**615 项 Core 零失败、零编译警告**；新增真实生产导航动作回归验证无当前书/同书/换书、忙碌与草稿门禁、过期书库/书籍/原文身份拒绝、提问草稿和原书/project/Markdown 保留，其余原生布局、工作区、PDF、AI、笔记及 17 项工具契约通过。下载包已核对两层 ZIP CRC/SHA、源码/版本/build、arm64/x86_64、0755、严格签名、资源自检及 32 资源与 Git blob 一致。
 
@@ -64,7 +74,7 @@
 
 # 0.23.10 · 功能交付与 Mac 安装完成（2026-10-29）
 
-[本机安装包 · 0.23.10/build41](dist/ReadingBook-0.23.10-Mac.zip) 已同步对应源码到 GitHub，并替换本机 `/Applications/ReadingBook.app`。本轮交付独立 AI 伴读/对话任务与取消、已有分析再生成确认、最新结果与折叠历史、句旁内容范围修正、紧凑阅读/对话布局、组件选择浮层、设置与管理入口精修，以及笔记链接显示收纳和撤销重做。按用户要求先交付功能，滚动性能继续单独优化；未安装性能诊断版。
+本机旧包已退役 已同步对应源码到 GitHub，并替换本机 `/Applications/ReadingBook.app`。本轮交付独立 AI 伴读/对话任务与取消、已有分析再生成确认、最新结果与折叠历史、句旁内容范围修正、紧凑阅读/对话布局、组件选择浮层、设置与管理入口精修，以及笔记链接显示收纳和撤销重做。按用户要求先交付功能，滚动性能继续单独优化；未安装性能诊断版。
 
 [Actions 40712468168](https://github.com/theincrediblewwz/readingbook/actions/runs/40712468168) 成功：**615 项 Core 零失败、零编译警告**，原生布局、真实工作区与草稿、PDF、独立 AI 并发/保存、原生笔记及 hosted undo、17 项性能工具契约和双架构打包全部通过。下载后已独立核对 artifact 摘要、内外 ZIP CRC/SHA、源码提交与版本/build、arm64/x86_64、0755、ad hoc 严格签名、资源自检及全部 32 资源与 Git blob 一致。
 
@@ -103,7 +113,7 @@
 
 # 0.23.8 · 新书阅读提示后台准备（2026-10-28）
 
-[直接安装 Mac ZIP · 0.23.8/build39](dist/ReadingBook-0.23.8-Mac.zip)，支持 Apple 芯片和 Intel。
+本机旧包已退役，支持 Apple 芯片和 Intel。
 
 午后 Mac 已抓到主线程持续布局与 300 轮布局警告；PDF 悬停通知的同步发布违规已在本地修正，仍未确认整次卡顿根治，原安装包未替换。详见[本机调查记录](Design/2026-10-28-mac-hang-diagnosis.md)。
 
@@ -125,7 +135,7 @@
 
 # 0.23.7 · 句首、页末与页眉定位（2026-10-27）
 
-[直接安装 Mac ZIP · 0.23.7/build38](dist/ReadingBook-0.23.7-Mac.zip)，支持 Apple 芯片和 Intel。
+本机旧包已退役，支持 Apple 芯片和 Intel。
 
 - PDF悬停改用每页缓存的真实物理行与严格原文范围，避免多行字符几何索引错位或字形空隙查不到字符；同行超过8个候选时有限补查，不必靠移走再回来触发。
 - 有重复证据的页眉/页脚、独立页码与正文分句；补齐导入换行偏移证明和密集标记截尾。只调整展示元数据，原书、用户Markdown、旧分析和Key保存机制保留。
@@ -140,7 +150,7 @@
 
 # 0.23.6 · 悬停与面板共存（2026-10-27）
 
-[直接安装 Mac ZIP · 0.23.6/build37](dist/ReadingBook-0.23.6-Mac.zip)，支持 Apple 芯片和 Intel。
+本机旧包已退役，支持 Apple 芯片和 Intel。
 
 - 可见页的句子先准备，之后再处理词条，避免已匹配句子等待无关工作；缩放、尺寸变化、解除遮挡和清空选段后补一次当前鼠标命中。同一句跨行时更新卡片坐标，保留固定和关闭行为。
 - 智能阅读进度与句卡改为单向避让，临时句卡不再把展开的进度面板挤成图标；手动拖放位置优先。
@@ -156,7 +166,7 @@
 
 # 0.23.5 · 本机密钥、阅读设置与悬停（2026-10-27）
 
-[直接安装 Mac ZIP · 0.23.5/build36](dist/ReadingBook-0.23.5-Mac.zip)，支持 Apple 芯片和 Intel。
+本机旧包已退役，支持 Apple 芯片和 Intel。
 
 - 启动、切服务和 OCR 不自动访问钥匙串；密钥保存在本机 App 私有目录，旧服务可在模型设置主动“取回旧钥匙串密钥”，不覆盖本机已有值、不删除旧项，也不随书库备份导出。
 - “怎样读”区分自然讲解和逐段释意，“讲解分段”控制页/章/自适应。阅读范围、组件选择及设置重新排版，原生设置页不再套第二层浮框；原执行配置和记录保留。
@@ -173,7 +183,7 @@
 
 # 0.23.4 · 目录边界接入章节阅读与分析（2026-10-26）
 
-[直接安装 Mac ZIP · 0.23.4/build35](dist/ReadingBook-0.23.4-Mac.zip)。
+本机旧包已退役。
 
 [Actions 40333505140](https://github.com/theincrediblewwz/readingbook/actions/runs/40333505140) 成功：**524 项 Core 零失败、无编译警告**，Apple 芯片/Intel 双架构 Release、ad hoc 签名和资源自检通过。原生源码 `c567a41faa659ab016bf4e85123c93fe017b20fd`，分支 `codex/chapter-boundaries-0.23.4`；此后仅补交付文档。
 
@@ -190,7 +200,7 @@
 
 # 0.23.3 · 句旁对话、译文切换与原书目录（2026-10-26）
 
-[直接安装 Mac ZIP · 0.23.3/build34](dist/ReadingBook-0.23.3-Mac.zip)，支持 Apple 芯片和 Intel。
+本机旧包已退役，支持 Apple 芯片和 Intel。
 
 [Actions 40315991954](https://github.com/theincrediblewwz/readingbook/actions/runs/40315991954) 成功：**495 项 Core 零失败、无编译警告**，双架构 Release、ad hoc 签名与资源自检通过。原生源码 [`d7e929eecc337937e2556e79d3e4f40823849d45`](https://github.com/theincrediblewwz/readingbook/commit/d7e929eecc337937e2556e79d3e4f40823849d45)，分支 `codex/reader-hover-outline-0.23.3`；此后仅更新交付文档。
 
@@ -208,7 +218,7 @@
 
 # 0.23.2 · 核心链路审查与组件补齐（2026-10-26）
 
-[本机直接安装 Mac ZIP · 0.23.2/build33](dist/ReadingBook-0.23.2-Mac.zip)，支持 Apple 芯片和 Intel。
+本机旧包已退役，支持 Apple 芯片和 Intel。
 
 - 阅读与缓存：复查滚动、快速翻页、密集标记和句子定位；Web 基底索引按正文复用，顺序标记使用临时游标，引用分隔符预索引。PDF 引文先做完整页原字节证明，旧锚仍可解析；异步命中绑定文档/导航/视口，过期结果不激活。历史页快照增加 24 项/24 MiB 估计预算，当前窗口保留精确复用。
 - 复杂 Markdown：引用、列表、懒续行与跨行代码按真实块分界，保留源字节和 UTF16 坐标。原生失败诊断确认 Foundation 的跨行代码和虚拟缩进位置不能直接作字节坐标；采用块结构交叉证明及原始物理行回映，不明确的局部跳过自动句标。原有译文和锚点不迁移、不删除。
@@ -230,7 +240,7 @@
 - 合法旧无偏移锚通过精确解析后可复用、保存句译，原锚记录不迁移。反引号代码按等长串及转义规则保护句界，空格/Tab 空白行正常分段，保留普通软换行；ATX 标题阻断代码跨度。结构扫描取消时保守拒绝，不把未完成扫描当成没有边界。
 - 同页新结果到达后，旧异步投影不再倒灌；有安全人物简介时跳过无用的全书层扫描，回退按锚点复用定位并及时响应取消。已固定或待显示卡片读取最新内容，保持位置、固定状态和关闭计时；关闭、换书、换页和新悬停后，旧任务不能重新弹出卡片。对象身份更换时清除旧卡，刷新本身不调用模型。
 
-[直接安装 0.23.1/build32 Mac ZIP](dist/ReadingBook-0.23.1-Mac.zip)，支持 Apple 芯片和 Intel。[Actions 40276965666](https://github.com/theincrediblewwz/readingbook/actions/runs/40276965666) 成功：**410 项 Core 零失败、无编译警告**，双架构 Release、ad hoc 签名与资源自检通过。新增 13 项检查覆盖取消、定位、旧锚缓存与批量准备器；卡片和投影的异步时序以代码交叉复核及原生编译检查，未冒充真机手势验收。原生源码 `3b34816be6b3ffa32522a29dac3370909c8b5c23`，分支 `codex/reader-audit-0.23.1`。下载后 artifact 摘要、ZIP CRC/SHA、版本/源码、双架构/0755及全部 32 个资源与构建提交逐字节核验通过，含 20 个公式字体。ZIP 19,896,838 字节，SHA-256 `21b87549b55d149abb73d03ba30f6968dffaeecd8e5b7354228bc0f584f4eb08`。原生源码冻结后仅更新既有交付文档；这是未经 Developer ID 公证的 ad hoc 测试包。
+本机旧包已退役，支持 Apple 芯片和 Intel。[Actions 40276965666](https://github.com/theincrediblewwz/readingbook/actions/runs/40276965666) 成功：**410 项 Core 零失败、无编译警告**，双架构 Release、ad hoc 签名与资源自检通过。新增 13 项检查覆盖取消、定位、旧锚缓存与批量准备器；卡片和投影的异步时序以代码交叉复核及原生编译检查，未冒充真机手势验收。原生源码 `3b34816be6b3ffa32522a29dac3370909c8b5c23`，分支 `codex/reader-audit-0.23.1`。下载后 artifact 摘要、ZIP CRC/SHA、版本/源码、双架构/0755及全部 32 个资源与构建提交逐字节核验通过，含 20 个公式字体。ZIP 19,896,838 字节，SHA-256 `21b87549b55d149abb73d03ba30f6968dffaeecd8e5b7354228bc0f584f4eb08`。原生源码冻结后仅更新既有交付文档；这是未经 Developer ID 公证的 ad hoc 测试包。
 
 本轮按热路径、反例和交叉调用时序复查，未改变原书、用户 Markdown、稳定 ID、项目格式或 canonical 保存方式。没有使用真实用户库或付费模型。0.23.0 包保留原样；Mac 实际滚动、原生卡片时序仍待 [本轮集中验收](MAC_TEST_CHECKLIST.md)。复杂 Markdown 引用/列表尚未完整识别为代码跨度边界；单次 Foundation/PDFKit 搜索和逐句唯一性扫描仍有成本，没有 Instruments 证据，不能认定卡顿根治。
 
@@ -245,7 +255,7 @@
 
 三轮代码与反例复查另修了旧卡关闭计时器误关新卡、混合锚点沿用整段译文、段落变词条后几何残留，以及过期最短候选遮住有效句子。所有显示过滤均不删除原分析；普通分析和用户笔记不按句译过滤。
 
-[直接安装 0.23.0/build31 Mac ZIP](dist/ReadingBook-0.23.0-Mac.zip)，支持 Apple 芯片和 Intel。[Actions 40228136123](https://github.com/theincrediblewwz/readingbook/actions/runs/40228136123) 成功：**397 项 Core 零失败、无编译警告**，双架构 Release、ad hoc 签名与资源自检通过。新增检查覆盖取句与旧缓存、区间查询、四边缩放、屏幕线位，以及真实 PDFKit 的中文/emoji、裁切和旋转页字符定位。原生源码 `c5c75e7b9073ab151803e2f0d0ac14f1b3139816`，分支 `codex/reader-geometry-0.23`。下载后 artifact 摘要、ZIP CRC/SHA、版本/源码、双架构/0755和全部 32 个资源与构建提交逐字节核验通过，含 20 个公式字体。ZIP 19,819,918 字节，SHA-256 `707b8e50d78ba2e167b5559369c42205aef81748aacc5fd50c6a652fa1e0ad8b`。源码冻结后仅更新既有交付文档；这是未经 Developer ID 公证的 ad hoc 测试包。
+本机旧包已退役，支持 Apple 芯片和 Intel。[Actions 40228136123](https://github.com/theincrediblewwz/readingbook/actions/runs/40228136123) 成功：**397 项 Core 零失败、无编译警告**，双架构 Release、ad hoc 签名与资源自检通过。新增检查覆盖取句与旧缓存、区间查询、四边缩放、屏幕线位，以及真实 PDFKit 的中文/emoji、裁切和旋转页字符定位。原生源码 `c5c75e7b9073ab151803e2f0d0ac14f1b3139816`，分支 `codex/reader-geometry-0.23`。下载后 artifact 摘要、ZIP CRC/SHA、版本/源码、双架构/0755和全部 32 个资源与构建提交逐字节核验通过，含 20 个公式字体。ZIP 19,819,918 字节，SHA-256 `707b8e50d78ba2e167b5559369c42205aef81748aacc5fd50c6a652fa1e0ad8b`。源码冻结后仅更新既有交付文档；这是未经 Developer ID 公证的 ad hoc 测试包。
 
 Mac 原生下划线、四边手势、惯性滚动和多面板效果仍待 [四项集中验收](MAC_TEST_CHECKLIST.md)。本轮没有操作真实用户书库或调用付费模型。
 

@@ -17,3 +17,16 @@
 建议并入组件计划的顺序（均未实施）：先明确“临时视口/进度、语义选择/当前页、持久原文与分析”三层状态；再给通信补齐 library/book/source-version、origin 与任务代次，组合页仅转发选择/时间组，防回环与旧库结果串入；最后对有证据的单个组件做有限缓存、取消和失效。每次只改一个责任边界，保留相同 fixture 的启动、交互、内容 FPS 与内存对照，不能用开源项目介绍替代本机验收。
 
 已核：上述 README、五份 GitHub LICENSE、Readium Package/Navigator、Sioyek 渲染器、Readest 两个 store、markdown-it 架构、GRDB 查询观察文档、Apple WWDC 与 Skim 官方记录。待核：Skim 具体源码/完整逐文件许可；所有候选的本项目集成成本与真实收益。当前没有“性能领先”结论或新增依赖建议。
+
+
+## 2026-10-30补查：生命周期与取消
+
+本批等待完整CI期间，在线复核了一手资料；只借鉴局部设计，没有下载新引擎或增加依赖。
+
+- [WebKit的能耗建议](https://webkit.org/blog/8970/how-web-content-can-affect-power-usage/)建议合并定时工作，并说明不可见页面会停止rAF、降低优先级。与本项目本批的有界合并方向相符；但原生WK、浏览器标签和SwiftUI透明视图不等同，不能据文档认定`isHidden`安全，也不能把120/250ms写成系统完成保证。
+- [Foliate-js的书接口](https://github.com/johnfactotum/foliate-js/blob/main/README.md#the-main-interface-for-books)显式区分章节load/unload；图片和资源按需加载。可借鉴“资源生命周期跟随章节”的思路。其PDF适配被项目标作实验性，且长文分页仍有性能限制，没有依据建议替换本项目PDFKit。
+- [Readium最新迁移说明](https://github.com/readium/swift-toolkit/blob/develop/docs/Migration%20Guide.md#swift-6-and-strict-concurrency)要求资源流协作取消、隔离可变句柄；CPU重任务需明确离开UI actor。文档中4.0 alpha的要求不等于本项目应升级Swift或直接引入UIKit导航器。
+
+再对照当前代码，已有能力必须先扣除：PDF悬浮有hit-band索引和阅读空闲调度，几何缓存已有16页/12MiB的闲置目标（可见页允许超出），原生准备由独立actor拥有PDF，逐请求校验并协作取消；这些不是下一轮待补功能。256条/1MiB的单页引文缓存满时全清，是可观察候选，但普通场景未证实触顶，先不为它改LRU。
+
+下一轮优先查两条实际链：快速切页后旧准备任务是否及时结束并释放；悬浮密集来源时准备、命中和发布分别占多少。保留无装饰/稀疏/密集、同页命中/跨页返回和取消对照，先排除已有索引和缓存的作用，再决定是否改页内任务分组或失效粒度。门槛仍看整条用户动作与原数据/迟到结果守护，不凭内部调用计数宣称收益。其他16类和四条跨组件任务继续沿用原计划。

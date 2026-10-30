@@ -1,6 +1,6 @@
-# 后台 Markdown 样式合并：已采用，0.23.21/build52 待完整CI与安装验收
+# 后台 Markdown 样式合并：0.23.21/build52 已发布、安装并验收
 
-实际产品源码本机回归已通过；GitHub完整706/49及双架构包、发布与安装验收尚待完成。当前安装仍20/build51。本页不把准备工作当交付完成。
+产品源码`6f36c65e549bd270d4973a381b88b4366471730f`，[完整CI41061416891](https://github.com/theincrediblewwz/readingbook/actions/runs/41061416891)与[Release0.23.21/build52](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.21)均已完成；本机/Applications/ReadingBook.app已替换并通过原书验收。
 
 ## 改动与边界
 
@@ -27,9 +27,9 @@
 
 ## 正确性与真实源码绑定
 
-影子控制路由/只读观测逐字移除后，四个产品文件与实际工作目录字节一致；没有带入试验入口。真实工作目录Debug（非影子）零编译警告，实际等根入口的V5/12、旧桥接29、Unicode24case/152、历史70全过。baseline20的既有CI与546a产品树逐文件等价，供控制臂复用。最后的完整GitHub CI仍须实际运行，当前不宣称706/49已重新通过。
+影子控制路由/只读观测逐字移除后，四个产品文件与实际工作目录字节一致；没有带入试验入口。真实工作目录Debug（非影子）零编译警告，实际等根入口的V8/12、旧桥接29、Unicode24case/152、历史70全过。baseline20的既有CI与546a产品树逐文件等价，供控制臂复用。最终完整GitHub CI也通过706项Core、49具名及全部原生门槛，零编译警告。
 
-原生试验最初仅等待focus class，早于双rAF后的native滚动便清除focus，导致两次观察失败。原源/失败均保留；只把观测前移并保留焦点等待真实clip，自然[false,true]完成，不用driver滚动、不放宽可见门槛。V5再仅允许sourceRoot等workspace，CFHOME/TMP仍严格子目录；真实最终等根12已经过。
+原生试验最初仅等待focus class，早于双rAF后的native滚动便清除focus，导致两次观察失败。原源/失败均保留；只把观测前移并保留焦点等待真实clip，自然[false,true]完成，不用driver滚动、不放宽可见门槛。V5仅允许sourceRoot等workspace，CFHOME/TMP仍严格子目录。最终V8实际等根12已经过。
 
 ## 明确未采用的候选
 
@@ -38,4 +38,30 @@
 - native isHidden：只完成编译/审计，首control因锁屏在计时前中止；没有性能结果，未采用。
 - 字节/focus/样式合并组合formal60：两主App CPU下降，但可见Web峰+9.05%/约237MB及无变化WebCPU回退，未采用。
 
-证据在本机logs/markdown-bytes-20261030。旧formal36及限高raw按pack-rejected-raw.py restore恢复，组合formal60按pack-idle-rejected-raw.py restore恢复后再用原冻结分析器；模式/SHA/CRC均核验。单个可再生产编译树已精确清理，必要原数据、回滚与实际程序/源/失败保留。最终交付和清理结果将在实际完成后补充。
+证据在本机logs/markdown-bytes-20261030。旧formal36及限高raw按pack-rejected-raw.py restore恢复，组合formal60按pack-idle-rejected-raw.py restore恢复后再用原冻结分析器；模式/SHA/CRC均核验。单个可再生产编译树已精确清理，必要原数据、回滚与实际程序/源/失败保留。采用的纯CSS原始证明按pack-idle-only-adopted-raw.py restore恢复；七组重复stdout按pack-experiment-stdout.py restore恢复。生成程序/影子源码和原生helper分别按cleanup-generated-replay、cleanup-native-replay中的pack-generated-trees.py restore恢复；先恢复对应归档再复跑冻结分析器。主线Debug/共享cache保留，可再生的旧对象/dSYM路径已明确退役，未冒称仍可用。
+
+
+## CI测试驱动的单独修正
+
+产品树自e5a0095以后未改；后续提交只修测试驱动。首轮CI41055373869在第3项失败，当时未上传原生原始时间线，不能凭后来结果补写其具体原因。第二轮41059077417的完整失败包已按Actions摘要和ZIP CRC核验并保存在本批私有工作记录：第3项通过（273.84ms/5次变化），第4项失败，失败时原生样式已是24且等待窗口正常清空。失败证据没有覆盖成通过。
+
+隔离负对照给每次观察增加30ms：相对间隔驱动到269.33ms时只发了4次变化，因此原断言拒绝；改为固定时间点后同样开销下7次变化、261.30ms且12项全过。V7/V8分别把持续输入和三次同tuple刷新改为绝对目标时刻，不累加观察/布局/JS往返开销；把时间线写到断言之前，CI失败时上传短期诊断包。V8真实源码本机最终7次变化/258.76ms，三次真实刷新/124.46ms，12项全过且无运行警告。抽取并比较12个完整断言表达式，和最初V5完全相同，没有减少次数、放宽时间或弱化来源/权限/可见条件。
+
+78ff2aa的CI41060701865在得知第二项驱动也需修正后已取消，避免继续构建过时测试包。最终源码6f36c65e549bd270d4973a381b88b4366471730f的完整CI41061416891已通过，采用该成功运行的核验包发布安装；取消/失败的运行未用于交付。
+
+
+## 发布、安装和原库保护
+
+Actions产物12982397231的摘要、两层ZIP CRC/路径安全、精确源码/版本、arm64+x86_64、0755、严格签名、32离线资源和36文件均核验。canonical ZIP25,179,831B，SHA256`3e24037bf73e53e11441b072e6465215c1f3b059c26195f394d531dd434ca402`。Release429079609的ZIP/校验附件692243457/692243460及tag均实查匹配。
+
+最新20文件原库、全部偏好和旧20 App保护在private-books/markdown-bytes-20261030/install-before-0.23.21，未回写或迁移原库。替换前后原库逐字节相同；原书验收后所有非Workspace文件与全部偏好仍相同，只有正常Workspace导航更新。实际About21/52、102既有句译、伴读/对话、建议/分解Unicode与emoji原生粘贴/Undo/Redo、草稿收起/恢复/清空、历史/记忆窗口均通过。原库本来0条聊天，不冒称做过不存在的真库长历史动作。
+
+简繁检索各57、关闭回103、首条入92；搜索背景实际截图可见原文。笔记/回收站从reader关闭回103、从library关闭回library；书库菜单重选原书及正常退出/重启仍103/343%。实际Applications启动PID18755/18916，两者三类界面警告均零。最终空草稿、伴读收起，停留原书103；未产生真实AI请求、新笔记或分析。10秒安装验收采样只检查健康状态，不作为性能对照或无泄漏证明。
+
+## 清理与后续
+
+原始证明、程序、源与失败经CRC/SHA校验压缩留存；再生旧编译对象与dSYM、已完成实验展开树退役，主线Debug和共享编译cache复用。交付最后11个精确目标为重复CI载荷、旧19 canonical及旧19 App，约291.7MiB；当次工作区5,176,844→4,878,180KiB。全批从4,411,376→4,878,180KiB（4.21→4.65GiB），净增466,804KiB/约0.45GiB，主要为压缩复查证据和新回滚，不能把删除量当全批净下降。
+
+GitHub仅main和21/20两Release/tag及两正式Actions产物；旧19按源/摘要/精确ID退役，提交历史保留。第二轮失败的原生诊断包采用3天短保留，其CRC/SHA已验证并在本地保存。旧备份的非App原书/笔记/分析/偏好未删除。清理前后安装App、当前20回滚、canonical21/20、原库与偏好、关键失败/正式证据再次核对通过；本机最终记录为logs/markdown-bytes-20261030/delivery-idle-only/final-delivery.json。
+
+其他16类组件与四条组合链继续保留。下一重点是快速切页的旧准备取消/释放与密集悬浮的准备、命中、发布成本；已有hit-band索引、缓存及独立actor不重复实施。已补充[一手资料与当前代码对照](2026-10-29-component-open-source-references.md#2026-10-30补查生命周期与取消)，候选未测试、未采用。
