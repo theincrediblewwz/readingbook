@@ -1,3 +1,13 @@
+> 2026-10-31：0.23.24/build55 已实现三处优化，本机正式Core60+原生54有效进程、105项回归通过；GitHub完整CI、发布、安装尚待本轮完成，勿误认为已交付。详见[本批结果](Design/2026-10-31-temporal-composition-optimization-results.md)。
+
+# 0.23.24 当前工作
+
+只改TemporalKnowledge.swift、ReadingAtlas.swift、GraphCanvas.swift，新增六项TemporalProjectionReuseTests。完整字节与48对图谱PNG保持；只读远缩放约−14%，可编辑交互保留。原生前台中断保留并整对续测，非锁屏结论，不改锁屏设置。Root用户progress文档SHA仍9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，不得修改或提交。当前安装仍23/54；本机所有新文件在logs/.build/private-books的temporal-composition-20261031。正式原生汇总native-formal-final，早期v1/v2有失败，不能拿早期不完整目录作最终通过证明。
+
+下方23及更旧接续为历史。
+
+---
+
 > 2026-10-31：0.23.23/build54 已同步main、发布、替换安装并完成原书验收。第二批非PDF覆盖卡片、知识库和共享图谱；卡片/知识库三处采用，Release48新进程局部查询耗时约−31%/−75%，图谱两候选否决。完整CI717/60、全部既有原生门禁通过，零警告。详见[本批结果](Design/2026-10-31-object-graph-optimization-results.md)。
 
 # 0.23.23 接续要点

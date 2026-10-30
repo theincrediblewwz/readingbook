@@ -112,12 +112,23 @@ public enum ReadingAtlasRuntime {
         let experience = project.readingExperience ?? ReadingExperienceState()
         let anchors = Dictionary(experience.anchors.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var resolvedTranslations: [String: ResolvedSourceAnchor] = [:]
+        var unitResolvers: [String: (SourceAnchor) throws -> ResolvedSourceAnchor] = [:]
         for layer in experience.layers where layer.kind == "translation" {
             if Task.isCancelled { return emptySnapshot() }
             for id in Set(layer.sourceAnchorIDs) {
                 if Task.isCancelled { return emptySnapshot() }
                 if let resolved = resolvedTranslations[id] { translationRanges[resolved.unitID, default: []].append(resolved.range); continue }
-                guard let anchor = anchors[id], let resolved = try? ReadingExperienceRuntime.resolve(anchor, in: project), byID[anchor.unitID] != nil else { continue }
+                guard let anchor = anchors[id], byID[anchor.unitID] != nil else { continue }
+                let resolved: ResolvedSourceAnchor
+                do {
+                    let resolver: (SourceAnchor) throws -> ResolvedSourceAnchor
+                    if let existing = unitResolvers[anchor.unitID] { resolver = existing }
+                    else {
+                        resolver = try ReadingExperienceRuntime.anchorResolver(sourceHash: project.sourceHash, unitID: anchor.unitID, in: project)
+                        unitResolvers[anchor.unitID] = resolver
+                    }
+                    resolved = try resolver(anchor)
+                } catch { continue }
                 resolvedTranslations[id] = resolved
                 translationRanges[resolved.unitID, default: []].append(resolved.range)
             }
@@ -130,6 +141,8 @@ public enum ReadingAtlasRuntime {
             chapterUnits[title, default: []].append(unit)
         }
         let receiptUnitIDs = Set((project.paragraphReceipts ?? []).map(\.unitID))
+        let receiptsByUnit = (project.paragraphReceipts?.count ?? 0) > 16
+            ? Dictionary(grouping: project.paragraphReceipts ?? [], by: \.unitID) : nil
         var chapters: [ReadingAtlasChapter] = []
         for title in chapterTitles {
             if Task.isCancelled { return emptySnapshot() }
@@ -138,7 +151,14 @@ public enum ReadingAtlasRuntime {
             for unit in group {
                 if Task.isCancelled { return emptySnapshot() }
                 if rangesCoverSource(translationRanges[unit.id] ?? [], text: unit.text) { translated += 1 }
-                if receiptUnitIDs.contains(unit.id), (try? ReadingLedger.requireComplete(unitIDs: [unit.id], in: project)) != nil { receipted += 1 }
+                if receiptUnitIDs.contains(unit.id) {
+                    var receiptProject = project
+                    if let receiptsByUnit {
+                        receiptProject.units = [unit]
+                        receiptProject.paragraphReceipts = receiptsByUnit[unit.id] ?? []
+                    }
+                    if (try? ReadingLedger.requireComplete(unitIDs: [unit.id], in: receiptProject)) != nil { receipted += 1 }
+                }
                 if project.coverage[unit.id]?.status == .completed { completed += 1 }
                 if !(translationRanges[unit.id] ?? []).isEmpty { touched += 1 }
                 if !unit.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { translatable += 1 }

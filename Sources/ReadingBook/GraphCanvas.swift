@@ -784,9 +784,11 @@ struct GraphSurface: View {
             Text(edge.line.label).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 .padding(.horizontal, 7).padding(.vertical, 4).background(Palette.canvas.opacity(0.96), in: Capsule())
                 .contentShape(Capsule()).overlay {
+                    if renameLine != nil || removeLine != nil {
                     GraphPointerBridge(enabled: acceptsCanvasInput && !savingPosition && !savingConnection && !savingLine,
                                        movable: false, resetID: gestureEpoch, canvasID: canvasInputID,
                                        click: { twice in if twice { beginRename(edge.line) } }, drag: { _, _ in }, cancel: {})
+                    }
                 }
                 .help(renameLine == nil ? edge.line.label : "双击修改关系名称；右键将连线移入回收站")
                 .contextMenu {

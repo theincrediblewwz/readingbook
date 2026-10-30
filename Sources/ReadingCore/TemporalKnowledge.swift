@@ -233,8 +233,13 @@ public enum TemporalKnowledgeRuntime {
 
     public static func events(in project: BookProject, entityID: String? = nil, placeID: String? = nil, at point: TemporalQueryPoint? = nil, boundary: KnowledgeReadBoundary) throws -> [TemporalEventSnapshot] {
         try validate(point: point)
-        let anchors = anchorIndex(in: project)
-        let referenceIDs = visibleReferenceIDs(in: project, boundary: boundary)
+        return try eventSnapshots(in: project, entityID: entityID, placeID: placeID, at: point, boundary: boundary,
+                                  anchors: anchorIndex(in: project), referenceIDs: visibleReferenceIDs(in: project, boundary: boundary))
+    }
+
+    private static func eventSnapshots(in project: BookProject, entityID: String?, placeID: String? = nil,
+                                       at point: TemporalQueryPoint?, boundary: KnowledgeReadBoundary,
+                                       anchors: [String: SourceAnchor], referenceIDs: Set<String>?) throws -> [TemporalEventSnapshot] {
         if let entityID, let referenceIDs, !referenceIDs.contains(entityID) { return [] }
         if let placeID, let referenceIDs, !referenceIDs.contains(placeID) { return [] }
         let allMetadata = Dictionary((project.temporalKnowledge?.eventMetadata ?? []).map { ($0.eventID, $0) }, uniquingKeysWith: { first, _ in first })
@@ -280,10 +285,11 @@ public enum TemporalKnowledgeRuntime {
         try relationSnapshots(objectID: nil, in: project, at: point, boundary: boundary)
     }
 
-    private static func relationSnapshots(objectID: String?, in project: BookProject, at point: TemporalQueryPoint?, boundary: KnowledgeReadBoundary) throws -> [TemporalRelationSnapshot] {
+    private static func relationSnapshots(objectID: String?, in project: BookProject, at point: TemporalQueryPoint?, boundary: KnowledgeReadBoundary,
+                                          preparedAnchors: [String: SourceAnchor]? = nil, preparedVisibleIDs: Set<String>? = nil) throws -> [TemporalRelationSnapshot] {
         try validate(point: point)
-        let anchors = anchorIndex(in: project)
-        let visibleIDs = visibleObjectIDs(in: project, boundary: boundary)
+        let anchors = preparedAnchors ?? anchorIndex(in: project)
+        let visibleIDs = preparedVisibleIDs ?? visibleObjectIDs(in: project, boundary: boundary)
         let metadata = Dictionary(grouping: project.temporalKnowledge?.relationMetadata ?? [], by: \.relationID)
         return project.relations.filter { relation in (objectID.map { relation.fromID == $0 || relation.toID == $0 } ?? true) && visibleIDs.contains(relation.fromID) && visibleIDs.contains(relation.toID) && admits(relation.evidence, boundary: boundary) }.flatMap { relation -> [TemporalRelationSnapshot] in
             let all = metadata[relation.id] ?? []
@@ -318,7 +324,10 @@ public enum TemporalKnowledgeRuntime {
         let uncertainParticipants = participants.filter { $0.extent.map { match($0, at: point) } != .outside && !exactParticipantIDs.contains($0.id) }
         return EntityTimeSnapshot(object: entity, presences: exact, uncertainPresences: uncertain,
             footprints: (point == nil ? presences : exact).filter { $0.assertion == .explicit && $0.placeID != nil }, participations: exactParticipants, uncertainParticipations: uncertainParticipants,
-            events: try events(in: project, entityID: entityID, at: point, boundary: boundary), relations: try relations(objectID: entityID, in: project, at: point, boundary: boundary))
+            events: try eventSnapshots(in: project, entityID: entityID, at: point, boundary: boundary, anchors: anchors,
+                                       referenceIDs: visibleReferenceIDs(in: project, boundary: boundary, preparedVisibleIDs: visibleIDs)),
+            relations: try relationSnapshots(objectID: entityID, in: project, at: point, boundary: boundary,
+                                             preparedAnchors: anchors, preparedVisibleIDs: visibleIDs))
     }
 
     public static func match(_ extent: TemporalExtent, at point: TemporalQueryPoint?) -> TemporalMatch {
@@ -400,10 +409,10 @@ public enum TemporalKnowledgeRuntime {
             + project.events.filter { admits($0.evidence, boundary: boundary) }.map(\.id)
             + project.activeDocuments.filter { admits($0.evidence, boundary: boundary) }.map(\.id))
     }
-    private static func visibleReferenceIDs(in project: BookProject, boundary: KnowledgeReadBoundary) -> Set<String>? {
+    private static func visibleReferenceIDs(in project: BookProject, boundary: KnowledgeReadBoundary, preparedVisibleIDs: Set<String>? = nil) -> Set<String>? {
         guard let allowed = boundary.allowedUnitIDs else { return nil }
         let insights = project.insights.filter { !$0.unitIDs.isEmpty && Set($0.unitIDs).isSubset(of: allowed) }.map(\.id)
-        return visibleObjectIDs(in: project, boundary: boundary).union(allowed).union(insights)
+        return (preparedVisibleIDs ?? visibleObjectIDs(in: project, boundary: boundary)).union(allowed).union(insights)
     }
     private static func visibleMetadata(_ metadata: EventTemporalMetadata?, anchors: [String: SourceAnchor], boundary: KnowledgeReadBoundary, referenceIDs: Set<String>?) -> EventTemporalMetadata? {
         guard let metadata, admits(metadata.sourceAnchorIDs, anchors: anchors, boundary: boundary),
@@ -716,7 +725,14 @@ extension TemporalKnowledgeRuntime {
     public static func events(in project: BookProject, entityID: String? = nil, placeID: String? = nil,
                               within window: TemporalQueryWindow, boundary: KnowledgeReadBoundary) throws -> [TemporalEventSnapshot] {
         try validate(window: window)
-        let index = try windowReadIndex(in: project, boundary: boundary)
+        return try eventSnapshots(in: project, entityID: entityID, placeID: placeID, within: window, boundary: boundary,
+                                  index: windowReadIndex(in: project, boundary: boundary))
+    }
+
+    private static func eventSnapshots(in project: BookProject, entityID: String?, placeID: String? = nil,
+                                       within window: TemporalQueryWindow, boundary: KnowledgeReadBoundary,
+                                       index: WindowReadIndex) throws -> [TemporalEventSnapshot] {
+        try Task.checkCancellation()
         if let entityID, let ids = index.referenceIDs, !ids.contains(entityID) { return [] }
         if let placeID, let ids = index.referenceIDs, !ids.contains(placeID) { return [] }
         var metadata: [String: EventTemporalMetadata] = [:], participationByEvent: [String: [Participation]] = [:], presenceByEvent: [String: [EntityPresence]] = [:]
@@ -778,9 +794,11 @@ extension TemporalKnowledgeRuntime {
     public static func relations(objectID: String, in project: BookProject, within window: TemporalQueryWindow, boundary: KnowledgeReadBoundary) throws -> [TemporalRelationSnapshot] {
         try relationSnapshots(objectID: objectID, in: project, within: window, boundary: boundary)
     }
-    private static func relationSnapshots(objectID: String?, in project: BookProject, within window: TemporalQueryWindow, boundary: KnowledgeReadBoundary) throws -> [TemporalRelationSnapshot] {
+    private static func relationSnapshots(objectID: String?, in project: BookProject, within window: TemporalQueryWindow, boundary: KnowledgeReadBoundary,
+                                          preparedIndex: WindowReadIndex? = nil) throws -> [TemporalRelationSnapshot] {
         try validate(window: window)
-        let index = try windowReadIndex(in: project, boundary: boundary)
+        try Task.checkCancellation()
+        let index = try preparedIndex ?? windowReadIndex(in: project, boundary: boundary)
         var metadata: [String: [RelationTemporalMetadata]] = [:], result: [TemporalRelationSnapshot] = []
         for value in project.temporalKnowledge?.relationMetadata ?? [] { try Task.checkCancellation(); metadata[value.relationID, default: []].append(value) }
         for relation in project.relations {
@@ -832,7 +850,7 @@ extension TemporalKnowledgeRuntime {
         }
         return EntityTimeSnapshot(object: entity, presences: exact, uncertainPresences: uncertain,
             footprints: exact.filter { $0.placeID != nil }, participations: participants, uncertainParticipations: uncertainParticipants,
-            events: try events(in: project, entityID: entityID, within: window, boundary: boundary),
-            relations: try relations(objectID: entityID, in: project, within: window, boundary: boundary))
+            events: try eventSnapshots(in: project, entityID: entityID, within: window, boundary: boundary, index: index),
+            relations: try relationSnapshots(objectID: entityID, in: project, within: window, boundary: boundary, preparedIndex: index))
     }
 }

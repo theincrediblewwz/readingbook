@@ -1,6 +1,6 @@
 # ReadingBook 0.23.21 · 后台样式更新优化
 
-[下载0.23.21/build52](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.21) · [本批结果与边界](Design/2026-10-30-bounded-markdown-results.md) · [组件优化进度](Design/2026-10-29-performance-progress.md)。已同步main，并替换本机安装版；产品源码`6f36c65e549bd270d4973a381b88b4366471730f`。
+0.23.24/build55 已实现并完成本机对照，正在进行最终GitHub测试与发布准备。[本批优化与边界](Design/2026-10-31-temporal-composition-optimization-results.md) · [组件计划](Design/2026-10-29-component-performance-plan.md)。
 
 隐藏Markdown连续切换字号时合并后台样式工作。在60个新进程的固定对照中，20/128KiB两场景完整App与所属Web进程合计CPU配对中位下降约69.77%/65.92%；主题和可见内容的小波动不作为收益。重显延迟、单进程内存、完整来源/DOM/选区/权限守护通过。其他已有功能与此前优化保留。
 
