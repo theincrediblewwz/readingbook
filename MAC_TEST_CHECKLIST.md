@@ -1,8 +1,16 @@
-# 2026-10-30 · 下一批两条优化已通过对照，18完整交付进行中
+# 2026-10-30 · 0.23.18已发布、安装与原书验收完成；继续下一类组件
 
-先读[两条准备链结果](Design/2026-10-30-fresh-proof-optimization-results.md)。canonicalEvidence同次复用和fresh回答证明分别与17/c80控制比较：3臂74实际测试函数零失败/警告，18smoke及48正式进程完整输入/输出身份一致，独立分析重算通过。1000人物完整列表/地图约−19.5%/−18.1%；1484单元兼容历史完整freeze约−48.8%。100人物约+1.3%及小幅footprint增加保留，未挑样本，不外推整App/FPS/模型速度。产品已准备0.23.18/build49，完整701Core和全部旧原生门禁、GitHub核包、安装与原书验收仍待最终main CI；当前安装仍17，不重复旧17交付。
+先读[本批结果与边界](Design/2026-10-30-fresh-proof-optimization-results.md)及[16组件进度](Design/2026-10-29-performance-progress.md)。两条优化已交付：同次canonicalEvidence复用、fresh回答上下文/来源证明复用。3臂各74实际函数通过；两轮各48新进程/各18smoke独立配对、完整输入输出与授权/UTF8/旧snapshot/OCR/选段守护通过，原始独立重算一致。第二轮实际-O+whole-module、无enable-testing；生产1000人物完整列表/地图约−17.1%/−18.4%，1484单元兼容历史完整freeze约−47.0%。小场景波动与回退保留，不相加或外推整App/FPS/模型速度。
 
-本机证据`logs/perf-proof-20261030/`，三个Core臂均从9aee233冻结控制，再单独覆盖A或B，无真库/真实模型。驱动修了旧history-only oracle并核完整实际返回值；public旧snapshot/OCR/UTF8/选段/授权守护保留。新产物继续工作区，复用共享module cache；结束清理可再生重复产物，保留原书/笔记/分析、关键证据与17必要回滚。下一类长笔记/搜索只读审计并行，不撤其余16组件，不恢复数学核查。
+源码`3d94bd7ef02fd278fd980e26be5662e8f8f35fc7`，[CI40994366391](https://github.com/theincrediblewwz/readingbook/actions/runs/40994366391) **701Core零失败/零编译警告、44具名和所有旧原生/工具/双架构门禁通过**。[Release18/build49](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.18)与本机About及36文件相符。canonical25,164,840B/SHA `78f4500aee955bca757104f8ecfdb46eee912cbfd343a4bdf11a123dec356060`，两层ZIP/源/双架构/严格签名/32资源/远端摘要均过。
+
+实际103页同书重选和正常重启、102已有句译、伴读/对话、建议/Unicode粘贴/Undo/Redo/草稿/焦点/历史/记忆均过；简繁各57、关闭搜索回103、首条到92reader、浮层背景可见。笔记/回收站从reader关闭回103、从library关闭回library；书库重选书名回阅读通过。自有输入清空，现原书103页/343%、伴读收起，未真实AI生成或真库新建/保存。两个UI PID87514/87965三类警告零；末PID10秒静止采样只作验收。一次CUA旧sheet句柄已重新绑定，不当产品bug；没有锁屏/安装待办，无需重复发布安装18。
+
+最新20文件库、全部偏好和原17 App保护在`private-books/perf-proof-20261030/install-before-0.23.18/`。安装后20文件集合/原书/笔记/分析字节保持，仅Workspace正常更新，3服务键及所有其余偏好完全相同。未用旧库覆盖当前库。旧16 App/ZIP及远端16Release/tag/Actions载荷退役，17/18包与17 App回滚保留；GitHub仅main，源码提交历史保留。
+
+证据`logs/perf-proof-20261030/`，生产确认在`production-confirmation/`。两轮实际4程序各压入唯一重放ZIP，按对应restore-perf-binaries.py恢复后再跑原判定器；Core对象/结束helper/重复CI包及解包App退役，不盲用历史readyappPath/build路径。三次清理约961MiB；全批5.96GiB→约6.10GiB，净增约144MiB为保留证据/共享cache/最新保护等，不能把清理量当净下降。新产物全部工作区，活跃Debug/共享module cache、原数据及必要回滚保留。
+
+**下一步两条线已只读审计，尚未改产品或测收益：** `next-note-ideas.md`只失效变化的折叠范围，保留已有remap/debounce/utility解析/字节迟到守护；`next-search-ideas.md`同次跨AI扩展词去重相同literal/canonical needles，保留首次归属、扫描顺序及精确映射/范围。先各做真正原生/完整检索对照，确认收益再改，不把静态调用减少当时间收益。长历史WebKit、其余16组件和跨组件/长时任务继续，不恢复数学核查。
 
 ---
 

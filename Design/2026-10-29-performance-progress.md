@@ -1,6 +1,6 @@
 # Mac性能进度与待测范围
 
-当前已安装产品**0.23.17/build48**，搜索/笔记/回收站浮层热修已发布并原书验收。[新一批两条优化](2026-10-30-fresh-proof-optimization-results.md)已分别通过48进程配对收益和完整结果守护，进入0.23.18/build49完整测试及交付，尚不声称已安装。此前[三项优化](2026-10-30-batch-optimization-results.md)与固定PDF基线保留。性能工作按组件和具体场景推进，不给整个软件标一个没有依据的完成百分比。
+当前产品**0.23.18/build49**已发布并完成本机原书验收。[本批两条优化](2026-10-30-fresh-proof-optimization-results.md)分别通过两轮各48进程（含无testability生产Release配置）收益和完整输出守护，完整701项Core及所有旧原生门禁通过。17的搜索/笔记/回收站热修、此前三项优化及固定PDF基线继续保留。性能按组件与实际场景推进，不给整软件标无依据的完成百分比。
 
 ## 有正式对照收益且已进入当前产品
 
@@ -11,8 +11,10 @@
 | 0.23.16对话草稿观察下移 | 固定4秒、100次真实草稿变更；20/512KiB历史的App CPU配对中位下降22.0%/71.9%，不再重复prepare旧回答 | 各3对原生进程；footprint略增，模型/网络及WebContent/GPU不在指标内；语义更新不是键盘首像素 |
 | 0.23.16空兼容历史早返回 | 1484单元、整书空/不兼容历史局部约省1.1ms；完整freeze仅约1ms的小幅收益 | 没有删历史或范围验证；零计时值表示分辨率，不表示免费 |
 | 0.23.16组合实体时间快照单次复用 | 1000人物、多来源80行，完整prepare+project列表/地图下降23.1%/41.6% | 单source列表约2.2%回退；压力footprint约增0.78MiB；200项为条目上限，不是字节上限 |
+| 0.23.18原文依据同次复用 | 1000人物完整prepare+project列表/地图墙钟配对约−17.1%/−18.4% | 小场景两轮方向不同，不宣称稳定收益；列表footprint约增0.09MiB，saved版本仍独立验证 |
+| 0.23.18 fresh回答证明复用 | 1484单元兼容整书历史完整freeze暖态墙钟约−47.0%、CPU约−47.1% | 空整书约+2.8%、空页约+8微秒仍在固定回退阈值；公共旧snapshot继续重验，不外推模型或整App |
 
-实现和原始结果来源见[同书PDF](2026-10-29-samebook-pdf-results.md)、[续读准备](2026-10-29-boundary-continuation-results.md)及[三项新优化](2026-10-30-batch-optimization-results.md)。这些实现均在main且当前保留；没有用旧未发布候选的较好数字替换最终交付数字。
+实现和原始结果来源见[同书PDF](2026-10-29-samebook-pdf-results.md)、[续读准备](2026-10-29-boundary-continuation-results.md)、[前三项优化](2026-10-30-batch-optimization-results.md)及[本批两项](2026-10-30-fresh-proof-optimization-results.md)。这些实现均在main且当前保留；没有用旧未发布候选的较好数字替换最终交付数字。
 
 上一轮[Markdown桥接参数缩减](2026-10-29-markdown-bridge-results.md)没有通过前台和三对同向收益门槛，因此没有进入产品。测试另外复现了取消高亮残留、精确来源字节不同步和新macOS旧PDF坐标页身份问题，三项功能修复已随15交付。它们是正确性收益，不冒称性能收益。
 
@@ -45,8 +47,8 @@
 
 前三处优化、PDF12样本及普通动作有效n2已收尾，完整CI/发布/安装及数据保护通过。新一批两个独立候选已完成对照：
 
-1. `ReadingSpoilerProjection.entity/event`复用canonicalEvidence：1000人物完整prepare+project列表/地图约−19.5%/−18.1%，100人物约+1.3%小回退；实际选中旧版本仍独立验证，准备随18交付。
-2. `ReadingPreparedAnswer.freeze`内部fresh证明和chatContext共享：1484单元兼容历史完整freeze约−48.8%；公共旧snapshot入口仍重新验证，空/不兼容历史及授权回退检查通过，准备随18交付。
+1. `ReadingSpoilerProjection.entity/event`复用canonicalEvidence：1000人物完整prepare+project列表/地图生产复核约−17.1%/−18.4%，100人物初轮约+1.3%小回退、两轮方向不一致不宣称稳定收益；实际选中旧版本仍独立验证，已随18交付。
+2. `ReadingPreparedAnswer.freeze`内部fresh证明和chatContext共享：1484单元兼容历史完整freeze生产复核约−47.0%；公共旧snapshot入口仍重新验证，空/不兼容历史及授权回退检查通过，已随18交付。
 3. 核查长笔记的结构性编辑、6000单元搜索和长历史WebKit工作集；已有remap、提前停止、图缓存保持，避免重复造缓存。
 
 原六批范围继续保留：字号/主题分变量已结束且两候选不采用；固定PDF条件已建立基线；阅读路径分段、长对话/笔记、大对象组件和跨组件/长时任务继续按成本排序。三项已采用不代表整类完成，也不把Core、输入和帧率的数字相加成全软件提速。

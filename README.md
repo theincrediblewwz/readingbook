@@ -1,14 +1,16 @@
-# ReadingBook · 两条准备链优化正在交付（2026-10-30）
+# ReadingBook 0.23.18 · 准备链性能优化（2026-10-30）
 
-当前正式版为[0.23.17/build48](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.17)，搜索、笔记与回收站浮层、繁简搜索及AI关键词扩展已经发布和本机验收。[新一批两条准备链优化](Design/2026-10-30-fresh-proof-optimization-results.md)已完成48进程对照，0.23.18/build49正在完整测试与交付，尚不表示已安装。
+[下载0.23.18/build49](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.18) · [本批实测与边界](Design/2026-10-30-fresh-proof-optimization-results.md)。源码已同步main，本机正式安装版也已更新，包内源码为`3d94bd7ef02fd278fd980e26be5662e8f8f35fc7`。搜索/笔记/回收站浮层及此前功能继续保留。
 
-大对象集的完整准备和投影约省19%，同范围有效历史的完整回答准备约省49%；小场景和内存代价也已记录。原书、笔记、分析与全部来源/范围验证保留。这是固定Core场景的收益，不是全软件或模型速度同比提高。
+大对象集的完整准备和投影约省17–18%，同范围有效历史的完整回答准备约省47%；小场景和内存代价也已记录。原书、笔记、分析与全部来源/范围验证保留。这是固定Core场景的收益，不是全软件或模型速度同比提高。
+
+[完整CI40994366391](https://github.com/theincrediblewwz/readingbook/actions/runs/40994366391) **701项Core零失败、零编译警告**，全部原生/工具回归及双架构打包通过。实际About、原书103页/343%与重启、已有译文、输入/Undo及搜索/笔记/回收站均验收。20文件原书库字节保护、全部偏好相同，仅正常Workspace更新；临时产物已清理，GitHub保留18与17回滚，提交历史保留。性能优化继续。
 
 ---
 
 # ReadingBook 0.23.16 · 多组件优化（历史交付）
 
-[下载0.23.16/build47](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.16) · [本批结果与边界](Design/2026-10-30-batch-optimization-results.md) · [组件性能进度](Design/2026-10-29-performance-progress.md)。最新功能已合入main，本机正式安装版已更新；包内产品源码为`b57c28f82de090fac804c422cfb00c5879376606`。
+0.23.16/build47（历史包已退役） · [该批结果与边界](Design/2026-10-30-batch-optimization-results.md) · [组件性能进度](Design/2026-10-29-performance-progress.md)。该轮功能已合入main，当时安装版已更新；包内产品源码为`b57c28f82de090fac804c422cfb00c5879376606`。
 
 本次缩小对话草稿观察范围，输入新问题时减少重复准备旧回答；空兼容历史跳过无用索引；同一次时间/地图/组合查询复用已验证快照。原书、笔记、分析及现有功能保留。独立对照确认局部收益和小幅代价，完整668项Core及原生回归、双架构核包、实际原书与输入/Undo验收均通过。固定条件PDF基线已补齐，性能优化继续按实际瓶颈推进。
 
