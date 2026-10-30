@@ -1,10 +1,10 @@
-# ReadingBook 0.23.18 · 准备链性能优化（2026-10-30）
+# ReadingBook 0.23.19 · 笔记与搜索优化（2026-10-30）
 
-[下载0.23.18/build49](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.18) · [本批实测与边界](Design/2026-10-30-fresh-proof-optimization-results.md)。源码已同步main，本机正式安装版也已更新，包内源码为`3d94bd7ef02fd278fd980e26be5662e8f8f35fc7`。搜索/笔记/回收站浮层及此前功能继续保留。
+[下载0.23.19/build50](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.19) · [本批实测与边界](Design/2026-10-30-note-search-optimization-results.md)。源码已同步main，本机正式安装版已替换；包内源码为`3f83696b1baf7e0d7daf889a4b17d9430f34d071`。此前功能和准备链优化继续保留。
 
-大对象集的完整准备和投影约省17–18%，同范围有效历史的完整回答准备约省47%；小场景和内存代价也已记录。原书、笔记、分析与全部来源/范围验证保留。这是固定Core场景的收益，不是全软件或模型速度同比提高。
+减少长笔记单个来源链接展开/收起的重复局部布局，并跳过扩展搜索词中的重复扫描项。72个新进程配对中，6000单元重复词的完整搜索约省30–32%；512KiB/128链接笔记的进入/离开局部布局约省55–67%。更大压力场景及小量回退均有记录；不外推为整App、FPS或模型速度。
 
-[完整CI40994366391](https://github.com/theincrediblewwz/readingbook/actions/runs/40994366391) **701项Core零失败、零编译警告**，全部原生/工具回归及双架构打包通过。实际About、原书103页/343%与重启、已有译文、输入/Undo及搜索/笔记/回收站均验收。20文件原书库字节保护、全部偏好相同，仅正常Workspace更新；临时产物已清理，GitHub保留18与17回滚，提交历史保留。性能优化继续。
+[完整CI41005093972](https://github.com/theincrediblewwz/readingbook/actions/runs/41005093972) **706项Core零失败、零编译警告**，49具名及全部原生/工具/双架构门槛通过。实际About、原书103页/343%和重启、已有译文、输入/Undo及搜索/笔记/回收站均验收。原书、笔记、分析字节与全部偏好保持，仅正常Workspace更新。临时/重复产物清理约618MiB；保留最新保护及证据后，工作区本轮净增约31MiB。GitHub仅main和19/18两版，提交历史保留；其余组件优化继续。
 
 ---
 

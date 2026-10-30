@@ -1,4 +1,20 @@
-# 2026-10-30 · 0.23.18已发布、安装与原书验收完成；继续下一类组件
+# 2026-10-30 · 0.23.19两项优化已发布、安装与原书验收完成
+
+先读[本批完整结果与边界](Design/2026-10-30-note-search-optimization-results.md)及[16组件进度](Design/2026-10-29-performance-progress.md)。长笔记只失效变化的折叠目标；同次扩展检索按精确字节去重literal/canonical扫描项，保留首次归属、顺序和原文映射。Release无testability、72新进程AB/BA/AB、完整源/响应/glyph/几何/selection/IME状态、双计时及独立复算通过，两候选采用。6000单元重复词完整搜索约−30～32%；512KiB/128链接局部进入/离开约−55%/−67%，2MiB/512约−92%/−97%；不外推整App/模型/FPS。英文约+0.63ms/+0.20%、小量首次和内存回退全部保留并过冻结门槛。
+
+产品源`3f83696b1baf7e0d7daf889a4b17d9430f34d071`，[CI41005093972](https://github.com/theincrediblewwz/readingbook/actions/runs/41005093972) **706 Core零失败/零编译警告、49具名及全部原生/工具/双架构门槛通过**。[Release19/build50](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.19)与本机About、36文件一致。canonical25,172,210B/SHA`ffaf655afb5927db12551e0c3a9c11449a45b16ea8d4181ed0e61cedfc11c64c`；两层ZIP、远端digest、源/版本、双架构、严格签名和32资源均核验。无需重复发布安装19。
+
+实际原书103页同书重选及正常重启、102既有句译、伴读/对话、建议/Unicode粘贴/Undo/Redo/草稿焦点、历史/记忆均过。简繁各57、关闭搜索回103、首条入92reader、浮层外原书可见；笔记/回收站从reader关闭回103、从library关闭回library，书库重选书名回103。现103页/343%、伴读收起、空草稿；未真实AI或真库新建/保存。两个实际19 UI PID93000/93477三类统一日志警告零，10秒idle仅验收。一次CUA旧sheet句柄及一次动作前JS绑定错误均纠正，不误算产品缺陷。
+
+最新20文件原库、全部偏好及旧18 App保护在`private-books/note-search-20261030/install-before-0.23.19/`。安装和使用后20文件无增删，原书/笔记/分析字节保持，仅正常Workspace更新；3服务键及所有其余偏好相同。未用旧库覆盖现库。GitHub仅main，保留19/18 Release/tag/Actions；17按精确源和资产核对后退役，提交历史保留。一次本地缺旧tag的预检在任何删除前停止，修正存在性检查后完成，失败记录保留。
+
+证据`logs/note-search-20261030/`。四实际正式helper已压入唯一`formal-helper-replay.zip`，逐文件SHA/CRC核验后退役本批Core对象、旧pilot和scratch；先用`restore-probe-binaries.py`恢复才可再用原二进制检查raw/root分析。独立源/对象审计及清单已保留；恢复不重建退役Core对象，不声称仍可原路径重审编译树。两阶段清理扣归档约618MiB；工作区6,397,872→约6,429,852KiB（6.13GiB），全批净增约31MiB为新包、最新保护与证据等，不能把删除量当净下降。所有数据保护、18回滚、活跃Debug及共享cache保留，未把新产物散落工作区外。
+
+**下一批只读思考已备，尚未改或测新收益：** `next-webkit-ideas.md`提出保留挂载状态但区分隐藏Markdown渲染活动，以及很早历史定位的有界窗口。先测真实入口成本，保留即时来源/授权失效、完整历史可达、草稿/Undo和重显延迟；现有懒列表/分页/DOM复用/height合并/拆除handlers不重复造。16组件、结构性编辑/其他搜索规模及跨组件/长时任务继续，不恢复数学核查。
+
+---
+
+# 2026-10-30 · 0.23.18历史交付；下方保留当时接续记录
 
 先读[本批结果与边界](Design/2026-10-30-fresh-proof-optimization-results.md)及[16组件进度](Design/2026-10-29-performance-progress.md)。两条优化已交付：同次canonicalEvidence复用、fresh回答上下文/来源证明复用。3臂各74实际函数通过；两轮各48新进程/各18smoke独立配对、完整输入输出与授权/UTF8/旧snapshot/OCR/选段守护通过，原始独立重算一致。第二轮实际-O+whole-module、无enable-testing；生产1000人物完整列表/地图约−17.1%/−18.4%，1484单元兼容历史完整freeze约−47.0%。小场景波动与回退保留，不相加或外推整App/FPS/模型速度。
 
