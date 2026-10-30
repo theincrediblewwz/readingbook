@@ -1,3 +1,21 @@
+> 2026-10-31：0.23.25/build56 已同步main、发布、替换安装，完整CI730/73与所有原生门槛通过，零警告；安装后的20原库文件/全部偏好及36程序文件均核对。**最后原书原生GUI验收待用户手动解锁，不算已通过。** 详见[本批结果](Design/2026-10-31-operations-workspace-optimization-results.md)。
+
+# 0.23.25 接续要点
+
+产品源d31197af5a33784a0384c6a31a9d18011877cfd4，CI41128366112、artifact13013940383、Release429511188；已安装25/56，不要重复发布/安装/跑CI。只有两个Core产品文件变动及七项OperationsReuseTests；36个实际Release新进程通过，固定请求准备CPU约−15.67%，64本存储统计−41.78%。首个Sendable容器整链+28.47%及地图/导图两个候选均否决；地图和可编辑导图源SHA保持24基线。方案、IO全校验及已有工作区合并保留。下一轮仍优先地图渲染/时间轴拆分和可编辑远缩放命中/标签层，不恢复退役功能。
+
+当前唯一交付待办：用户手动解锁后，用CUA绑定Applications已安装App，实际About25/56、原书104/1484与343%、102已有译文、空草稿、书库顶部书名重选回104、存储设置/组件目录、正常退出重启104，收集两个实际PID三类警告，再运行本批post-install-check。**CUA曾提示Mac锁屏，虽内核IOConsoleLocked当时No，也未绕过工具或虚构界面通过。** 启动前写新的ui-start文件；旧release脚本21:35时间不是已确认GUI启动。字段与路径见logs/operations-workspace-20261031/delivery和current-source-operations-validation.json。不要用只核文件的post-install-file-check当原生界面验收。
+
+最新书库/偏好/24回滚保护在private-books/operations-workspace-20261031/install-before-0.23.25。真实原书20文件和全部偏好安装后重核完全一致，未用旧库覆盖；24回滚App清单一致。GitHub仅main与25/24两Release/tag/Actions产物，23精准退役；所有非App私人保护与提交历史保留。
+
+canonical dist/ReadingBook-0.23.25-Mac.zip25197169B，SHA96a3f92bbbb9767b57c83535000ad8f0043f32c6d1756a5519b90b3b7ed97e33。25解包readyappPath/重复ZIP已退役，先按dist/0.23.25-ci-41128366112/RETIRED_PAYLOADS.md从canonical恢复；安装App仍完整。测试目录.build/operations-workspace-20261031及native-ui-harness已退役；程序/源码/输入/完整capture已入唯一replay-evidence.zip104038515B，SHAd37e1f7d3c07ee8f54dd3da5e2b3e058e4a4d52b1d364a750cefff2342424cd4。先用restore-replay.py按prefix恢复，别盲跑历史路径。
+
+清理两阶段约1.09GiB，项目约5.16GiB；整批相对开工净增约290MiB为新保留证据和共享缓存等，未冒称净减少。旧历史ZIP经检查保持哈希；活跃mac-debug/共享缓存保留。用户未提交progress文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4原样保持，不得修改或提交。
+
+下方24及更旧接续为历史。
+
+---
+
 > 2026-10-31：0.23.24/build55 已同步main、发布、替换安装并完成原书验收。第三批时空/组合/总览/只读图谱三处采用，Core60+原生54有效Release进程，105本机回归，完整CI723/66与全部原生门槛、零警告。详见[本批结果](Design/2026-10-31-temporal-composition-optimization-results.md)。
 
 # 0.23.24 接续要点
