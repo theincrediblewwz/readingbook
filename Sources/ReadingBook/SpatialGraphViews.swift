@@ -11,15 +11,16 @@ struct EntityCardsView: View {
         (store.book?.entities ?? []).filter { (typeIDs.isEmpty || typeIDs.contains($0.typeID)) && (filter.isEmpty || $0.typeID == filter) && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.summary.localizedCaseInsensitiveContains(query)) }
     }
     var body: some View {
+        let visibleEntities = entities
         VStack(alignment: .leading, spacing: 0) {
-            if entities.isEmpty {
+            if visibleEntities.isEmpty {
                 if !query.isEmpty || !filter.isEmpty { EmptyState(title: "没有匹配的卡片", detail: "调整搜索词或类型筛选，已保存的卡片仍会保留。", icon: "magnifyingglass") }
                 else { EmptyState(title: "卡片会随着阅读长出来", detail: "AI 会依据内容创建人物、概念、定理或自定义类型，并保留每张卡片的原文依据。", icon: "rectangle.stack") }
             }
             else {
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 18)], alignment: .leading, spacing: 18) {
-                        ForEach(entities) { entity in
+                        ForEach(visibleEntities) { entity in
                             Button { store.focus(entity.id); inspectedEntity = entity } label: {
                                 VStack(alignment: .leading, spacing: 10) {
                                     HStack { Image(systemName: store.book?.types.first { $0.id == entity.typeID }?.icon ?? "square.stack").font(.system(size: 24)).foregroundStyle(Palette.accent); Spacer(); Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.system(size: 13)).foregroundStyle(.secondary) }
@@ -33,15 +34,15 @@ struct EntityCardsView: View {
                 }
             }
         }.padding(.top, 80).padding(.bottom, 92).background(Palette.canvas)
-            .overlay(alignment: .bottom) { cardsDock.padding(.horizontal, 24).padding(.bottom, 18) }
+            .overlay(alignment: .bottom) { cardsDock(count: visibleEntities.count).padding(.horizontal, 24).padding(.bottom, 18) }
             .popover(item: $inspectedEntity) { entity in
             ObjectInspector(id: entity.id, onClose: { inspectedEntity = nil }).environmentObject(store).frame(width: 330, height: 500)
         }.onChange(of: store.bookID) { _, _ in inspectedEntity = nil; query = ""; filter = "" }
             .onChange(of: typeIDs) { _, ids in if !ids.isEmpty && !ids.contains(filter) { filter = "" } }
     }
-    private var cardsDock: some View {
+    private func cardsDock(count: Int) -> some View {
         ReadingDockSurface {
-                Text("\(entities.count) 张卡片").font(.system(size: 14)).foregroundStyle(.secondary).padding(.leading, 12)
+                Text("\(count) 张卡片").font(.system(size: 14)).foregroundStyle(.secondary).padding(.leading, 12)
                 DockDivider()
                 HStack(spacing: 9) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -271,14 +272,18 @@ struct KnowledgeLibraryView: View {
         (store.book?.entities ?? []).filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.summary.localizedCaseInsensitiveContains(query) }
     }
     var body: some View {
+        let searching = !query.isEmpty
+        let visibleDocuments = section == "documents" || searching ? documents : []
+        let visibleInsights = section == "insights" || searching ? insights : []
+        let visibleEntities = section == "entities" || searching ? entities : []
         VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if !query.isEmpty { Text("搜索全部笔记、阅读分析与要素").font(.caption).foregroundStyle(.secondary) }
-                    documentSection
-                    insightSection
-                    entitySection
-                    if !query.isEmpty, documents.isEmpty, insights.isEmpty, entities.isEmpty { Text("没有找到匹配内容。").foregroundStyle(.secondary).padding(.vertical, 20) }
+                    documentSection(visibleDocuments)
+                    insightSection(visibleInsights)
+                    entitySection(visibleEntities)
+                    if searching, visibleDocuments.isEmpty, visibleInsights.isEmpty, visibleEntities.isEmpty { Text("没有找到匹配内容。").foregroundStyle(.secondary).padding(.vertical, 20) }
                 }.padding(.horizontal, 24).padding(.bottom, 24).frame(maxWidth: 1100).frame(maxWidth: .infinity, alignment: .topLeading)
             }.background(Palette.canvas)
         }.padding(.top, 80).padding(.bottom, 92).background(Palette.canvas)
@@ -293,9 +298,14 @@ struct KnowledgeLibraryView: View {
             let repository = store.repository
             var loaded: [String: String] = [:]
             do {
-                for document in book.activeDocuments {
-                    try Task.checkCancellation()
-                    loaded[document.id] = try await repository.readDocument(bookID: book.id, document: document)
+                let documents = book.activeDocuments
+                if documents.count > 2 {
+                    loaded = try await repository.readDocumentsForSearch(bookID: book.id, sourceHash: book.sourceHash, documents: documents)
+                } else {
+                    for document in documents {
+                        try Task.checkCancellation()
+                        loaded[document.id] = try await repository.readDocument(bookID: book.id, document: document)
+                    }
                 }
                 if !Task.isCancelled, documentSearchKey == request { documentTexts = loaded; loadedDocumentKey = request }
             }
@@ -303,7 +313,7 @@ struct KnowledgeLibraryView: View {
             catch { if !Task.isCancelled, documentSearchKey == request { store.errorMessage = error.localizedDescription } }
         }.onChange(of: store.bookID) { _, _ in inspectedID = nil; query = "" }
     }
-    @ViewBuilder private var documentSection: some View {
+    @ViewBuilder private func documentSection(_ documents: [DocumentRecord]) -> some View {
         if section == "documents" || !query.isEmpty {
             if !query.isEmpty { sectionLabel("笔记", count: documents.count) }
             ForEach(documents) { document in
@@ -326,7 +336,7 @@ struct KnowledgeLibraryView: View {
             if documents.isEmpty, query.isEmpty { Text("还没有保存笔记。可以主动保存 AI 回答，或写下自己的理解。").font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 20) }
         }
     }
-    @ViewBuilder private var insightSection: some View {
+    @ViewBuilder private func insightSection(_ insights: [ReadingInsight]) -> some View {
         if section == "insights" || !query.isEmpty {
             if !query.isEmpty { sectionLabel("阅读分析", count: insights.count) }
             ForEach(insights) { insight in
@@ -348,7 +358,7 @@ struct KnowledgeLibraryView: View {
             if insights.isEmpty, query.isEmpty { Text("精读保存的分析会出现在这里。展开条目查看全文与原文依据。").font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 20) }
         }
     }
-    @ViewBuilder private var entitySection: some View {
+    @ViewBuilder private func entitySection(_ entities: [KnowledgeEntity]) -> some View {
         if section == "entities" || !query.isEmpty {
             if !query.isEmpty { sectionLabel("要素", count: entities.count) }
             ForEach(entities) { entity in

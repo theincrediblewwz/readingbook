@@ -1269,3 +1269,48 @@ extension LibraryRepository {
         return try ControlledChangeCoding.hash(actual) == proofHash
     }
 }
+
+extension LibraryRepository {
+    /// Search-only text preparation. Never a content-hash receipt or a writer
+    /// grant. Small callers may retain readDocument; a batch verifies current
+    /// membership once before and after its synchronous, cancellable file pass.
+    public func readDocumentsForSearch(bookID: String, sourceHash: String, documents: [DocumentRecord]) throws -> [String: String] {
+        try Task.checkCancellation()
+        guard !documents.isEmpty else { return [:] }
+        guard Set(documents.map(\.id)).count == documents.count else {
+            throw ReadingError.invalid("检索请求包含重复的笔记。")
+        }
+        let directory = try bookDirectory(bookID, mustExist: true)
+        try recoverDocument(in: directory)
+        func checkedRecords(_ project: BookProject) throws -> [String: DocumentRecord] {
+            guard project.id == bookID, project.sourceHash == sourceHash else {
+                throw ReadingError.invalid("书籍来源已变化，请重新载入后搜索。")
+            }
+            let current = Dictionary(project.activeDocuments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for document in documents {
+                guard let record = current[document.id], record.relativePath == document.relativePath,
+                      record.updatedAt == document.updatedAt else {
+                    throw ReadingError.invalid("笔记引用或版本已变化，请重新载入后搜索。")
+                }
+            }
+            return current
+        }
+        let records = try checkedRecords(readProject(in: directory))
+        var texts: [String: String] = [:]
+        var total = 0
+        for document in documents {
+            try Task.checkCancellation()
+            guard let record = records[document.id] else { throw ReadingError.invalid("笔记不属于当前书籍。") }
+            let data = try readLimited(documentURL(record, in: directory), limit: Self.documentLimit)
+            total += data.count
+            guard total <= Self.packageLimit, let text = String(data: data, encoding: .utf8) else {
+                throw ReadingError.invalid("笔记不是有效UTF-8或检索内容超过书库大小限制。")
+            }
+            texts[record.id] = text
+        }
+        try Task.checkCancellation()
+        try recoverDocument(in: directory)
+        _ = try checkedRecords(readProject(in: directory))
+        return texts
+    }
+}
