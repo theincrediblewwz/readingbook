@@ -16,6 +16,133 @@ final class ReadingChatHistoryTests: XCTestCase {
             return value
         }
     }
+    private func bytes<T: Encodable>(_ value: T) throws -> Data {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(value)
+    }
+    private func changing(_ context: ReadingChatContext, key: String, to value: Any) throws -> ReadingChatContext {
+        var encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes(context)) as? [String: Any])
+        encoded[key] = value
+        return try JSONDecoder().decode(ReadingChatContext.self, from: JSONSerialization.data(withJSONObject: encoded))
+    }
+
+    func testFreshPreparedHistoryMatchesPublicRevalidationAndAllFrozenFields() throws {
+        for scope in ReadingQueryScope.allCases {
+            for mode in [ReadingConversationMode.reading, .functional] {
+                for avoidsSpoilers in [true, false] {
+                    var project = book()
+                    project.documents = [DocumentRecord(id: "note", title: "已附加", evidence: [Evidence(unitID: "u1", quote: "开篇。")]),
+                                         DocumentRecord(id: "private", title: "未附加")]
+                    project.nodes = [CanvasNode(id: "node", targetID: "u1"), CanvasNode(id: "private-node", targetID: "u3")]
+                    let context = ReadingContext(unitID: "u1", selectedText: "开篇。", page: 1)
+                    let preferences = ReadingAnswerPreferences(interaction: mode, style: .mentor, avoidsSpoilers: avoidsSpoilers)
+                    let expectedSnapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: project, context: context,
+                        documentIDs: scope == .notes ? ["note"] : nil,
+                        appendedDocumentIDs: scope == .notes ? [] : ["note"],
+                        authorizedNodeIDs: mode == .functional ? ["node"] : []).withContextIdentity(preferences.contextIdentity)
+                    let expectedContext = try ReadingChatContext(snapshot: expectedSnapshot, avoidsSpoilers: avoidsSpoilers)
+                    let past = try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: context)
+                    project.chats = try pair("current", context: expectedContext, mode: mode)
+                        + pair("past", context: ReadingChatContext(snapshot: past, avoidsSpoilers: avoidsSpoilers), mode: mode)
+                        + pair("unsafe-group", context: nil, mode: mode)
+                    project.chats[project.chats.count - 1].readingContext = expectedContext
+                    for index in project.chats.indices {
+                        project.chats[index].createdAt = Date(timeIntervalSince1970: 1_700_000_000 + Double(index))
+                        project.chats[index].content += " 完整正文 e\u{301} 😀"
+                        project.chats[index].evidence = [Evidence(unitID: "u1", quote: "开篇。")]
+                    }
+                    let before = try bytes(project)
+                    let expectedHistory = ReadingChatHistory.automaticHistory(in: project, preferences: preferences, snapshot: expectedSnapshot)
+                    let prepared = try ReadingPreparedAnswer.freeze(project: project, scope: scope, context: context,
+                        documentIDs: scope == .notes ? ["note"] : nil,
+                        appendedDocumentIDs: scope == .notes ? [] : ["note"], authorizedNodeIDs: ["node"], preferences: preferences)
+                    let label = "\(scope)/\(mode)/\(avoidsSpoilers)"
+                    XCTAssertTrue(expectedHistory.contains { $0.id == "current-assistant" }, label)
+                    XCTAssertFalse(expectedHistory.contains { $0.id.hasPrefix("unsafe-group") }, label)
+                    XCTAssertEqual(try bytes(prepared.history), try bytes(expectedHistory), label)
+                    XCTAssertEqual(prepared.snapshot.scope, expectedSnapshot.scope, label)
+                    XCTAssertEqual(prepared.snapshot.bookID, expectedSnapshot.bookID, label)
+                    XCTAssertEqual(prepared.snapshot.sourceHash, expectedSnapshot.sourceHash, label)
+                    XCTAssertEqual(prepared.snapshot.scopeFingerprint, expectedSnapshot.scopeFingerprint, label)
+                    XCTAssertEqual(prepared.snapshot.displayTitle, expectedSnapshot.displayTitle, label)
+                    XCTAssertEqual(prepared.snapshot.authorizedNodeIDs, expectedSnapshot.authorizedNodeIDs, label)
+                    XCTAssertEqual(prepared.snapshot.sources, expectedSnapshot.sources, label)
+                    XCTAssertEqual(try bytes(prepared.snapshot.documents), try bytes(expectedSnapshot.documents), label)
+                    XCTAssertEqual(try prepared.snapshot.sourceRanges(in: project), try expectedSnapshot.sourceRanges(in: project), label)
+                    XCTAssertEqual(prepared.chatContext, expectedContext, label)
+                    XCTAssertEqual(prepared.preferences, preferences, label)
+                    XCTAssertEqual(prepared.context, context, label)
+                    XCTAssertEqual(prepared.scope, scope, label)
+                    XCTAssertEqual(try bytes(prepared.project), before, label)
+                    XCTAssertEqual(try bytes(project), before, label)
+                }
+            }
+        }
+    }
+
+    func testPublicOldSnapshotsRevalidateCurrentSourceBytesAndDocumentVersions() throws {
+        for scope in [ReadingQueryScope.book, .page] {
+            for mutation in ["body", "ocr", "unicode-bytes", "note-version", "duplicate-unit"] {
+                var project = book()
+                project.units[0].text = "开篇 é。"
+                project.documents = [DocumentRecord(id: "note", title: "附加笔记")]
+                let context = ReadingContext(unitID: "u1", page: 1)
+                let old = try ReadingQuerySnapshot.freeze(scope: scope, in: project, context: context, appendedDocumentIDs: ["note"])
+                project.chats = try pair("old", context: ReadingChatContext(snapshot: old, avoidsSpoilers: true))
+                XCTAssertEqual(ReadingChatHistory.automaticHistory(in: project, preferences: .init(), snapshot: old).count, 2)
+                switch mutation {
+                case "body": project.units[0].text += "新增原文。"
+                case "ocr": project.units[0].text = "OCR 修正后的开篇。"; project.units[0].warning = "OCR 已修订"
+                case "unicode-bytes":
+                    project.units[0].text = "开篇 e\u{301}。"
+                    XCTAssertEqual(project.units[0].text, old.sources[0].text)
+                    XCTAssertFalse(project.units[0].text.utf8.elementsEqual(old.sources[0].text.utf8))
+                case "note-version": project.documents[0].updatedAt += 1
+                default: project.units.append(project.units[0])
+                }
+                let before = try bytes(project), label = "\(scope)/\(mutation)"
+                XCTAssertTrue(ReadingChatHistory.automaticHistory(in: project, preferences: .init(), snapshot: old).isEmpty, label)
+                if mutation == "duplicate-unit" {
+                    XCTAssertThrowsError(try ReadingPreparedAnswer.freeze(project: project, scope: scope, context: context, appendedDocumentIDs: ["note"]), label)
+                } else {
+                    let prepared = try ReadingPreparedAnswer.freeze(project: project, scope: scope, context: context, appendedDocumentIDs: ["note"])
+                    XCTAssertTrue(prepared.history.isEmpty, label)
+                    XCTAssertEqual(try bytes(prepared.project), before, label)
+                }
+                XCTAssertEqual(try bytes(project), before, label)
+            }
+        }
+    }
+
+    func testFreshBookProofRejectsForgedMembershipOrderAndLiteralIdentity() throws {
+        var project = book()
+        project.units[0].id = "café"
+        project.documents = [DocumentRecord(id: "noté", title: "笔记一"), DocumentRecord(id: "second-note", title: "笔记二")]
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: project, appendedDocumentIDs: ["noté", "second-note"])
+        let valid = try ReadingChatContext(snapshot: snapshot, avoidsSpoilers: true)
+        let malformed: [(String, ReadingChatContext)] = try [
+            ("wrong-order", changing(valid, key: "unitIDs", to: Array(valid.unitIDs.reversed()))),
+            ("duplicate-unit", changing(valid, key: "unitIDs", to: ["café", "café", "u3"])),
+            ("missing-unit", changing(valid, key: "unitIDs", to: ["café", "u2"])),
+            ("literal-unit-id", changing(valid, key: "unitIDs", to: ["cafe\u{301}", "u2", "u3"])),
+            ("wrong-document-order", changing(valid, key: "documentIDs", to: Array(valid.documentIDs.reversed()))),
+            ("duplicate-document", changing(valid, key: "documentIDs", to: ["noté", "noté"])),
+            ("missing-document", changing(valid, key: "documentIDs", to: ["noté"])),
+            ("wrong-scope", changing(valid, key: "scope", to: ReadingQueryScope.page.rawValue)),
+            ("wrong-source", changing(valid, key: "sourceHash", to: "different-source")),
+            ("self-reported-fingerprint", changing(valid, key: "scopeFingerprint", to: String(repeating: "a", count: 64)))
+        ]
+        for (label, forged) in malformed {
+            project.chats = pair(label, context: forged)
+            let before = try bytes(project)
+            let expected = ReadingChatHistory.automaticHistory(in: project, preferences: .init(), snapshot: snapshot)
+            let prepared = try ReadingPreparedAnswer.freeze(project: project, scope: .book, appendedDocumentIDs: ["noté", "second-note"])
+            XCTAssertTrue(expected.isEmpty, label)
+            XCTAssertEqual(try bytes(prepared.history), try bytes(expected), label)
+            XCTAssertEqual(try bytes(prepared.project), before, label)
+            XCTAssertEqual(try bytes(project), before, label)
+        }
+    }
     func testEmptyOrIncompatibleHistoryPreservesArchivesAndPreparedScopeGrants() throws {
         let context = ReadingContext(unitID: "u2", page: 2)
         let preferences = ReadingAnswerPreferences(interaction: .functional, style: .mentor)

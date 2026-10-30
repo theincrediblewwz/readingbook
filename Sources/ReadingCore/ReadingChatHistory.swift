@@ -34,11 +34,29 @@ public struct ReadingChatContext: Codable, Hashable, Sendable {
 public enum ReadingChatHistory {
     public static func automaticHistory(in project: BookProject, preferences: ReadingAnswerPreferences,
                                         snapshot: ReadingQuerySnapshot) -> [ChatMessage] {
-        let matching = project.chats.filter {
-            ($0.conversationMode ?? .functional) == preferences.interaction && ($0.answerStyle ?? .research) == preferences.style
-        }
+        let matching = matchingMessages(in: project, preferences: preferences)
         guard !matching.isEmpty else { return [] }
         guard let current = try? ReadingChatContext(snapshot: snapshot, avoidsSpoilers: preferences.avoidsSpoilers) else { return [] }
+        return automaticHistory(in: project, preferences: preferences, matching: matching, current: current,
+            freshBookContext: nil)
+    }
+
+    static func automaticHistory(in input: FreshReadingAnswerInput) -> [ChatMessage] {
+        let matching = matchingMessages(in: input.project, preferences: input.preferences)
+        guard !matching.isEmpty else { return [] }
+        return automaticHistory(in: input.project, preferences: input.preferences, matching: matching,
+            current: input.chatContext, freshBookContext: input.snapshot.scope == .book ? input.chatContext : nil)
+    }
+
+    private static func matchingMessages(in project: BookProject, preferences: ReadingAnswerPreferences) -> [ChatMessage] {
+        project.chats.filter {
+            ($0.conversationMode ?? .functional) == preferences.interaction && ($0.answerStyle ?? .research) == preferences.style
+        }
+    }
+
+    private static func automaticHistory(in project: BookProject, preferences: ReadingAnswerPreferences,
+                                         matching: [ChatMessage], current: ReadingChatContext,
+                                         freshBookContext: ReadingChatContext?) -> [ChatMessage] {
         let orders = Dictionary(project.units.map { ($0.id, $0.order) }, uniquingKeysWith: { first, _ in first })
         let cursor = current.unitIDs.compactMap { orders[$0] }.max()
         let documents = Set(current.documentIDs)
@@ -47,6 +65,15 @@ public enum ReadingChatHistory {
         var sourceHashes: [String: String] = [:], currentVersions: [ReadingChatContext: Bool] = [:]
         func sameVersion(_ context: ReadingChatContext) -> Bool {
             if let saved = currentVersions[context] { return saved }
+            if let fresh = freshBookContext, context.scope == .book,
+               context.scopeFingerprint == fresh.scopeFingerprint,
+               sameLiteralIDs(context.unitIDs, fresh.unitIDs), sameLiteralIDs(context.documentIDs, fresh.documentIDs) {
+                // Fresh .book sources contain each whole canonical unit. Their
+                // hashes and note versions were just computed from this exact
+                // immutable project. A slice or different historical range
+                // still needs the original reconstruction below.
+                currentVersions[context] = true; return true
+            }
             // A historic slice cannot be reconstructed from unit IDs alone.
             // Exact same-slice context is checked separately below.
             guard context.scope != .selection else { currentVersions[context] = false; return false }
@@ -94,5 +121,9 @@ public enum ReadingChatHistory {
         }
         appendGroup()
         return output
+    }
+
+    private static func sameLiteralIDs(_ lhs: [String], _ rhs: [String]) -> Bool {
+        lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
     }
 }

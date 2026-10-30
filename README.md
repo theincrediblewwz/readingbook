@@ -1,4 +1,12 @@
-# ReadingBook 0.23.16 · 多组件优化（2026-10-30）
+# ReadingBook · 两条准备链优化正在交付（2026-10-30）
+
+当前正式版为[0.23.17/build48](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.17)，搜索、笔记与回收站浮层、繁简搜索及AI关键词扩展已经发布和本机验收。[新一批两条准备链优化](Design/2026-10-30-fresh-proof-optimization-results.md)已完成48进程对照，0.23.18/build49正在完整测试与交付，尚不表示已安装。
+
+大对象集的完整准备和投影约省19%，同范围有效历史的完整回答准备约省49%；小场景和内存代价也已记录。原书、笔记、分析与全部来源/范围验证保留。这是固定Core场景的收益，不是全软件或模型速度同比提高。
+
+---
+
+# ReadingBook 0.23.16 · 多组件优化（历史交付）
 
 [下载0.23.16/build47](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.16) · [本批结果与边界](Design/2026-10-30-batch-optimization-results.md) · [组件性能进度](Design/2026-10-29-performance-progress.md)。最新功能已合入main，本机正式安装版已更新；包内产品源码为`b57c28f82de090fac804c422cfb00c5879376606`。
 

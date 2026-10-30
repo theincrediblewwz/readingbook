@@ -27,8 +27,15 @@ public enum ReadingSpoilerProjection {
         let canonicalEvidence = evidence(canonical.evidence, context: context)
         guard !canonicalEvidence.isEmpty else { return nil }
         let completeCanonical = canonicalEvidence.count == canonical.evidence.count
-        let original = usesSavedVersions && !completeCanonical ? (context.versions.entity(canonical.id) ?? canonical) : canonical
-        let local = evidence(original.evidence, context: context)
+        let original: KnowledgeEntity
+        let local: [Evidence]
+        if usesSavedVersions && !completeCanonical, let saved = context.versions.entity(canonical.id) {
+            original = saved
+            local = evidence(saved.evidence, context: context)
+        } else {
+            original = canonical
+            local = canonicalEvidence
+        }
         guard !local.isEmpty else { return nil }
         let names = ([original.name] + original.aliases).filter { name in
             !name.isEmpty && local.contains { exact(name, in: $0.quote) }
@@ -52,8 +59,15 @@ public enum ReadingSpoilerProjection {
         let canonicalEvidence = evidence(canonical.evidence, context: context)
         guard !canonicalEvidence.isEmpty else { return nil }
         let completeCanonical = canonicalEvidence.count == canonical.evidence.count
-        let original = usesSavedVersions && !completeCanonical ? (context.versions.event(canonical.id) ?? canonical) : canonical
-        let local = evidence(original.evidence, context: context)
+        let original: KnowledgeEvent
+        let local: [Evidence]
+        if usesSavedVersions && !completeCanonical, let saved = context.versions.event(canonical.id) {
+            original = saved
+            local = evidence(saved.evidence, context: context)
+        } else {
+            original = canonical
+            local = canonicalEvidence
+        }
         guard !local.isEmpty else { return nil }
         var result = original
         let nameVisible = local.contains(where: { exact(original.name, in: $0.quote) })
