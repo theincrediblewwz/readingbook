@@ -1,6 +1,6 @@
 # 卡片、知识库与共享图谱：第二批非PDF优化
 
-本批已采用卡片和知识库的三处改动，图谱两个候选均否决。0.23.23/build54 的完整CI、通用包与本机安装验收正在交付；完成后补充源提交、产物与数据保护记录。
+本批已采用卡片和知识库的三处改动，图谱两个候选均否决。[0.23.23/build54](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.23)已同步main、发布、替换本机安装并完成原书验收。
 
 ## 实际修改
 
@@ -38,8 +38,18 @@
 
 ## 验证与证据
 
-本机产品增量Debug编译15.41秒、零警告；正式对照另用本机完整Release，无混用编译耗时。60个实际测试方法通过；本机只有CLT，用原测试源码加轻量断言适配，不冒称本机执行XCTest。完整真实XCTest、所有旧原生门禁及通用包由本批一次GitHub流水线验证。
+本机产品增量Debug编译15.41秒、零警告；正式对照另用本机完整Release，无混用编译耗时。60个实际测试方法通过；本机只有CLT，用原测试源码加轻量断言适配，不冒称本机执行XCTest。[完整CI41096615848](https://github.com/theincrediblewwz/readingbook/actions/runs/41096615848)已通过717个真实XCTest、60个具名回归、零编译警告，所有既有原生门禁（包括桥接29、输入152、历史70、空闲12、AI记忆12组）保留并通过。通用包打包步骤约12分27秒，与本机增量Debug不是相同工作量，不作直接速度比较。
 
 工作区证据目录 `logs/objects-graphs-20261031/`：`protocol-v3.json`、`formal-v3/manifest.json`、`formal-adoption.json`、`adjudicate-formal.py`、`actual-tests-result.json`、`graph-rejection.json`。两次测试准备错误及一次API名称编译错误保留在failed-actual-tests目录；修正测试后60项通过，未因此放宽产品保护。
 
-原库已有20文件、原书104页/343%、已有102页句译和全部偏好为交付保护基线。待完整CI通过后再正常退出旧程序、做新备份、替换App和实际界面验收；不使用旧备份覆盖当前书库。所有新源、实验、缓存、日志和备份在工作目录，结束后清理可重建及重复载荷，报告整个批次前后占用。
+另用当前真实产品Debug对象做非空交互验收，未改产品代码：1000卡片→“名9”111→无匹配0→清空恢复1000；知识库组合Unicode正文命中30篇，隔离库和原偏好保持。该入口没有Edit菜单，中文用AX文本设置，不冒称测了粘贴/Undo；输入工具、退出后AX超时等限制均记录在current-source-ui-smoke.json。正式收益仍独立来自冻结的Release48进程。
+
+产品提交为 `5634da0dea4f4b020715ceb6fa720b2351af526d`；通用产物12998826042，Release429325977。canonical ZIP为25,202,124字节，SHA256 `4cbaa4d4feb5f8c406368871c95c0a97ed95004111f3e030a12c2624cec9a5e2`；双层ZIP、远端摘要、源/版本、32资源、严格签名、双架构和36 App文件均核验。本机实际About确认23/54。
+
+GitHub状态查询曾502；最终run/job成功且完整日志已有两次Release完成、签名/资源、ZIP和上传记录，但嵌套步骤API仍显示打包中或返回空列表。保留原始响应及首次核验拒绝，不改写其状态；包步骤改用“同源成功最终Job＋准确的失败传播脚本＋完整构建日志＋匹配源/Run/ID/大小的实际上传产物”共同确认，随后仍逐项核验下载包。717/60及每个原生运行断言未删除、未放宽，没有重跑CI。详情在delivery/metadata-recovery.md。
+
+原书20文件集合、原书/笔记/分析字节保留，3项服务设置键与全部其他偏好保持，仅主窗口尺寸变化；只有Workspace正常导航更新。安装版原有102页句译可见，回104/343%、从书库顶部重选和正常重启恢复均通过，最终伴读收起、空草稿；未请求真实模型或新建/保存原库笔记。原书views/卡片/笔记均0，安装版只查看组件目录，未为验收新增书籍配置；非空UI由上述同源隔离窗口覆盖。两个实际Applications UI PID28707/29020三类布局/发布警告均零。最新数据/偏好及旧22 App保护在 `private-books/objects-graphs-20261031/install-before-0.23.23/`，未用旧库覆盖现库。
+
+GitHub仅main与23/22两版Release/tag/通用产物；过期21按源、ID和摘要核对退役，提交历史保留。实验对象/dSYM、早期Debug预检大程序、重复CI包/解包App和旧21 App/ZIP已退役；关键正式App、Repository、Core测试和像素程序及源/合成库/原始capture在唯一34,386,355字节重放ZIP，逐blob CRC/SHA核验。先按REPLAY_AND_RETIRED.md恢复后才可使用旧路径；已退役Debug预检需按记录重建，不混用未来Debug对象。原始错误、不利观测、全部非App私人备份保留。
+
+三轮清理观测约释放1.15GiB；全批工作区约4.71→4.77GiB，净增约64MiB为新保护、关键证据与共享缓存等，不能把删除量说成全批净下降。当前23/22包、22回滚、活跃Debug和共享module cache保留。所有新源、实验、缓存、日志和备份仍在工作目录。下一批只读源码与设计依据在next-batch-temporal-audit.json和next-batch-design-references.md；本批没有顺手修改其他产品组件。

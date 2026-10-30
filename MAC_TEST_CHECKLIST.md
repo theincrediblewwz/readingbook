@@ -1,3 +1,21 @@
+> 2026-10-31：0.23.23/build54 已同步main、发布、替换安装并完成原书验收。第二批非PDF覆盖卡片、知识库和共享图谱；卡片/知识库三处采用，Release48新进程局部查询耗时约−31%/−75%，图谱两候选否决。完整CI717/60、全部既有原生门禁通过，零警告。详见[本批结果](Design/2026-10-31-object-graph-optimization-results.md)。
+
+# 0.23.23 接续要点
+
+产品源5634da0dea4f4b020715ceb6fa720b2351af526d，CI41096615848、通用产物12998826042、Release23和实际About23/54均完成，不需再发布/安装。只改两个产品文件，原图谱源保持基线。GitHub嵌套步骤API曾陈旧/为空、watch曾502；首次拒绝和原始记录保留，最终包步骤通过完整成功Job/日志/同源上传产物联合确认，再严格核包，Core/原生断言未放宽，CI未重跑。详见本批delivery/metadata-recovery.md。
+
+实际Applications PID28707/29020三类布局/状态警告零；原书20文件原文/笔记/分析字节保持，仅Workspace正常更新。3服务及其余偏好保持，仅主窗口尺寸变化。102既有译文可见，顶部书名从书库重选及正常重启恢复104/343%，伴读收起、空草稿，无真实AI或真库新建/保存。原书views/卡片/笔记0，安装版只看组件目录，不为验收改配置；真实当前Debug产品对象另验非空1000卡片/30笔记，隔离库与原偏好不变，不冒称测了该无Edit菜单入口的粘贴/Undo。最新20文件/偏好/旧22 App保护在private-books/objects-graphs-20261031/install-before-0.23.23。
+
+下一批时间轴、地图、轨迹、组合组件和全书总览。只读审查在logs/objects-graphs-20261031/next-batch-temporal-audit.json与next-batch-design-references.md。优先查同次temporalBoundary/事件/人物/地点索引重复准备与更新传播；组合已有PreparedCompositionInput/owner保护，进度已有独立状态对象，不能再冒称新优化。点/窗口、日历/叙事、不确定性、防剧透与跨书/来源/版本边界均保留。图谱远缩放大量节点/文字仍待实际分段调用栈；两候选未采用，不恢复数学核查。其他16类与PDF后续轮转未取消。
+
+关键正式App、Repository、Core测试和像素程序及源/合成库/完整capture在唯一34,386,355B replay-binaries.zip；先按REPLAY_AND_RETIRED.md恢复再用旧路径。早期Debug预检大程序与对象/dSYM已退役，源码、构建/对象摘要、失败/不利结果保留，需要时按对应基线在工作区重建。23解包App和重复CI载荷已退役，别盲用旧readyappPath；需要时从canonical恢复并核verification清单。活跃mac-debug与共享cache、23/22包和22 App回滚保留；旧21Release/tag/通用产物/App/ZIP精确退役，GitHub仅main与23/22，提交历史及全部非App私人备份保留。
+
+三轮清理约1.15GiB；全批约4.71→4.77GiB，净增约64MiB为新保护与关键证据等，不把删除量当净下降。所有新产物仍在工作区。Design/2026-10-29-performance-progress.md用户未提交修改SHA保持9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，不能修改或混入提交。本机先增量迭代，多个组件合并一次完整CI；本批15.41秒增量Debug与GitHub12分27秒双架构打包不是同等工作量。
+
+下方22及更旧记录为历史；当前以上方接续为准。
+
+---
+
 > 2026-10-30：0.23.22/build53 已同步main、发布、替换安装并完成原书验收。第一批非PDF覆盖伴读出处、整书记忆准备与AI调度；48新进程对照局部耗时约−65%/−42%，发送前取消不再误占令牌预算。完整CI711/54、所有既有原生门禁和新记忆12组通过，零编译警告。实际原书104页/343%、102已有句译与全部数据/偏好保留，仅Workspace正常更新。详见[本批结果](Design/2026-10-30-companion-chat-scheduling-results.md)。
 
 # 0.23.22 接续要点
