@@ -23,7 +23,7 @@ public struct RegisteredReadingTool: Sendable {
     public let phases: Set<PluginToolPhase>
     public let requiresReceipts: Bool
     public let readOnly: Bool
-    private let schemaData: Data
+    private let schemaSnapshot: ReadingToolSchemaSnapshot
     private let handler: @Sendable (Data, inout BookProject, Set<String>) throws -> String
 
     public init(pluginID: String, schema: [String: Any], phases: Set<PluginToolPhase>, requiresReceipts: Bool = false, readOnly: Bool = false,
@@ -35,12 +35,29 @@ public struct RegisteredReadingTool: Sendable {
         }
         self.name = name; self.pluginID = pluginID; self.phases = phases
         self.requiresReceipts = requiresReceipts; self.readOnly = readOnly
-        schemaData = try JSONSerialization.data(withJSONObject: schema, options: [.sortedKeys])
+        let schemaData = try JSONSerialization.data(withJSONObject: schema, options: [.sortedKeys])
         guard schemaData.count <= 262_144 else { throw ReadingError.invalid("插件工具声明过大。") }
+        schemaSnapshot = try ReadingToolSchemaSnapshot(data: schemaData)
         handler = execute
     }
-    public var schema: [String: Any] { (try? JSONSerialization.jsonObject(with: schemaData) as? [String: Any]) ?? [:] }
+    public var schema: [String: Any] { schemaSnapshot.dictionary }
     func execute(_ arguments: Data, project: inout BookProject, allowed: Set<String>) throws -> String { try handler(arguments, &project, allowed) }
+}
+
+/// This wrapper alone owns a default, immutable JSON parse. Its only initializer
+/// accepts encoded bytes, so caller-owned NSMutable containers cannot enter it.
+/// Foundation JSON scalars/containers are immutable with options []; the returned
+/// Swift Dictionary has copy-on-write value semantics. No mutable references or
+/// setters are exposed. Any erases these guarantees from compiler checking.
+private struct ReadingToolSchemaSnapshot: @unchecked Sendable {
+    private let value: [String: Any]
+    init(data: Data) throws {
+        guard let dictionary = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+            throw ReadingError.invalid("插件工具声明必须是JSON对象。")
+        }
+        value = dictionary
+    }
+    var dictionary: [String: Any] { value }
 }
 
 /// A value registry belongs to an AIReader run. Registration is atomic; no global

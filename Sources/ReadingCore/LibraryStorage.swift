@@ -133,19 +133,26 @@ extension LibraryRepository {
 
     public func storageOverview() throws -> LibraryStorageOverview {
         let books = try booksDirectory(), trash = try trashDirectory()
+        let usage = try storageUsage(in: rootURL)
+        var membership: LibraryMembership?
         var result: [LibraryStorageBook] = []
         for (directory, archived) in [(books, false), (trash, true)] {
             for url in try files.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
                 if url.lastPathComponent == ".DS_Store" { continue }
-                result.append(try storageBook(id: url.lastPathComponent, archived: archived))
+                if !archived, membership == nil { membership = try libraryMembership() }
+                result.append(try storageBook(id: url.lastPathComponent, archived: archived,
+                    preparedBytes: usage.books[(archived ? "trash/" : "books/") + url.lastPathComponent] ?? 0, preparedMembership: membership))
             }
         }
         return LibraryStorageOverview(rootURL: rootURL, booksURL: books, trashURL: trash,
-                                      totalBytes: try storageBytes(in: rootURL),
+                                      totalBytes: usage.total,
                                       books: result.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending })
     }
 
     public func storageBook(id: String, archived: Bool = false) throws -> LibraryStorageBook {
+        try storageBook(id: id, archived: archived, preparedBytes: nil, preparedMembership: nil)
+    }
+    private func storageBook(id: String, archived: Bool, preparedBytes: Int64?, preparedMembership: LibraryMembership?) throws -> LibraryStorageBook {
         let directory: URL
         if archived { directory = try archivedBookDirectory(id, mustExist: true) }
         else { directory = try bookDirectory(id, mustExist: true) }
@@ -153,11 +160,11 @@ extension LibraryRepository {
         guard project.id == id else { throw ReadingError.invalid("书籍身份与目录不符。") }
         try validate(project)
         var removed = false
-        if !archived { removed = try libraryMembership().removed[id] != nil }
+        if !archived { removed = try (preparedMembership ?? libraryMembership()).removed[id] != nil }
         return LibraryStorageBook(id: project.id, title: project.title, directoryURL: directory,
                                   sourceURL: try child(child(directory, "source"), project.originalName),
                                   documentsURL: try child(directory, "docs"), metadataURL: try child(directory, "project.json"),
-                                  bytes: try storageBytes(in: directory),
+                                  bytes: try preparedBytes ?? storageBytes(in: directory),
                                   isRemoved: removed, isArchived: archived)
     }
 
@@ -432,6 +439,33 @@ extension LibraryRepository {
             let marker = try child(child(changes, entry.lastPathComponent), "transaction.json")
             guard !files.fileExists(atPath: marker.path) else { throw ReadingError.invalid("此书有待恢复的 AI 修改事务；未改写源库，请先完成恢复。") }
         }
+    }
+
+    // One bounded size walk serves the overview only. It grants no removal or
+    // transfer authority; those operations still perform their full validation.
+    private func storageUsage(in root: URL) throws -> (total: Int64, books: [String: Int64]) {
+        try requireDirectory(root)
+        let namespaces = Set([root.appendingPathComponent("books").path, root.appendingPathComponent("trash").path])
+        var pending: [(URL, String?)] = [(root, nil)], total: Int64 = 0, count = 0
+        var books: [String: Int64] = [:]
+        while let (directory, owner) = pending.popLast() {
+            for entry in try files.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]) {
+                count += 1
+                guard count <= 200_000 else { throw ReadingError.invalid("目录条目过多。") }
+                let checked = try child(directory, entry.lastPathComponent)
+                let values = try checked.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+                guard values.isSymbolicLink != true else { throw ReadingError.invalid("不统计符号链接目录。") }
+                let nextOwner = owner ?? (namespaces.contains(directory.path) ? directory.lastPathComponent + "/" + entry.lastPathComponent : nil)
+                if values.isDirectory == true { pending.append((checked, nextOwner)) }
+                else {
+                    guard values.isRegularFile == true, let size = values.fileSize, size >= 0,
+                          Int64(size) <= Self.transferTotalLimit, total <= Self.transferTotalLimit - Int64(size) else { throw ReadingError.invalid("文件占用大小无效。") }
+                    total += Int64(size)
+                    if let nextOwner { books[nextOwner, default: 0] += Int64(size) }
+                }
+            }
+        }
+        return (total, books)
     }
 
     private func storageBytes(in root: URL) throws -> Int64 {
