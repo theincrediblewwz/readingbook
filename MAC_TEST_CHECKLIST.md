@@ -1,6 +1,14 @@
-# 2026-10-30 · 0.23.20历史引用修复进入最终CI与交付
+# 2026-10-30 · 0.23.20已发布、安装与原书验收完成
 
-先读[本批修复与否决边界](Design/2026-10-30-history-reference-results.md)。历史引用改为目标回答起始的60条显示窗口、前后扩展；保留所有聊天/原书/笔记/分析，普通入口仍最后60条。六真实原生场景70项守护已过，包括字号/宽度与用户滚动后不回拉。CSS无限隐藏延后候选在128KiB重显出现约349ms预检回退，拒绝、不进入产品，未做正式36进程采用声明。完整CI/核包/发布/安装及原书UI尚在进行；不要将下方19的验收当作20已完成。
+先读[本批修复、否决和证据边界](Design/2026-10-30-history-reference-results.md)及[16组件进度](Design/2026-10-29-performance-progress.md)。从引用打开历史时，目标回答作为初始60条显示窗口的第一条，前后逐批可达全部内容；普通入口仍最后60条。不再靠异步高度之前的一次滚动估算，也不在字号/宽度/普通更新时把用户拉回。六组真实原生场景70项、同源1000条合成库CUA17次实际分页与首尾全文检查均过。原书本来0条已保存聊天，不冒称真库做过不存在的引用测试。
+
+产品源`6408ab4a4cd65deced124691fd92c2e5883ffd85`，[CI41024746938](https://github.com/theincrediblewwz/readingbook/actions/runs/41024746938) **706 Core零失败/零编译警告、49具名、旧29桥接/152来源字节、新70历史及全部旧门槛通过**。[Release20/build51](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.20)已发布并替换安装，实际About确认。ZIP25,173,896B/SHA`32f5a3182d37348b1f2a6b58eb42fc8322e550bca79ef91eb230cf1da30e6cb0`；两层ZIP、远端digest、源/版本、双架构、严格签名、32资源/36文件均核验。无需重复发布安装20。
+
+原书103页/343%、重选/正常重启、102既有句译、伴读/对话、Unicode草稿/Undo/Redo/收起焦点、历史/记忆窗口通过；简繁各57，关闭搜索回103，首条入92；笔记/回收站从reader/library均返回原界面。最终空草稿、伴读收起，无真实AI或真库创建/保存。20文件原书/笔记/分析字节与全部偏好保持，仅Workspace正常导航更新。两次现场登记Applications PID5840/5871与首次同Macho UUID UI进程5746的三类统一日志警告零；日志UUID路径缓存会指向CI解包路径，未据此假定首次物理路径。
+
+最新20文件/偏好/旧19 App保护在`private-books/webkit-history-20261030/install-before-0.23.20/`。GitHub仅main和20/19 Release/tag/Actions资产，18已按源/摘要核对退役，提交历史保留。9个更旧App、重复CI载荷和旧18本地包已清理，全部非App私有备份不变。旧展开测试树与本批实际probe/helper/source已通过唯一内容归档CRC/SHA核验后退役，先按cleanup-old-generated或cleanup-current-replay中的restore恢复再用旧路径；可重建对象/dSYM已退役，主线Debug与共享cache保留。工作区全批6,430,072→约4,411,200KiB（6.13→4.21GiB），净减约1.93GiB；不把删除量当全批净下降。证据`logs/webkit-history-20261030/`，最新验收`delivery/final-delivery-v2.json`。
+
+**性能候选明确拒绝：** 隐藏Markdown无限延后CSS只做了4新进程预检，128KiB重显约104→453ms，超过事前回退门槛，未采用、未运行36进程正式采用实验。产品MarkdownRenderer/ReadingViews保持19原样。短时合并并在空闲后后台补齐是下一批未实现思路，需继续保住source/权限即时失效、独立可见sheet样式、草稿/选区/重显延迟；其他16组件及跨组件/长时任务继续。
 
 ---
 

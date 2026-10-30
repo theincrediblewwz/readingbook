@@ -1,4 +1,14 @@
-# ReadingBook 0.23.19 · 笔记与搜索优化（2026-10-30）
+# ReadingBook 0.23.20 · 历史引用定位（2026-10-30）
+
+[下载0.23.20/build51](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.20) · [本批结果与边界](Design/2026-10-30-history-reference-results.md)。源码已同步main，本机安装版已替换并验收，产品源`6408ab4a4cd65deced124691fd92c2e5883ffd85`。
+
+打开历史引用时优先显示目标回答，可分批查看更早和后续内容；字号、宽度变化及普通滚动不会反复拉回。原书、笔记、分析、全部历史与偏好保留。此前优化保持；隐藏Markdown延后排版方案因重新显示变慢未采用。
+
+[完整CI41024746938](https://github.com/theincrediblewwz/readingbook/actions/runs/41024746938)通过706 Core、全部旧门槛及新增70项历史原生守护，零编译警告。双架构核包、实际About、原书103页/343%、已有句译、输入/Undo和搜索/笔记/回收站均通过。清理后工作区全批约6.13→4.21GiB；保留原数据、最新19回滚与关键证据。GitHub仅main和20/19两版，提交历史保留，其他组件优化继续。
+
+---
+
+# ReadingBook 0.23.19 · 笔记与搜索优化（历史交付）
 
 [下载0.23.19/build50](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.19) · [本批实测与边界](Design/2026-10-30-note-search-optimization-results.md)。源码已同步main，本机正式安装版已替换；包内源码为`3f83696b1baf7e0d7daf889a4b17d9430f34d071`。此前功能和准备链优化继续保留。
 
