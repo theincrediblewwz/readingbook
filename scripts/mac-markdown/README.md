@@ -86,3 +86,26 @@ optimization benefit. In the initial baseline, the positive mark stayed focused
 after the model cleared it; adding the missing native JS return made the same
 29 expectations pass. Detailed failed and passing evidence remains in this work
 cycle's `logs/webkit-bridge-20261029/regression`.
+
+
+## Saved-history reference regression
+
+Run sequentially in the allocated foreground interval with completed Debug
+objects (the wrapper starts no product build):
+
+    python3 scripts/mac-markdown/run-history-reference-probe.py \
+      --workspace "$PWD" --build-dir .build/tests/debug \
+      --output-dir logs/ci-markdown-bridge/history-reference --run --show-window
+
+The actual EnhancedBookChatView receives AppStore.openInternalURL(book/message)
+and opens the production sheet. Six cases cover 60 messages at 0/58/59 and 1000
+at 0/500/998. Guards compare complete target source/HTML, math and fonts, and
+heading geometry in the real clipped native viewport. Additional cases change
+font/width and reject a reset after same-row scrolling and subsequent resize.
+Native programmatic scrolling is not a physical wheel/momentum/gesture test.
+
+No private history factory or shipping test API is linked. Read-only Mirror of
+the actual WK owner fails closed on changed typed readiness/source State fields.
+Each fresh fake library has empty profiles and preserves complete project,
+canonical file, saved-note, source and unsent-draft bytes. No real library,
+installed App, AI, general clipboard, FPS or performance claim is involved.

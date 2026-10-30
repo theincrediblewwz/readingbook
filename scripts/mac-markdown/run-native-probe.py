@@ -20,7 +20,8 @@ def sha(path):
 
 def main(probe="bridge"):
     variants = {"bridge": ("NativeMarkdownBridgeProbe", "native-markdown-bridge-probe"),
-                "input-identity": ("NativeMarkdownInputIdentityProbe", "native-markdown-input-probe")}
+                "input-identity": ("NativeMarkdownInputIdentityProbe", "native-markdown-input-probe"),
+                "history-reference": ("NativeHistoryReferenceProbe", "native-history-reference-probe")}
     if probe not in variants:
         raise ValueError("Unknown fixed native probe")
     probe_name, work_name = variants[probe]
@@ -49,8 +50,8 @@ def main(probe="bridge"):
     build, output = local(args.build_dir), local(args.output_dir)
     if args.show_window and not args.run:
         raise ValueError("--show-window requires --run")
-    if probe == "input-identity" and args.run and not args.show_window:
-        raise ValueError("The input identity regression requires an allocated foreground --show-window run")
+    if probe in {"input-identity", "history-reference"} and args.run and not args.show_window:
+        raise ValueError("This native regression requires an allocated foreground --show-window run")
     sidecars = {kind: output.with_name(output.name + suffix) for kind, suffix in
                 [("identity", "-build.json"), ("compile", "-build.log"),
                  ("run", "-run.log"), ("source", "-source.swift"),

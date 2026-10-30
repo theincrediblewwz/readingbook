@@ -424,22 +424,39 @@ private struct SavedConversationHistory: View {
     let project: BookProject
     var focusedMessageID: String?
     var onClose: () -> Void
-    @State private var limit = 60
-    private var visibleLimit: Int {
-        guard let id = focusedMessageID, let index = project.chats.firstIndex(where: { $0.id == id }) else { return limit }
-        return max(limit, project.chats.count - index)
+    @State private var windowStart: Int
+    @State private var windowEnd: Int
+
+    init(project: BookProject, focusedMessageID: String?, onClose: @escaping () -> Void) {
+        self.project = project; self.focusedMessageID = focusedMessageID; self.onClose = onClose
+        let start = focusedMessageID.flatMap { id in project.chats.firstIndex { $0.id == id } } ?? max(0, project.chats.count - 60)
+        _windowStart = State(initialValue: start); _windowEnd = State(initialValue: min(project.chats.count, start + 60))
+    }
+    private var displayedRange: Range<Int> {
+        let start = min(project.chats.count, max(0, windowStart))
+        return start..<min(project.chats.count, max(start, windowEnd))
+    }
+    private func resetWindow(_ id: String?) {
+        let start = id.flatMap { id in project.chats.firstIndex { $0.id == id } } ?? max(0, project.chats.count - 60)
+        windowStart = start; windowEnd = min(project.chats.count, start + 60)
     }
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Label("已保存的对话", systemImage: "clock.arrow.circlepath").font(.system(size: 18, weight: .semibold))
+                    .accessibilityIdentifier("history.range")
+                    .accessibilityValue("显示第 \(displayedRange.isEmpty ? 0 : displayedRange.lowerBound + 1)–\(displayedRange.upperBound) 条，共 \(project.chats.count) 条已保存的对话")
                 Spacer()
                 Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction)
             }.padding(18)
-            ScrollViewReader { proxy in ScrollView {
+            ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    if project.chats.count > visibleLimit { Button("显示更早的对话") { limit = visibleLimit + 60 }.buttonStyle(ReadingToolbarButtonStyle()) }
-                    ForEach(Array(project.chats.suffix(visibleLimit))) { message in
+                    if displayedRange.lowerBound > 0 {
+                        Button("显示更早的对话") { windowStart = max(0, displayedRange.lowerBound - 60) }
+                            .buttonStyle(ReadingToolbarButtonStyle()).accessibilityIdentifier("history.load-earlier")
+                            .help("向前显示最多60条已保存对话，已显示的内容会保留。")
+                    }
+                    ForEach(Array(project.chats[displayedRange])) { message in
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text(message.role == "user" ? "你" : "伴读").font(.system(size: 13, weight: .semibold))
@@ -451,10 +468,14 @@ private struct SavedConversationHistory: View {
                             .background(message.id == focusedMessageID ? Palette.accent.opacity(0.055) : Color.clear).id(message.id)
                     }
                     if project.chats.isEmpty { Text("还没有保存的对话").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 200) }
+                    if displayedRange.upperBound < project.chats.count {
+                        Button("显示后续的对话") { windowEnd = min(project.chats.count, displayedRange.upperBound + 60) }
+                            .buttonStyle(ReadingToolbarButtonStyle()).accessibilityIdentifier("history.load-later")
+                            .help("继续显示最多60条后续对话，已显示的内容会保留。")
+                    }
                 }.padding(18)
-            }.onAppear { if let id = focusedMessageID { proxy.scrollTo(id, anchor: .center) } }
-                .onChange(of: focusedMessageID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
-            }
+            }.id(focusedMessageID)
+                .onChange(of: focusedMessageID) { _, id in resetWindow(id) }
         }.frame(minWidth: 360, idealWidth: 620, maxWidth: 900, minHeight: 320, idealHeight: 600, maxHeight: .infinity)
             .background(Palette.canvas).onExitCommand(perform: onClose)
     }
