@@ -153,6 +153,18 @@ import PDFKit
             }
             observations["stablePageSamples"] = stable
             let project = store.book!, root = store.libraryRootURL, preferences = store.currentQueryPreferences
+            let paperPreview = PositionNotePreview.make("原话。[unit:p1][doc:n1]", project: project)
+            checks["paperPreviewUsesReadableReferences"] = !paperPreview.contains("[unit:") && !paperPreview.contains("[doc:") && paperPreview.contains("第 1 页") && paperPreview.contains("人物动机 1")
+            checks["paperPreviewKeepsLiteralCodeAndUnicode"] = PositionNotePreview.make("`[unit:p1]` e\u{301} 👩🏽‍💻", project: project) == "[unit:p1] e\u{301} 👩🏽‍💻"
+            let installed = NSFontManager.shared.availableFontFamilies.sorted().compactMap { family -> (String, NSFont)? in
+                guard let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 21) else { return nil }; return (family, font)
+            }
+            guard let chosen = installed.first(where: { NSFont(name: $0.0, size: 21) == nil }) ?? installed.first else { throw ReadingError.invalid("No installed font family available") }
+            var fontPlacement = ReadingNotePlacement(sourceHash: project.sourceHash, unitID: "p1", page: 1, x: 0.5, y: 0.5, fontFamily: chosen.0, fontSize: 21)
+            let custom = PositionNoteTypography.native(fontPlacement)
+            checks["paperAndEditorResolveInstalledFontFamily"] = custom.fontName == chosen.1.fontName && custom.pointSize == 21
+            fontPlacement.fontFamily = "monospaced"
+            checks["paperAndEditorShareMonospacedFont"] = PositionNoteTypography.native(fontPlacement).fontName == NSFont.monospacedSystemFont(ofSize: 21, weight: .regular).fontName
             let prepared = try ReadingPreparedAnswer.freeze(project: project, scope: .page, context: store.queryReadingContext, preferences: preferences)
             let history = prepared.history
             func memory(_ messages: [ChatMessage], count: Int) throws -> ConversationMemory {

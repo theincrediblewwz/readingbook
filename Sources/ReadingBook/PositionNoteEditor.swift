@@ -2,6 +2,16 @@ import SwiftUI
 import ReadingCore
 import CryptoKit
 
+@MainActor enum PositionNoteTypography {
+    static func native(_ placement: ReadingNotePlacement?) -> NSFont {
+        let family = placement?.fontFamily ?? "serif", size = placement?.fontSize ?? 15
+        if family == "system" { return .systemFont(ofSize: size) }
+        if family == "monospaced" { return .monospacedSystemFont(ofSize: size, weight: .regular) }
+        if family == "serif" { return NSFont(name: "Songti SC", size: size) ?? NSFont(name: "STSong", size: size) ?? .systemFont(ofSize: size) }
+        return NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: size) ?? .systemFont(ofSize: size)
+    }
+}
+
 private struct PositionNoteDraft: Codable {
     var bookID: String
     var sourceHash: String
@@ -194,10 +204,7 @@ struct PositionNoteEditor: View {
     }
     private var hasChanges: Bool { text != request.text || placement != request.placement || request.recovered || (request.document == nil && !text.isEmpty) }
     private var noteNSFont: NSFont {
-        let family = placement?.fontFamily ?? "serif", size = placement?.fontSize ?? 15
-        if family == "system" { return .systemFont(ofSize: size) }
-        if family == "monospaced" { return .monospacedSystemFont(ofSize: size, weight: .regular) }
-        return NSFont(name: family == "serif" ? "Songti SC" : family, size: size) ?? .systemFont(ofSize: size)
+        PositionNoteTypography.native(placement)
     }
     private func scheduleDraft() {
         draftSaveTask?.cancel()

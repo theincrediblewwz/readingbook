@@ -6,6 +6,22 @@ private struct PositionNoteStackPresentation: Identifiable {
     let ids: [String]
 }
 
+enum PositionNotePreview {
+    /// This is a display-only, bounded preview. The ordinary Markdown document
+    /// remains byte-for-byte intact for editing, saving, export and backup.
+    static func make(_ source: String, project: BookProject) -> String {
+        let rendered = MarkdownReferenceLinks.render(source, bookID: project.id, project: project)
+        guard let value = try? AttributedString(markdown: rendered, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) else { return source }
+        var result = "", previousReference: URL?
+        for run in value.runs {
+            let reference = run.link.flatMap { $0.scheme == "readingbook" ? $0 : nil }
+            if let reference, let previousReference, reference != previousReference { result += " · " }
+            result += String(value[run.range].characters); previousReference = reference
+        }
+        return result
+    }
+}
+
 /// Paper is confined to a separate part of the book surface. It cannot cover
 /// a PDF glyph, even at a large scale, after rotation or in a narrow window.
 struct PositionNoteMargin: View {
@@ -57,7 +73,11 @@ struct PositionNoteMargin: View {
                 var values: [String: String] = [:], dates: [String: Date] = [:]
                 for document in book.activeDocuments where wanted.contains(document.id) {
                     if Task.isCancelled { return }
-                    if let body = try? await store.repository.readDocument(bookID: book.id, document: document) { values[document.id] = String(body.prefix(2400)); dates[document.id] = document.updatedAt }
+                    if let body = try? await store.repository.readDocument(bookID: book.id, document: document) {
+                        let source = String(body.prefix(2400))
+                        values[document.id] = await Task.detached(priority: .utility) { PositionNotePreview.make(source, project: book) }.value
+                        dates[document.id] = document.updatedAt
+                    }
                 }
                 guard !Task.isCancelled, owner.matches(store) else { return }; snippets = values; noteDates = dates
             }
@@ -98,15 +118,11 @@ struct PositionNotePaper: View {
     @Environment(\.readingReduceMotion) private var reduceMotion
     private var placement: ReadingNotePlacement? { store.readerCollections.notePlacements?[id] }
     private var font: Font {
-        let size = placement?.fontSize ?? 15, family = placement?.fontFamily ?? "serif"
-        if family == "system" { return .system(size: size) }
-        if family == "monospaced" { return .system(size: size, design: .monospaced) }
-        return .custom(family == "serif" ? "Songti SC" : family, size: size)
+        Font(PositionNoteTypography.native(placement))
     }
     private var resolvedHeight: CGFloat {
         if let height { return height }
-        let family = placement?.fontFamily ?? "serif", size = placement?.fontSize ?? 15
-        let native = NSFontManager.shared.font(withFamily: family == "serif" ? "Songti SC" : family, traits: [], weight: 5, size: size) ?? NSFont.systemFont(ofSize: size)
+        let native = PositionNoteTypography.native(placement)
         let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = 5
         let bounds = (text as NSString).boundingRect(with: CGSize(width: width - 36, height: 10_000), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: native, .paragraphStyle: paragraph])
         return min(300, max(100, ceil(bounds.height) + 36))
@@ -172,7 +188,10 @@ struct PositionNoteStackBrowser: View {
                 var loaded: [String: String] = [:]
                 for document in book.activeDocuments where ids.contains(document.id) {
                     if Task.isCancelled { return }
-                    if let text = try? await store.repository.readDocument(bookID: book.id, document: document) { loaded[document.id] = String(text.prefix(2400)) }
+                    if let text = try? await store.repository.readDocument(bookID: book.id, document: document) {
+                        let source = String(text.prefix(2400))
+                        loaded[document.id] = await Task.detached(priority: .utility) { PositionNotePreview.make(source, project: book) }.value
+                    }
                 }
                 guard owner.matches(store), !Task.isCancelled else { return }; contents = loaded
             }.onChange(of: store.collectionOwnerKey) { _, _ in close() }
