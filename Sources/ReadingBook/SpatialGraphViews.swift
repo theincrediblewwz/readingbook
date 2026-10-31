@@ -390,9 +390,9 @@ struct KnowledgeLibraryView: View {
         HStack(spacing: 2) {
             ForEach([("documents", "笔记"), ("insights", "分析"), ("entities", "要素")], id: \.0) { item in
                 Button { section = item.0 } label: { Text(item.1).font(.system(size: 15)).frame(minWidth: 44, minHeight: 44) }
-                    .buttonStyle(ReadingToolbarButtonStyle(selected: section == item.0)).accessibilityAddTraits(section == item.0 ? .isSelected : [])
+                    .buttonStyle(ReadingToolbarButtonStyle(selected: section == item.0)).accessibilityLabel(item.1).help("查看\(item.1)").accessibilityAddTraits(section == item.0 ? .isSelected : [])
             }
-        }.accessibilityLabel("知识库内容分类").disabled(!query.isEmpty)
+        }.accessibilityElement(children: .contain).accessibilityLabel("知识库内容分类").disabled(!query.isEmpty)
     }
     private var librarySearch: some View {
         HStack(spacing: 9) {
@@ -408,12 +408,7 @@ struct KnowledgeLibraryView: View {
     private func sectionLabel(_ title: String, count: Int) -> some View {
         Text("\(title) · \(count)").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 6)
     }
-    private func excerpt(_ markdown: String) -> String {
-        let compact = markdown.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, let match = compact.range(of: query, options: .caseInsensitive) else { return String(compact.prefix(120)) }
-        let start = compact.index(match.lowerBound, offsetBy: -30, limitedBy: compact.startIndex) ?? compact.startIndex
-        return (start == compact.startIndex ? "" : "…") + String(compact[start...].prefix(120))
-    }
+    private func excerpt(_ markdown: String) -> String { ReadingKnowledgeExcerpt.make(markdown, query: query) }
     private func insightSources(_ insight: ReadingInsight) -> some View {
         Menu("回到原文") {
             ForEach(insight.unitIDs, id: \.self) { id in

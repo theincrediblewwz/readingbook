@@ -206,16 +206,21 @@ public struct ReadingQuerySnapshot: Sendable {
             } else { documents = active }
             title += " · \(documents.count) 篇"
         }
-        let appended = Set(appendedDocumentIDs), active = project.activeDocuments
-        guard appendedDocumentIDs.count <= 1024, appended.count == appendedDocumentIDs.count,
-              appended.isSubset(of: Set(active.map(\.id))) else { throw ReadingError.invalid("附加笔记包含重复、已删除或不存在的文档，或超过范围上限。") }
-        if scope != .notes, !appended.isEmpty {
-            documents = active.filter { appended.contains($0.id) }
-            title += " · 附加 \(documents.count) 篇笔记"
+        let appended = Set(appendedDocumentIDs)
+        guard appendedDocumentIDs.count <= 1024, appended.count == appendedDocumentIDs.count else { throw ReadingError.invalid("附加笔记包含重复、已删除或不存在的文档，或超过范围上限。") }
+        if !appended.isEmpty {
+            let active = project.activeDocuments
+            guard appended.isSubset(of: Set(active.map(\.id))) else { throw ReadingError.invalid("附加笔记包含重复、已删除或不存在的文档，或超过范围上限。") }
+            if scope != .notes {
+                documents = active.filter { appended.contains($0.id) }
+                title += " · 附加 \(documents.count) 篇笔记"
+            }
         }
         let layoutIDs = Set(authorizedNodeIDs)
-        guard authorizedNodeIDs.count <= 1024, layoutIDs.count == authorizedNodeIDs.count,
-              layoutIDs.isSubset(of: Set(project.nodes.map(\.id))) else { throw ReadingError.invalid("附加布局必须是当前书中真实、无重复的物理节点，且不超过1024个。") }
+        guard authorizedNodeIDs.count <= 1024, layoutIDs.count == authorizedNodeIDs.count else { throw ReadingError.invalid("附加布局必须是当前书中真实、无重复的物理节点，且不超过1024个。") }
+        if !layoutIDs.isEmpty {
+            guard layoutIDs.isSubset(of: Set(project.nodes.map(\.id))) else { throw ReadingError.invalid("附加布局必须是当前书中真实、无重复的物理节点，且不超过1024个。") }
+        }
         let sortedLayoutIDs = layoutIDs.sorted()
         if !sortedLayoutIDs.isEmpty { title += " · 附加 \(sortedLayoutIDs.count) 个布局节点" }
         let sources = try selectedSlices ?? units.map { unit in
