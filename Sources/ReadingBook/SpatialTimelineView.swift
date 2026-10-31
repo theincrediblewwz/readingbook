@@ -2,12 +2,17 @@ import SwiftUI
 import MapKit
 import ReadingCore
 
-private struct ReadingMapPoint: Identifiable {
+private struct ReadingMapPoint: Identifiable, Equatable {
     var id: String
     var targetID: String
     var title: String
     var subtitle: String
     var coordinate: CLLocationCoordinate2D
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id.utf8.elementsEqual(rhs.id.utf8) && lhs.targetID.utf8.elementsEqual(rhs.targetID.utf8)
+            && lhs.title.utf8.elementsEqual(rhs.title.utf8) && lhs.subtitle.utf8.elementsEqual(rhs.subtitle.utf8)
+            && lhs.coordinate.latitude == rhs.coordinate.latitude && lhs.coordinate.longitude == rhs.coordinate.longitude
+    }
 }
 
 /// One floating time card over a full viewport map. Details stay below the
@@ -16,6 +21,7 @@ struct SpatialTimelineView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.readingReduceMotion) private var reduceMotion
     @State private var camera: MapCameraPosition = .automatic
+    @State private var mapSelection: ReadingMapSelection?
     @State private var showingEvents = false
     @State private var editingRange = false
     @State private var expandedEventID: String?
@@ -325,22 +331,24 @@ struct SpatialTimelineView: View {
         locateSelection(id)
     }
 
+    private var mapScope: ReadingMapScope {
+        ReadingMapScope(root: store.libraryRootURL, key: store.workspaceMemoryKey)
+    }
     private var bookMap: some View {
         let expectedKey = store.workspaceMemoryKey
-        let sequence = footprintSequence
-        return Map(position: $camera) {
-            if sequence.count > 1 {
-                MapPolyline(coordinates: sequence).stroke(Palette.copper.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
-            }
-            ForEach(points) { point in
-                Annotation("", coordinate: point.coordinate) { mapMarker(point) }
-            }
+        let expectedRoot = store.libraryRootURL
+        return ReadingMapRenderer(points: points, sequence: footprintSequence,
+                                  selectedID: store.selectedObjectID, scope: mapScope,
+                                  cameraValue: camera, camera: $camera, selection: $mapSelection)
+        .equatable()
+        .onChange(of: mapSelection) { _, value in
+            guard let value, value.scope == mapScope else { return }
+            selectEvent(value.targetID)
         }
-        .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
         .onMapCameraChange(frequency: .onEnd) { context in
             let region = context.region
             let saved = WorkspaceMapMemory(latitude: region.center.latitude, longitude: region.center.longitude, latitudeDelta: region.span.latitudeDelta, longitudeDelta: region.span.longitudeDelta)
-            guard memoryScope == expectedKey, saved.isValid else { return }
+            guard memoryScope == expectedKey, store.libraryRootURL == expectedRoot, saved.isValid else { return }
             store.updateWorkspaceMemory({ $0.map = saved }, expectedKey: expectedKey)
         }
         .safeAreaPadding(.top, topReserve).safeAreaPadding(.trailing, 16)
@@ -593,23 +601,6 @@ struct SpatialTimelineView: View {
             }
         }
     }
-    private func mapMarker(_ point: ReadingMapPoint) -> some View {
-        let selected = store.selectedObjectID == point.targetID
-        return Button { selectEvent(point.targetID) } label: {
-            VStack(spacing: 4) {
-                Image(systemName: selected ? "mappin" : "circle.fill").font(.system(size: selected ? 18 : 9, weight: .semibold))
-                    .foregroundStyle(selected ? Palette.surface : Palette.accent)
-                    .frame(width: selected ? 42 : 22, height: selected ? 42 : 22)
-                    .background(selected ? Palette.accent : Palette.surface, in: Circle())
-                    .overlay(Circle().stroke(Palette.accent.opacity(0.5), lineWidth: 1))
-                if selected {
-                    Text(point.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.accent).lineLimit(1).truncationMode(.middle).frame(maxWidth: 240).padding(.horizontal, 14).padding(.vertical, 8).background(Palette.surface, in: Capsule())
-                    Text(point.subtitle).font(.system(size: 13)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 240).padding(.horizontal, 9).padding(.vertical, 5).background(Palette.surface.opacity(0.94), in: Capsule())
-                }
-            }.frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
-        }.buttonStyle(.plain).help("\(point.title) · \(point.subtitle)").accessibilityLabel("\(point.title)，\(point.subtitle)")
-    }
-
     private var rangeEditor: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("精确时间范围").font(.headline)
@@ -796,4 +787,59 @@ struct SpatialTimelineView: View {
 private struct TimelinePanelSizeKey: PreferenceKey {
     static var defaultValue = CGSize.zero
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+}
+
+private struct ReadingMapScope: Equatable {
+    let root: URL
+    let key: String?
+}
+private struct ReadingMapSelection: Equatable {
+    let targetID: String
+    let scope: ReadingMapScope
+    let token = UUID()
+}
+/// The time card can update without rebuilding unchanged MapKit annotations.
+/// Bindings deliver camera commands and clicks; actions are handled by the current
+/// parent view, so this equality never retains an old action closure.
+private struct ReadingMapRenderer: View, Equatable {
+    let points: [ReadingMapPoint]
+    let sequence: [CLLocationCoordinate2D]
+    let selectedID: String?
+    let scope: ReadingMapScope
+    let cameraValue: MapCameraPosition
+    @Binding var camera: MapCameraPosition
+    @Binding var selection: ReadingMapSelection?
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.scope == rhs.scope && lhs.selectedID == rhs.selectedID && lhs.cameraValue == rhs.cameraValue
+            && lhs.points == rhs.points && lhs.sequence.count == rhs.sequence.count
+            && zip(lhs.sequence, rhs.sequence).allSatisfy { $0.latitude == $1.latitude && $0.longitude == $1.longitude }
+    }
+    var body: some View {
+        Map(position: $camera) {
+            if sequence.count > 1 {
+                MapPolyline(coordinates: sequence).stroke(Palette.copper.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
+            }
+            ForEach(points) { point in
+                Annotation("", coordinate: point.coordinate) { mapMarker(point) }
+            }
+        }
+        .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
+    }
+    private func mapMarker(_ point: ReadingMapPoint) -> some View {
+        let selected = selectedID == point.targetID
+        return Button { selection = ReadingMapSelection(targetID: point.targetID, scope: scope) } label: {
+            VStack(spacing: 4) {
+                Image(systemName: selected ? "mappin" : "circle.fill").font(.system(size: selected ? 18 : 9, weight: .semibold))
+                    .foregroundStyle(selected ? Palette.surface : Palette.accent)
+                    .frame(width: selected ? 42 : 22, height: selected ? 42 : 22)
+                    .background(selected ? Palette.accent : Palette.surface, in: Circle())
+                    .overlay(Circle().stroke(Palette.accent.opacity(0.5), lineWidth: 1))
+                if selected {
+                    Text(point.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.accent).lineLimit(1).truncationMode(.middle).frame(maxWidth: 240).padding(.horizontal, 14).padding(.vertical, 8).background(Palette.surface, in: Capsule())
+                    Text(point.subtitle).font(.system(size: 13)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 240).padding(.horizontal, 9).padding(.vertical, 5).background(Palette.surface.opacity(0.94), in: Capsule())
+                }
+            }.frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(.plain).help("\(point.title) · \(point.subtitle)").accessibilityLabel("\(point.title)，\(point.subtitle)")
+    }
+
 }

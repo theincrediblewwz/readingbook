@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import Foundation
 import AppKit
 import ReadingCore
@@ -139,7 +140,15 @@ struct GraphSurface: View {
     @State private var savingConnection = false
     @State private var savingPosition = false
     @State private var editingLineID: String?
+    @State private var nodeActions = PassthroughSubject<NodeIntent, Never>()
+    private enum NodeIntent {
+        case activate(String, Bool), drag(String, CGSize, Bool), cancelNode
+        case port(String, PortSide), portDrag(String, PortSide, CGSize, Bool), cancelConnection
+        case inspect(String), remove(String), startConnection(String), connect(String)
+    }
     @State private var lineDraft = ""
+    @State private var lineActions = PassthroughSubject<LineIntent, Never>()
+    private enum LineIntent { case rename(GraphLine), remove(String) }
     @State private var savingLine = false
     @State private var message = ""
     @State private var canvasInputID = UUID()
@@ -223,6 +232,7 @@ struct GraphSurface: View {
                 let edges = renderedLines(phase: motion)
                 let rendered = edges.filter { $0.curve.bounds.intersects(viewport) }
                 let labels = edges.filter { labelVisible($0, in: geometry.size) }
+
                 ZStack(alignment: .topLeading) {
                 Canvas { context, _ in
                     context.translateBy(x: geometry.size.width / 2 - camera.center.x * camera.scale,
@@ -242,7 +252,7 @@ struct GraphSurface: View {
                         .position(camera.screen(CGPoint(x: edge.curve.middle.x, y: edge.curve.middle.y - 11), in: geometry.size))
                 }
                 ForEach(visibleNodes) { item in
-                    nodeShell(item).scaleEffect(camera.scale)
+                    ReusedNode(key: nodeReuseKey(item)) { nodeShell(item) }.equatable().scaleEffect(camera.scale)
                         .position(camera.screen(point(item, phase: motion), in: geometry.size)).zIndex(item.id == selectedPhysicalID ? 2 : 1)
                 }
                 }
@@ -340,6 +350,26 @@ struct GraphSurface: View {
             if let drag = nodeDragState, !ids.contains(drag.id) { nodeDragState = nil; gestureEpoch += 1 }
         }
         .onChange(of: lines.map(\.id)) { _, ids in if let id = editingLineID, !ids.contains(id) { editingLineID = nil } }
+        .onReceive(nodeActions) { action in
+            switch action {
+            case .activate(let id, let opening): if let item = renderCache.byID[id] { activate(item, opening: opening) }
+            case .drag(let id, let delta, let ended): if let item = renderCache.byID[id] { updateNodeDrag(item, delta: delta, ended: ended) }
+            case .cancelNode: if !savingPosition { nodeDragState = nil }
+            case .port(let id, let side): if let item = renderCache.byID[id] { portActivated(item, side: side) }
+            case .portDrag(let id, let side, let delta, let ended): if let item = renderCache.byID[id] { updatePortDrag(item, side: side, delta: delta, ended: ended) }
+            case .cancelConnection: cancelConnection()
+            case .inspect(let id): inspect?(id)
+            case .remove(let id): remove?(id)
+            case .startConnection(let id): if let item = renderCache.byID[id] { beginConnection(item, side: .trailing) }
+            case .connect(let id): if let source = connectionFromID { commitConnection(from: source, to: id) }
+            }
+        }
+        .onReceive(lineActions) { action in
+            switch action {
+            case .rename(let line): beginRename(line)
+            case .remove(let id): deleteLine(id)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ReadingBookCaptureWorkspaceMemory"))) { _ in saveCameraMemory() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in cancelTransientInteractions() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in cancelTransientInteractions() }
@@ -608,23 +638,72 @@ struct GraphSurface: View {
         Text(statusText).font(.system(size: 13)).foregroundStyle(.secondary)
             .padding(.horizontal, 16).padding(.vertical, 10)
     }
+    private struct NodeReuseKey: Equatable {
+        let item: GraphItem
+        let ordinal: Int
+        let selected: Bool
+        let sourceID: String?
+        let targetID: String?
+        let flags: [Bool]
+        let epoch: Int
+        let canvasID: UUID
+        let root: URL
+        let scope: String?
+        let menuText: [String]
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.item == rhs.item && lhs.item.id.utf8.elementsEqual(rhs.item.id.utf8)
+                && lhs.item.targetID.utf8.elementsEqual(rhs.item.targetID.utf8)
+                && lhs.item.title.utf8.elementsEqual(rhs.item.title.utf8)
+                && lhs.item.subtitle.utf8.elementsEqual(rhs.item.subtitle.utf8)
+                && lhs.item.documentIDs.count == rhs.item.documentIDs.count
+                && zip(lhs.item.documentIDs, rhs.item.documentIDs).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
+                && lhs.ordinal == rhs.ordinal && lhs.selected == rhs.selected
+                && lhs.sourceID == rhs.sourceID && lhs.targetID == rhs.targetID && lhs.flags == rhs.flags
+                && lhs.epoch == rhs.epoch && lhs.canvasID == rhs.canvasID && lhs.root == rhs.root && lhs.scope == rhs.scope
+                && lhs.menuText.count == rhs.menuText.count
+                && zip(lhs.menuText, rhs.menuText).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
+        }
+    }
+    private func nodeReuseKey(_ item: GraphItem) -> NodeReuseKey {
+        let menuText = (renderCache.incident[item.id] ?? []).flatMap { line -> [String] in
+            let other = renderCache.byID[line.from == item.id ? line.to : line.from]
+            return [line.id, line.from, line.to, line.label, other?.title ?? "节点", String(other.map(nodeNumber) ?? 0)]
+        }
+        return NodeReuseKey(item: item, ordinal: nodeNumber(item), selected: selectedPhysicalID == item.id,
+                            sourceID: connectionFromID, targetID: connectionTargetID,
+                            flags: [acceptsCanvasInput, savingPosition, savingConnection, savingLine, editingLineID != nil,
+                                    move != nil, connect != nil, open != nil, inspect != nil, remove != nil,
+                                    renameLine != nil, removeLine != nil],
+                            epoch: gestureEpoch, canvasID: canvasInputID, root: store.libraryRootURL,
+                            scope: store.workspaceMemoryKey, menuText: menuText)
+    }
+    /// Camera values stay outside this subtree. Every retained action sends an
+    /// intent to the current parent; no caller save/open/remove closure is cached.
+    /// The key covers content, identity, menu text, capabilities and input epoch.
+    private struct ReusedNode<Content: View>: View, Equatable {
+        let key: NodeReuseKey
+        @ViewBuilder var content: () -> Content
+        @Environment(\.colorScheme) private var colorScheme
+        static func == (lhs: Self, rhs: Self) -> Bool { lhs.key == rhs.key }
+        var body: some View { let _ = colorScheme; content() }
+    }
     private func nodeShell(_ item: GraphItem) -> some View {
         ZStack {
             nodeBody(item).overlay {
                 GraphPointerBridge(enabled: acceptsCanvasInput && !savingPosition && !savingConnection && !savingLine,
                                    movable: move != nil && connectionFromID == nil && editingLineID == nil,
                                    reservePorts: connect != nil, resetID: gestureEpoch, canvasID: canvasInputID,
-                                   click: { activate(item, opening: $0) },
-                                   drag: { updateNodeDrag(item, delta: $0, ended: $1) },
-                                   cancel: { if !savingPosition { nodeDragState = nil } })
+                                   click: { nodeActions.send(.activate(item.id, $0)) },
+                                   drag: { nodeActions.send(.drag(item.id, $0, $1)) },
+                                   cancel: { nodeActions.send(.cancelNode) })
             }
             .focusable().focusEffectDisabled().focused($focus, equals: .node(item.id))
-            .onKeyPress(.return) { activate(item, opening: true); return .handled }
-            .onKeyPress(.space) { activate(item); return .handled }
+            .onKeyPress(.return) { nodeActions.send(.activate(item.id, true)); return .handled }
+            .onKeyPress(.space) { nodeActions.send(.activate(item.id, false)); return .handled }
             .contextMenu { nodeMenu(item) }
             .accessibilityLabel("\(item.title)，\(item.subtitle)，节点 \(nodeNumber(item))")
             .accessibilityHint(connect == nil ? "单击选中，双击打开内容。" : "双击打开；拖动卡片移动，从边缘圆点拖到另一节点连线。")
-            .accessibilityAction { activate(item, opening: true) }
+            .accessibilityAction { nodeActions.send(.activate(item.id, true)) }
             if connect != nil {
                 port(item, side: .leading).offset(x: -nodeSize.width / 2)
                 port(item, side: .trailing).offset(x: nodeSize.width / 2)
@@ -653,26 +732,26 @@ struct GraphSurface: View {
             .overlay {
                 GraphPointerBridge(enabled: acceptsCanvasInput && !savingPosition && !savingConnection && !savingLine && editingLineID == nil,
                                    movable: true, resetID: gestureEpoch, canvasID: canvasInputID, requiresUnobscuredDragEnd: true,
-                                   click: { _ in portActivated(item, side: side) },
-                                   drag: { updatePortDrag(item, side: side, delta: $0, ended: $1) }, cancel: { cancelConnection() })
+                                   click: { _ in nodeActions.send(.port(item.id, side)) },
+                                   drag: { nodeActions.send(.portDrag(item.id, side, $0, $1)) }, cancel: { nodeActions.send(.cancelConnection) })
             }
             .focusable().focusEffectDisabled().focused($focus, equals: .port(item.id, side))
-            .onKeyPress(.return) { portActivated(item, side: side); return .handled }
-            .onKeyPress(.space) { portActivated(item, side: side); return .handled }
+            .onKeyPress(.return) { nodeActions.send(.port(item.id, side)); return .handled }
+            .onKeyPress(.space) { nodeActions.send(.port(item.id, side)); return .handled }
             .accessibilityLabel("\(item.title)，节点 \(nodeNumber(item))，\(side == .leading ? "左" : "右")连接点")
             .accessibilityHint("点击开始或完成连接，也可以按住拖向另一节点。")
-            .accessibilityAction { portActivated(item, side: side) }
+            .accessibilityAction { nodeActions.send(.port(item.id, side)) }
             .help("从这里拖到另一节点连线；也可点击后选择目标")
     }
     @ViewBuilder private func nodeMenu(_ item: GraphItem) -> some View {
-        if open != nil { Button(item.subtitle == "Markdown" ? "打开文档" : "打开内容") { activate(item, opening: true) } }
-        if let inspect { Button("查看来源与关联") { inspect(item.targetID) } }
+        if open != nil { Button(item.subtitle == "Markdown" ? "打开文档" : "打开内容") { nodeActions.send(.activate(item.id, true)) } }
+        if inspect != nil { Button("查看来源与关联") { nodeActions.send(.inspect(item.targetID)) } }
         if connect != nil {
             if let source = connectionFromID, source != item.id {
-                Button("连接到这里") { commitConnection(from: source, to: item.id) }
+                Button("连接到这里") { nodeActions.send(.connect(item.id)) }
             }
-            Button("从这里连线") { beginConnection(item, side: .trailing) }
-            if connectionFromID != nil { Button("取消连线") { cancelConnection() } }
+            Button("从这里连线") { nodeActions.send(.startConnection(item.id)) }
+            if connectionFromID != nil { Button("取消连线") { nodeActions.send(.cancelConnection) } }
         }
         let incident = renderCache.incident[item.id] ?? []
         if !incident.isEmpty, renameLine != nil || removeLine != nil {
@@ -680,13 +759,13 @@ struct GraphSurface: View {
                 ForEach(incident) { line in
                     let other = renderCache.byID[line.from == item.id ? line.to : line.from]
                     Menu("\(line.from == item.id ? "→" : "←") \(line.label) · \(other?.title ?? "节点") · \(other.map(nodeNumber) ?? 0)") {
-                        if renameLine != nil { Button("修改关系名称") { beginRename(line) } }
-                        if removeLine != nil { Button("连线移入回收站", role: .destructive) { deleteLine(line.id) } }
+                        if renameLine != nil { Button("修改关系名称") { lineActions.send(.rename(line)) } }
+                        if removeLine != nil { Button("连线移入回收站", role: .destructive) { lineActions.send(.remove(line.id)) } }
                     }
                 }
             }
         }
-        if let remove { Divider(); Button("节点移入回收站，保留文档", role: .destructive) { remove(item.id) } }
+        if remove != nil { Divider(); Button("节点移入回收站，保留文档", role: .destructive) { nodeActions.send(.remove(item.id)) } }
     }
     private func updateNodeDrag(_ item: GraphItem, delta: CGSize, ended: Bool) {
         guard acceptsCanvasInput, !savingPosition, editingLineID == nil, connectionFromID == nil, let move else { return }
