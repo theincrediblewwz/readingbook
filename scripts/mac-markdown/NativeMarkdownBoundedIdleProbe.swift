@@ -482,7 +482,8 @@ private struct BoundedIdleHeightKey: PreferenceKey {
         let leaf="MarkdownText(markdown: previewBody).readingTextContext(.notes)\n                                    .environment(\\.isReaderPanelActive, active)"
         let actual=["notesLeaf":reading.components(separatedBy:leaf).count==2,
             "nativeEditorUnchanged":reading.contains("editable: !store.isRecognizingPDF && active, visible: !preview && active)"),
-            "history":chat.contains("ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(message.content, bookID: project.id, project: project), presentationActiveOverride: true)"),
+            "history":chat.contains("ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(message.content, bookID: current.id, project: current), presentationActiveOverride: true)"),
+            "companionHistory":chat.contains("ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(reference.content, bookID: current.id, project: current), presentationActiveOverride: true)"),
             "savePreview":chat.contains("context: .notes, presentationActiveOverride: true)"),
             "continuation":history.contains("RichMarkdownView(markdown: markdown, presentationActiveOverride: true)"),
             "originalFullFrame":renderer.contains("}.frame(height: max(1, contentHeight))"),
