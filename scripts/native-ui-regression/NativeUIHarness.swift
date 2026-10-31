@@ -2,11 +2,112 @@ import AppKit
 import SwiftUI
 import Foundation
 import CryptoKit
+import MapKit
 import PDFKit
 import WebKit
 import Darwin
 @testable import ReadingBook
 @testable import ReadingCore
+
+/// Controlled native camera movement reproduces the stale position binding;
+/// clicks are public AppKit events delivered only to this fixture's own window.
+/// Physical pan/repeated click is checked separately with CUA on the Mac.
+@MainActor extension Runner {
+    func runMapRecenterScenario() async {
+        var checks: [String: Bool] = [:]
+        var observations: [[String: Double]] = []
+        func require(_ name: String, _ value: Bool) throws {
+            checks[name] = value
+            guard value else { throw ReadingError.invalid(name) }
+        }
+        do {
+            var project = syntheticBook()
+            for index in 0..<10 {
+                let evidence: [[String: Any]] = [["unitID": project.units[index].id,
+                    "quote": "Synthetic source page \(index + 1)."]]
+                project.entities.append(try JSONDecoder().decode(KnowledgeEntity.self, from: JSONSerialization.data(withJSONObject: [
+                    "id": "map-place-\(index)", "typeID": "place", "name": "Place \(index)", "aliases": [],
+                    "summary": "Saved place", "properties": [:], "latitude": 20.0 + Double(index),
+                    "longitude": 80.0 + Double(index), "evidence": evidence])))
+                project.events.append(try JSONDecoder().decode(KnowledgeEvent.self, from: JSONSerialization.data(withJSONObject: [
+                    "id": "map-event-\(index)", "name": "Event \(index)", "dateText": "Year \(200 + index)",
+                    "startYear": 200 + index, "summary": "Saved event", "participantIDs": [],
+                    "placeIDs": ["map-place-\(index)"], "evidence": evidence])))
+            }
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            let before = try encoder.encode(project)
+            store.books = [project]; store.bookID = project.id
+            store.selectedUnitID = project.units.last?.id; store.readingScopeCurrent = false
+            store.temporalAxis = "legacy"; store.timeFrom = 195; store.timeTo = 215
+            store.workspaceMemory = BookWorkspaceMemory(bookID: project.id, sourceHash: project.sourceHash)
+            store.updateWorkspaceMemory { $0.temporalAxis = "legacy"; $0.timeFrom = 195; $0.timeTo = 215 }
+            window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 1100, height: 760),
+                styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.title = "ReadingBook map recenter regression"
+            window.contentView = CountingHost(rootView: AnyView(SpatialTimelineView().environmentObject(store)
+                .environmentObject(ReadingTypographySettings()).environment(\.readingReduceMotion, true)))
+            window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            func nativeMap(_ view: NSView) -> MKMapView? {
+                (view as? MKMapView) ?? view.subviews.lazy.compactMap { nativeMap($0) }.first
+            }
+            try await Task.sleep(nanoseconds: 600_000_000)
+            guard let map = nativeMap(window.contentView!) else { throw ReadingError.invalid("Missing native map") }
+            let identity = ObjectIdentifier(map)
+            func observe() {
+                observations.append(["latitude": map.region.center.latitude, "longitude": map.region.center.longitude,
+                    "latitudeDelta": map.region.span.latitudeDelta, "longitudeDelta": map.region.span.longitudeDelta])
+            }
+            func clickMarker() throws {
+                guard let annotation = map.annotations.first(where: { abs($0.coordinate.latitude - 27) < 1e-8 }),
+                      let view = map.view(for: annotation) else { throw ReadingError.invalid("Marker view missing") }
+                let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+                guard window.contentView!.bounds.contains(window.contentView!.convert(point, from: nil)) else {
+                    throw ReadingError.invalid("Marker must be visible inside its test window")
+                }
+                let now = ProcessInfo.processInfo.systemUptime
+                guard let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: now,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1),
+                      let up = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [], timestamp: now + 0.01,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0) else {
+                    throw ReadingError.invalid("Unable to create fixture-local click")
+                }
+                NSApp.postEvent(down, atStart: false); NSApp.postEvent(up, atStart: false)
+            }
+            try require("allMarkersInitiallyPresent", map.annotations.filter { !($0 is MKUserLocation) }.count == 10)
+            try clickMarker(); try await Task.sleep(nanoseconds: 700_000_000)
+            try require("actualMarkerClickSelectedEvent", store.selectedObjectID == "map-event-7")
+            let target = map.region
+            observe(); metrics.scenario()
+            for cycle in 0..<cycles {
+                // This public native movement deliberately leaves the same
+                // desired command in the binding; no framework internals used.
+                map.setRegion(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: target.center.latitude + 0.2,
+                    longitude: target.center.longitude - 0.4), span: MKCoordinateSpan(latitudeDelta: target.span.latitudeDelta * 1.15,
+                    longitudeDelta: target.span.longitudeDelta * 1.15)), animated: false)
+                try await Task.sleep(nanoseconds: 250_000_000)
+                observe()
+                try require("nativeMovementApplied-\(cycle)", abs(map.region.center.longitude - target.center.longitude) > 0.2)
+                try clickMarker(); try await Task.sleep(nanoseconds: 500_000_000)
+                observe()
+                try require("sameMarkerRecentered-\(cycle)", abs(map.region.center.latitude - target.center.latitude) < 1e-6
+                    && abs(map.region.center.longitude - target.center.longitude) < 1e-6)
+                try require("sameMarkerZoomRestored-\(cycle)", abs(map.region.span.latitudeDelta - target.span.latitudeDelta) < 1e-5)
+                try require("nativeMapAndMarkersRetained-\(cycle)", nativeMap(window.contentView!).map(ObjectIdentifier.init) == identity
+                    && map.annotations.filter { !($0 is MKUserLocation) }.count == 10)
+                metrics.record("map-recenter-\(cycle)")
+            }
+            try require("projectBytesUnchanged", try encoder.encode(store.books[0]) == before)
+            try require("noModelRequests", !store.isQueryBusy && !store.isSmartReadingRunning && store.apiKey.isEmpty)
+            writeJSON("result.json", ["status": "passed", "mode": mode, "checks": checks, "checkCount": checks.count,
+                "regions": observations, "metrics": metrics.snapshot(), "realModelRequests": 0,
+                "scope": "Actual product MapKit; controlled native camera change and fixture-window AppKit marker clicks. Separate CUA covers physical pan."])
+        } catch {
+            writeJSON("result.json", ["status": "failed", "mode": mode, "reason": String(describing: error),
+                "checks": checks, "regions": observations, "metrics": metrics.snapshot()])
+        }
+        timer?.cancel(); window?.orderOut(nil); NSApp.terminate(nil)
+    }
+}
 
 final class Metrics: @unchecked Sendable {
     struct Pulse: Sendable { let queuedAt: Double; let phase: String; let action: String }
@@ -177,6 +278,7 @@ struct PanelHarnessRoot: View {
         store = AppStore()
         guard store.apiKey.isEmpty, store.savedServices.isEmpty else { fatalError("Harness service isolation failed") }
         store.settings = ProviderSettings(baseURL: "http://127.0.0.1:1/disabled", model: "")
+        if mode == "map-recenter" { await runMapRecenterScenario(); return }
         if mode == "pdf" { await runPDFScenario(); return }
         if mode == "samebook" { await runSameBookPDFScenario(); return }
         if mode == "boundary" { await runPDFBoundaryScenario(); return }

@@ -36,7 +36,9 @@ struct ReaderOutlinePanel: View {
     }
     private var visibleUnits: [SourceUnit] {
         guard panelActive, resultRequest == request else { return [] }
-        return bookmarksOnly ? results.filter { store.book?.bookmarks.contains($0.id) == true } : results
+        guard bookmarksOnly else { return results }
+        let bookmarkedIDs = Set(store.book?.bookmarks ?? [])
+        return results.filter { bookmarkedIDs.contains($0.id) }
     }
     private var isPDF: Bool { store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
     private var outlineOwner: String {

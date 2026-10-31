@@ -22,6 +22,8 @@ struct SpatialTimelineView: View {
     @Environment(\.readingReduceMotion) private var reduceMotion
     @State private var camera: MapCameraPosition = .automatic
     @State private var mapSelection: ReadingMapSelection?
+    @State private var observedCamera: ReadingMapCameraSnapshot?
+    @State private var selectionCameraCenter: CLLocationCoordinate2D?
     @State private var showingEvents = false
     @State private var editingRange = false
     @State private var expandedEventID: String?
@@ -297,6 +299,9 @@ struct SpatialTimelineView: View {
         .popover(isPresented: Binding(get: { inspectedObjectID != nil }, set: { if !$0 { inspectedObjectID = nil } })) {
             if let id = inspectedObjectID { ObjectInspector(id: id, onClose: { inspectedObjectID = nil }).environmentObject(store).frame(width: 330, height: 500) }
         }
+        .onChange(of: mapScope) { _, _ in
+            observedCamera = nil; selectionLayoutToken = nil; selectionCameraCenter = nil
+        }
         .onChange(of: store.selectedObjectID) { _, id in handleObjectSelection(id) }
         .onChange(of: store.selectedUnitID) { _, _ in
             if let id = store.selectedTemporalEntityID, !admittedEntities.contains(where: { $0.id == id }) { store.selectedTemporalEntityID = nil }
@@ -348,12 +353,28 @@ struct SpatialTimelineView: View {
         .onMapCameraChange(frequency: .onEnd) { context in
             let region = context.region
             let saved = WorkspaceMapMemory(latitude: region.center.latitude, longitude: region.center.longitude, latitudeDelta: region.span.latitudeDelta, longitudeDelta: region.span.longitudeDelta)
-            guard memoryScope == expectedKey, store.libraryRootURL == expectedRoot, saved.isValid else { return }
+            guard mapScope == ReadingMapScope(root: expectedRoot, key: expectedKey), saved.isValid else { return }
+            let actual = ReadingMapCameraSnapshot(context.camera)
+            if observedCamera?.matches(actual) != true {
+                observedCamera = actual
+                // A native macOS pan can leave the position binding at its last
+                // explicit region. Adopt actual geometry once, so locating the
+                // same marker again sends a different position to MapKit.
+                if !camera.positionedByUser, camera.region != nil || camera.camera != nil || camera.rect != nil {
+                    camera = .camera(context.camera)
+                }
+                // Do not let the delayed panel-layout adjustment undo a pan.
+                if let center = selectionCameraCenter, !actual.matchesCenter(center) {
+                    selectionLayoutToken = nil; selectionCameraCenter = nil
+                }
+            }
+            guard memoryScope == expectedKey else { return }
             store.updateWorkspaceMemory({ $0.map = saved }, expectedKey: expectedKey)
         }
         .safeAreaPadding(.top, topReserve).safeAreaPadding(.trailing, 16)
     }
     private func restoreMapMemory() {
+        observedCamera = nil; selectionCameraCenter = nil
         selectionLayoutToken = nil
         memoryScope = store.workspaceMemoryKey
         let saved = store.workspaceMemory
@@ -710,13 +731,13 @@ struct SpatialTimelineView: View {
     }
     private func locateSelection(_ id: String) {
         locate(id)
-        let token = UUID(), key = store.workspaceMemoryKey
+        let token = UUID(), scope = mapScope
         selectionLayoutToken = token
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 180_000_000)
             guard selectionLayoutToken == token else { return }
-            defer { selectionLayoutToken = nil }
-            guard key == store.workspaceMemoryKey, store.selectedObjectID == id, !camera.positionedByUser else { return }
+            defer { selectionLayoutToken = nil; selectionCameraCenter = nil }
+            guard scope == mapScope, store.selectedObjectID == id, !camera.positionedByUser else { return }
             locate(id)
         }
     }
@@ -734,6 +755,7 @@ struct SpatialTimelineView: View {
         center.latitude = min(85, max(-85, center.latitude))
         if center.longitude < -180 { center.longitude += 360 }
         if center.longitude > 180 { center.longitude -= 360 }
+        selectionCameraCenter = center
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) {
             camera = .region(MKCoordinateRegion(center: center, span: span))
         }
@@ -842,4 +864,28 @@ private struct ReadingMapRenderer: View, Equatable {
         }.buttonStyle(.plain).help("\(point.title) · \(point.subtitle)").accessibilityLabel("\(point.title)，\(point.subtitle)")
     }
 
+}
+
+private struct ReadingMapCameraSnapshot {
+    let latitude: Double
+    let longitude: Double
+    let distance: Double
+    let heading: Double
+    let pitch: Double
+    init(_ camera: MapCamera) {
+        latitude = camera.centerCoordinate.latitude; longitude = camera.centerCoordinate.longitude
+        distance = camera.distance; heading = camera.heading; pitch = camera.pitch
+    }
+    private func angle(_ a: Double, _ b: Double) -> Double {
+        let difference = abs(a - b).truncatingRemainder(dividingBy: 360)
+        return min(difference, 360 - difference)
+    }
+    func matchesCenter(_ center: CLLocationCoordinate2D) -> Bool {
+        abs(latitude - center.latitude) < 1e-7 && angle(longitude, center.longitude) < 1e-7
+    }
+    func matches(_ other: Self) -> Bool {
+        return abs(latitude - other.latitude) < 1e-8 && angle(longitude, other.longitude) < 1e-8
+            && abs(distance - other.distance) < max(0.001, max(abs(distance), abs(other.distance)) * 1e-9)
+            && angle(heading, other.heading) < 1e-6 && abs(pitch - other.pitch) < 1e-6
+    }
 }

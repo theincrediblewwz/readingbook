@@ -64,6 +64,7 @@ jobs:
           python3 scripts/native-ui-regression/run.py --mode samebook --cycles 3 --tag ci-samebook
           HARNESS_PDF_SCROLLER_STYLE=legacy python3 scripts/native-ui-regression/run.py --mode boundary --cycles 1 --tag ci-boundary-legacy
           HARNESS_PDF_SCROLLER_STYLE=overlay python3 scripts/native-ui-regression/run.py --mode boundary --cycles 1 --tag ci-boundary-overlay
+          python3 scripts/native-ui-regression/run.py --mode map-recenter --cycles 3 --tag ci-map-recenter
           python3 scripts/native-ui-regression/run.py --mode navigation --cycles 1 --tag ci-book-picker
           python3 scripts/native-ui-regression/run.py --mode continuation --cycles 12 --tag ci-continuation
           python3 scripts/native-ui-regression/run.py --mode urgent-search-overlay --cycles 3 --tag ci-urgent-search-overlay

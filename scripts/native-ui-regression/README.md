@@ -23,6 +23,12 @@ Passing also requires all actions to finish, preserved draft, no query/analysis 
 
 The first CI attempt `40635956572` remains a failed run: all 144 actions finished with no runtime warnings, but its undifferentiated global peak was 1.7156 seconds against the old global 1.5-second gate. It did not record enough attribution to establish whether the peak was initialization or an interaction. The phase-aware harness adds evidence and keeps the interactive gate unchanged; it does not retroactively convert that failure into a pass.
 
+## Repeated map marker positioning
+
+`--mode map-recenter --cycles 3` hosts the real `SpatialTimelineView` with ten synthetic places/events. It clicks the native annotation through public AppKit events confined to its own window, changes the actual camera through public MapKit, and clicks that same selected marker again. Every cycle requires a changed native center before the repeated click, restored center and zoom afterward, the same native map, all markers, and unchanged complete project bytes. Three cycles execute 16 checks. No installed library, credentials, real model, private MapKit API, or global event injection is used.
+
+This controlled camera change deliberately reproduces the stale desired-position binding; it is not a hardware drag or FPS test. Separate CUA evidence on the Mac covers a physical pan/repeated click. The pre-fix product passes initial click/movement but fails `sameMarkerRecentered-0`, establishing that the new regression detects the original fault.
+
 This checks programmatic state transitions and native layout. Physical-PDF cold import, pointer/selection/annotation QA, the full Core suite and installed Release validation remain separate checks.
 
 ## Physical PDF correctness mode
