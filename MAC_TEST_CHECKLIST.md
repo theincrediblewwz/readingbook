@@ -1,3 +1,9 @@
+> 2026-11-01 当前接续：0.23.32/build63已同步main并发布，产品源6c3569678cd8e22482b87cd67f98e57482b8bc7c，完整CI41243871702通过790项Core/133项指定回归、两种滚动条各20项新增布局检查及全部旧门槛，零编译警告。Mac仍锁屏，安装版仍31/62；安装替换、原书GUI与被遮卡片的实际悬停验收尚未完成，不得报整批完成。先读[七项结果与待办](Design/2026-11-01-note-layout-and-library-results.md)和logs/note-layout-covers-20261101/STATUS.md。解锁问题已发出，不重复询问授权或改锁屏设置。用户dirty进度文档SHA不变，最新回收状态和新增译文都要保留，不用初始备份覆盖现库。
+
+32交付入口：该批delivery/verified-release-32.json、dist/0.23.32-ci-41243871702/verification.json、delivery/delivery-plan.json。Release430213965、artifact13058983743；canonical ZIP27295650B、SHA2df4e7058c9e90266028379eebf372541f40a29ab217302a05b94611e7b98dff。不要重复创建发布或重跑已通过CI。安装器要求正常退出原安装进程后才备份和替换，禁止强退。当前源CI与早先未变组件人工截图分开封存于current-source-ui.json，明确localFinalInstalledUICompleted=false，不能当成原安装验收。四种缩放恢复与外侧滚动条已自动验证；真实悬停顺滑程度仍待本机检查。两次旧CI失败与锁屏中断证据保留。
+
+两阶段已清理1425536KiB（约1.36GiB）可重建helper/调试程序/重复module cache，保留swift与clang两套共享缓存、增量对象、源、原始证据与私人保护。旧helper路径已退役，重建前读本批RETIRED_GENERATED.md。当前库27文件，原PDF/5篇笔记正文及旧分析保留；pre-install-preservation-32.json记录最新状态。原书104页、fitMode width，布局修正后适宽应按真实区域重算，自定义缩放须精确保留。新包重复载荷及30版的Release/tag/程序产物/回滚App清理须等32安装验收后，保留31回滚。七项完成后继续16类轮转，优先文件夹完整投影和跨组件状态，不恢复数学核查。
+
 > 2026-11-01：0.23.31/build62已同步main、发布、替换安装并完成原书两次启动验收。十点体验缺口、位置笔记与摘要紧凑布局已补齐；完整CI774/117、渲染15和新增原生38项及所有旧门槛通过，零编译警告。见[本批结果](Design/2026-11-01-ux-completion-results.md)和[逐项状态](Design/2026-10-31-ten-point-ux-status.md)。下方30及更旧是历史，不再作为当前待办。
 
 # 0.23.31 接续要点
