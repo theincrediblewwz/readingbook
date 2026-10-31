@@ -136,7 +136,8 @@ struct ReadingLayersWorkspaceView: View {
     }
 
     private func paper(wide: Bool) -> some View {
-        VStack(spacing: 0) {
+        let visibleLayers = layers, visibleAlignments = alignments
+        return VStack(spacing: 0) {
             paperHeader(wide: wide).padding(22)
             if !restorationNotice.isEmpty {
                 HStack(spacing: 10) {
@@ -159,9 +160,9 @@ struct ReadingLayersWorkspaceView: View {
                 LazyVStack(alignment: .leading, spacing: 20) {
                     if !contentUnitIDs.isEmpty { sourceQuote }
                     if let error = store.readingExperienceError { Label(error, systemImage: "exclamationmark.circle").foregroundStyle(.red).font(.system(size: 14)).textSelection(.enabled) }
-                    ForEach(layers) { layer in layerCard(layer) }
-                    ForEach(alignments) { alignment in alignmentCard(alignment) }
-                    if layers.isEmpty && alignments.isEmpty { emptyCompanion }
+                    ForEach(visibleLayers) { layer in layerCard(layer) }
+                    ForEach(visibleAlignments) { alignment in alignmentCard(alignment) }
+                    if visibleLayers.isEmpty && visibleAlignments.isEmpty { emptyCompanion }
                 }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider().opacity(0.6)
@@ -250,12 +251,15 @@ struct ReadingLayersWorkspaceView: View {
         }
     }
     private func sourceLinks(_ ids: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // This runs with the lazy card, so unseen history does not prepare an
+        // index. Small/repeated references retain the direct lookup path.
+        let sources = StoredReadingSourceIndex(anchors: anchors, units: store.book?.units ?? [], referencedAnchorIDs: ids)
+        return VStack(alignment: .leading, spacing: 8) {
             ForEach(ids, id: \.self) { id in
-                if let anchor = anchors.first(where: { $0.id == id }) {
+                if let anchor = sources.anchor(id: id) {
                     Button { store.focusReadingAnchor(id) } label: {
                         VStack(alignment: .leading, spacing: 8) {
-                            Label(store.book?.units.first(where: { $0.id == anchor.unitID })?.locator ?? "原文依据", systemImage: "arrow.uturn.backward").font(.system(size: 13, weight: .medium))
+                            Label(sources.locator(unitID: anchor.unitID) ?? "原文依据", systemImage: "arrow.uturn.backward").font(.system(size: 13, weight: .medium))
                             Text(anchor.quote).font(.system(size: 15, design: .serif)).lineLimit(4).multilineTextAlignment(.leading)
                         }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(14).background(Palette.accent.opacity(0.04), in: RoundedRectangle(cornerRadius: 12)).contentShape(Rectangle())
                     }.buttonStyle(.plain).foregroundStyle(Palette.accent)

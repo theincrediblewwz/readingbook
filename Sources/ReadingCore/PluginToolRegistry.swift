@@ -103,6 +103,18 @@ public struct PluginToolRegistry: Sendable {
         if tool.requiresReceipts { try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project) }
         var candidate = project
         let result = try tool.execute(arguments, project: &candidate, allowed: allowedUnitIDs)
+        // A successful read-only call already has to preserve the entire encoded
+        // project. Prove that once before the overlapping field checks. A failed
+        // encode or any difference keeps the original validation/error path.
+        // Standard completion has an additional host-authority gate even for an
+        // unchanged project, so it must always use the full path below.
+        if tool.readOnly, !(tool.pluginID == "builtin.standard-reading" && name == "reading_analysis" && phase == .reading) {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            if let original = try? encoder.encode(project), let unchanged = try? encoder.encode(candidate), original == unchanged {
+                try ManualTrashRuntime.validateReservedRecords(in: candidate)
+                return result
+            }
+        }
         if name == "views_configure", ReadingAnalysisAuthority.current != nil {
             guard project.views.allSatisfy({ old in candidate.views.contains(old) }),
                   candidate.views.filter({ view in !project.views.contains(where: { $0.id == view.id }) }).allSatisfy({ $0.configuration?["presentation"] == "inline" && $0.composition != nil }) else {
