@@ -1,6 +1,6 @@
 # 地图重复定位与书签筛选
 
-本批目标为 0.23.27/build58，先修地图正确性，再采用已测得收益的目录书签筛选改动。最终发布、安装和原书验收记录待完成后补齐。基线 main 为 `80c21dcb189bb4c4a52bc0187aec82bb77eb5209`；用户原有 progress 文档保持原样。
+0.23.27/build58 已同步 main、发布、替换本地安装并完成原书原生验收。地图重复定位已修复，目录书签筛选采用了有实测收益的改动。产品源为 `c10fca203f0d03c5374f39b15a66024fc4bb2a7e`，基线 main 为 `80c21dcb189bb4c4a52bc0187aec82bb77eb5209`；用户原有 progress 文档保持原样。
 
 ## 地图故障证据与修复
 
@@ -20,7 +20,7 @@ Apple 的[相机位置状态说明](https://developer.apple.com/documentation/ma
 
 旧 `visibleUnits` 对每一条结果线性扫描书签数组；新实现每次取得当前书签集合，再按原有结果顺序筛选。隐藏面板、旧搜索请求、非书签模式的提前返回保持；没有增加跨书或跨请求缓存。
 
-冻结协议后运行 24 个新进程，两个规模各六对，AB/BA 交替。比较包括建立集合、32 次变化输入的筛选与同样的包裹开销；完整输出的所有 SourceUnit 字段逐字节一致，并覆盖普通、全部结果、隐藏、旧请求及无当前书五种状态。
+冻结协议后运行 24 个新进程，两个规模各六对，AB/BA 交替。比较包括建立集合、32 次变化输入的筛选与同样的包裹开销。每对比较五种状态的最终完整 SourceUnit 数组，合计 60 组，所有字段逐字节一致；覆盖普通、全部结果、隐藏、旧请求及无当前书。另核对 32 次输入的汇总计数，没有把每次中间数组都称为完整输出比较。
 
 | 场景 | 局部 CPU 用时配对中位变化 | 每次筛选节省 | 最大额外峰值 RSS |
 | --- | ---: | ---: | ---: |
@@ -31,4 +31,22 @@ Apple 的[相机位置状态说明](https://developer.apple.com/documentation/ma
 
 ## 证据与保留
 
-证据在 `logs/map-recenter-20261031/`：`outline-experiment-plan.json`、`outline-formal/result.json`、`native-negative-control.json`、原始 trace 与逐次实际相机快照。原生回归的运行目录通过其汇总引用。原书、笔记、分析和偏好只读核对；新实验仅写工作目录内隔离库。最终完整 CI、安装、原书验收和清理数字将在交付阶段补充。
+证据在 `logs/map-recenter-20261031/`：`outline-experiment-plan.json`、`outline-formal/result.json`、`native-negative-control.json`、原始 trace 与逐次实际相机快照。原生回归的运行目录通过其汇总引用。新实验仅写工作目录内隔离库。当前产品还通过 14 项范围/坐标/来源校验及 CUA 真实拖动、重复点击；原生地图对象和标记保持。独立的原生日志补充亦为三类警告零。没有把一次未改变相机的 AX 缩放点击称为物理缩放成功；缩放恢复由三轮受控原生回归覆盖。
+
+## 发布与原书验收
+
+[完整 CI 41173030606](https://github.com/theincrediblewwz/readingbook/actions/runs/41173030606) 通过：730 项 Core、73 项指定回归、全部既有原生门槛及新增地图 16 项，编译警告零。CI artifact 为 `13032408120`。实际产品修改仅涉及 `SpatialTimelineView.swift`、`ReaderOutlinePanel.swift` 和 Info 版本；另增加原生回归及其 CI 入口，Core 产品代码保持。
+
+[0.23.27 发布](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.27) 与安装均完成。双架构 ZIP 为 `dist/ReadingBook-0.23.27-Mac.zip`，25,253,677 字节，SHA256 为 `1da0d48ec69ed568b3bf9901e87fe97bd4fa83feb8e5dd54598b9ef0186b9138`。安装的 36 个程序文件与 CI 核验清单完全一致，签名及资源核验通过。
+
+安装版两次实际进程 `58190/58622` 检查了 About 27/58、原书 104/1484 页及 343% 缩放、102 页已有译文、伴读/对话与空草稿、目录及空书签、书库顶部书名重选、正常退出重启后仍为 104/343%。原书已有的时间与地图组件保留，目前为 0 条事件；非空地图故障与修复使用隔离合成书验证，未向原书添加测试标记、组件或笔记，未请求真实模型。两次实际 PID 的三类布局/状态警告均零。
+
+以安装前的新鲜保护快照重核，原库仍为 20 个文件，原书、笔记、分析字节保持，只有 Workspace 的正常导航状态更新；全部生产偏好完全一致。当前完整保护和 0.23.26 App 回滚在 `private-books/map-recenter-20261031/install-before-0.23.27/`。未用旧库覆盖原数据，用户未提交 progress 文档 SHA 保持不变。最终入口为 `delivery/final-delivery.json`、`delivery/post-install-check-27/` 和 `delivery/ui-native-logs-27/`，没有待解锁或待安装事项。
+
+## 清理与下一批
+
+实际执行过的关键程序、源码、输入、完整最终数组和失败负对照收进唯一 `replay-evidence.zip`，63,924,594 字节，SHA256 为 `347e18d8bf4e3860a1d2fd259bbae8f7c5720b0b17a24627c94c20d76e65a323`；183 条路径、82 个去重块及窄前缀恢复均核验。使用前先读 `REPLAY_AND_RETIRED.md`，按前缀恢复；对象文件、dSYM、未执行的本机 Release 和重复展开输出已清理，不能盲用历史 binary/readyappPath。
+
+两阶段清理实际退役 1,456,828 KiB，约 1.39 GiB。全批工作目录约 5.26→5.34 GiB，净增约 80.8 MiB，包含新保护、关键压缩证据和共享内容；删除量与全批净变化分别报告。保留活跃 mac-debug、共享缓存、27/26 两版 ZIP 与 26 App 回滚、全部非 App 私人保护。旧 25 的远端 Release/tag/Actions 程序包、本地过期 ZIP 和精确核验的旧 App 已退役；远端仅 main 与 27/26 两版程序，提交历史保留。另保留一份 417,245 字节的历史失败原生诊断，首次审计把所有 artifact 都当作程序包而拒绝，识别并保留该诊断后的核对见 `delivery/remote-final-state.json`，原拒绝也保留。
+
+其余组件继续轮转，下一批只读审查见 `next-components-audit.md`：多层伴读来源准备、实际只读工具执行、对话附件准备、知识库剩余界面。它们尚未测得新收益，也没有混入本版。保留已有缓存、权限、范围和来源边界，不恢复数学核查。
