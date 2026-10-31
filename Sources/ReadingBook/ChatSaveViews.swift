@@ -582,6 +582,7 @@ struct SavedConversationHistory: View {
             }.padding(.horizontal, 18).padding(.bottom, 8)
             ReaderRecordGroupingBar(state: browser).padding(.horizontal, 18).padding(.bottom, 8)
             Divider().opacity(0.4)
+            ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     if kind == "chat" {
@@ -590,7 +591,7 @@ struct SavedConversationHistory: View {
                                 .buttonStyle(ReadingToolbarButtonStyle()).accessibilityIdentifier("history.load-earlier")
                                 .help("向前显示最多60条已保存对话，已显示的内容会保留。")
                         }
-                        chatRecords
+                        chatRecords { proxy.scrollTo($0, anchor: .top) }
                         if messages.isEmpty { emptyHistory }
                         if displayedRange.upperBound < messages.count {
                             Button("显示后续的对话") { windowEnd = min(messages.count, displayedRange.upperBound + 60) }
@@ -612,6 +613,7 @@ struct SavedConversationHistory: View {
             }.id(focusedMessageID)
                 .onChange(of: focusedMessageID) { _, id in folderID = nil; kind = "chat"; resetWindow(id) }
                 .onChange(of: folderID) { _, _ in resetWindow(nil) }
+            }
         }.frame(minWidth: 360, idealWidth: 740, maxWidth: 1000, minHeight: 320, idealHeight: 620, maxHeight: .infinity)
             .background(Palette.canvas).onExitCommand(perform: onClose)
             .onAppear { owner = WorkspacePickerOwner(store: store) }
@@ -625,10 +627,10 @@ struct SavedConversationHistory: View {
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }.frame(maxWidth: .infinity, minHeight: 200)
     }
-    private var chatRecords: some View {
+    private func chatRecords(onFocus: @escaping (String) -> Void) -> some View {
         let visible = Array(messages[displayedRange])
         let byID = Dictionary(visible.map { ("chat:" + $0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return ReaderRecordSections(state: browser, ids: visible.map { "chat:" + $0.id }, focusedID: focusedMessageID.map { "chat:" + $0 }) { record, expanded in
+        return ReaderRecordSections(state: browser, ids: visible.map { "chat:" + $0.id }, focusedID: focusedMessageID.map { "chat:" + $0 }, onFocusReady: onFocus) { record, expanded in
             if let message = byID[record.id] {
                 let archived = current.readerCollections?.archivedChatIDs.contains(message.id) == true
                 ReaderRecordFoldCard(record: record, expanded: expanded,

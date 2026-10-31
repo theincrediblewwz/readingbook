@@ -51,6 +51,7 @@ struct ReaderRecordSections<Content: View>: View {
     @ObservedObject var state: ReaderRecordBrowserState
     let ids: [String]
     var focusedID: String? = nil
+    var onFocusReady: ((String) -> Void)? = nil
     var searching = false
     @ViewBuilder var row: (ReadingRecordDescriptor, Binding<Bool>) -> Content
     @State private var groups: [ReadingRecordGroup] = []
@@ -59,10 +60,10 @@ struct ReaderRecordSections<Content: View>: View {
     @State private var limits: [String: Int] = [:]
     @State private var ownerKey = ""
     @State private var appliedFoldRevision = 0
+    @State private var appliedFocusKey = ""
     @State private var preparationError: String?
     private var preparationKey: String { store.collectionOwnerKey + "|" + String(store.projectRevision) + "|" + state.grouping.rawValue + "|" + ids.joined(separator: ",") + "|" + (focusedID ?? "") + "|" + String(searching) }
     var body: some View {
-        ScrollViewReader { proxy in
         LazyVStack(alignment: .leading, spacing: 7) {
             if groups.isEmpty && !ids.isEmpty {
                 Text(preparationError ?? "正在整理列表…").font(.system(size: 12)).foregroundStyle(.secondary).padding(10)
@@ -106,12 +107,16 @@ struct ReaderRecordSections<Content: View>: View {
                     expandedRows = state.expandRequested ? Set(result.flatMap(\.records).map(\.id)) : []
                     appliedFoldRevision = state.foldRevision
                 }
-                if let focusedID, let group = result.first(where: { $0.records.contains { $0.id == focusedID } }) {
+                if let focusedID, appliedFocusKey != owner + "|" + focusedID, let group = result.first(where: { $0.records.contains { $0.id == focusedID } }) {
                     expandedGroups.insert(group.id); expandedRows.insert(focusedID)
                     if let index = group.records.firstIndex(where: { $0.id == focusedID }) { limits[group.id] = max(60, index + 1) }
-                    await Task.yield()
+                    // The reader that owns the enclosing ScrollView performs
+                    // the one-time reveal. A reader nested in its content has
+                    // no descendant scroll to control. Do not repeat a reveal
+                    // after unrelated metadata/height updates.
+                    try await Task.sleep(for: .milliseconds(25))
                     guard !Task.isCancelled, key == preparationKey else { return }
-                    proxy.scrollTo(focusedID, anchor: .top)
+                    onFocusReady?(focusedID); appliedFocusKey = owner + "|" + focusedID
                 }
             } catch { if !Task.isCancelled, key == preparationKey { groups = []; preparationError = "暂时无法整理列表：" + error.localizedDescription } }
         }.onChange(of: state.foldRevision) { _, _ in
@@ -119,7 +124,6 @@ struct ReaderRecordSections<Content: View>: View {
             expandedGroups = state.expandRequested ? Set(groups.map(\.id)) : []
             expandedRows = state.expandRequested ? Set(groups.flatMap(\.records).map(\.id)) : []
             appliedFoldRevision = state.foldRevision
-        }
         }
     }
 }
