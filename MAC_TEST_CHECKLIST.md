@@ -1,6 +1,20 @@
-> 2026-10-31：0.23.30/build61候选已完成两项非PDF优化、本机产品编译、5项机制断言及8项当前源码原生知识库验收；完整CI、发布和安装验收在交付阶段执行。详见[本批结果](Design/2026-10-31-request-preview-optimization-results.md)。
+> 2026-10-31：0.23.30/build61 已同步main、发布、替换安装并完成原书两次启动验收。对话完整冻结与知识库长预览两项采用，80个正式Release新进程；完整CI758/101、渲染器15及全部既有原生门槛通过，零编译警告。详见[本批结果](Design/2026-10-31-request-preview-optimization-results.md)。
 
-本批入口logs/request-preview-20261031/delivery。两项采用代码逐字节绑定next-performance中已经测过的Release候选：完整freeze48进程，public Core长预览24进程，较小中文补测8进程；只限请求/可见预览准备，不外推整App/FPS/网络。新增5项RequestPreviewTests，最终CI门槛758Core/101命名回归，全部原生/渲染器门槛保留。原库现21文件，隔离检查后原书/笔记/分析和全部偏好保持。旧版0.23.29已经完整交付，勿重复安装29。当前用户dirty进度文档不得修改或提交。下方29及更旧为接续历史。
+# 0.23.30 接续要点
+
+产品源f20862f50fdcc917b0a1efde952537d1ba3746a8，CI41202619431、artifact13043871874、Release429945436；实际About30/61及36文件均核验。发布、安装、原书GUI和清理已全部完成，不要重复发布/安装/CI。两处Core产品源（含新增预览helper）、知识库UI/无障碍名称、5项RequestPreviewTests及Info版本变更；继承29全部对话/伴读修复。用户dirty进度文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，不得修改或提交。
+
+空显式附件避免整书笔记/节点集合扫描；完整freeze48进程，大书当前页空附件约−28.13%、每次省0.169ms。非空权限/异常和当前值校验保持，没有跨请求缓存。实际public Core长预览24进程，8条每条432012字节压力样本约省31.44ms；较小中文补测8进程省1.01ms，短文/搜索走旧完整路径。2424项Unicode oracle及5项机制测试覆盖边界。只限完整请求冻结/可见预览准备，不外推整App/FPS/模型网络速度。整书索引更慢已否决，原有按需IO不重算新成果。
+
+真实当前产品隔离库8项：同书8条完整AX预览与29基线一致、末尾独有词命中1条、末条可达、跨书清搜索、分类标签/提示、完整合成项目及原库/偏好保持。首候选按最近打开时间选到44而基线为43，调查保留并明确选43重核，按bookID比较全部字段；不是数据变化。原生helper均已关闭。
+
+安装实际PID82321/82388：104/1484页、343%、102旧译文、已有问答、对话工具和回到原文、书库顶部重选、时间地图/导图/总览目录、正常退出重启及空草稿均通过，三类警告零。最终21原库文件及全部字节、所有生产偏好完全保持。没有生成AI、新增组件或保存原书新笔记。最新保护及29回滚App在private-books/request-preview-20261031/install-before-0.23.30，不覆盖现库。入口delivery/final-delivery.json、native-original-ui-passed.json、post-install-check-30、ui-native-logs-30、final-preservation-check.json。
+
+canonical dist/ReadingBook-0.23.30-Mac.zip为26037217B，SHAedee083df4935c3d47e1327872f48c33a0f4449cb9fc12690206da6946aeefae；重复ZIP/展开readyappPath已退役，先读dist的RETIRED_PAYLOADS再恢复。唯一回放logs/request-preview-20261031/replay-evidence.zip为184451200B，SHAfe7a1c9d20d939521bc5a7e2c1eb3826c22feb54562e8916c65e71792b843927，1212路径/560块及实际恢复执行权限通过。29/30编译/helper树和展开capture已退役，先读该批REPLAY_AND_RETIRED并按窄前缀恢复。
+
+旧五份generated-trees回放仅退役可重建二进制/模块，全部非二进制源码/输入/原始结果/日志保留于原目录validation-inputs.zip；先读BINARY_RETIREMENT.md，旧完整程序回放命令不再适用。四阶段清理约3.07GiB，全批6862056→4343192KiB、净减少约2.40GiB，现约4.14GiB；活跃mac-debug/共享缓存保留。远端仅30/29、main及必要失败诊断；旧28程序/包/Release/tag/Actions程序产物精确退役，所有非App私人保护和源历史保持。下方更旧回滚App路径是历史。
+
+用户设计原则：明确的代码问题和常规布局细节直接处理；存在实质交互取舍时再展示多套方案。其余16类继续轮转，不恢复数学核查。下一批只读线索logs/request-preview-20261031/next-components-audit.md；优先复现摘要目录跨书256文件边界，再查文件夹树/跨组件更新。该边界尚未复现。下方29及更旧均历史。
 
 ---
 
