@@ -1,4 +1,16 @@
-> 2026-10-31：当前正交付0.23.29/build60，先完成对话/伴读收纳、真实模型推荐及界面修整，再继续性能批次。请先读[本批结果与边界](Design/2026-10-31-conversation-workspace-results.md)。本机15项机制和原生隔离库验收已通过；完整同源CI、发布、安装原书验收尚待执行。下方0.23.28为已完成的旧版记录。原库当前21文件，用户dirty性能进度文档不得修改或提交。
+> 2026-10-31：0.23.29/build60 已同步main、发布、替换安装并完成原书两次启动验收。对话/伴读整轮收纳、真实模型推荐、逻辑文件夹及界面修整；完整CI753/96、渲染器15及所有既有原生门槛通过，零编译警告。详见[本批结果](Design/2026-10-31-conversation-workspace-results.md)。
+
+# 0.23.29 接续要点
+
+产品源ce2d624b607dc084952954c1a1750e580425592f，CI41198215184、artifact13041918557、Release429917112；实际About29/60、36程序文件、原书104/1484与343%、102旧句译和两次启动均核验。原库目前21文件（用户新增过保存的问答与笔记），不能再套用下方20文件旧基线。21文件集合/原书/笔记/分析保持，只正常更新Workspace；偏好仅主窗口尺寸变化。28App回滚和最新数据在private-books/conversation-workspace-20261031/install-before-0.23.29，不覆盖现库。
+
+新readerCollections是可选宿主元数据；收起保留当前上下文，移入历史才退出，归档整轮问答。笔记/历史/摘要可文件夹收纳和主动引用。推荐是真实模型结合当前原文的一次小请求，无固定兜底；原生合成库使用模拟传输，无真实模型测试。current-source-ui、local-tests-v4、delivery/final-delivery为入口；用户dirty进度文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4不得修改或提交。
+
+首CI地图启动点击失败在同源本机及原样远端重跑16项通过，没有猜改产品。第二CI原生29/152/70通过，12项检查仅旧源码变量名字面匹配失败；修正为current并额外要求伴读历史独立渲染，12个运行断言全部保留，本机及最终CI全过。失败和修正证据保留，不恢复旧guard。不要重复发布安装29。
+
+canonical dist/ReadingBook-0.23.29-Mac.zip SHA8119faca47f521a77667c05a8e55753e0957f6897edbab22e163def90ada7b3a。解包readyappPath/重复载荷已退役，先读该dist元数据目录RETIRED_PAYLOADS再恢复。第一阶段净清理约248MiB，活跃性能实验/共享缓存保留；当前远端29/28、main和必要失败诊断，27已精确退役，全部非App私人保护和源历史保留。
+
+下一步直接继续已经测过的两个非PDF候选，先看logs/conversation-workspace-20261031/next-performance：完整Release freeze48进程，空附件大样本约-28%但只省0.17ms；实际publicCore长预览24进程，8条422KiB样本准备省31ms，较小CJK补测8进程约省1ms。均只限局部准备、未采用进29，不冒称整App/FPS/模型速度。整书索引对8/32可见行反而慢，已否决。实际知识库基线窗口已用同源视图核对8条折叠、末尾独有词命中1条及字节保持；logs/request-preview-20261031/native-baseline-ui.json，基线helper已关闭。继续整合、原生对照、完整检查和交付，所有文件仍workspace内，不恢复退役数学核查。下方28及更旧均历史。
 
 ---
 
