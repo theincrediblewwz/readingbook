@@ -633,13 +633,8 @@ struct SavedConversationHistory: View {
         return ReaderRecordSections(state: browser, ids: visible.map { "chat:" + $0.id }, focusedID: focusedMessageID.map { "chat:" + $0 }, onFocusReady: onFocus) { record, expanded in
             if let message = byID[record.id] {
                 let archived = current.readerCollections?.archivedChatIDs.contains(message.id) == true
-                ReaderRecordFoldCard(record: record, expanded: expanded,
+                ReaderRecordFoldCard(record: record, expanded: expanded, status: archived ? "已归档" : "当前对话",
                     actions: AnyView(message.role == "assistant" ? AnyView(referenceActions(record.id, archived: archived)) : AnyView(EmptyView()))) {
-                    HStack {
-                        Text(message.role == "user" ? "你" : "伴读").font(.system(size: 12, weight: .medium))
-                        Text(archived ? "已归档" : "当前对话").font(.system(size: 11)).foregroundStyle(.secondary)
-                            .help(archived ? "不自动带入后续问题。" : "仍可参与当前范围的对话上下文。")
-                    }
                     ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(message.content, bookID: current.id, project: current), presentationActiveOverride: true)
                 }.background(message.id == focusedMessageID ? Palette.accent.opacity(0.055) : Color.clear)
             }

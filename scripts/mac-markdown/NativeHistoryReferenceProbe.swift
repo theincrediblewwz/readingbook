@@ -325,7 +325,17 @@ private final class HistoryBindingReceipts: @unchecked Sendable {
         guard let scroll = outerScrollView(web), let document = scroll.documentView else { throw HistoryReferenceFailure(message: "Actual same-row native scroll absent") }
         let clip = scroll.contentView, initial = clip.bounds.origin
         let maximum = max(0, document.bounds.height - clip.bounds.height)
-        clip.scroll(to: NSPoint(x: initial.x, y: min(maximum, initial.y + 460))); scroll.reflectScrolledClipView(clip)
+        // Enter the same answer's interior using its actual native offset.
+        // A fixed 460-point gesture assumed all preceding row headers occupied
+        // at most 210 points; date groups and paging controls legitimately vary.
+        // Keep the original >=250 interior and >=100 visible-height assertions.
+        let rawVisibleBefore = web.visibleRect
+        let delta = max(460, 320 - rawVisibleBefore.minY)
+        let desired = min(maximum, initial.y + delta)
+        try write("same-row-scroll-command.json", ["clipBefore": rect(clip.bounds), "webVisibleBefore": rect(rawVisibleBefore),
+            "requestedDelta": delta, "desiredClipY": desired, "maximumClipY": maximum,
+            "oldFixedStepProjectedLocalY": rawVisibleBefore.minY + 460], to: output)
+        clip.scroll(to: NSPoint(x: initial.x, y: desired)); scroll.reflectScrolledClipView(clip)
         try await wait(name + ".same-row-scroll-away-from-heading") {
             let visible = web.visibleRect.intersection(web.bounds)
             return !visible.isNull && visible.minY >= 250 && visible.height >= 100

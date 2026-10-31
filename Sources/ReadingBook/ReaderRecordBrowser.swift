@@ -134,6 +134,7 @@ struct ReaderRecordFoldCard<Content: View>: View {
     var selection: Binding<Bool>? = nil
     var open: (() -> Void)? = nil
     var openEnabled = true
+    var status: String? = nil
     var actions: AnyView = AnyView(EmptyView())
     @ViewBuilder var content: () -> Content
     var body: some View {
@@ -150,6 +151,7 @@ struct ReaderRecordFoldCard<Content: View>: View {
                         HStack(spacing: 7) {
                             if let date = record.date { Text(date, format: .dateTime.hour().minute()) }
                             Text(record.chapterTitle).lineLimit(1)
+                            if let status { Text(status).fixedSize().help(status == "已归档" ? "不自动带入后续问题。" : "仍可参与当前范围的对话上下文。") }
                         }.font(.system(size: 11)).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(ReadingQuietButtonStyle()).disabled(open != nil && !openEnabled).help(open == nil ? "展开或收起完整记录" : "在编辑器中打开这篇笔记")
