@@ -92,7 +92,7 @@ struct ReadingContinuationPreviewView: View {
                 Button { showsDetails.toggle() } label: {
                     Label("处理详情", systemImage: "info.circle")
                         .font(.system(size: 12)).frame(minHeight: 30)
-                }.buttonStyle(.borderless).help("查看哪些内容可沿用，哪些需要补齐；不会发起模型请求。")
+                }.buttonStyle(ReadingQuietButtonStyle()).help("查看哪些内容可沿用，哪些需要补齐；不会发起模型请求。")
                     .accessibilityValue(showsDetails ? "已展开" : "已收起")
                     .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
                         VStack(alignment: .leading, spacing: 12) {

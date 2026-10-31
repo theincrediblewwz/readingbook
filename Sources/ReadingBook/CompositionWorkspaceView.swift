@@ -451,7 +451,7 @@ private struct CompositionObjectTable: View {
                         Text(item.title).font(typography.font(for: .knowledge, weight: .medium)).multilineTextAlignment(.leading).lineLimit(3)
                     }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(ReadingQuietButtonStyle())
-                Button("完整内容") { detailID = item.id }.font(.caption).buttonStyle(.borderless).frame(minHeight: 36)
+                Button("完整内容") { detailID = item.id }.font(.caption).buttonStyle(ReadingQuietButtonStyle()).frame(minHeight: 36)
                     .popover(isPresented: Binding(get: { detailID == item.id }, set: { if !$0 { detailID = nil } })) {
                         CompositionObjectDetails(items: items.filter { $0.id == item.id }, selected: [item.id]).frame(width: 480, height: 480)
                     }
@@ -466,7 +466,7 @@ private struct CompositionObjectTable: View {
                 if item.evidence.isEmpty { Text("暂无原文依据").font(.caption).foregroundStyle(.secondary) }
                 else {
                     Button("查看 \(item.evidence.count) 处依据") { evidenceID = item.id }
-                        .font(.caption).buttonStyle(.borderless).frame(minHeight: 44)
+                        .font(.caption).buttonStyle(ReadingQuietButtonStyle()).frame(minHeight: 44)
                         .popover(isPresented: Binding(get: { evidenceID == item.id }, set: { if !$0 { evidenceID = nil } })) {
                             ScrollView { CompositionEvidenceList(evidence: items.first { $0.id == item.id }?.evidence ?? []).padding(18) }
                                 .frame(width: 460, height: 440)
@@ -865,7 +865,7 @@ private struct CompositionGraph: View {
                                 }
                             }
                             if shownRelations < projection.edges.count {
-                                Button("继续显示关系依据") { shownRelations += 24 }.buttonStyle(.borderless).frame(minHeight: 44)
+                                Button("继续显示关系依据") { shownRelations += 24 }.buttonStyle(ReadingQuietButtonStyle()).frame(minHeight: 44)
                             }
                         }.padding(.top, 10)
                     }

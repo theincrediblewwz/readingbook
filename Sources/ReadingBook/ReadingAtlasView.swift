@@ -99,10 +99,10 @@ struct ReadingAtlasView: View {
                     }.buttonStyle(ReadingQuietButtonStyle())
                 }
             }
-            Button("时间待考：\(snapshot.undatedEventIDs.count) 条，单独查看") { selectedBucket = nil }.buttonStyle(.borderless)
+            Button("时间待考：\(snapshot.undatedEventIDs.count) 条，单独查看") { selectedBucket = nil }.buttonStyle(ReadingQuietButtonStyle())
             ForEach(ids, id: \.self) { id in
                 if let event = store.book?.events.first(where: { $0.id == id }) {
-                    DisclosureGroup("\(event.dateText) · \(event.name)") { VStack(alignment: .leading, spacing: 12) { Text(event.summary).font(.subheadline); EvidenceList(evidence: event.evidence); Button("在时间与地图查看") { store.selectedObjectID = id; store.readingScopeCurrent = false; store.activate(.map) }.buttonStyle(.borderless) }.padding(.top, 12) }.padding(16).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
+                    DisclosureGroup("\(event.dateText) · \(event.name)") { VStack(alignment: .leading, spacing: 12) { Text(event.summary).font(.subheadline); EvidenceList(evidence: event.evidence); Button("在时间与地图查看") { store.selectedObjectID = id; store.readingScopeCurrent = false; store.activate(.map) }.buttonStyle(ReadingQuietButtonStyle()) }.padding(.top, 12) }.padding(16).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
                 }
             }
             if snapshot.yearBuckets.isEmpty { Text("没有可系年的事件。概念和证明不必强制生成时间轴。").font(.subheadline).foregroundStyle(.secondary) }

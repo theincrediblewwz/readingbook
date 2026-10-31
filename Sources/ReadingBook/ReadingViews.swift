@@ -14,6 +14,10 @@ struct ReaderWorkspaceView: View {
     @State private var outlineFrame = CGRect.zero
     @State private var companionFrame = CGRect.zero
     @StateObject private var inlineReading = ReaderInlineState()
+    @State private var notesCollapsed = false
+    @State private var showNarrowNotes = false
+    @StateObject private var narrowNoteRelay = PositionNoteActionRelay()
+    private var hasPositionNotes: Bool { !store.activeNotePlacements.isEmpty }
     private var isPDF: Bool {
         store.sourceFileURL?.pathExtension.lowercased() == "pdf"
             || store.book?.originalName.lowercased().hasSuffix(".pdf") == true
@@ -25,6 +29,7 @@ struct ReaderWorkspaceView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
+                HStack(spacing: 0) {
                 Group {
                     if let unit = store.selectedUnit {
                         if store.readingSourceMode != "original" {
@@ -81,7 +86,12 @@ struct ReaderWorkspaceView: View {
                                onWorkspaceMemory: { receipt in
                                    if let memoryOwner { store.updatePDFWorkspaceMemory(receipt, owner: memoryOwner) }
                                },
-                               interactionResetID: store.pdfInteractionResetID)
+                               interactionResetID: store.pdfInteractionResetID,
+                               notePlacements: store.activeNotePlacements,
+                               onCreatePositionNote: { page, x, y in
+                                   guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash else { return }; store.beginPositionNote(page: page, x: x, y: y)
+                               }, noteMarginVisible: hasPositionNotes && !notesCollapsed && geometry.size.width >= 680, notePlacementOwner: store.collectionOwnerKey,
+                               onCancelPositionNote: { if store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash { store.positionNoteBinding = nil } })
                             .id(store.pdfDisplayReloadID)
                         } else if isPDF, showPDF {
                             // The source URL arrives asynchronously after book
@@ -94,6 +104,15 @@ struct ReaderWorkspaceView: View {
                     }
                 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
+                    if hasPositionNotes && !notesCollapsed && geometry.size.width >= 680 {
+                        PositionNoteMargin(nativePositions: pdfController.notePositions, height: geometry.size.height, isPDF: isPDF && showPDF && store.readingSourceMode == "original", collapse: { notesCollapsed = true })
+                    }
+                }
+                if hasPositionNotes && (notesCollapsed || geometry.size.width < 680) {
+                    Button { if geometry.size.width < 680 { showNarrowNotes = true } else { notesCollapsed = false } } label: { Image(systemName: "note.text").font(.system(size: 13)).frame(width: 32, height: 32) }
+                        .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.95), in: Circle())
+                        .padding(16).frame(maxWidth: .infinity, alignment: .trailing).help("展开页边便签").accessibilityLabel("展开页边便签")
+                }
                 ReaderFloatingPanel(title: "目录与书签", icon: "list.bullet", width: 302, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 88, avoidRects: pdfChrome,
                     showsRestoreButton: false, unifiedDismiss: true,
                     onFrameChange: { value in if outlineFrame != value { outlineFrame = value } }) { ReaderOutlinePanel(bookmarksOnly: $bookmarksOnly) }
@@ -118,7 +137,16 @@ struct ReaderWorkspaceView: View {
                     if !value { store.queryAllowsOrganizing = false }
                 }
                 .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.readingCompanionVisible)
-                .onChange(of: store.bookID) { _, _ in inlineReading.clear() }
+                .onChange(of: store.bookID) { _, _ in inlineReading.clear(); notesCollapsed = false; store.positionNoteBinding = nil }
+                .onChange(of: store.positionNoteBinding?.id) { _, _ in armPositionBinding() }
+                .onChange(of: pdfController.isReady) { _, ready in if ready { armPositionBinding() } }
+                .onAppear { armPositionBinding() }
+                .sheet(item: $store.positionNoteRequest) { request in PositionNoteEditor(request: request).environmentObject(store) }
+                .sheet(isPresented: $showNarrowNotes, onDismiss: {
+                    narrowNoteRelay.finish(store: store)
+                }) {
+                    PositionNoteStackBrowser(ids: store.activeNotePlacements.filter { $0.value.unitID == store.selectedUnitID }.map(\.key).sorted(), snippets: [:], close: { showNarrowNotes = false }, onCommand: { id, command in narrowNoteRelay.pending = (id, WorkspacePickerOwner(store: store), command); showNarrowNotes = false }).environmentObject(store)
+                }
                 .onChange(of: store.selectedUnitID) { _, _ in inlineReading.clear() }
                 .onChange(of: store.readingSourceMode) { _, _ in inlineReading.clear() }
                 .onChange(of: store.sourceReadingSelection != nil) { _, selecting in if selecting { inlineReading.clear() } }
@@ -129,6 +157,13 @@ struct ReaderWorkspaceView: View {
                 .onReceive(store.$readingExperienceIndex) { index in refreshInlineContent(index: index) }
                 .onDisappear { inlineReading.clear() }
         }
+    }
+    private func armPositionBinding() {
+        guard let pending = store.positionNoteBinding, pending.owner.matches(store) else { return }
+        if isPDF {
+            if !showPDF { showPDF = true }
+            if pdfController.isReady { pdfController.command(.placeNote) }
+        } else { store.beginPositionNote() }
     }
     private func inlineObstacles(in geometry: GeometryProxy) -> [CGRect] {
         var obstacles = pdfChrome + [outlineFrame, companionFrame].filter { !$0.isEmpty && !$0.isNull }
@@ -228,13 +263,7 @@ struct ReadingProcessingDetailsView: View {
     var body: some View {
         VStack(spacing: 0) {
             CompactWorkspaceHeader("处理详情") {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { preReadButton; executionButton }
-                    Menu {
-                        Button(store.book?.plan == nil ? "预读选法" : "重新预读") { store.makePlan() }.disabled(!store.canStartReading)
-                        Button(store.isSmartReadingRunning ? "暂停分析" : "设置范围并继续", action: executeOrConfigure).disabled(cannotPause || (!store.isSmartReadingRunning && !store.canStartReading))
-                    } label: { Image(systemName: "play.circle") }.help("预读、精读与暂停")
-                }
+                HStack(spacing: 8) { preReadButton; executionButton }
             }
             ScrollView {
                 if let book = store.book {
@@ -642,6 +671,8 @@ struct DocumentEditorView: View {
     private var documentActions: [ManagementActionOption] {
         var items = [ManagementActionOption(id: "new", title: "新建笔记", detail: store.editorDirty ? "先保存或放弃当前修改后可新建。" : "开始一篇新的 Markdown 笔记。", icon: "square.and.pencil", enabled: !store.editorDirty && !store.isBusy)]
         if currentDocument != nil {
+            let placed = currentDocument.flatMap { store.readerCollections.notePlacements?[$0.id] } != nil
+            items.append(ManagementActionOption(id: "position", title: placed ? "取消位置绑定" : "绑定到原文位置…", detail: placed ? "移除页边纸条，普通笔记正文和分类保留。" : "PDF可点击指定位置，其他格式绑定到当前章节。正文不动。", icon: placed ? "mappin.slash" : "mappin.and.ellipse", enabled: !store.editorDirty && !store.isBusy && store.selectedUnit != nil))
             items.append(ManagementActionOption(id: "graph", title: "加入导图", detail: "将这篇已保存笔记加入本书导图。", icon: "point.3.connected.trianglepath.dotted", enabled: !store.isBusy))
             items.append(ManagementActionOption(id: "export", title: "导出 Markdown…", detail: store.editorDirty ? "保存当前修改后可导出完整 .md 文件。" : "导出完整正文、公式与原文定位。", icon: "square.and.arrow.up", enabled: !store.editorDirty && !store.isBusy))
         }
@@ -665,6 +696,12 @@ struct DocumentEditorView: View {
             pendingDocumentActionOwner = nil
             switch id {
             case "new": store.newDocument(); preview = false
+            case "position":
+                if let document = currentDocument {
+                    let old = store.readerCollections.notePlacements?[document.id]
+                    if old == nil { store.requestPositionNoteBinding(document.id) }
+                    else { await store.organizeReaderCollections(.setNotePlacement(document.id, nil)) }
+                }
             case "graph": if let document = currentDocument { await store.addDocumentToGraph(document) }
             case "export": store.exportMarkdown()
             case "trash": store.showingTrash = true

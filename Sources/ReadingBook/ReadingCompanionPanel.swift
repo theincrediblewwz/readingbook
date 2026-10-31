@@ -322,7 +322,7 @@ struct ReadingCompanionPanel: View {
                         Button { if let component = WorkspaceComponentRegistry.shared.component(id: "reading.layers") { store.activate(component) } } label: {
                             Label("另有 \(crossScopeCount) 条解释涉及其他页，查看完整来源", systemImage: "arrow.up.right.square")
                                 .font(.system(size: 13)).multilineTextAlignment(.leading).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        }.buttonStyle(.borderless).disabled(store.isBusy)
+                        }.buttonStyle(ReadingQuietButtonStyle()).disabled(store.isBusy)
                     }
                     if scope != "book" {
                         if let scopeMessage { Text(scopeMessage).font(.system(size: 13)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
@@ -335,7 +335,7 @@ struct ReadingCompanionPanel: View {
                             VStack(alignment: .leading, spacing: 10) {
                                 Label(scopeTitle, systemImage: "text.quote").font(.system(size: 13)).foregroundStyle(.secondary)
                                 ForEach(Array(sourceUnits.prefix(sourceContextLimit))) { unit in if !unit.text.isEmpty { MarkdownText(markdown: unit.text).readingTextContext(.source) } }
-                                if sourceUnits.count > sourceContextLimit { Button("继续显示原文") { sourceContextLimit += 4 }.buttonStyle(.borderless).frame(minHeight: 40) }
+                                if sourceUnits.count > sourceContextLimit { Button("继续显示原文") { sourceContextLimit += 4 }.buttonStyle(ReadingQuietButtonStyle()).frame(minHeight: 40) }
                                 if sourceUnits.allSatisfy({ $0.text.isEmpty }) { Text("此处尚无可靠识别文本，请先对照原 PDF。") }
                             }.padding(.vertical, 8)
                         }
@@ -382,53 +382,42 @@ struct ReadingCompanionPanel: View {
         }
     }
     @ViewBuilder private var companionSelectors: some View {
-                if section == "context" {
-                    Menu {
-                        Button { store.readingCompanionSection = "layers" } label: { Label("解释与译文", systemImage: "text.book.closed") }
-                            .help("查看当前范围的解读、译文和已保存记录，最新内容置前。")
-                        Button { store.readingCompanionSection = "mentions" } label: { Label("原文对象", systemImage: "rectangle.stack") }
-                            .help("查看原文中的人物、地点、概念与事件，并核对各自出现的出处。")
-                        Button { store.readingCompanionSection = "references" } label: { Label("资料对读", systemImage: "arrow.left.arrow.right") }
-                            .help("并列查看有出处的相关段落或资料，分别返回原文核对。")
-                        if !recoverableItems.isEmpty {
-                            Divider()
-                            Menu {
-                                ForEach(recoverableItems) { item in
-                                    Button { Task { await store.restoreReadingItem(item.id) } } label: { Label(item.title, systemImage: "arrow.uturn.backward") }.disabled(store.isBusy)
-                                }
-                            } label: { Label("恢复已移除的伴读", systemImage: "arrow.uturn.backward") }
-                        }
-                    } label: { Label(contentTitle, systemImage: contentIcon).font(.system(size: 15, weight: .medium)).frame(minHeight: 44) }
-                        .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().help(contentHelp)
-                } else { Label(contentTitle, systemImage: contentIcon).font(.system(size: 15, weight: .medium)).lineLimit(1) }
-                if scope != "book" {
-                    Menu {
-                        Button { companionScope = .page } label: { Label("当前页", systemImage: "doc.text") }
-                        Button { companionScope = .chapter } label: { Label("当前章节", systemImage: "book.closed") }
-                        if frozenScope != nil { Divider(); Button { frozenScope = nil } label: { Label("解除固定，跟随原文", systemImage: "lock.open") } }
-                    } label: {
-                        Label(companionScope == .page ? "当前页" : "当前章节", systemImage: frozenScope == nil ? "book.closed" : "lock")
-                            .font(.system(size: 13, weight: .medium)).frame(minHeight: 44)
-                    }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().disabled(store.isCompanionGenerating)
-                        .help(scopeTitle + "\n选择按当前页或完整章节生成；伴读生成期间固定这次范围，对话可独立使用。")
-                } else { Text("全书").font(.system(size: 13)).foregroundStyle(.secondary) }
+        if section == "context" {
+            ReadingChoiceControl(title: contentTitle, icon: contentIcon, options: contentOptions, owner: store.collectionOwnerKey, fontSize: 15) { id in
+                if id.hasPrefix("restore:") { Task { await store.restoreReadingItem(String(id.dropFirst(8))) } }
+                else { store.readingCompanionSection = id }
+            }.help(contentHelp)
+        } else { Label(contentTitle, systemImage: contentIcon).font(.system(size: 15, weight: .medium)).lineLimit(1) }
+        if scope != "book" {
+            ReadingChoiceControl(title: companionScope == .page ? "当前页" : "当前章节", icon: frozenScope == nil ? "book.closed" : "lock", options: scopeOptions, owner: store.collectionOwnerKey) { id in
+                if id == "unlock" { frozenScope = nil }
+                else if let value = ReadingQueryScope(rawValue: id) { companionScope = value }
+            }.disabled(store.isCompanionGenerating).help(scopeTitle + "\n生成期间固定本次范围，对话可独立使用。")
+        } else { Text("全书").font(.system(size: 13)).foregroundStyle(.secondary) }
+    }
+    private var contentOptions: [ManagementActionOption] {
+        var values = [
+            ManagementActionOption(id: "layers", title: "解释与译文", detail: "查看解读、译文和先前记录，最新内容置前。", icon: "text.book.closed"),
+            .init(id: "mentions", title: "原文对象", detail: "查看有出处的人物、地点、概念与事件。", icon: "rectangle.stack"),
+            .init(id: "references", title: "资料对读", detail: "并列阅读有出处的相关资料，分别返回原文核对。", icon: "arrow.left.arrow.right")
+        ]
+        values += recoverableItems.map { .init(id: "restore:" + $0.id, title: "恢复 · " + $0.title, detail: "从伴读回收站恢复这条内容。", icon: "arrow.uturn.backward", enabled: !store.isBusy) }
+        return values
+    }
+    private var scopeOptions: [ManagementActionOption] {
+        var values = [ManagementActionOption(id: ReadingQueryScope.page.rawValue, title: "当前页", detail: "只为当前原文页准备伴读。", icon: "doc.text"),
+            .init(id: ReadingQueryScope.chapter.rawValue, title: "当前章节", detail: "围绕当前章节的完整原文范围。", icon: "book.closed")]
+        if frozenScope != nil { values.append(.init(id: "unlock", title: "解除固定，跟随原文", detail: "恢复随当前阅读位置切换；已保存内容保留。", icon: "lock.open")) }
+        return values
     }
     @ViewBuilder private var companionTools: some View {
-                Menu {
-                    Button("放大文字") { typography.setPointSize(typography.style(for: .companion).pointSize + 1, for: .companion) }
-                        .disabled(typography.style(for: .companion).pointSize >= ReadingTextStyle.pointSizeRange.upperBound)
-                        .help("只放大伴读文字，不改变原PDF缩放。")
-                    Button("缩小文字") { typography.setPointSize(typography.style(for: .companion).pointSize - 1, for: .companion) }
-                        .disabled(typography.style(for: .companion).pointSize <= ReadingTextStyle.pointSizeRange.lowerBound)
-                        .help("只缩小伴读文字，不改变原PDF缩放。")
-                    Button("恢复默认") { typography.reset(.companion) }
-                    Divider()
-                    ForEach(ReadingAnswerStyle.allCases, id: \.self) { style in
-                        Button { store.queryAnswerStyle = style } label: { Label(style.title, systemImage: store.queryAnswerStyle == style ? "checkmark" : style.icon) }
-                            .help(style == .mentor ? "补充必要背景并解释思路；书外知识与原文依据分开。" : "只围绕原文证据分析，不把不确定背景当成书中事实。")
-                    }
-                } label: { Image(systemName: "textformat.size").frame(width: 32, height: 44) }
-                    .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().help("伴读字号与讲解方式")
+                CompanionHistoryReferenceControl()
+                ReadingChoiceControl(title: "伴读字号与讲解方式", icon: "textformat.size", options: typographyOptions, owner: store.collectionOwnerKey, iconOnly: true) { id in
+                    if id == "larger" { typography.setPointSize(typography.style(for: .companion).pointSize + 1, for: .companion) }
+                    else if id == "smaller" { typography.setPointSize(typography.style(for: .companion).pointSize - 1, for: .companion) }
+                    else if id == "default" { typography.reset(.companion) }
+                    else if let value = ReadingAnswerStyle(rawValue: id) { store.queryAnswerStyle = value }
+                }.help("调整伴读字号，或选择对象介绍与下一次对话的讲解方式。")
                 if showsHeader {
                     Button { NotificationCenter.default.post(name: Notification.Name("ReadingBookExpandCompanion"), object: nil) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
                         .buttonStyle(ReadingToolbarButtonStyle()).help("放大或还原伴读窗口").accessibilityLabel("放大伴读窗口")
@@ -445,6 +434,13 @@ struct ReadingCompanionPanel: View {
                         .buttonStyle(ReadingToolbarButtonStyle(selected: showsSourceContext)).disabled(sourceUnits.isEmpty)
                         .help("查看原文与上下文").accessibilityLabel("原文与上下文")
                 }
+    }
+    private var typographyOptions: [ManagementActionOption] {
+        [ .init(id: "larger", title: "放大文字", detail: "只改变伴读文字，不改变原PDF缩放。", icon: "textformat.size.larger", enabled: typography.style(for: .companion).pointSize < ReadingTextStyle.pointSizeRange.upperBound),
+          .init(id: "smaller", title: "缩小文字", detail: "只改变伴读文字，不改变原PDF缩放。", icon: "textformat.size.smaller", enabled: typography.style(for: .companion).pointSize > ReadingTextStyle.pointSizeRange.lowerBound),
+          .init(id: "default", title: "恢复默认字号", detail: "恢复伴读的默认字体设置。", icon: "arrow.counterclockwise"),
+          .init(id: "mentor", title: "老师伴读", detail: "对象介绍可补充背景；下一次对话先讲清意思与思路。", icon: store.queryAnswerStyle == .mentor ? "checkmark" : "sparkles"),
+          .init(id: "research", title: "原文考据", detail: "对象只显示当前范围出处；下一次对话区分明载、推断与未知。", icon: store.queryAnswerStyle == .research ? "checkmark" : "text.magnifyingglass") ]
     }
     private var companionFooter: some View {
         HStack(spacing: 10) {
@@ -629,7 +625,7 @@ struct ReadingCompanionPanel: View {
                     }
                     if historyIDs.count > layerLimit {
                         Button("继续显示记录 · 还有 \(historyIDs.count - layerLimit) 条") { layerLimit += 8 }
-                            .buttonStyle(.borderless).font(.system(size: 12)).frame(minHeight: 28).help("按保存顺序从新到旧继续列出；点击每条标题查看完整内容。")
+                            .buttonStyle(ReadingQuietButtonStyle()).font(.system(size: 12)).frame(minHeight: 28).help("按保存顺序从新到旧继续列出；点击每条标题查看完整内容。")
                     }
             }
         }
@@ -667,7 +663,7 @@ struct ReadingCompanionPanel: View {
                     }
                     if historyIDs.count > alignmentLimit {
                         Button("继续显示对读 · 还有 \(historyIDs.count - alignmentLimit) 条") { alignmentLimit += 8 }
-                            .buttonStyle(.borderless).font(.system(size: 12)).frame(minHeight: 28).help("按保存顺序从新到旧继续列出对读记录。")
+                            .buttonStyle(ReadingQuietButtonStyle()).font(.system(size: 12)).frame(minHeight: 28).help("按保存顺序从新到旧继续列出对读记录。")
                     }
             }
         }
@@ -780,7 +776,7 @@ struct ReadingCompanionPanel: View {
         HStack(spacing: 10) { Image(systemName: "folder").foregroundStyle(Palette.accent); Text(title).font(.system(size: 15, weight: .semibold)); Spacer(minLength: 8); Text("\(count)").font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary) }.frame(minHeight: 36)
     }
     @ViewBuilder private func moreObjects(_ id: String, shown: Int, total: Int) -> some View {
-        if shown < total { Button("继续显示 · 还有 \(total - shown) 项") { objectLimits[id] = shown + 24 }.font(.system(size: 13)).buttonStyle(.borderless).frame(minHeight: 40) }
+        if shown < total { Button("继续显示 · 还有 \(total - shown) 项") { objectLimits[id] = shown + 24 }.font(.system(size: 13)).buttonStyle(ReadingQuietButtonStyle()).frame(minHeight: 40) }
     }
     private func revealSelectedObjectGroup() {
         guard let id = store.selectedObjectID else { return }
@@ -813,7 +809,7 @@ struct ReadingCompanionPanel: View {
                     }
                     appearances(entity.id, evidence: entity.evidence)
                     relatedObjects(entity.id)
-                    Button { discussObject(entity.name) } label: { Label("聊聊\(entity.name)", systemImage: "bubble.left") }.buttonStyle(.borderless).font(.system(size: 13)).frame(minHeight: 40)
+                    Button { discussObject(entity.name) } label: { Label("聊聊\(entity.name)", systemImage: "bubble.left") }.buttonStyle(ReadingQuietButtonStyle()).font(.system(size: 13)).frame(minHeight: 40)
                 }.padding(.top, 8)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -829,7 +825,7 @@ struct ReadingCompanionPanel: View {
                     if !event.dateText.isEmpty { Text(event.dateText).font(.system(size: 13)).foregroundStyle(.secondary) }
                     if canShowSummary(event.evidence), !event.summary.isEmpty { MarkdownText(markdown: event.summary) }
                     appearances(event.id, evidence: event.evidence)
-                    if !event.placeIDs.isEmpty { Button { store.selectedObjectID = event.id; store.readingScopeCurrent = true; store.activate(.map) } label: { Label("在时间与地图中查看", systemImage: "map") }.buttonStyle(.borderless).font(.system(size: 13)).frame(minHeight: 40) }
+                    if !event.placeIDs.isEmpty { Button { store.selectedObjectID = event.id; store.readingScopeCurrent = true; store.activate(.map) } label: { Label("在时间与地图中查看", systemImage: "map") }.buttonStyle(ReadingQuietButtonStyle()).font(.system(size: 13)).frame(minHeight: 40) }
                 }.padding(.top, 8)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -953,12 +949,12 @@ private struct ReadingDecisionView: View {
             }
             TextField("我这样判断的理由…", text: $thought, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(2...5)
             if revealed { MarkdownText(markdown: card.historicalOutcomeMarkdown) }
-            Button(revealed ? "收起解析" : "看原书结果与解析") { revealed.toggle() }.disabled(choice == nil).buttonStyle(.borderless)
+            Button(revealed ? "收起解析" : "看原书结果与解析") { revealed.toggle() }.disabled(choice == nil).buttonStyle(ReadingQuietButtonStyle())
             Button("保存我的思考为 Markdown 草稿") {
                 let selected = card.options.first { $0.id == choice }?.title ?? "尚未选择"
                 let outcome = revealed ? "\n\n## 原书结果与解析\n\n\(card.historicalOutcomeMarkdown)" : ""
                 store.newReadingNote(title: card.title, markdown: "\(card.contextMarkdown)\n\n## 我的选择\n\n\(selected)\n\n\(thought)\(outcome)\n\n_\(card.sourceLabel)_", anchorIDs: card.sourceAnchorIDs)
-            }.font(.caption).buttonStyle(.borderless)
+            }.font(.caption).buttonStyle(ReadingQuietButtonStyle())
         }.readingCompanionSection().id(card.id)
         .onAppear {
             let draft = UserDefaults.standard.dictionary(forKey: draftKey) ?? [:]

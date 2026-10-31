@@ -93,13 +93,18 @@ import ReadingCore
               let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(ConversationMemory.self, from: data)
     }
-    func saveQueryMemory(_ memory: ConversationMemory?, for snapshot: ReadingQuerySnapshot, root: URL) async {
+    func saveQueryMemory(_ memory: ConversationMemory?, for snapshot: ReadingQuerySnapshot, preferences: ReadingAnswerPreferences, root: URL) async {
         guard let memory, !storageState.working, libraryRootURL == root, bookID == snapshot.bookID,
               memory.bookID == snapshot.bookID, memory.scopeFingerprint == snapshot.scopeFingerprint else { return }
         // Keep the question lane occupied until its derived write finishes, so
         // an immediate library transfer cannot race this separate file actor.
         do {
-            try await QueryMemoryFiles.shared.write(memory, snapshot: snapshot, root: root)
+            guard let latest = book else { return }
+            let history = try await Task.detached(priority: .utility) {
+                _ = try snapshot.sourceRanges(in: latest)
+                return ReadingChatHistory.automaticHistory(in: latest, preferences: preferences, snapshot: snapshot)
+            }.value
+            try await QueryMemoryFiles.shared.write(memory, snapshot: snapshot, history: history, root: root)
             if libraryRootURL == root, bookID == snapshot.bookID { queryMemoryRevision += 1 }
         }
         catch { if libraryRootURL == root, bookID == snapshot.bookID { queryDisclosure += "\n本次会话记忆未能缓存，原对话仍完整保留。" } }
@@ -119,8 +124,62 @@ import ReadingCore
                             references: ReaderCollectionRuntime.explicitReferences(key.references, in: project)))
                 }.value
                 try await QueryMemoryFiles.shared.remove(snapshot: snapshot, root: key.root)
-                if bookID == key.bookID, libraryRootURL == key.root { queryMemoryRevision += 1; queryDisclosure = "已清除当前范围的对话摘要，原始问答和笔记都保留。聊得长时可重新自动整理。" }
+                if bookID == key.bookID, libraryRootURL == key.root { queryMemoryRevision += 1; queryMemoryStatusKey = queryMemoryPreparationKey; queryMemoryStatus = "摘要已清除，完整问答和笔记保留。"; queryDisclosure = queryMemoryStatus }
             } catch { if bookID == key.bookID, libraryRootURL == key.root { errorMessage = "派生记忆未能清除：\(error.localizedDescription)" } }
+        }
+    }
+
+    func summarizeCurrentConversation() {
+        guard !isManagingQueryMemory, !storageState.working, let original = book else { return }
+        let key = queryMemoryPreparationKey, preferences = currentQueryPreferences
+        let memoryOwner = WorkspacePickerOwner(store: self)
+        var frozenSettings = settings; frozenSettings.transportSessionID = "readingbook-" + original.id + "-summary"
+        let frozenKey = apiKey
+        isManagingQueryMemory = true; queryMemoryStatus = "正在整理当前范围的问答…"
+        queryMemoryStatusKey = key
+        queryMemoryTask = Task {
+            var progressID: UUID?
+            defer {
+                if let progressID { finishAIProgress(progressID) }
+                isManagingQueryMemory = false; isSummaryRequestRunning = false; queryMemoryTask = nil
+            }
+            do {
+                let project = key.scope == .chapter ? try await ensureBookChapterOutline(project: original) : original
+                let worker = Task.detached(priority: .userInitiated) {
+                    try ReadingPreparedAnswer.freeze(project: project, scope: key.scope, context: key.context,
+                        documentIDs: key.documents, appendedDocumentIDs: key.attachments, authorizedNodeIDs: key.nodes,
+                        preferences: preferences, referencedAnswerIDs: key.references)
+                }
+                let prepared = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                try Task.checkCancellation()
+                guard memoryOwner.matches(self) else { throw CancellationError() }
+                let previous = await QueryMemoryFiles.shared.read(snapshot: prepared.snapshot, history: prepared.history, root: key.root)
+                let reader = AIReader(coordinator: sharedAIRequests, lane: .background)
+                progressID = await beginSummaryProgress(title: "整理摘要 · " + prepared.snapshot.displayTitle, worker: reader, settings: frozenSettings)
+                try Task.checkCancellation()
+                guard memoryOwner.matches(self) else { throw CancellationError() }
+                isSummaryRequestRunning = true
+                let memory = try await reader.summarizeConversation(prepared: prepared, previous: previous, settings: frozenSettings, apiKey: frozenKey)
+                try Task.checkCancellation()
+                guard memoryOwner.matches(self), let latest = book else { throw CancellationError() }
+                let checker = Task.detached(priority: .utility) {
+                    _ = try prepared.snapshot.sourceRanges(in: latest)
+                    return ReadingChatHistory.automaticHistory(in: latest, preferences: preferences, snapshot: prepared.snapshot)
+                }
+                let currentHistory = try await withTaskCancellationHandler(operation: { try await checker.value }, onCancel: { checker.cancel() })
+                try Task.checkCancellation()
+                guard memoryOwner.matches(self) else { throw CancellationError() }
+                let stored = try await QueryMemoryFiles.shared.write(memory, snapshot: prepared.snapshot, history: currentHistory, root: key.root)
+                guard libraryRootURL == key.root, bookID == key.bookID else { return }
+                queryMemoryRevision += 1
+                var statusKey = key; statusKey.revision = projectRevision; statusKey.memoryRevision = queryMemoryRevision
+                queryMemoryStatusKey = statusKey
+                queryMemoryStatus = stored.cursor.index >= currentHistory.count ? "摘要已更新，原始问答完整保留。" : "已整理前\(stored.cursor.index)条消息\(stored.cursor.offset > 0 ? "及下一条的部分内容" : "")，点击继续整理可补齐。"
+            } catch {
+                if let progressID { finishAIProgress(progressID, error: error) }
+                guard libraryRootURL == key.root, bookID == key.bookID else { return }
+                queryMemoryStatus = error is CancellationError ? "已停止整理，已有摘要与原问答保留。" : "整理未完成：" + error.localizedDescription
+            }
         }
     }
 }
@@ -129,29 +188,55 @@ import ReadingCore
 struct QueryScopeControl: View {
     @EnvironmentObject var store: AppStore
     var compact = false
+    @State private var presented = false
+    @State private var owner: WorkspacePickerOwner?
     var body: some View {
-        Menu {
-            ForEach(ReadingQueryScope.allCases, id: \.self) { scope in
-                Button { store.queryScope = scope } label: {
-                    HStack {
-                        Label(scope.title, systemImage: icon(scope))
-                        Spacer(minLength: 16)
-                        if store.queryScope == scope { Image(systemName: "checkmark") }
-                    }
-                }.disabled(!store.canUseQueryScope(scope))
-            }
-            if store.queryScope == .notes {
-                Divider()
-                Button { store.queryDocumentIDs = nil } label: { Label("选择全部笔记", systemImage: "checkmark.circle") }
-                ForEach(store.book?.activeDocuments ?? []) { document in
-                    Toggle(document.title, isOn: Binding(get: { store.queryDocumentIDs?.contains(document.id) ?? true },
-                        set: { store.setQueryDocument(document.id, included: $0) }))
-                }
-            }
-        } label: {
-            Label(store.queryScope.title, systemImage: icon(store.queryScope))
+        Button { owner = WorkspacePickerOwner(store: store); presented = true } label: {
+            HStack(spacing: 5) { Label(store.queryScope.title, systemImage: icon(store.queryScope)); Image(systemName: "chevron.down").font(.system(size: 9)) }
                 .font(.system(size: compact ? 14 : 15, weight: .medium)).frame(minHeight: 44)
-        }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().disabled(store.isQueryBusy).help("选择这次提问允许读取的内容")
+        }.buttonStyle(ReadingQuietButtonStyle()).fixedSize().disabled(store.isQueryBusy).help("选择这次提问允许读取的内容")
+            .popover(isPresented: $presented) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack { Text("本次阅读范围").font(.system(size: 16, weight: .semibold)); Spacer()
+                        Button { presented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭阅读范围")
+                    }.padding(.horizontal, 12)
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(ReadingQueryScope.allCases, id: \.self) { scope in
+                                Button {
+                                    guard owner?.matches(store) == true else { return }; store.queryScope = scope
+                                    if scope != .notes { presented = false }
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: icon(scope)).foregroundStyle(Palette.accent).frame(width: 24)
+                                        VStack(alignment: .leading, spacing: 4) { Text(scope.title).font(.system(size: 14, weight: .medium)); Text(detail(scope)).font(.system(size: 12)).foregroundStyle(.secondary) }
+                                        Spacer(); if store.queryScope == scope { Image(systemName: "checkmark").foregroundStyle(Palette.accent) }
+                                    }.padding(12).frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+                                }.buttonStyle(ReadingQuietButtonStyle()).disabled(!store.canUseQueryScope(scope)).help(detail(scope))
+                            }
+                            if store.queryScope == .notes {
+                                Divider().padding(.vertical, 6)
+                                Button("选择全部已保存笔记") { guard owner?.matches(store) == true else { return }; store.queryDocumentIDs = nil }
+                                    .buttonStyle(ReadingToolbarButtonStyle())
+                                ForEach(store.book?.activeDocuments ?? []) { document in
+                                    Toggle(document.title, isOn: Binding(get: { store.queryDocumentIDs?.contains(document.id) ?? true },
+                                        set: { if owner?.matches(store) == true { store.setQueryDocument(document.id, included: $0) } }))
+                                        .toggleStyle(.checkbox).font(.system(size: 14)).frame(minHeight: 40).padding(.horizontal, 12)
+                                }
+                            }
+                        }.padding(.horizontal, 8)
+                    }.frame(maxHeight: 480)
+                }.padding(10).frame(width: 370)
+            }.onChange(of: store.collectionOwnerKey) { _, _ in presented = false }
+    }
+    private func detail(_ scope: ReadingQueryScope) -> String {
+        switch scope {
+        case .selection: return "只读你选中的原文片段"
+        case .page: return "围绕当前页，不自动扩大到后文"
+        case .chapter: return "读取当前章节的完整范围"
+        case .book: return "允许检索本书的全部原文"
+        case .notes: return "选择本次允许读取的已保存笔记"
+        }
     }
     private func icon(_ scope: ReadingQueryScope) -> String {
         switch scope {

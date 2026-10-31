@@ -1,9 +1,18 @@
 import SwiftUI
 import ReadingCore
 
+@MainActor final class PDFNotePositionState: ObservableObject {
+    @Published private(set) var points: [String: CGPoint] = [:]
+    @Published private(set) var owner = ""
+    func update(_ next: [String: CGPoint], owner: String = "") {
+        if self.owner != owner { self.owner = owner }
+        if points != next { points = next }
+    }
+}
+
 enum PDFReaderCommand {
     case prev, next, jump(Int), zoomIn, zoomOut, fitPage, fitWidth, actualSize
-    case showSearch, toggleSearch, toggleThumbnails, toggleContinuous, createHighlight, createRegion, showAnnotations
+    case showSearch, toggleSearch, toggleThumbnails, toggleContinuous, createHighlight, createRegion, showAnnotations, placeNote
     case hideSearch, setThumbnails(Bool), setContinuous(Bool)
     case setDirection(PDFReadingDirection)
     /// Offsets from an extracted SourceUnit must never be reused as PDF offsets.
@@ -26,10 +35,15 @@ enum PDFReaderCommand {
     @Published var chromeFrame = CGRect.zero
     @Published var thumbnailFrame = CGRect.zero
     @Published var canEditAnnotations = true
+    let notePositions = PDFNotePositionState()
+    var noteAnchorPoints: [String: CGPoint] { notePositions.points }
     private var bindingID: UUID?
     private var handler: ((PDFReaderCommand) -> Void)?
 
     func command(_ command: PDFReaderCommand) { handler?(command) }
+    func reportNotePositions(id: UUID, points: [String: CGPoint], owner: String) {
+        guard bindingID == id else { return }; notePositions.update(points, owner: owner)
+    }
     func bind(id: UUID, handler: @escaping (PDFReaderCommand) -> Void) { bindingID = id; self.handler = handler }
     func update(id: UUID, page: Int, pageCount: Int, zoomPercent: Int, isReady: Bool, hasSelection: Bool, canEditAnnotations: Bool, isSearchVisible: Bool, isContinuous: Bool, direction: PDFReadingDirection, thumbnailsVisible: Bool, fitMode: String, chromeFrame: CGRect, thumbnailFrame: CGRect) {
         guard bindingID == id else { return }
@@ -52,6 +66,7 @@ enum PDFReaderCommand {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.bindingID == nil else { return }
             self.isReady = false; self.hasSelection = false; self.isSearchVisible = false; self.pageCount = 0
+            self.notePositions.update([:])
             self.chromeFrame = .zero; self.thumbnailFrame = .zero; self.thumbnailsVisible = false
         }
     }

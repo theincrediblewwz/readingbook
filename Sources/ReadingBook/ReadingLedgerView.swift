@@ -72,7 +72,7 @@ struct ReadingLedgerView: View {
                 if issueCount > 0 { warning("\(issueCount) 段回执记录了疑点，展开逐项核对。") }
                 if let failure = (book.workflowRuns ?? []).last(where: { $0.unitID == unit.id && $0.status == .failed }) {
                     warning(failure.error ?? "步骤执行失败，检查点已保留。")
-                    Button("查看失败步骤") { expanded = true; showSteps = true }.font(.caption).buttonStyle(.borderless)
+                    Button("查看失败步骤") { expanded = true; showSteps = true }.font(.caption).buttonStyle(ReadingQuietButtonStyle())
                 }
                 if requirements == nil && book.plan != nil { warning("读书法步骤清单暂不可用，请检查当前方案。") }
             }.padding(18).readingGlass(radius: 20)

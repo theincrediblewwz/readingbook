@@ -34,12 +34,14 @@ import ReadingCore
     var newHistoryFolderTitle: String {
         Date.now.formatted(.dateTime.month().day()) + " · " + (selectedUnit?.page.map { "第\($0)页" } ?? "阅读讨论")
     }
-    func setReferencedAnswer(_ id: String, included: Bool) {
-        guard !isQueryBusy, let book, ReaderCollectionRuntime.reference(id, in: book) != nil else { return }
+    func setReferencedAnswer(_ id: String, included: Bool, forCompanion: Bool = false) {
+        guard !(forCompanion ? isCompanionGenerating : isQueryBusy), let book, ReaderCollectionRuntime.reference(id, in: book) != nil else { return }
+        var selected = forCompanion ? companionReferencedAnswerIDs : queryReferencedAnswerIDs
         if included {
-            guard queryReferencedAnswerIDs.count < 16 || queryReferencedAnswerIDs.contains(id) else { errorMessage = "一次最多引用16条历史回答。"; return }
-            queryReferencedAnswerIDs.insert(id)
-        } else { queryReferencedAnswerIDs.remove(id) }
+            guard selected.count < 16 || selected.contains(id) else { errorMessage = "一次最多引用16条历史回答。"; return }
+            selected.insert(id)
+        } else { selected.remove(id) }
+        if forCompanion { companionReferencedAnswerIDs = selected } else { queryReferencedAnswerIDs = selected }
     }
     func returnToOriginalReading() {
         guard finishWorkspaceNotesEditing() else { return }
@@ -57,16 +59,39 @@ import ReadingCore
     private var owner = ""
     private var attempted = false
     private var occupied = false
+    private var loaded = false
+    private var loading = false
     private var task: Task<Void, Never>?
     private var generation = UUID()
 
     func cancelActive() { task?.cancel(); task = nil; generation = UUID() }
-    func reset() { cancelActive(); questions = []; owner = ""; attempted = false; occupied = false }
+    func reset() { cancelActive(); questions = []; owner = ""; attempted = false; occupied = false; loaded = false; loading = false }
     func refresh(store: AppStore, active: Bool, eligible: Bool) {
         let key = store.collectionOwnerKey + "|" + store.queryScope.rawValue + "|" + (store.selectedUnitID ?? "") + "|" + store.currentQueryPreferences.contextIdentity + "|" + store.settings.baseURL + "|" + store.settings.model
         if key != owner { reset(); owner = key }
-        if !eligible { occupied = true; cancelActive(); return }
-        if occupied { occupied = false; attempted = false; questions = []; cancelActive() }
+        let cache = ReadingSuggestionCache.shared, cacheRoot = store.libraryRootURL
+        if !eligible {
+            let changed = !occupied || !loaded
+            occupied = true; loaded = true; loading = false; cancelActive()
+            if changed { Task { try? await cache.write(.init(occupied: true), root: cacheRoot, identity: key) } }
+            return
+        }
+        if active, !loaded {
+            guard !loading else { return }; loading = true
+            let token = generation
+            task = Task { [weak self, weak store] in
+                let value = await cache.read(root: cacheRoot, identity: key)
+                guard let self, let store, !Task.isCancelled, self.owner == key, self.generation == token else { return }
+                self.loaded = true; self.loading = false
+                if let value { self.questions = value.questions; self.attempted = !value.questions.isEmpty; self.occupied = value.occupied }
+                self.refresh(store: store, active: active, eligible: eligible)
+            }
+            return
+        }
+        if occupied {
+            occupied = false; attempted = false; questions = []; cancelActive()
+            Task { try? await cache.write(.init(), root: cacheRoot, identity: key) }
+        }
         guard active, !attempted, !store.isQueryBusy, !store.storageState.working,
               !store.settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let book = store.book else { return }
         attempted = true
@@ -89,6 +114,7 @@ import ReadingCore
                 guard let self, let store, self.generation == token, self.owner == key,
                       store.libraryRootURL == root, store.bookID == book.id, store.book?.sourceHash == book.sourceHash else { return }
                 self.questions = result.questions
+                try? await cache.write(.init(questions: result.questions), root: root, identity: key)
             } catch {
                 // Offline, missing configuration, cancellation and invalid model
                 // responses have no fixed fallback masquerading as a suggestion.

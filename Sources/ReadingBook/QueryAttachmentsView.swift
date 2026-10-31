@@ -31,7 +31,7 @@ struct QueryAttachmentsControl: View {
                     if store.queryScope != .notes {
                         HStack { Text("笔记正文").font(.subheadline.weight(.semibold)); Spacer(); ReaderFolderControl(kind: .notes, selection: $noteFolderID) }
                         if let current = store.selectedDocumentID, store.book?.activeDocuments.contains(where: { $0.id == current }) == true {
-                            Button("附加正在编辑的笔记") { store.setQueryAttachedDocument(current, included: true) }.buttonStyle(.borderless)
+                            Button("附加正在编辑的笔记") { store.setQueryAttachedDocument(current, included: true) }.buttonStyle(ReadingQuietButtonStyle())
                         }
                         ForEach(documents) { document in
                             Toggle(document.title, isOn: Binding(get: { store.queryAttachedDocumentIDs.contains(document.id) },
@@ -52,7 +52,7 @@ struct QueryAttachmentsControl: View {
                     Divider().padding(.vertical, 8)
                     if store.queryInteractionMode == .functional {
                         Text("画布节点").font(.subheadline.weight(.semibold))
-                        Button("附加画布中已选节点") { store.addSelectedQueryNodes() }.buttonStyle(.borderless)
+                        Button("附加画布中已选节点") { store.addSelectedQueryNodes() }.buttonStyle(ReadingQuietButtonStyle())
                         ForEach(nodes) { node in
                             Toggle(store.queryNodeTitle(node), isOn: Binding(get: { store.queryAuthorizedNodeIDs.contains(node.id) },
                                 set: { store.setQueryAuthorizedNode(node.id, included: $0) }))
@@ -66,7 +66,7 @@ struct QueryAttachmentsControl: View {
             }
             Divider()
             HStack {
-                Button("清空附加") { store.clearQueryTaskAttachments() }.buttonStyle(.borderless)
+                Button("清空附加") { store.clearQueryTaskAttachments() }.buttonStyle(ReadingQuietButtonStyle())
                 Spacer()
                 Button("完成") { presented = false }.buttonStyle(.borderedProminent).controlSize(.large)
             }.padding(14)
@@ -116,23 +116,31 @@ struct QueryMemoryInspector: View {
     private var selected: ConversationMemory? { records.first { $0.id == selectedID } ?? records.first }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Label("对话摘要", systemImage: "brain.head.profile").font(.system(size: 20, weight: .semibold))
-                Spacer()
-                ReaderInformationButton(title: "摘要与历史有什么不同？", text: "历史保存完整问答；摘要只提炼长对话中的要求、结论和待讨论问题，帮助AI接着聊。清除摘要不会删除任何原始问答或笔记。旧范围的摘要可以查阅和分类，只有经过当前范围与原消息核对的摘要才会自动使用。")
+            HStack(spacing: 8) {
+                Label("对话摘要", systemImage: "brain.head.profile").font(.system(size: 18, weight: .semibold))
+                Text("\(records.count)").font(.system(size: 12)).foregroundStyle(.secondary)
+                ReaderFolderControl(kind: .summaries, selection: $folderID).frame(maxWidth: 170)
+                Spacer(minLength: 4)
+                if store.isManagingQueryMemory {
+                    ProgressView().controlSize(.small)
+                    Button("停止") { store.queryMemoryTask?.cancel() }.buttonStyle(ReadingToolbarButtonStyle()).help("停止本次整理；已有摘要、完整问答和笔记保留。")
+                } else {
+                    Button(current.memory == nil ? "立即整理" : summaryComplete ? "已整理" : "继续整理") { store.summarizeCurrentConversation() }
+                        .buttonStyle(ReadingToolbarButtonStyle(selected: true)).disabled(summaryComplete || store.storageState.working || current.historyCount == 0)
+                        .help("用当前模型整理本范围的已有问答，会消耗一次模型请求。长对话分批处理，不删除原消息。")
+                }
+                ReaderInformationButton(title: "摘要状态与使用说明", text: statusText + "\n\n历史保存完整问答；摘要只提炼要点，帮助AI接着聊。自动整理在后续提问且对话较长、预算足够时进行。手动整理也可处理短对话。清除摘要不删除问答或笔记；旧范围的摘要可查阅和分类，只有当前范围与原消息核对通过的摘要才会自动使用。")
                 Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction).help("关闭对话摘要")
-            }.padding(.horizontal, 20).padding(.vertical, 12)
-            HStack {
-                ReaderFolderControl(kind: .summaries, selection: $folderID)
-                Spacer()
-                Text("\(records.count) 份摘要").font(.system(size: 12)).foregroundStyle(.secondary)
-            }.padding(.horizontal, 18).padding(.bottom, 8)
+            }.padding(.horizontal, 18).frame(height: 58)
+            if store.isManagingQueryMemory || statusText.hasPrefix("整理未完成") || statusText.hasPrefix("已停止") {
+                Text(statusText).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).padding(.horizontal, 20).padding(.bottom, 8)
+            }
             Divider().opacity(0.4)
             if records.isEmpty {
                 VStack(spacing: 14) {
                     Image(systemName: "text.badge.star").font(.system(size: 30)).foregroundStyle(Palette.accent)
                     Text("还没有对话摘要").font(.system(size: 19, weight: .semibold))
-                    Text("聊得长时，会自动归纳要点，方便接着讨论。\n完整问答始终保留在历史对话中。")
+                    Text("点上方“立即整理”，就能在这里看到要点和来源。\n自动整理只在后续提问且对话较长、预算足够时进行。")
                         .font(.system(size: 15)).foregroundStyle(.secondary).multilineTextAlignment(.center).lineSpacing(5)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -143,6 +151,7 @@ struct QueryMemoryInspector: View {
                                 Button { selectedID = memory.id } label: {
                                     VStack(alignment: .leading, spacing: 6) {
                                         Text(memory.unresolved.first?.text ?? memory.requirements.first?.text ?? memory.conclusions.first?.text ?? "对话摘要").font(.system(size: 14, weight: .medium)).lineLimit(2)
+                                        Text(memory.scopeTitle ?? "较早的对话摘要").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
                                         Text(memory.updatedAt, format: .dateTime.month().day().hour().minute()).font(.system(size: 12)).foregroundStyle(.secondary)
                                     }.padding(12).frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
                                         .background(selected?.id == memory.id ? Palette.accent.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 12))
@@ -155,10 +164,12 @@ struct QueryMemoryInspector: View {
                         if let memory = selected {
                             VStack(alignment: .leading, spacing: 18) {
                                 HStack {
-                                    Text(current.memory?.id == memory.id ? "当前范围的摘要" : "已保存的摘要").font(.system(size: 14, weight: .semibold))
+                                    Text(memory.scopeTitle ?? (current.memory?.id == memory.id ? "当前范围的摘要" : "已保存的摘要")).font(.system(size: 14, weight: .semibold))
                                     Spacer()
                                     ReaderMoveToFolderButton(kind: .summaries, recordIDs: ["memory:" + memory.id])
                                 }
+                                Text("已整理前\(memory.cursor.index)条消息" + (memory.cursor.offset > 0 ? "和下一条的部分内容" : "") + " · " + memory.updatedAt.formatted(.dateTime.month().day().hour().minute()))
+                                    .font(.system(size: 12)).foregroundStyle(.secondary)
                                 memoryGroup("你的想法与要求", items: memory.requirements)
                                 memoryGroup("讨论过的结论", items: memory.conclusions)
                                 memoryGroup("还想继续聊", items: memory.unresolved)
@@ -172,11 +183,9 @@ struct QueryMemoryInspector: View {
                 Toggle("自动整理长对话", isOn: $store.queryMemoryEnabled).toggleStyle(.switch)
                     .help("对话较长时，在同一请求预算内提炼要点供后续问题使用；关闭后仍保留原始问答与已有摘要。")
                 Spacer()
-                if current.memory != nil {
-                    Button("清除当前摘要…") { clearOwner = WorkspacePickerOwner(store: store); clearing = true }
-                        .buttonStyle(ReadingToolbarButtonStyle()).disabled(store.isQueryBusy || store.isManagingQueryMemory || store.storageState.working)
-                        .help("只清除当前阅读范围的自动摘要，原问答、历史文件夹和笔记保留。")
-                }
+                Button("清除当前摘要…") { clearOwner = WorkspacePickerOwner(store: store); clearing = true }
+                    .buttonStyle(ReadingToolbarButtonStyle()).disabled(current.memory == nil || store.isQueryBusy || store.isManagingQueryMemory || store.storageState.working)
+                    .help(current.memory == nil ? "当前阅读范围还没有摘要可清除；其他范围的摘要不受影响。" : "只清除当前阅读范围的摘要，原问答、历史文件夹和笔记保留。")
             }.padding(18)
         }.frame(width: 780, height: 600).background(Palette.canvas).onExitCommand(perform: onClose)
             .confirmationDialog("清除当前范围的对话摘要？", isPresented: $clearing, titleVisibility: .visible) {
@@ -196,6 +205,17 @@ struct QueryMemoryInspector: View {
             }
             .onChange(of: store.collectionOwnerKey) { _, _ in onClose() }
     }
+    private var statusText: String {
+        if store.isSummaryRequestRunning, let key = store.queryMemoryStatusKey, !key.hasSameScope(as: store.queryMemoryPreparationKey) {
+            return store.summaryProgressState.value.title + "，完成后保存在原来的范围。"
+        }
+        if store.queryMemoryStatusKey == store.queryMemoryPreparationKey, !store.queryMemoryStatus.isEmpty { return store.queryMemoryStatus }
+        guard preparedKey != nil else { return "正在核对当前阅读范围…" }
+        if current.historyCount == 0 { return "当前范围没有可整理的问答；可切回对应的范围和讲解方式查看。" }
+        if let memory = current.memory { return "当前范围有\(current.historyCount)条消息，已整理\(memory.cursor.index)条。摘要是要点，完整回答在历史对话中。" }
+        return "当前范围有\(current.historyCount)条消息，尚未整理；可立即整理，不必等到长对话自动触发。"
+    }
+    private var summaryComplete: Bool { current.memory.map { $0.cursor.index >= current.historyCount && $0.cursor.offset == 0 } ?? false }
     private func memoryGroup(_ title: String, items: [ConversationMemoryItem]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { Image(systemName: "folder").foregroundStyle(Palette.accent); Text(title).font(.system(size: 15, weight: .semibold)); Spacer(); Text("\(items.count)").font(.caption).foregroundStyle(.secondary) }

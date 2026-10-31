@@ -5,6 +5,7 @@ import ReadingCore
 struct QueryMemoryDisplay: Sendable {
     var memory: ConversationMemory?
     var messages: [String: ChatMessage] = [:]
+    var historyCount = 0
 }
 
 /// Derived context is prepared on demand, never while SwiftUI computes body.
@@ -20,6 +21,11 @@ struct QueryMemoryPreparationKey: Hashable {
     var nodes: [String]
     var references: [String]
     var mode: String
+    func hasSameScope(as other: Self) -> Bool {
+        var lhs = self, rhs = other
+        lhs.revision = 0; lhs.memoryRevision = 0; rhs.revision = 0; rhs.memoryRevision = 0
+        return lhs == rhs
+    }
 }
 
 actor QueryMemoryFiles {
@@ -36,12 +42,16 @@ actor QueryMemoryFiles {
               ConversationMemoryRuntime.isValid(memory, snapshot: snapshot, history: history) else { return nil }
         return memory
     }
-    func write(_ memory: ConversationMemory, snapshot: ReadingQuerySnapshot, root: URL) throws {
+    @discardableResult func write(_ memory: ConversationMemory, snapshot: ReadingQuerySnapshot, history: [ChatMessage], root: URL) throws -> ConversationMemory {
+        guard ConversationMemoryRuntime.isValid(memory, snapshot: snapshot, history: history) else { throw ReadingError.invalid("问答范围或原消息已经变化，未替换已保存的摘要。") }
+        if let current = read(snapshot: snapshot, history: history, root: root),
+           current.cursor.index > memory.cursor.index || (current.cursor.index == memory.cursor.index && current.cursor.offset >= memory.cursor.offset) { return current }
         let path = Self.url(snapshot: snapshot, root: root)
         let data = try JSONEncoder().encode(memory)
-        guard data.count <= 1_048_576 else { return }
+        guard data.count <= 1_048_576 else { throw ReadingError.invalid("摘要缓存过大，已有摘要保留。") }
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: path, options: .atomic)
+        return memory
     }
     func remove(snapshot: ReadingQuerySnapshot, root: URL) throws {
         let path = Self.url(snapshot: snapshot, root: root)
@@ -50,30 +60,7 @@ actor QueryMemoryFiles {
     /// A catalog is for browsing only. Automatic model context continues to
     /// use read(snapshot:history:), including its exact prefix proof.
     func catalog(bookID: String, messages: [ChatMessage], root: URL) -> [ConversationMemory] {
-        let directory = root.appendingPathComponent("ConversationMemory", isDirectory: true)
-        guard let urls = try? FileManager.default.contentsOfDirectory(at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey], options: [.skipsHiddenFiles]) else { return [] }
-        let known = Dictionary(messages.map { ($0.id, $0.role) }, uniquingKeysWith: { first, _ in first })
-        let sorted = urls.filter { $0.pathExtension == "json" }.sorted {
-            ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) >
-            ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
-        }
-        var result: [ConversationMemory] = [], seen = Set<String>()
-        for url in sorted.prefix(256) {
-            guard !Task.isCancelled, let attributes = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
-                  attributes.isRegularFile == true, attributes.isSymbolicLink != true, (attributes.fileSize ?? Int.max) <= 1_048_576,
-                  let data = try? Data(contentsOf: url), let memory = try? JSONDecoder().decode(ConversationMemory.self, from: data),
-                  memory.version == 1, memory.bookID == bookID, memory.id == bookID + ":" + memory.scopeFingerprint,
-                  memory.scopeFingerprint.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
-                  memory.updatedAt.timeIntervalSince1970.isFinite, seen.insert(memory.id).inserted else { continue }
-            let groups = [memory.requirements, memory.conclusions, memory.unresolved]
-            guard groups.contains(where: { !$0.isEmpty }), groups.allSatisfy({ $0.count <= 12 }),
-                  groups.flatMap({ $0 }).allSatisfy({ item in
-                      !item.text.isEmpty && item.text.count <= 800 && (1...8).contains(item.sources.count) && item.sources.allSatisfy { known[$0] != nil }
-                  }) else { continue }
-            result.append(memory)
-        }
-        return result.sorted { $0.updatedAt > $1.updatedAt }
+        ConversationMemoryCatalog.read(bookID: bookID, messages: messages, root: root)
     }
 }
 
@@ -119,6 +106,6 @@ actor QueryMemoryFiles {
         let memory = await loadPreparedQueryMemory(snapshot: snapshot, history: history, root: key.root)
         guard !Task.isCancelled, queryMemoryPreparationKey == key else { return QueryMemoryDisplay() }
         let ids = Set(((memory?.requirements ?? []) + (memory?.conclusions ?? []) + (memory?.unresolved ?? [])).flatMap(\.sources))
-        return QueryMemoryDisplay(memory: memory, messages: Dictionary(history.filter { ids.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }))
+        return QueryMemoryDisplay(memory: memory, messages: Dictionary(history.filter { ids.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }), historyCount: history.count)
     }
 }

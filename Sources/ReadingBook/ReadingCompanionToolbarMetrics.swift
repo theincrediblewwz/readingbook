@@ -13,7 +13,7 @@ enum ReadingCompanionToolbarMetrics {
         }
         let mode = text("解释与译文", size: 15) + 15 + 8 + 16
         let scope = text("当前章节", size: 13) + 13 + 8 + 16
-        let tools = 32 + 16 + ReadingLayout.controlHeight * 2 + 8 * 2
+        let tools = 32 + 32 + 16 + ReadingLayout.controlHeight * 2 + 8 * 3
         let toolbar = mode + scope + tools + 8 * 2 + ReadingLayout.panelPadding * 2
         let title = text("伴读与对话", size: ReadingLayout.panelTitleSize) + 20 + 8
         let tabs = modeTabWidth * 2 + 2 + 2 * 2

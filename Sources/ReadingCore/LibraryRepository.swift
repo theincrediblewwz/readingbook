@@ -180,7 +180,7 @@ public actor LibraryRepository {
         return DocumentContentSnapshot(markdown: markdown, contentHash: try BookImporter.sha256(data))
     }
 
-    public func saveDocument(project: BookProject, document: DocumentRecord, markdown: String, expectedContentHash: String? = nil) throws -> BookProject {
+    public func saveDocument(project: BookProject, document: DocumentRecord, markdown: String, expectedContentHash: String? = nil, notePlacement: ReadingNotePlacement? = nil) throws -> BookProject {
         let directory = try bookDirectory(project.id, mustExist: true)
         try recoverDocument(in: directory)
         let existing = try readProject(in: directory)
@@ -225,6 +225,9 @@ public actor LibraryRepository {
         record.updatedAt = Date()
         if let index = documentIndices[record.id] { updated.documents[index] = record }
         else { updated.documents.append(record) }
+        if let notePlacement {
+            updated.readerCollections = try ReaderCollectionRuntime.apply(.setNotePlacement(record.id, notePlacement), in: updated)
+        }
         try ReadingKnowledgeRuntime.captureVersions(before: existing, in: &updated)
         try validate(updated)
         // Validate all pre-existing files; the one being saved is allowed not to exist yet.

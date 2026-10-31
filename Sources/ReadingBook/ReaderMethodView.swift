@@ -130,7 +130,7 @@ struct ReaderMethodView: View {
                         Button { details = true } label: { Label("查看处理详情", systemImage: "checklist") }
                         Spacer(minLength: 0)
                         Button { store.requestedWorkspaceRoute = "reader" } label: { Label("回原文阅读", systemImage: "book.pages") }
-                    }.font(.system(size: 13)).buttonStyle(.borderless).foregroundStyle(.secondary)
+                    }.font(.system(size: 13)).buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(.secondary)
                 }.frame(maxWidth: 1060).padding(.horizontal, geometry.size.width < 800 ? 32 : 60)
                     .padding(.top, 116).padding(.bottom, 220).frame(maxWidth: .infinity, alignment: .top)
             }.background(Palette.canvas)
@@ -433,7 +433,7 @@ struct ReaderMethodView: View {
                                 Toggle("启用步骤", isOn: $step.enabled).labelsHidden().toggleStyle(.checkbox)
                                 TextField("要做什么", text: $step.title).textFieldStyle(.roundedBorder)
                                 Button { execution.steps.removeAll { $0.id == step.id } } label: { Image(systemName: "minus.circle") }
-                                    .buttonStyle(.borderless).help("移除这一步")
+                                    .buttonStyle(ReadingQuietButtonStyle()).help("移除这一步")
                             }
                             HStack {
                                 Picker("处理方式", selection: $step.actionID) {
@@ -448,7 +448,7 @@ struct ReaderMethodView: View {
                         }
                     }
                     Button { execution.steps.append(ReadingExecutionStep(title: "补充一个阅读关注点")) } label: { Label("增加步骤", systemImage: "plus") }
-                        .buttonStyle(.borderless).disabled(execution.steps.count >= 24)
+                        .buttonStyle(ReadingQuietButtonStyle()).disabled(execution.steps.count >= 24)
                 }.padding(.top, 12)
             }.font(.system(size: 13))
             HStack {
@@ -510,7 +510,7 @@ struct ReaderMethodView: View {
             journeyStep("01", "先了解这本书", "预读只用于选方法，还没有读完整本书。")
             journeyStep("02", "按合适的节奏读", "先选讲解的细致程度，再决定每次读一页、一章，或让 AI 安排。")
             journeyStep("03", "在组件里看见结果", "人物、战役与地点使用同一对象；适用时，地图、时间和关系同步呈现。")
-            Button { store.requestedWorkspaceRoute = "reader" } label: { Label("先回原文，稍后再分析", systemImage: "book.pages") }.buttonStyle(.borderless).font(.system(size: 13))
+            Button { store.requestedWorkspaceRoute = "reader" } label: { Label("先回原文，稍后再分析", systemImage: "book.pages") }.buttonStyle(ReadingQuietButtonStyle()).font(.system(size: 13))
         }.padding(.top, 20)
     }
     private func journeyStep(_ number: String, _ title: String, _ text: String) -> some View {

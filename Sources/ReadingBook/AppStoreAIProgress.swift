@@ -213,22 +213,30 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
         return await prepareProgress(title: title, destination: .companion, ocr: false, worker: companionReader, requestRun: run,
             sourceBookID: sourceBookID, sourceRoot: sourceRoot, owner: owner)
     }
+    @discardableResult func beginSummaryProgress(title: String, worker: AIReader, settings: ProviderSettings) async -> UUID {
+        let sourceBookID = bookID, sourceRoot = libraryRootURL, owner = repository
+        let run = try? await sharedAIRequests.beginManagedRun(settings: settings, maximumConcurrency: aiConcurrencyLimit)
+        return await prepareProgress(title: title, destination: .summary, ocr: false, worker: worker, requestRun: run,
+            sourceBookID: sourceBookID, sourceRoot: sourceRoot, owner: owner)
+    }
     private func progressValue(_ runID: UUID) -> AIProgressPresentationState? {
         if aiProgress.runID == runID { return aiProgress }
         if queryProgressState.value.runID == runID { return queryProgressState.value }
         if companionProgress.runID == runID { return companionProgress }
+        if summaryProgressState.value.runID == runID { return summaryProgressState.value }
         return nil
     }
     private func setProgress(_ value: AIProgressPresentationState) {
         if value.runID == queryProgressState.value.runID { queryProgressState.value = value }
         else if value.runID == companionProgress.runID { companionProgress = value }
+        else if value.runID == summaryProgressState.value.runID { summaryProgressState.value = value }
         else { aiProgress = value }
     }
-    private enum ProgressDestination: Equatable { case general, query, companion }
+    private enum ProgressDestination: Equatable { case general, query, companion, summary }
     private func prepareProgress(title: String, destination: ProgressDestination, ocr: Bool, worker: AIReader, requestRun: AIRequestRun?,
                                  sourceBookID: String?, sourceRoot: URL, owner: LibraryRepository) async -> UUID {
         let runID = UUID()
-        let old = destination == .query ? queryProgressState.value : destination == .companion ? companionProgress : aiProgress
+        let old = destination == .query ? queryProgressState.value : destination == .companion ? companionProgress : destination == .summary ? summaryProgressState.value : aiProgress
         _ = old.mailbox?.take(close: true)
         let mailbox = AIProgressMailbox(requestRun: requestRun) {
             if let sourceBookID { _ = try? await owner.refreshReadableViews(id: sourceBookID, archived: false) }
@@ -240,6 +248,7 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
         case .query: queryProgressState.value = value
         case .companion: companionProgress = value
         case .general: aiProgress = value
+        case .summary: summaryProgressState.value = value
         }
         let handler = workerProgressHandler(runID)
         if ocr { await pdfOCRReader.setProgressHandler(handler) } else { await worker.setProgressHandler(handler) }
@@ -277,6 +286,7 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
               value.bookID == bookID, value.libraryRoot == libraryRootURL else { return }
         if companionProgress.runID == runID { cancelCompanion() }
         else if queryProgressState.value.runID == runID { cancelQuery() }
+        else if summaryProgressState.value.runID == runID { queryMemoryTask?.cancel() }
         else if aiProgress.runID == runID {
             if isSmartReadingRunning { pauseReading() }
             else { task?.cancel(); activity = "正在停止本次任务，已保存内容保留。" }

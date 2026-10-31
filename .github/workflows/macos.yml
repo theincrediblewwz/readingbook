@@ -81,6 +81,8 @@ jobs:
         run: |
           python3 scripts/mac-note-editor/run-native-probe.py --build-dir .build/tests/debug --output logs/ci-note-editor/native-probe.json
           python3 scripts/mac-note-editor/run-hosted-undo-probe.py --build-dir .build/tests/debug --output logs/ci-note-editor/hosted-undo.json
+      - name: Native position notes and concurrent conversation summaries
+        run: python3 scripts/native-ui-regression/run-experience-completion.py --bin-dir .build/tests/debug --tag ci-experience-completion
       - name: Native Markdown bridge and preservation regression
         run: |
           node scripts/test-markdown-provenance.cjs logs/ci-markdown-bridge/provenance/result.json
@@ -100,6 +102,14 @@ jobs:
         with:
           name: failed-markdown-native-evidence
           path: logs/ci-markdown-bridge
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Preserve failed experience regression evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-experience-regression-evidence
+          path: logs/ux-completion-20261031/ci-experience-completion
           if-no-files-found: ignore
           retention-days: 3
       - name: Build universal app and package

@@ -753,6 +753,7 @@ private struct CompanionScopePreparation: Sendable {
         var frozenSettings = settings
         frozenSettings.transportSessionID = "readingbook-\(initial.id)-companion"
         let frozenKey = apiKey
+        let frozenReferenceIDs = companionReferencedAnswerIDs.sorted()
         companionScopeRunID = runID
         isCompanionGenerating = true; readingExperienceError = nil; readingCompanionVisible = true; readingCompanionTab = "companion"
         activity = "正在准备伴读范围…"
@@ -774,7 +775,11 @@ private struct CompanionScopePreparation: Sendable {
                       book?.sourceHash == initial.sourceHash else { throw CancellationError() }
                 let preparationProject = current
                 let worker = Task.detached(priority: .userInitiated) {
-                    let snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: preparationProject, context: frozenContext)
+                    let references = try ReaderCollectionRuntime.explicitReferences(frozenReferenceIDs, in: preparationProject)
+                    let baseSnapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: preparationProject, context: frozenContext)
+                    let snapshot: ReadingQuerySnapshot
+                    if references.isEmpty { snapshot = baseSnapshot }
+                    else { snapshot = try baseSnapshot.withContextIdentity(ReaderCollectionRuntime.contextIdentity(preferences: .init(), references: references)) }
                     let byID = Dictionary(preparationProject.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                     var actionable: [String] = [], needsOCR = false
                     for id in snapshot.unitIDs {
@@ -847,7 +852,8 @@ private struct CompanionScopePreparation: Sendable {
                         // A unit shared by chapters uses the host's exact slice
                         // capability instead of widening a chapter to the page.
                         var result = try await companionReader.enrichCurrent(project: current, unitID: unitID, settings: frozenSettings, apiKey: frozenKey,
-                            sourceRanges: wholeUnit ? nil : ranges)
+                            sourceRanges: wholeUnit ? nil : ranges,
+                            referencedAnswers: try ReaderCollectionRuntime.explicitReferences(frozenReferenceIDs, in: initial))
                         try Task.checkCancellation()
                         guard companionScopeRunID == runID, libraryRootURL == root, bookID == snapshot.bookID else { throw CancellationError() }
                         let completed = result.audit.contains { $0.name == "reading_enrich" && !oldAuditIDs.contains($0.id) }

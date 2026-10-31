@@ -302,7 +302,7 @@ private actor OfflineConcurrentTransport {
                         conclusions: [.init(text: "保留原回答", sources: ["memory-assistant"])], unresolved: [],
                         updatedAt: Date(timeIntervalSince1970: 1_700_000_001), model: "offline")
                     try require(ConversationMemoryRuntime.isValid(memory, snapshot: snapshot, history: history), "侧车必须先通过真实来源验证。")
-                    try await QueryMemoryFiles.shared.write(memory, snapshot: snapshot, root: root)
+                    try await QueryMemoryFiles.shared.write(memory, snapshot: snapshot, history: history, root: root)
                     store.books = [current]
                     let before = try encoder.encode(current), display = await store.prepareQueryMemoryDisplay()
                     try require(display.memory == memory && (try encoder.encode(display.messages)) == encoder.encode(Dictionary(uniqueKeysWithValues: history.map { ($0.id, $0) })),

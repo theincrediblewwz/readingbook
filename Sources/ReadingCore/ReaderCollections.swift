@@ -24,6 +24,7 @@ public struct ReaderCollectionState: Codable, Hashable, Sendable {
     public var archivedChatIDs: [String] = []
     public var archivedCompanionIDs: [String] = []
     public var collapsedReferenceIDs: [String] = []
+    public var notePlacements: [String: ReadingNotePlacement]?
     public init() { }
 }
 
@@ -43,6 +44,8 @@ public enum ReaderCollectionCommand: Sendable {
     case archive([String], String)
     case restore([String])
     case organizeNotesByMonth
+    case organizeNotesByTopic([ReadingNoteTopicGroup], expectedDocuments: [DocumentRecord])
+    case setNotePlacement(String, ReadingNotePlacement?)
 }
 
 public enum ReaderCollectionRuntime {
@@ -50,6 +53,11 @@ public enum ReaderCollectionRuntime {
 
     public static func validate(_ state: ReaderCollectionState?) throws {
         guard let state else { return }
+        guard (state.notePlacements?.count ?? 0) <= 100_000 else { throw ReadingError.invalid("位置笔记数量过多。") }
+        for (id, placement) in state.notePlacements ?? [:] {
+            guard !id.isEmpty, id.utf8.count <= 160 else { throw ReadingError.invalid("位置笔记身份无效。") }
+            try placement.validate()
+        }
         guard state.folders.count <= 512, Set(state.folders.map(\.id)).count == state.folders.count,
               state.assignments.count <= 100_000, state.archivedChatIDs.count <= 100_000,
               state.archivedCompanionIDs.count <= 100_000, state.collapsedReferenceIDs.count <= 100_000 else {
@@ -155,6 +163,29 @@ public enum ReaderCollectionRuntime {
             guard ids.count <= 100_000, Set(ids).isSubset(of: known) else { throw ReadingError.invalid("回答已变化，请重新选择。") }
         }
         switch command {
+        case let .organizeNotesByTopic(groups, expected):
+            let encoded = try JSONSerialization.data(withJSONObject: ["groups": try JSONSerialization.jsonObject(with: JSONEncoder().encode(groups))])
+            _ = try ReadingNoteTopicRuntime.parse(String(decoding: encoded, as: UTF8.self), offeredIDs: Set(expected.map(\.id)))
+            let selectedIDs = Set(groups.flatMap(\.noteIDs))
+            let original = Dictionary(expected.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for id in selectedIDs {
+                guard let document = project.activeDocuments.first(where: { $0.id == id }), original[id] == document,
+                      state.assignments["note:" + id] == nil else { throw ReadingError.invalid("部分笔记或手工分类已经变化，未应用建议；请重新生成预览。") }
+            }
+            for group in groups {
+                let folder = state.folders.first { $0.kind == .notes && $0.parentID == nil && $0.title == group.title }
+                    ?? ReaderCollectionFolder(kind: .notes, title: group.title)
+                if !state.folders.contains(where: { $0.id == folder.id }) { state.folders.append(folder) }
+                for id in group.noteIDs { state.assignments["note:" + id] = folder.id }
+            }
+        case let .setNotePlacement(id, placement):
+            guard project.activeDocuments.contains(where: { $0.id == id }) else { throw ReadingError.invalid("笔记已变化或在回收站，请重新打开。") }
+            if let placement {
+                try placement.validate()
+                guard placement.matches(project) else { throw ReadingError.invalid("原书位置或版本已变化，请重新绑定；正文保留。") }
+                if state.notePlacements == nil { state.notePlacements = [:] }
+                state.notePlacements?[id] = placement
+            } else { state.notePlacements?.removeValue(forKey: id) }
         case .createFolder(var folder):
             folder.title = folder.title.trimmingCharacters(in: .whitespacesAndNewlines)
             try requireFolder(folder.parentID, kind: folder.kind)
@@ -226,10 +257,29 @@ public enum ReaderCollectionRuntime {
 }
 
 extension LibraryRepository {
+    /// A small editor/perspective save starts from the latest actor-owned book,
+    /// so unrelated analysis written during a model request is retained.
+    public func saveLatestNote(bookID: String, sourceHash: String, document: DocumentRecord, markdown: String,
+                               expectedDocument: DocumentRecord? = nil, expectedContentHash: String? = nil,
+                               notePlacement: ReadingNotePlacement? = nil, readingSnapshot: ReadingQuerySnapshot? = nil) throws -> BookProject {
+        try Task.checkCancellation()
+        let directory = try bookDirectory(bookID, mustExist: true)
+        try recoverDocument(in: directory)
+        let project = try readProject(in: directory)
+        guard project.sourceHash == sourceHash else { throw ReadingError.invalid("原书版本已经变化，未覆盖笔记。") }
+        if let expectedDocument {
+            guard project.activeDocuments.first(where: { $0.id == expectedDocument.id }) == expectedDocument else {
+                throw ReadingError.invalid("笔记记录已经修改或回收，未覆盖已有内容。")
+            }
+        }
+        if let readingSnapshot { _ = try readingSnapshot.sourceRanges(in: project) }
+        return try saveDocument(project: project, document: document, markdown: markdown, expectedContentHash: expectedContentHash, notePlacement: notePlacement)
+    }
     /// Resolve from the actor's latest canonical project, so an AI result or
     /// another window cannot overwrite a concurrent manual archive/folder edit.
     public func organizeReaderCollections(bookID: String, sourceHash: String, command: ReaderCollectionCommand) throws -> BookProject {
         let directory = try bookDirectory(bookID, mustExist: true)
+        try recoverDocument(in: directory)
         let project = try readProject(in: directory)
         guard project.sourceHash == sourceHash else { throw ReadingError.invalid("原书版本已变化，请重新打开收纳界面。") }
         let state = try ReaderCollectionRuntime.apply(command, in: project)

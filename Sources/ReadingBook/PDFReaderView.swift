@@ -38,8 +38,13 @@ struct PDFReaderView: NSViewRepresentable {
     var memoryRevision = 0
     var onWorkspaceMemory: ((PDFWorkspaceMemoryReceipt) -> Void)?
     var interactionResetID: UUID?
+    var notePlacements: [String: ReadingNotePlacement]
+    var onCreatePositionNote: ((Int, Double, Double) -> Void)?
+    var noteMarginVisible: Bool
+    var notePlacementOwner: String
+    var onCancelPositionNote: (() -> Void)?
 
-    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((PDFWorkspaceMemoryReceipt) -> Void)? = nil, interactionResetID: UUID? = nil) {
+    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((PDFWorkspaceMemoryReceipt) -> Void)? = nil, interactionResetID: UUID? = nil, notePlacements: [String: ReadingNotePlacement] = [:], onCreatePositionNote: ((Int, Double, Double) -> Void)? = nil, noteMarginVisible: Bool = false, notePlacementOwner: String = "", onCancelPositionNote: (() -> Void)? = nil) {
         self.controller = controller; self.url = url; self.sourceHash = sourceHash; self.password = password; self.annotations = annotations
         self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
         self.onUnlock = onUnlock; self.onSaveAnnotations = onSaveAnnotations; self.onTrashAnnotation = onTrashAnnotation
@@ -51,6 +56,10 @@ struct PDFReaderView: NSViewRepresentable {
         self.onPreparationChanged = onPreparationChanged
         self.workspaceMemory = workspaceMemory; self.memoryRevision = memoryRevision; self.onWorkspaceMemory = onWorkspaceMemory
         self.interactionResetID = interactionResetID
+        self.onCancelPositionNote = onCancelPositionNote
+        self.notePlacementOwner = notePlacementOwner
+        self.noteMarginVisible = noteMarginVisible
+        self.notePlacements = notePlacements; self.onCreatePositionNote = onCreatePositionNote
     }
 
     func makeNSView(context: Context) -> PDFReaderContainerView {
@@ -73,6 +82,10 @@ struct PDFReaderView: NSViewRepresentable {
 /// The PDF fills the reader; navigation is controlled by the window toolbar.
 /// Search and annotation editing appear only when requested.
 @MainActor final class PDFReaderContainerView: NSView, NSSearchFieldDelegate {
+    private var notePlacementOwner = ""
+    private var notePlacements: [String: ReadingNotePlacement] = [:]
+    private var notePlacementsByPage: [Int: [(String, ReadingNotePlacement)]] = [:]
+    private var onCreatePositionNote: ((Int, Double, Double) -> Void)?
     private let bindingID = UUID()
     private weak var controller: PDFReaderController?
     private var interactionBlocked = false
@@ -541,7 +554,19 @@ struct PDFReaderView: NSViewRepresentable {
 
     func update(from input: PDFReaderView) {
         let url = input.url, requestedPage = input.page, navigationToken = input.navigationToken
+        pdfView.pageShadowsEnabled = !input.noteMarginVisible
+        pdfView.backgroundColor = input.noteMarginVisible ? .textBackgroundColor : .windowBackgroundColor
         let sourceChanged = sourceHash != input.sourceHash
+        if notePlacements != input.notePlacements {
+            notePlacements = input.notePlacements
+            notePlacementsByPage = Dictionary(grouping: notePlacements.compactMap { id, value in value.page.map { ($0, id, value) } }, by: { $0.0 })
+                .mapValues { $0.map { ($0.1, $0.2) } }
+        }
+        notePlacementOwner = input.notePlacementOwner
+        onCreatePositionNote = input.onCreatePositionNote
+        pdfView.onNotePlacementCancelled = input.onCancelPositionNote
+        pdfView.onNotePoint = { [weak self] page, point in self?.createPositionNote(page: page, point: point) }
+        scheduleVisiblePages()
         if controller !== input.controller {
             controller?.unbind(id: bindingID)
             controller = input.controller
@@ -1124,7 +1149,7 @@ struct PDFReaderView: NSViewRepresentable {
     @objc private func scaleChanged(_ notification: Notification) {
         invalidateSourcePress()
         if !isApplyingFit, !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil { fitMode = .custom }
-        refreshControls(); sourceCanvas.needsDisplay = true; scheduleWorkspaceCapture()
+        refreshControls(); sourceCanvas.needsDisplay = true; scheduleWorkspaceCapture(); scheduleVisiblePages()
         scheduleSourceHoverRefresh()
     }
 
@@ -1477,6 +1502,10 @@ struct PDFReaderView: NSViewRepresentable {
             guard document != nil, document?.isLocked == false else { return }
             pdfView.armRegionSelection(); window?.makeFirstResponder(pdfView)
             setStatus("拖动框选同一页内的区域，松开后填写批注；按Esc取消。")
+        case .placeNote:
+            guard canEditAnnotations, document != nil, document?.isLocked == false else { return }
+            pdfView.armNotePlacement(); window?.makeFirstResponder(pdfView)
+            setStatus("点击原书中要贴便签的位置；按Esc取消。")
         case .showAnnotations: showAnnotations()
         case .focusQuote(let page, let quote): focusQuote(on: page, quote: quote)
         }
@@ -1668,6 +1697,7 @@ struct PDFReaderView: NSViewRepresentable {
                 let index = document.index(for: page); return index == NSNotFound ? nil : index + 1
             })).sorted()
             self.sourceCanvas.needsDisplay = true
+            self.publishNoteAnchorPoints()
             if pages != self.lastVisiblePages {
                 self.invalidateSourcePress()
                 self.lastVisiblePages = pages; self.onVisiblePagesChange?(pages); self.renderSourceDecorations()
@@ -1677,6 +1707,31 @@ struct PDFReaderView: NSViewRepresentable {
                 self.scheduleSourceHoverRefresh()
             }
         }
+    }
+    private func createPositionNote(page: PDFPage, point: CGPoint) {
+        guard !interactionBlocked, canEditAnnotations, let document else { return }
+        let index = document.index(for: page), crop = page.bounds(for: .cropBox)
+        guard index != NSNotFound, crop.width > 0, crop.height > 0, crop.contains(point) else { return }
+        setStatus("")
+        onCreatePositionNote?(index + 1, Double((point.x - crop.minX) / crop.width), Double((point.y - crop.minY) / crop.height))
+    }
+    private func publishNoteAnchorPoints() {
+        guard let document else { controller?.reportNotePositions(id: bindingID, points: [:], owner: notePlacementOwner); return }
+        var points: [String: CGPoint] = [:]
+        if !notePlacementsByPage.isEmpty {
+            for page in pdfView.visiblePages {
+                let index = document.index(for: page)
+                guard index != NSNotFound else { continue }
+                for (id, placement) in notePlacementsByPage[index + 1] ?? [] where placement.sourceHash == sourceHash {
+                    let crop = page.bounds(for: .cropBox)
+                    let original = CGPoint(x: crop.minX + crop.width * placement.x, y: crop.minY + crop.height * placement.y)
+                    let local = convert(pdfView.convert(original, from: page), from: pdfView)
+                    guard bounds.contains(local) else { continue }
+                    points[id] = CGPoint(x: local.x, y: isFlipped ? local.y : bounds.height - local.y)
+                }
+            }
+        }
+        controller?.reportNotePositions(id: bindingID, points: points, owner: notePlacementOwner)
     }
     private func nativePreparationSession() -> NativePDFPreparationWorker.Session? {
         guard let loadedURL, !sourceHash.isEmpty else { return nil }
@@ -2348,6 +2403,22 @@ private extension ReaderAnnotationColor {
     var interactionBlocked = false
     var readingDirection = PDFReadingDirection.vertical
     var onReadingNavigation: ((Int, PDFReadingDirection, Bool, Bool) -> Bool)?
+    var onNotePlacementCancelled: (() -> Void)?
+    var onNotePoint: ((PDFPage, CGPoint) -> Void)?
+    private var noteArmed = false
+    private var noteMenuPoint: (PDFPage, CGPoint)?
+    func armNotePlacement() { cancelRegionSelection(); noteArmed = true }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        let point = convert(event.locationInWindow, from: nil)
+        if !interactionBlocked, let page = page(for: point, nearest: false) {
+            noteMenuPoint = (page, convert(point, to: page))
+            let item = NSMenuItem(title: "在此写便签…", action: #selector(createNoteFromMenu), keyEquivalent: "")
+            item.target = self; menu.insertItem(item, at: 0)
+        }
+        return menu
+    }
+    @objc private func createNoteFromMenu() { if let (page, point) = noteMenuPoint { onNotePoint?(page, point) }; noteMenuPoint = nil }
     var onRegion: ((PDFPage, CGRect) -> Void)?
     var onRegionError: ((String) -> Void)?
     var isManagedAnnotation: ((PDFAnnotation) -> Bool)?
@@ -2359,10 +2430,10 @@ private extension ReaderAnnotationColor {
     private var regionPreview: NSView?
 
     func armRegionSelection() { cancelRegionSelection(); regionArmed = true }
-    func cancelRegionSelection() { regionArmed = false; handlingManagedClick = false; regionStart = nil; regionPreview?.removeFromSuperview(); regionPreview = nil }
+    func cancelRegionSelection() { noteArmed = false; regionArmed = false; handlingManagedClick = false; regionStart = nil; regionPreview?.removeFromSuperview(); regionPreview = nil }
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
-        if regionArmed { return bounds.contains(local) ? self : nil }
+        if regionArmed || noteArmed { return bounds.contains(local) ? self : nil }
         if NSApp.currentEvent?.modifierFlags.contains(.option) != true, managedAnnotation(at: local) != nil { return self }
         return super.hitTest(point)
     }
@@ -2373,6 +2444,10 @@ private extension ReaderAnnotationColor {
     }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if noteArmed {
+            defer { cancelRegionSelection() }
+            if let page = page(for: point, nearest: false) { onNotePoint?(page, convert(point, to: page)) }; return
+        }
         if !regionArmed {
             if !event.modifierFlags.contains(.option), let annotation = managedAnnotation(at: point) {
                 handlingManagedClick = true; onAnnotationTap?(annotation); return
@@ -2405,7 +2480,7 @@ private extension ReaderAnnotationColor {
     }
     override func keyDown(with event: NSEvent) {
         guard !interactionBlocked else { return }
-        if regionArmed && event.keyCode == 53 { cancelRegionSelection(); onRegionError?(""); return }
+        if (regionArmed || noteArmed) && event.keyCode == 53 { let note = noteArmed; cancelRegionSelection(); if note { onNotePlacementCancelled?() }; onRegionError?(""); return }
         // Every plain arrow pans along its own axis. Only the selected reading
         // axis turns pages, and only after the current magnified page boundary.
         if !regionArmed, (displayMode == .singlePage || displayMode == .singlePageContinuous),

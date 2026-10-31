@@ -145,7 +145,7 @@ struct ReadingContinuationHistoryView: View {
                 Button {
                     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(markdown, forType: .string)
                 } label: { Image(systemName: "doc.on.doc").frame(width: 30, height: 30) }
-                    .buttonStyle(.borderless).help("复制完整 Markdown").accessibilityLabel("复制" + title + "的完整 Markdown")
+                    .buttonStyle(ReadingQuietButtonStyle()).help("复制完整 Markdown").accessibilityLabel("复制" + title + "的完整 Markdown")
             }.padding(.horizontal, 12)
             if expandedRecords.contains(id) {
                 SettingsGroupDivider()

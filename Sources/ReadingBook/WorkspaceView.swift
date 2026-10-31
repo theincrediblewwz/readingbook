@@ -89,7 +89,7 @@ struct WorkspaceView: View {
                 topIslands(width: geometry.size.width).padding(.top, 14).padding(.leading, 104).padding(.trailing, 24)
                     .allowsHitTesting(!hasWorkspaceOverlay)
                     .opacity(hasWorkspaceOverlay ? 0 : 1).accessibilityHidden(hasWorkspaceOverlay)
-                if (store.book?.smartReading != nil || (store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID && store.aiProgress.libraryRoot == store.libraryRootURL) || (store.isCompanionGenerating && store.companionProgress.bookID == store.bookID && store.companionProgress.libraryRoot == store.libraryRootURL) || (store.isQueryBusy && store.queryProgressState.value.bookID == store.bookID && store.queryProgressState.value.libraryRoot == store.libraryRootURL)) && !store.storageState.working && !hasWorkspaceOverlay && !navigationExpanded && store.route != "library" {
+                if (store.book?.smartReading != nil || (store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID && store.aiProgress.libraryRoot == store.libraryRootURL) || (store.isCompanionGenerating && store.companionProgress.bookID == store.bookID && store.companionProgress.libraryRoot == store.libraryRootURL) || (store.isQueryBusy && store.queryProgressState.value.bookID == store.bookID && store.queryProgressState.value.libraryRoot == store.libraryRootURL) || (store.isSummaryRequestRunning && store.summaryProgressState.value.bookID == store.bookID && store.summaryProgressState.value.libraryRoot == store.libraryRootURL)) && !store.storageState.working && !hasWorkspaceOverlay && !navigationExpanded && store.route != "library" {
                     floatingProgress(in: geometry).zIndex(6)
                 }
                 if store.route == "reader" && store.book != nil && !hasWorkspaceOverlay {
@@ -129,6 +129,7 @@ struct WorkspaceView: View {
             }
         }
         .ignoresSafeArea(.container, edges: .top)
+        .buttonStyle(ReadingQuietButtonStyle())
         .environmentObject(pdfController)
         .environment(\.bookSchemeDraftStore, bookSchemeDrafts)
         .serviceProfileChangeConfirmation(store: store)
@@ -319,7 +320,7 @@ struct WorkspaceView: View {
             }, cancel: cancelDrag)
         }
         return ZStack(alignment: .topLeading) {
-          SmartReadingProgressPanel(activityState: store.aiProgressState, companionState: store.companionProgressState, queryState: store.queryProgressState,
+          SmartReadingProgressPanel(activityState: store.aiProgressState, companionState: store.companionProgressState, queryState: store.queryProgressState, summaryState: store.summaryProgressState,
               maximumExpandedHeight: max(100, min(430, geometry.size.height - 220)),
               compactInteraction: interaction(at: CGPoint(x: frame.midX, y: frame.midY), fallback: false), resetCompactPosition: resetPosition).environmentObject(store)
             .background {
@@ -336,7 +337,7 @@ struct WorkspaceView: View {
             .position(x: frame.midX, y: frame.midY)
           if usesFallback {
             Button { openActiveProgress() } label: {
-                Image(systemName: store.isSmartReadingRunning || store.isCompanionGenerating || store.isQueryBusy ? "sparkles" : "book.pages")
+                Image(systemName: store.isSmartReadingRunning || store.isCompanionGenerating || store.isQueryBusy || store.isManagingQueryMemory ? "sparkles" : "book.pages")
                     .font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
                     .frame(width: 52, height: 52).contentShape(Circle())
             }.buttonStyle(ReadingQuietButtonStyle()).readingGlass(radius: 26, interactive: true)
@@ -346,6 +347,7 @@ struct WorkspaceView: View {
                 .contextMenu {
                     if store.isCompanionGenerating { Button("停止本次伴读，其他任务继续") { store.cancelAIActivity(store.companionProgress.runID) } }
                     if store.isQueryBusy { Button("停止本次对话，其他任务继续") { store.cancelAIActivity(store.queryProgressState.value.runID) } }
+                    if store.isManagingQueryMemory { Button("停止整理摘要，其他任务继续") { store.cancelAIActivity(store.summaryProgressState.value.runID) } }
                     if store.isSmartReadingRunning { Button("暂停分析，保留已读内容") { store.pauseReading() } }
                     Button("还原浮钮位置", action: resetPosition)
                 }
@@ -361,6 +363,8 @@ struct WorkspaceView: View {
             store.readingCompanionVisible = true; store.readingCompanionTab = "companion"
         } else if store.isQueryBusy {
             store.readingCompanionVisible = true; store.readingCompanionTab = "chat"
+        } else if store.isManagingQueryMemory {
+            store.readingCompanionVisible = true; store.readingCompanionTab = "chat"; store.queryMemoryRequested = true
         } else { navigate("workflow") }
     }
     private func restoreReaderMemory() {
@@ -814,6 +818,11 @@ struct WorkspaceView: View {
             if let unit = store.selectedUnit {
                 let bookmarked = store.book?.bookmarks.contains(unit.id) == true
                 DockMenuRow(title: bookmarked ? "移除书签" : "添加书签", icon: bookmarked ? "bookmark.slash" : "bookmark", selected: bookmarked) { readerPopover = nil; Task { await store.toggleBookmark(unit.id) } }.disabled(store.isBusy)
+                DockMenuRow(title: "在原文贴便签…", icon: "note.text.badge.plus") {
+                    readerPopover = nil
+                    if store.sourceFileURL?.pathExtension.lowercased() == "pdf" { pdfController.command(.placeNote) }
+                    else { store.beginPositionNote() }
+                }.disabled(store.isSavingDocument || store.isRecognizingPDF).help("点击原书中的具体位置，写下自己的笔记；不会改动原书或遮住字。")
                 DockMenuRow(title: "记一篇笔记", icon: "square.and.pencil") { readerPopover = nil; store.newNote(for: unit) }.disabled(store.isRecognizingPDF)
             }
             if store.sourceReadingSelection != nil || store.selectedSourceAnchor != nil {

@@ -5,6 +5,7 @@ struct SmartReadingProgressPanel: View {
     @ObservedObject var activityState: AIProgressObservableState
     @ObservedObject var companionState: AIProgressObservableState
     @ObservedObject var queryState: AIProgressObservableState
+    @ObservedObject var summaryState: AIProgressObservableState
     var maximumExpandedHeight: CGFloat = 360
     var compactInteraction: FloatingLauncherInteraction?
     var resetCompactPosition: (() -> Void)?
@@ -20,10 +21,11 @@ struct SmartReadingProgressPanel: View {
     }
     private var hasCompanion: Bool { owns(companionState.value) && companionState.value.isRunning }
     private var hasQuery: Bool { owns(queryState.value) && queryState.value.isRunning }
+    private var hasSummary: Bool { owns(summaryState.value) && summaryState.value.isRunning }
     private var hasActivity: Bool { owns(activityState.value) && activityState.value.isRunning }
     private var readingRunning: Bool { store.isSmartReadingRunning && owns(activityState.value) }
-    private var hasReading: Bool { hasActivity || readingRunning || awaiting || (!hasCompanion && !hasQuery) }
-    private var headerCount: Int { (hasCompanion ? 1 : 0) + (hasQuery ? 1 : 0) + (hasReading ? 1 : 0) }
+    private var hasReading: Bool { hasActivity || readingRunning || awaiting || (!hasCompanion && !hasQuery && !hasSummary) }
+    private var headerCount: Int { (hasCompanion ? 1 : 0) + (hasQuery ? 1 : 0) + (hasSummary ? 1 : 0) + (hasReading ? 1 : 0) }
     private var detailHeight: CGFloat { max(0, maximumExpandedHeight - CGFloat(headerCount) * 52 - 1) }
     private var currentReceipts: [ParagraphReceipt] {
         guard let book = store.book, let id = progress?.currentUnitID,
@@ -41,6 +43,7 @@ struct SmartReadingProgressPanel: View {
         if headerCount > 1 { return "AI任务进度" }
         if hasCompanion { return "伴读生成" }
         if hasQuery { return "阅读对话" }
+        if hasSummary { return "对话摘要" }
         return readingTitle
     }
     private var compactTitle: String {
@@ -49,7 +52,7 @@ struct SmartReadingProgressPanel: View {
         return session?.status == .completed ? "已结束" : session == nil ? "智能阅读" : "已暂停"
     }
     private var statusIcon: String {
-        (hasCompanion || hasQuery || readingRunning || hasActivity) ? "sparkles" : session?.status == .completed ? "checkmark.circle" : "book.pages"
+        (hasCompanion || hasQuery || hasSummary || readingRunning || hasActivity) ? "sparkles" : session?.status == .completed ? "checkmark.circle" : "book.pages"
     }
     private var countText: String? {
         guard let progress, session?.isPlanConfirmed == true else { return nil }
@@ -62,6 +65,7 @@ struct SmartReadingProgressPanel: View {
         var values: [String] = []
         if hasCompanion { values.append("伴读：" + companionState.value.phaseTitle) }
         if hasQuery { values.append("对话：" + queryState.value.phaseTitle) }
+        if hasSummary { values.append("摘要：" + summaryState.value.phaseTitle) }
         if hasReading { values.append(hasActivity ? readingTitle + "：" + activityState.value.phaseTitle : readingTitle) }
         if let countText, hasReading { values.append("本次范围 " + countText + " 个内容单元，包含沿用") }
         return values.joined(separator: "，")
@@ -73,6 +77,7 @@ struct SmartReadingProgressPanel: View {
                 VStack(spacing: 0) {
                     if hasCompanion { laneHeader("伴读", state: companionState.value, icon: "sparkles") }
                     if hasQuery { laneHeader("对话", state: queryState.value, icon: "bubble.left.and.bubble.right") }
+                    if hasSummary { laneHeader("摘要", state: summaryState.value, icon: "brain.head.profile") }
                     if hasReading { readingHeader }
                     if expanded, detailHeight > 0 {
                         Divider().opacity(0.3)
@@ -88,8 +93,13 @@ struct SmartReadingProgressPanel: View {
                                     AIProgressStatusView(state: queryState)
                                 }
                                 if hasReading {
-                                    if hasCompanion || hasQuery { Divider().opacity(0.3) }
+                                    if hasCompanion || hasQuery || hasSummary { Divider().opacity(0.3) }
                                     readingDetails
+                                }
+                                if hasSummary {
+                                    if hasCompanion || hasQuery { Divider().opacity(0.3) }
+                                    detailLabel("对话摘要", icon: "brain.head.profile")
+                                    AIProgressStatusView(state: summaryState)
                                 }
                             }.padding(17)
                         }.frame(maxHeight: detailHeight)
@@ -170,6 +180,7 @@ struct SmartReadingProgressPanel: View {
     @ViewBuilder private var minimizedActions: some View {
         if hasCompanion { Button("停止伴读，保留已保存内容") { store.cancelAIActivity(companionState.value.runID) } }
         if hasQuery { Button("停止本次对话，伴读继续") { store.cancelAIActivity(queryState.value.runID) } }
+        if hasSummary { Button("停止整理摘要，其他任务继续") { store.cancelAIActivity(summaryState.value.runID) } }
         if readingRunning { Button("暂停智能阅读，其他任务继续", action: cancelReadingActivity) }
         else if hasActivity { Button("停止本次" + readingTitle, action: cancelReadingActivity) }
         if let resetCompactPosition { Button("还原浮钮位置", action: resetCompactPosition) }

@@ -12,6 +12,15 @@ public enum MarkdownReferenceLinks {
         var bracketEnds: [Int: Int] = [:], brackets: [Int] = []
         var parenthesisEnds: [Int: Int] = [:], parentheses: [Int] = []
         var referenceLabels = Set<String>()
+        func isKnownHostReference(_ label: ArraySlice<UInt8>) -> Bool {
+            let kind: String, prefix: Int
+            if label.starts(with: Array("unit:".utf8)) { kind = "unit"; prefix = 5 }
+            else if label.starts(with: Array("doc:".utf8)) { kind = "document"; prefix = 4 }
+            else if label.starts(with: Array("message:".utf8)) { kind = "message"; prefix = 8 }
+            else { return false }
+            let id = label.dropFirst(prefix)
+            return !id.isEmpty && id.allSatisfy(isIdentifier) && labelForReference?(kind, String(decoding: id, as: UTF8.self)) != nil
+        }
         var scanningFence: (marker: UInt8, count: Int)?
         var offset = 0
         while offset < bytes.count {
@@ -101,7 +110,15 @@ public enum MarkdownReferenceLinks {
                     output.append(contentsOf: bytes[offset...end]); offset = end + 1; continue
                 }
                 if after < bytes.count, bytes[after] == 91, let end = bracketEnds[after] {
-                    output.append(contentsOf: bytes[offset...end]); offset = end + 1; continue
+                    let first = bytes[(offset + 1)..<close], second = bytes[(after + 1)..<end]
+                    // Models may put two verified citations next to each other.
+                    // Keep real Markdown reference links, including explicit
+                    // definitions, but render a pair of known host IDs separately.
+                    if !isKnownHostReference(first) || !isKnownHostReference(second)
+                        || referenceLabels.contains(normalizeLabel(String(decoding: first, as: UTF8.self)))
+                        || referenceLabels.contains(normalizeLabel(String(decoding: second, as: UTF8.self))) {
+                        output.append(contentsOf: bytes[offset...end]); offset = end + 1; continue
+                    }
                 }
                 let inside = bytes[(offset + 1)..<close]
                 if !referenceLabels.isEmpty, referenceLabels.contains(normalizeLabel(String(decoding: inside, as: UTF8.self))) {

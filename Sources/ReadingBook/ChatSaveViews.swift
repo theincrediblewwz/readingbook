@@ -49,7 +49,7 @@ private struct BookChatContent: View {
     var body: some View {
         VStack(spacing: 0) {
             if selectionMode { selectionBar }
-            if !store.currentQueryHistory.isEmpty { conversationCollectionBar }
+            conversationCollectionBar
             if !embedded && store.isQueryBusy {
                 queryStatus.padding(.horizontal, embedded ? 16 : 24).padding(.vertical, 8)
             }
@@ -73,9 +73,10 @@ private struct BookChatContent: View {
         }.padding(.top, embedded ? 0 : 76).background(embedded ? Color.clear : Palette.canvas)
         .readingTextContext(.conversation)
         .onChange(of: store.bookID) { _, _ in selectionMode = false; selectedAnswers.removeAll(); renderedSelections.removeAll(); saveRequest = nil; historyBook = nil; historyMessageID = nil }
-        .onAppear { revealRequestedHistory() }
+        .onAppear { revealRequestedHistory(); revealRequestedMemory() }
+        .onChange(of: store.queryMemoryRequested) { _, _ in revealRequestedMemory() }
         .onChange(of: store.queryHistoryMessageID) { _, _ in revealRequestedHistory() }
-        .onChange(of: composerIsActive) { _, active in if !active { composerFocused = false } else { revealRequestedHistory() } }
+        .onChange(of: composerIsActive) { _, active in if !active { composerFocused = false } else { revealRequestedHistory(); revealRequestedMemory() } }
         .onChange(of: store.queryInteractionMode) { _, _ in store.queryAllowsOrganizing = false; resetModePresentation() }
         .onChange(of: store.queryAnswerStyle) { _, _ in resetModePresentation() }
         .task(id: suggestionRefreshKey) {
@@ -110,6 +111,10 @@ private struct BookChatContent: View {
               project.chats.contains(where: { $0.id == id }) else { return }
         historyMessageID = id; historyBook = project; store.queryHistoryMessageID = nil
     }
+    private func revealRequestedMemory() {
+        guard composerIsActive, store.queryMemoryRequested else { return }
+        store.queryMemoryRequested = false; showingMemory = true
+    }
 
     private var questionEmptyState: some View {
         VStack(spacing: 16) {
@@ -123,11 +128,15 @@ private struct BookChatContent: View {
     }
     private var conversationCollectionBar: some View {
         HStack(spacing: 6) {
+            Button { historyMessageID = nil; historyBook = store.book } label: { Label("历史", systemImage: "archivebox").font(.system(size: 12)).frame(minHeight: 30) }
+                .buttonStyle(ReadingQuietButtonStyle()).help("完整问答与已归档的对话，可按文件夹查看和引用。")
+            Button { showingMemory = true } label: { Label("摘要", systemImage: "brain.head.profile").font(.system(size: 12)).frame(minHeight: 30) }
+                .buttonStyle(ReadingQuietButtonStyle()).help("查看简短要点、来源和整理进度；可以立即整理或清除摘要。")
             if !store.foldedQueryAnswers.isEmpty {
                 Button { foldedExpanded.toggle() } label: {
                     Label("已收起 \(store.foldedQueryAnswers.count)", systemImage: "tray.full").font(.system(size: 12, weight: .medium))
                 }.buttonStyle(ReadingToolbarButtonStyle(selected: foldedExpanded)).help("收起的回答仍属于当前对话，后续问题仍可使用它们；点击展开列表。")
-            } else { Text("当前对话").font(.system(size: 12)).foregroundStyle(.secondary) }
+            }
             Spacer(minLength: 0)
             Button { Task { await store.collapseCurrentQueryAnswers() } } label: { Image(systemName: "rectangle.compress.vertical").frame(width: 32, height: 32) }
                 .buttonStyle(ReadingQuietButtonStyle()).help("一键收起所有回答；仍保留在当前上下文中。").accessibilityLabel("收起全部回答")
@@ -163,7 +172,7 @@ private struct BookChatContent: View {
         HStack(spacing: 12) {
             Label("已选 \(selectedAnswers.count) 条", systemImage: "checkmark.circle.fill").font(.system(size: 14, weight: .medium))
             Spacer()
-            Button { selectionMode = false; selectedAnswers.removeAll() } label: { Label("取消多选", systemImage: "xmark") }.buttonStyle(.borderless)
+            Button { selectionMode = false; selectedAnswers.removeAll() } label: { Label("取消多选", systemImage: "xmark") }.buttonStyle(ReadingQuietButtonStyle())
             Button {
                 guard let book = store.book else { return }
                 let parts = book.chats.filter { $0.role == "assistant" && selectedAnswers.contains($0.id) }.map { SavedAnswerPart(answer: $0) }
@@ -255,7 +264,7 @@ private struct BookChatContent: View {
     private func selectionActions(_ message: ChatMessage, bookID: String, selection: RenderedMarkdownSelection) -> some View {
         HStack(spacing: 12) {
             Button { requestSource(message, bookID: bookID) } label: { Label("选源文", systemImage: "text.cursor") }
-                .buttonStyle(.borderless).help("从只读 Markdown 中选择连续原文，精确保留公式")
+                .buttonStyle(ReadingQuietButtonStyle()).help("从只读 Markdown 中选择连续原文，精确保留公式")
             Button {
                 saveRenderedSelection(message, bookID: bookID, selection: selection)
             } label: { Label("保存选段…", systemImage: "square.and.arrow.down") }.keyboardShortcut("s", modifiers: [.command, .shift]).help("保存语义摘录 · ⌘⇧S；公式建议选择源文")
@@ -822,7 +831,7 @@ private struct AnswerSaveSheet: View {
     }
 }
 
-private struct ChatMarkdownBody: View {
+struct ChatMarkdownBody: View {
     @EnvironmentObject var store: AppStore
     var markdown: String
     var context: ReadingTextContext = .conversation

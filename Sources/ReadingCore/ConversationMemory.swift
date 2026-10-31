@@ -23,6 +23,7 @@ public struct ConversationMemory: Codable, Identifiable, Hashable, Sendable {
     public var unresolved: [ConversationMemoryItem]
     public var updatedAt: Date
     public var model: String
+    public var scopeTitle: String? = nil
 }
 
 public enum ConversationMemoryRuntime {
@@ -30,7 +31,7 @@ public enum ConversationMemoryRuntime {
         guard memory.version == 1, memory.id == snapshot.bookID + ":" + snapshot.scopeFingerprint,
               memory.bookID == snapshot.bookID, memory.scopeFingerprint == snapshot.scopeFingerprint,
               (try? prefixFingerprint(history, cursor: memory.cursor)) == memory.fingerprint,
-              memory.updatedAt.timeIntervalSince1970.isFinite else { return false }
+              memory.updatedAt.timeIntervalSince1970.isFinite, (memory.scopeTitle?.count ?? 0) <= 200 else { return false }
         return validItems(memory, history: history)
     }
     public static func prefixFingerprint(_ history: [ChatMessage], cursor: ConversationMemoryCursor) throws -> String {
@@ -90,10 +91,12 @@ public enum ConversationMemoryRuntime {
         return try message(selected)
     }
     /// Preserve the latest four user turns. Each batch is bounded and advances even for a huge message.
-    static func batch(history: [ChatMessage], after cursor: ConversationMemoryCursor, maximumBytes: Int) throws -> (rows: [[String: Any]], cursor: ConversationMemoryCursor)? {
+    static func batch(history: [ChatMessage], after cursor: ConversationMemoryCursor, maximumBytes: Int, retainingRecentTurns: Int = 4) throws -> (rows: [[String: Any]], cursor: ConversationMemoryCursor)? {
         _ = try prefixFingerprint(history, cursor: cursor)
-        var target = 0, turns = 0
-        for index in history.indices.reversed() where history[index].role == "user" { turns += 1; if turns == 4 { target = index; break } }
+        var target = retainingRecentTurns == 0 ? history.count : 0, turns = 0
+        if retainingRecentTurns > 0 {
+            for index in history.indices.reversed() where history[index].role == "user" { turns += 1; if turns == retainingRecentTurns { target = index; break } }
+        }
         guard target > cursor.index, maximumBytes >= 500 else { return nil }
         var rows: [[String: Any]] = [], next = cursor
         while next.index < target && rows.count < 16 {
@@ -127,9 +130,10 @@ public enum ConversationMemoryRuntime {
         let prior = (previous.map { $0.requirements + $0.conclusions + $0.unresolved } ?? []).flatMap(\.sources)
         let allowed = suppliedIDs.union(prior)
         guard (content.requirements + content.conclusions + content.unresolved).flatMap(\.sources).allSatisfy({ allowed.contains($0) }) else { throw ReadingError.invalid("记忆引用了未提供的消息。") }
-        let memory = ConversationMemory(id: snapshot.bookID + ":" + snapshot.scopeFingerprint, bookID: snapshot.bookID,
+        var memory = ConversationMemory(id: snapshot.bookID + ":" + snapshot.scopeFingerprint, bookID: snapshot.bookID,
             scopeFingerprint: snapshot.scopeFingerprint, fingerprint: try prefixFingerprint(history, cursor: next), cursor: next,
             requirements: content.requirements, conclusions: content.conclusions, unresolved: content.unresolved, updatedAt: Date(), model: model)
+        memory.scopeTitle = String(snapshot.displayTitle.prefix(180))
         guard isValid(memory, snapshot: snapshot, history: history) else { throw ReadingError.invalid("记忆来源或角色校验未通过。") }
         return memory
     }

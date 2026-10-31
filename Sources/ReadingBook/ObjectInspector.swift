@@ -201,6 +201,7 @@ private struct ObjectInspectorProjection: Sendable {
             Text(document.title).font(.system(size: 25, weight: .semibold))
             Button { store.openObject(document.id) } label: { Label("打开文档", systemImage: "doc.text").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(ReadingToolbarButtonStyle())
             ObjectManagementControl(kind: .document, id: document.id, title: document.title, showsTitle: true).disabled(store.isBusy)
+            if !document.origin.hasPrefix("ai-perspective:") { DocumentPerspectiveView(document: document) }
             EvidenceList(evidence: document.evidence)
         } else if let unit = store.book?.units.first(where: { $0.id == objectID }) {
             Text(unit.chapter).font(.title3); Text(unit.locator).font(.caption).foregroundStyle(.secondary)

@@ -281,7 +281,7 @@ struct SourceIndexWorkspaceView: View {
                         sourceHeader(source.locator, badge: "单元依据", accent: false, warning: source.warning)
                         quote(source.evidence.quote, expanded: selectedSourceID == source.id)
                         HStack {
-                            Button { selectedSourceID = selectedSourceID == source.id ? nil : source.id } label: { Label(selectedSourceID == source.id ? "已选为笔记出处" : "选为笔记出处", systemImage: selectedSourceID == source.id ? "checkmark.circle.fill" : "circle") }.buttonStyle(.borderless).font(.system(size: 13)).disabled(!source.unitExists).help("保留粗定位身份，不把这条依据冒充精确提及")
+                            Button { selectedSourceID = selectedSourceID == source.id ? nil : source.id } label: { Label(selectedSourceID == source.id ? "已选为笔记出处" : "选为笔记出处", systemImage: selectedSourceID == source.id ? "checkmark.circle.fill" : "circle") }.buttonStyle(ReadingQuietButtonStyle()).font(.system(size: 13)).disabled(!source.unitExists).help("保留粗定位身份，不把这条依据冒充精确提及")
                             Spacer(minLength: 8)
                             Button { selectedSourceID = source.id; store.follow(source.evidence) } label: { Label("查看原文", systemImage: "arrow.uturn.backward") }.buttonStyle(ReadingToolbarButtonStyle()).disabled(!source.unitExists)
                         }

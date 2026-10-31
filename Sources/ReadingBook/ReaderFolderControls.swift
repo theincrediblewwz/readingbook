@@ -28,6 +28,7 @@ struct ReaderFolderControl: View {
     @State private var renaming = false
     @State private var removing = false
     @State private var name = ""
+    @State private var showingTopicOrganizer = false
     private var folders: [ReaderCollectionFolder] { store.readerCollections.folders.filter { $0.kind == kind } }
     private var selected: ReaderCollectionFolder? { folders.first { $0.id == selection } }
     var body: some View {
@@ -40,6 +41,7 @@ struct ReaderFolderControl: View {
         }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
             .help("按文件夹查看、新建或管理\(kind.title)；收纳不会移动或改写原始文件。")
             .popover(isPresented: $presented) { folderPicker }
+            .sheet(isPresented: $showingTopicOrganizer) { NoteTopicOrganizer(close: { showingTopicOrganizer = false }).environmentObject(store) }
             .alert(renaming ? "重命名文件夹" : "新建文件夹", isPresented: $naming) {
                 TextField("文件夹名称", text: $name)
                 Button("取消", role: .cancel) { }
@@ -84,6 +86,9 @@ struct ReaderFolderControl: View {
                 Button { presented = false; removing = true } label: { Label("移除文件夹…", systemImage: "folder.badge.minus").frame(maxWidth: .infinity, minHeight: 40, alignment: .leading) }.buttonStyle(ReadingQuietButtonStyle()).help("只移除文件夹，里面的内容保留。")
             }
             if organizeNotes {
+                Button { presented = false; showingTopicOrganizer = true } label: {
+                    Label("按内容整理…", systemImage: "folder.badge.gearshape").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }.buttonStyle(ReadingQuietButtonStyle()).help("模型建议主题文件夹，先逐篇预览，确认后再应用。正文和已有手工分类保留。")
                 Button {
                     guard let owner else { return }; presented = false
                     Task { await store.organizeReaderCollections(.organizeNotesByMonth, owner: owner) }

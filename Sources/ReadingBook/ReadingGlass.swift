@@ -65,6 +65,7 @@ struct ReadingQuietButtonStyle: ButtonStyle {
     @State private var hovered = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             .background(Palette.accent.opacity(enabled ? (configuration.isPressed ? 0.14 : hovered ? 0.075 : 0) : 0),
                 in: RoundedRectangle(cornerRadius: radius, style: .continuous))
             .opacity(enabled ? 1 : 0.45)
