@@ -52,6 +52,7 @@ struct FrostLibraryView: View {
                                 }.buttonStyle(ReadingQuietButtonStyle(radius: 20)).disabled(store.isBusy)
                                     .help("打开\(book.title)继续阅读")
                                     .accessibilityElement(children: .ignore).accessibilityLabel(book.title)
+                                    .accessibilityAddTraits(.isButton)
                                     .accessibilityValue("已处理 \(Int(book.progress * 100))%，\(book.activeDocuments.count) 篇笔记")
                             }.readingGlass(radius: 20)
                                 .overlay(alignment: .topTrailing) {
