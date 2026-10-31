@@ -1,10 +1,14 @@
-> 2026-10-31：0.23.25/build56 已同步main、发布、替换安装，完整CI730/73与所有原生门槛通过，零警告；安装后的20原库文件/全部偏好及36程序文件均核对。**最后原书原生GUI验收待用户手动解锁，不算已通过。** 详见[本批结果](Design/2026-10-31-operations-workspace-optimization-results.md)。
+> 2026-10-31：0.23.25/build56 已同步main、发布、替换安装，完整CI730/73与所有原生门槛通过，零警告；安装后的20原库文件/全部偏好及36程序文件均核对。**用户解锁后已完成安装版原书原生GUI验收，全部交付完成。** 详见[本批结果](Design/2026-10-31-operations-workspace-optimization-results.md)。
 
 # 0.23.25 接续要点
 
 产品源d31197af5a33784a0384c6a31a9d18011877cfd4，CI41128366112、artifact13013940383、Release429511188；已安装25/56，不要重复发布/安装/跑CI。只有两个Core产品文件变动及七项OperationsReuseTests；36个实际Release新进程通过，固定请求准备CPU约−15.67%，64本存储统计−41.78%。首个Sendable容器整链+28.47%及地图/导图两个候选均否决；地图和可编辑导图源SHA保持24基线。方案、IO全校验及已有工作区合并保留。下一轮仍优先地图渲染/时间轴拆分和可编辑远缩放命中/标签层，不恢复退役功能。
 
-当前唯一交付待办：用户手动解锁后，用CUA绑定Applications已安装App，实际About25/56、原书104/1484与343%、102已有译文、空草稿、书库顶部书名重选回104、存储设置/组件目录、正常退出重启104，收集两个实际PID三类警告，再运行本批post-install-check。**CUA曾提示Mac锁屏，虽内核IOConsoleLocked当时No，也未绕过工具或虚构界面通过。** 启动前写新的ui-start文件；旧release脚本21:35时间不是已确认GUI启动。字段与路径见logs/operations-workspace-20261031/delivery和current-source-operations-validation.json。不要用只核文件的post-install-file-check当原生界面验收。
+本机验收已完成：实际About25/56、原书104/1484与343%、102已有句译、重启前后空草稿、书库顶部书名重选回104、书库设置总计/单书均8MB、阅读/外观/本地诊断及组件目录均检查。未生成AI、未保存原书新笔记或添加组件。正常退出/重启后仍104页/343%，伴读收起、伴读标签选中。实际安装PID43734/43824两次启动，三类警告均0。post-install-check-25-v2通过，20文件集合/原书笔记分析字节及全部偏好保持，仅Workspace正常导航更新。
+
+第一次post-install-check-25因打开设置自动新增NSWindow Frame com_apple_SwiftUI_Settings_window记录失败；原报告保留。确认基线无此key、当前值正是本轮设置窗口位置且无其他偏好差异后，仅清除此项测试产生的布局记录，再用同一严格检查重核通过，未放宽门槛或覆盖整份偏好。详见ui-settings-geometry-cleanup.json。当前原书原生验收没有待办，不要重复发布/安装/CI。
+
+CUA曾提示锁屏，用户解锁后才继续；旧pending-ui收据仅表示之前阶段，最终以delivery/final-delivery.json、post-install-check-25-v2和ui-native-logs-25为准。
 
 最新书库/偏好/24回滚保护在private-books/operations-workspace-20261031/install-before-0.23.25。真实原书20文件和全部偏好安装后重核完全一致，未用旧库覆盖；24回滚App清单一致。GitHub仅main与25/24两Release/tag/Actions产物，23精准退役；所有非App私人保护与提交历史保留。
 
