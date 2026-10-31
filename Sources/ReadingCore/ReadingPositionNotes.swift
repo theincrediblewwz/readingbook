@@ -41,12 +41,13 @@ public struct ReadingNoteStack: Hashable, Sendable {
 public enum ReadingNoteLayout {
     /// Nearby paper slips stack rather than obscure each other. This affects
     /// presentation only: every note and exact source coordinate is preserved.
-    public static func stacks(_ positions: [ReadingNoteScreenPosition], height: Double, cardHeight: Double = 170) -> [ReadingNoteStack] {
-        guard height.isFinite, height > 0, cardHeight.isFinite, cardHeight > 0 else { return [] }
+    public static func stacks(_ positions: [ReadingNoteScreenPosition], height: Double, cardHeight: Double = 170, topInset: Double = 16) -> [ReadingNoteStack] {
+        guard height.isFinite, height > 0, cardHeight.isFinite, cardHeight > 0, topInset.isFinite else { return [] }
         let sorted = positions.filter { $0.y.isFinite && $0.y >= 0 && $0.y <= height }.sorted { $0.y == $1.y ? $0.id < $1.id : $0.y < $1.y }
         var result: [ReadingNoteStack] = []
         for point in sorted {
-            let top = min(max(16, point.y - cardHeight / 2), max(16, height - cardHeight - 32))
+            let bottom = max(16, height - cardHeight - 32), minimum = min(max(16, topInset), bottom)
+            let top = min(max(minimum, point.y - cardHeight / 2), bottom)
             if let last = result.last, top < last.top + cardHeight + 24 {
                 result[result.count - 1] = .init(ids: last.ids + [point.id], top: last.top)
             } else { result.append(.init(ids: [point.id], top: top)) }

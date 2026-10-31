@@ -248,6 +248,7 @@ struct KnowledgeLibraryView: View {
     @EnvironmentObject var store: AppStore
     @State private var query = ""
     @State private var section = "documents"
+    @StateObject private var noteBrowser = ReaderRecordBrowserState()
     @State private var documentTexts: [String: String] = [:]
     @State private var loadedDocumentKey: DocumentSearchRequest?
     private struct DocumentSearchEntry: Hashable {
@@ -316,21 +317,18 @@ struct KnowledgeLibraryView: View {
     @ViewBuilder private func documentSection(_ documents: [DocumentRecord]) -> some View {
         if section == "documents" || !query.isEmpty {
             if !query.isEmpty { sectionLabel("笔记", count: documents.count) }
-            ForEach(documents) { document in
-                Button { Task { await store.openDocument(document) } } label: {
-                    HStack(spacing: 11) {
-                        BrandGlyph(name: "note").frame(width: 19, height: 19).foregroundStyle(Palette.accent)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(document.title).font(.system(size: 16, weight: .medium)).lineLimit(2)
-                            Text(document.origin == "user" ? "我的笔记" : "主动保存的摘记").font(.system(size: 13)).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 4)
-                        Text(document.updatedAt, style: .date).font(.caption2).foregroundStyle(.secondary)
-                        Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(Palette.accent)
-                    }.padding(20).frame(maxWidth: .infinity, minHeight: 88, alignment: .leading).background(Palette.surface, in: RoundedRectangle(cornerRadius: 16)).contentShape(Rectangle())
-                }.buttonStyle(ReadingQuietButtonStyle()).contextMenu {
-                    Button("加入导图") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
-                    Button("移入回收站", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy)
+            ReaderRecordGroupingBar(state: noteBrowser)
+            let byID = Dictionary(documents.map { ("note:" + $0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            ReaderRecordSections(state: noteBrowser, ids: documents.map { "note:" + $0.id }, searching: !query.isEmpty) { record, expanded in
+                if let document = byID[record.id] {
+                    ReaderRecordFoldCard(record: record, expanded: expanded,
+                        open: { Task { await store.openDocument(document) } }, openEnabled: !store.isBusy,
+                        actions: AnyView(ReaderMoveToFolderButton(kind: .notes, recordIDs: [record.id]))) {
+                        ReaderNoteRecordPreview(documentID: document.id)
+                    }.contextMenu {
+                        Button("加入导图") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
+                        Button("移入回收站", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy)
+                    }
                 }
             }
             if documents.isEmpty, query.isEmpty { Text("还没有保存笔记。可以主动保存 AI 回答，或写下自己的理解。").font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 20) }

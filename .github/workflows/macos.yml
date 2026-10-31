@@ -83,6 +83,10 @@ jobs:
           python3 scripts/mac-note-editor/run-hosted-undo-probe.py --build-dir .build/tests/debug --output logs/ci-note-editor/hosted-undo.json
       - name: Native position notes and concurrent conversation summaries
         run: python3 scripts/native-ui-regression/run-experience-completion.py --bin-dir .build/tests/debug --tag ci-experience-completion
+      - name: Dynamic position note fit and outer scroller regression
+        run: |
+          python3 scripts/native-ui-regression/run-note-layout.py --bin-dir .build/tests/debug --tag ci-note-layout-legacy --scroller-style legacy
+          python3 scripts/native-ui-regression/run-note-layout.py --bin-dir .build/tests/debug --tag ci-note-layout-overlay --scroller-style overlay
       - name: Native Markdown bridge and preservation regression
         run: |
           node scripts/test-markdown-provenance.cjs logs/ci-markdown-bridge/provenance/result.json

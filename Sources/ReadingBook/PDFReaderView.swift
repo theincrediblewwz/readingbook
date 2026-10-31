@@ -83,6 +83,13 @@ struct PDFReaderView: NSViewRepresentable {
 /// Search and annotation editing appear only when requested.
 @MainActor final class PDFReaderContainerView: NSView, NSSearchFieldDelegate {
     private var notePlacementOwner = ""
+    private var noteMarginWidth: CGFloat = 0
+    private var noteInsetsNeedLayout = false
+    private weak var noteInsetScrollView: NSScrollView?
+    private var originalContentInsets = NSEdgeInsetsZero
+    private var originalScrollerInsets = NSEdgeInsetsZero
+    private var originalAutomaticInsets = true
+    private var appliedNoteReservedWidth: CGFloat = 0
     private var notePlacements: [String: ReadingNotePlacement] = [:]
     private var notePlacementsByPage: [Int: [(String, ReadingNotePlacement)]] = [:]
     private var onCreatePositionNote: ((Int, Double, Double) -> Void)?
@@ -554,6 +561,10 @@ struct PDFReaderView: NSViewRepresentable {
 
     func update(from input: PDFReaderView) {
         let url = input.url, requestedPage = input.page, navigationToken = input.navigationToken
+        let margin = input.noteMarginVisible ? PositionNoteSurface.marginWidth : 0
+        if noteMarginWidth != margin {
+            noteMarginWidth = margin; noteInsetsNeedLayout = true; needsLayout = true
+        }
         pdfView.pageShadowsEnabled = !input.noteMarginVisible
         pdfView.backgroundColor = input.noteMarginVisible ? .textBackgroundColor : .windowBackgroundColor
         let sourceChanged = sourceHash != input.sourceHash
@@ -983,7 +994,7 @@ struct PDFReaderView: NSViewRepresentable {
         // A scrollbar is a native control rather than a page-turn surface.
         return !(hit is NSScroller)
     }
-    private func consumePageScroll(_ event: NSEvent) -> Bool {
+    private func consumePageScroll(_ event: NSEvent, fromNoteMargin: Bool = false) -> Bool {
         guard pdfView.displayMode == .singlePage, !interactionBlocked,
               !isHiddenOrHasHiddenAncestor, !installingDocument,
               let owner = window, event.window === owner, owner.isKeyWindow,
@@ -992,7 +1003,7 @@ struct PDFReaderView: NSViewRepresentable {
             resetPageGesture(); return false
         }
         let phase = Self.gesturePhase(event.phase), momentum = Self.gesturePhase(event.momentumPhase)
-        let eligible = ownsPDFHit(event, in: owner)
+        let eligible = fromNoteMargin || ownsPDFHit(event, in: owner)
         guard pageGestureOwnership.accepts(phase: phase, momentum: momentum, isEligible: eligible) else { return false }
         // A field editor elsewhere in this window keeps its input. PDF-owned
         // text selection is not an editable field and remains scrollable.
@@ -1069,13 +1080,17 @@ struct PDFReaderView: NSViewRepresentable {
 
     override func layout() {
         super.layout()
+        // SwiftUI can resize the representable before the nested stack/PDFView
+        // has laid out. Always measure the settled child, including a first note.
+        contentStack.layoutSubtreeIfNeeded()
+        let changedInsets = layoutNoteInsets()
         sourceCanvas.frame = bounds; sourceCanvas.needsDisplay = true
         scheduleVisiblePages()
         let chrome = visibleChromeFrame(header)
         let nextTop: CGFloat = chrome.isEmpty ? 76 : max(76, chrome.maxY + 12)
         if let thumbnailTop, abs(thumbnailTop.constant - nextTop) > 0.5 { thumbnailTop.constant = nextTop }
         let size = pdfView.bounds.size
-        if abs(size.width - lastViewportSize.width) > 0.5 || abs(size.height - lastViewportSize.height) > 0.5 {
+        if changedInsets || abs(size.width - lastViewportSize.width) > 0.5 || abs(size.height - lastViewportSize.height) > 0.5 {
             invalidateSourcePress()
             lastViewportSize = size; layoutThumbnails(); applyFit()
             if let pending = pendingNavigation, size.width > 40, size.height > 40 {
@@ -1087,13 +1102,39 @@ struct PDFReaderView: NSViewRepresentable {
         refreshControls()
     }
 
+    @discardableResult private func layoutNoteInsets() -> Bool {
+        guard let scroll = observedClip?.enclosingScrollView ?? pdfScrollView(in: pdfView) else { return false }
+        if noteInsetScrollView !== scroll {
+            noteInsetScrollView = scroll
+            originalContentInsets = scroll.contentInsets; originalScrollerInsets = scroll.scrollerInsets
+            originalAutomaticInsets = scroll.automaticallyAdjustsContentInsets; noteInsetsNeedLayout = true
+        }
+        let overlayRail = scroll.scrollerStyle == .overlay ? max(12, scroll.verticalScroller?.bounds.width ?? 17) : 0
+        let reserved = noteMarginWidth == 0 ? 0 : noteMarginWidth + overlayRail
+        guard noteInsetsNeedLayout || abs(appliedNoteReservedWidth - reserved) > 0.1 else { return false }
+        noteInsetsNeedLayout = false; appliedNoteReservedWidth = reserved
+        scroll.automaticallyAdjustsContentInsets = noteMarginWidth == 0 ? originalAutomaticInsets : false
+        var content = originalContentInsets; content.right += reserved
+        var scroller = originalScrollerInsets; scroller.right -= reserved
+        // Public AppKit insets reserve page space while the original native
+        // scroller remains at the outer edge of the combined book surface.
+        scroll.contentInsets = content; scroll.scrollerInsets = scroller; scroll.tile()
+        return true
+    }
+    private func pdfScrollView(in view: NSView) -> NSScrollView? {
+        if let scroll = view as? NSScrollView { return scroll }
+        return view.subviews.lazy.compactMap { self.pdfScrollView(in: $0) }.first
+    }
+
     private func applyFit() {
         guard fitMode != .custom, let page = pdfView.currentPage, pdfView.bounds.width > 40, pdfView.bounds.height > 40 else { return }
         var size = page.bounds(for: pdfView.displayBox).size
         if abs(page.rotation) % 180 == 90 { size = NSSize(width: size.height, height: size.width) }
         guard size.width > 0, size.height > 0 else { return }
-        let width = max(1, pdfView.bounds.width - 32) / size.width
-        let height = max(1, pdfView.bounds.height - 32) / size.height
+        let scroll = observedClip?.enclosingScrollView ?? pdfScrollView(in: pdfView)
+        let viewport = scroll?.contentSize ?? pdfView.bounds.size
+        let width = max(1, viewport.width - appliedNoteReservedWidth - 32) / size.width
+        let height = max(1, viewport.height - 32) / size.height
         let scale: CGFloat = fitMode == .actual ? 1 : (fitMode == .width ? width : min(width, height))
         pdfView.autoScales = false
         let clamped = min(pdfView.maxScaleFactor, max(pdfView.minScaleFactor, scale))
@@ -1506,6 +1547,11 @@ struct PDFReaderView: NSViewRepresentable {
             guard canEditAnnotations, document != nil, document?.isLocked == false else { return }
             pdfView.armNotePlacement(); window?.makeFirstResponder(pdfView)
             setStatus("点击原书中要贴便签的位置；按Esc取消。")
+        case .scrollNoteArea(let event):
+            guard noteMarginWidth > 0, !interactionBlocked, window?.attachedSheet == nil, NSApp.modalWindow == nil else { return }
+            if !consumePageScroll(event, fromNoteMargin: true) {
+                (observedClip?.enclosingScrollView ?? pdfScrollView(in: pdfView))?.scrollWheel(with: event)
+            }
         case .showAnnotations: showAnnotations()
         case .focusQuote(let page, let quote): focusQuote(on: page, quote: quote)
         }
@@ -1718,6 +1764,8 @@ struct PDFReaderView: NSViewRepresentable {
     private func publishNoteAnchorPoints() {
         guard let document else { controller?.reportNotePositions(id: bindingID, points: [:], owner: notePlacementOwner); return }
         var points: [String: CGPoint] = [:]
+        var connectors: [String: PDFNoteConnector] = [:]
+        func topLeft(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x, y: isFlipped ? point.y : bounds.height - point.y) }
         if !notePlacementsByPage.isEmpty {
             for page in pdfView.visiblePages {
                 let index = document.index(for: page)
@@ -1728,10 +1776,26 @@ struct PDFReaderView: NSViewRepresentable {
                     let local = convert(pdfView.convert(original, from: page), from: pdfView)
                     guard bounds.contains(local) else { continue }
                     points[id] = CGPoint(x: local.x, y: isFlipped ? local.y : bounds.height - local.y)
+                    let glyphIndex = page.characterIndex(at: original)
+                    var start = points[id]!
+                    if glyphIndex >= 0, glyphIndex < page.numberOfCharacters {
+                        let glyph = page.characterBounds(at: glyphIndex)
+                        if !glyph.isEmpty, !glyph.isNull, glyph.insetBy(dx: -4, dy: -4).contains(original) {
+                            let line = page.selectionForLine(at: original)?.bounds(for: page) ?? glyph
+                            let screenGlyph = convert(pdfView.convert(glyph, from: page), from: pdfView)
+                            let screenLine = convert(pdfView.convert(line, from: page), from: pdfView)
+                            let top = topLeft(CGPoint(x: screenGlyph.midX, y: screenLine.maxY))
+                            let bottom = topLeft(CGPoint(x: screenGlyph.midX, y: screenLine.minY))
+                            start = CGPoint(x: screenGlyph.midX, y: min(bounds.height - 3, max(top.y, bottom.y) + 2))
+                        }
+                    }
+                    let screenPage = convert(pdfView.convert(crop, from: page), from: pdfView)
+                    connectors[id] = .init(start: start, pageExit: CGPoint(x: min(bounds.width - noteMarginWidth - 4, screenPage.maxX + 8), y: start.y))
                 }
             }
         }
-        controller?.reportNotePositions(id: bindingID, points: points, owner: notePlacementOwner)
+        let width = (observedClip?.enclosingScrollView ?? pdfScrollView(in: pdfView))?.verticalScroller?.bounds.width ?? 17
+        controller?.reportNotePositions(id: bindingID, points: points, owner: notePlacementOwner, connectors: connectors, scrollerWidth: max(12, width))
     }
     private func nativePreparationSession() -> NativePDFPreparationWorker.Session? {
         guard let loadedURL, !sourceHash.isEmpty else { return nil }

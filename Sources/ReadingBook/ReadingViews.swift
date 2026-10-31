@@ -15,8 +15,7 @@ struct ReaderWorkspaceView: View {
     @State private var companionFrame = CGRect.zero
     @StateObject private var inlineReading = ReaderInlineState()
     @State private var notesCollapsed = false
-    @State private var showNarrowNotes = false
-    @StateObject private var narrowNoteRelay = PositionNoteActionRelay()
+    @State private var noteFan: PositionNoteFanPresentation?
     private var hasPositionNotes: Bool { !store.activeNotePlacements.isEmpty }
     private var isPDF: Bool {
         store.sourceFileURL?.pathExtension.lowercased() == "pdf"
@@ -28,12 +27,13 @@ struct ReaderWorkspaceView: View {
     }
     var body: some View {
         GeometryReader { geometry in
+            let showsMargin = hasPositionNotes && !notesCollapsed && geometry.size.width >= 680
+            let nativePDF = isPDF && showPDF && store.readingSourceMode == "original"
             ZStack(alignment: .topLeading) {
-                HStack(spacing: 0) {
                 Group {
                     if let unit = store.selectedUnit {
                         if store.readingSourceMode != "original" {
-                            ReadingParallelView(mode: store.readingSourceMode, onSourceDecorationTap: sourceTapped, onSourceDecorationHover: sourceHovered)
+                            ReadingParallelView(mode: store.readingSourceMode, noteMargin: showsMargin ? PositionNoteSurface.marginWidth : 0, onSourceDecorationTap: sourceTapped, onSourceDecorationHover: sourceHovered)
                         }
                         else if isPDF, showPDF, let url = store.sourceFileURL {
                             let requestToken = store.pdfNavigationToken
@@ -90,28 +90,50 @@ struct ReaderWorkspaceView: View {
                                notePlacements: store.activeNotePlacements,
                                onCreatePositionNote: { page, x, y in
                                    guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash else { return }; store.beginPositionNote(page: page, x: x, y: y)
-                               }, noteMarginVisible: hasPositionNotes && !notesCollapsed && geometry.size.width >= 680, notePlacementOwner: store.collectionOwnerKey,
+                               }, noteMarginVisible: showsMargin, notePlacementOwner: store.collectionOwnerKey,
                                onCancelPositionNote: { if store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash { store.positionNoteBinding = nil } })
                             .id(store.pdfDisplayReloadID)
+                            .environment(\.workspaceCanvasBlocked, interactionBlocked || noteFan != nil)
                         } else if isPDF, showPDF {
                             // The source URL arrives asynchronously after book
                             // selection. Do not mount a temporary text/WebKit
                             // reader for that PDF and flash its extracted text.
                             Palette.paper.accessibilityLabel("正在打开原书")
-                        } else { sourceText(unit) }
+                        } else { sourceText(unit, noteMargin: showsMargin ? PositionNoteSurface.marginWidth : 0) }
                     } else {
                         EmptyState(title: "选择一个章节", detail: "从阅读工具中的目录选择原文内容。", icon: "book.pages")
                     }
                 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
-                    if hasPositionNotes && !notesCollapsed && geometry.size.width >= 680 {
-                        PositionNoteMargin(nativePositions: pdfController.notePositions, height: geometry.size.height, isPDF: isPDF && showPDF && store.readingSourceMode == "original", collapse: { notesCollapsed = true })
+                if showsMargin {
+                    if nativePDF { PositionNoteConnections(positions: pdfController.notePositions, size: geometry.size).opacity(noteFan == nil ? 1 : 0) }
+                    let margin = PositionNoteMargin(nativePositions: pdfController.notePositions, height: geometry.size.height, isPDF: nativePDF) { ids, snippets, origin in
+                        store.readingCompanionVisible = false; showOutline = false
+                        noteFan = .init(ids: ids, snippets: snippets,
+                            origin: CGPoint(x: geometry.size.width - 17 - PositionNoteSurface.marginWidth + origin.x, y: origin.y), owner: WorkspacePickerOwner(store: store))
                     }
+                    Group {
+                        if nativePDF { PositionNoteMarginHost(content: margin, controller: pdfController) }
+                        else { margin }
+                    }.frame(width: PositionNoteSurface.marginWidth, height: geometry.size.height)
+                        .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 17)
+                        .opacity(noteFan == nil ? 1 : 0).allowsHitTesting(noteFan == nil && !interactionBlocked)
+                    Button { notesCollapsed = true } label: { Image(systemName: "chevron.right").font(.system(size: 12, weight: .medium)).frame(width: 32, height: 32) }
+                        .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.96), in: Circle())
+                        .overlay { Circle().strokeBorder(Color.primary.opacity(0.07)) }.shadow(color: .black.opacity(0.05), radius: 6, y: 2)
+                        .padding(.top, 86).padding(.trailing, 20).frame(maxWidth: .infinity, alignment: .trailing)
+                        .opacity(noteFan == nil ? 1 : 0).allowsHitTesting(noteFan == nil)
+                        .help("收起便签与右侧留白，恢复原来的阅读模式").accessibilityLabel("收起页边便签")
                 }
                 if hasPositionNotes && (notesCollapsed || geometry.size.width < 680) {
-                    Button { if geometry.size.width < 680 { showNarrowNotes = true } else { notesCollapsed = false } } label: { Image(systemName: "note.text").font(.system(size: 13)).frame(width: 32, height: 32) }
+                    Button {
+                        if geometry.size.width < 680 {
+                            store.readingCompanionVisible = false; showOutline = false
+                            noteFan = .init(ids: store.activeNotePlacements.filter { $0.value.unitID == store.selectedUnitID }.map(\.key).sorted(), snippets: [:], origin: .init(x: geometry.size.width - 36, y: 102), owner: WorkspacePickerOwner(store: store))
+                        } else { notesCollapsed = false }
+                    } label: { Image(systemName: "note.text").font(.system(size: 13)).frame(width: 32, height: 32) }
                         .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.95), in: Circle())
-                        .padding(16).frame(maxWidth: .infinity, alignment: .trailing).help("展开页边便签").accessibilityLabel("展开页边便签")
+                        .padding(.top, 86).padding(.trailing, 20).frame(maxWidth: .infinity, alignment: .trailing).help("展开页边便签").accessibilityLabel("展开页边便签")
                 }
                 ReaderFloatingPanel(title: "目录与书签", icon: "list.bullet", width: 302, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 88, avoidRects: pdfChrome,
                     showsRestoreButton: false, unifiedDismiss: true,
@@ -137,16 +159,13 @@ struct ReaderWorkspaceView: View {
                     if !value { store.queryAllowsOrganizing = false }
                 }
                 .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.readingCompanionVisible)
-                .onChange(of: store.bookID) { _, _ in inlineReading.clear(); notesCollapsed = false; store.positionNoteBinding = nil }
+                .onChange(of: store.bookID) { _, _ in inlineReading.clear(); notesCollapsed = false; noteFan = nil; store.positionNoteBinding = nil }
                 .onChange(of: store.positionNoteBinding?.id) { _, _ in armPositionBinding() }
                 .onChange(of: pdfController.isReady) { _, ready in if ready { armPositionBinding() } }
                 .onAppear { armPositionBinding() }
                 .sheet(item: $store.positionNoteRequest) { request in PositionNoteEditor(request: request).environmentObject(store) }
-                .sheet(isPresented: $showNarrowNotes, onDismiss: {
-                    narrowNoteRelay.finish(store: store)
-                }) {
-                    PositionNoteStackBrowser(ids: store.activeNotePlacements.filter { $0.value.unitID == store.selectedUnitID }.map(\.key).sorted(), snippets: [:], close: { showNarrowNotes = false }, onCommand: { id, command in narrowNoteRelay.pending = (id, WorkspacePickerOwner(store: store), command); showNarrowNotes = false }).environmentObject(store)
-                }
+                .overlay { if let noteFan { PositionNoteFan(presentation: noteFan, size: geometry.size, close: { self.noteFan = nil }).environmentObject(store) } }
+                .onChange(of: store.collectionOwnerKey) { _, _ in noteFan = nil }
                 .onChange(of: store.selectedUnitID) { _, _ in inlineReading.clear() }
                 .onChange(of: store.readingSourceMode) { _, _ in inlineReading.clear() }
                 .onChange(of: store.sourceReadingSelection != nil) { _, selecting in if selecting { inlineReading.clear() } }
@@ -180,7 +199,7 @@ struct ReaderWorkspaceView: View {
         if !pdfController.thumbnailFrame.isEmpty { bounds["pdf-thumbnails"] = pdfController.thumbnailFrame.offsetBy(dx: offset.x, dy: offset.y) }
         return bounds
     }
-    private func sourceText(_ unit: SourceUnit) -> some View {
+    private func sourceText(_ unit: SourceUnit, noteMargin: CGFloat = 0) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if !isPDF { Text(unit.chapter).font(.system(size: 18, weight: .medium, design: .serif)).lineLimit(1).help(unit.chapter) }
@@ -206,7 +225,7 @@ struct ReaderWorkspaceView: View {
                         Button("保存为我的文档") { Task { await store.saveInsight(insight) } }.font(.caption).disabled(store.isBusy)
                     }.softPanel()
                 }
-            }.frame(maxWidth: 740).padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 100).frame(maxWidth: .infinity)
+            }.frame(maxWidth: 740).padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 100).padding(.trailing, noteMargin).frame(maxWidth: .infinity)
         }.background(Palette.paper)
     }
     private func anchoredSource(_ text: String, plain: Bool) -> some View {
@@ -475,6 +494,7 @@ struct DocumentEditorView: View {
     @State private var panelEpoch = 0
     @State private var documentSearch = ""
     @State private var documentFolderID: String?
+    @StateObject private var documentBrowser = ReaderRecordBrowserState()
     @State private var showingSources = false
     @State private var memoryScope: String?
     private var hasDocument: Bool { store.selectedDocumentID != nil || store.editorDirty }
@@ -735,7 +755,8 @@ struct DocumentEditorView: View {
         return CGPoint(x: min(max(12, value.x), max(12, viewport.width - 352)), y: min(max(embedded ? 64 : 96, value.y), max(embedded ? 64 : 96, viewport.height - height - 88)))
     }
     private var documentPicker: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let byID = Dictionary(documents.map { ("note:" + $0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 ReaderFolderControl(kind: .notes, selection: $documentFolderID, organizeNotes: true)
                 Spacer(minLength: 0)
@@ -746,30 +767,23 @@ struct DocumentEditorView: View {
                 TextField("搜索笔记…", text: $documentSearch).readingSearchInput(pointSize: 15)
                 if !documentSearch.isEmpty { Button { documentSearch = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(ReadingQuietButtonStyle()).accessibilityLabel("清空笔记搜索").frame(width: 44, height: 44) }
             }.padding(.horizontal, 12).frame(minHeight: 46).background(Palette.surface.opacity(0.65), in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(Palette.line.opacity(0.8)))
+            ReaderRecordGroupingBar(state: documentBrowser)
             if store.editorDirty { Text("有未保存的修改，请先保存或放弃再切换。").font(.system(size: 13)).foregroundStyle(Palette.copper).fixedSize(horizontal: false, vertical: true) }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 5) {
-                    ForEach(documents) { document in
-                        Button {
-                            Task { await store.openDocument(document) }
-                        } label: {
-                            HStack(spacing: 9) {
-                                Image(systemName: document.origin == "user" ? "doc.text" : "sparkles").font(.system(size: 23)).foregroundStyle(Palette.accent).frame(width: 28)
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(document.title).font(.system(size: 16, weight: .medium)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                                    Text(document.updatedAt, format: .dateTime.month().day().hour().minute()).font(.system(size: 12)).foregroundStyle(.secondary)
+                    ReaderRecordSections(state: documentBrowser, ids: documents.map { "note:" + $0.id }, searching: !documentSearch.isEmpty) { record, expanded in
+                        if let document = byID[record.id] {
+                            ReaderRecordFoldCard(record: record, expanded: expanded,
+                                open: { Task { await store.openDocument(document) } },
+                                openEnabled: !store.isBusy && (!store.editorDirty || store.selectedDocumentID == document.id),
+                                actions: AnyView(ReaderMoveToFolderButton(kind: .notes, recordIDs: [record.id]))) {
+                                ReaderNoteRecordPreview(documentID: document.id)
+                            }.background(store.selectedDocumentID == document.id ? Palette.accent.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 12))
+                                .contextMenu {
+                                    Button { Task { await store.addDocumentToGraph(document) } } label: { Label("加入导图", systemImage: "point.3.connected.trianglepath.dotted") }.disabled(store.isBusy)
+                                    Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
                                 }
-                                Color.clear.frame(width: 28)
-                            }.padding(.horizontal, 12).padding(.vertical, 14).frame(maxWidth: .infinity, minHeight: 76, alignment: .leading).contentShape(Rectangle())
-                                .background(store.selectedDocumentID == document.id ? Palette.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 12))
-                        }.buttonStyle(ReadingQuietButtonStyle()).disabled(store.isBusy || (store.editorDirty && store.selectedDocumentID != document.id))
-                            .overlay(alignment: .trailing) {
-                                ReaderMoveToFolderButton(kind: .notes, recordIDs: ["note:" + document.id]).padding(.trailing, 4)
-                            }
-                            .contextMenu {
-                                Button { Task { await store.addDocumentToGraph(document) } } label: { Label("加入导图", systemImage: "point.3.connected.trianglepath.dotted") }.disabled(store.isBusy)
-                                Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
-                            }
+                        }
                     }
                     if documents.isEmpty { Text(documentSearch.isEmpty ? "还没有笔记，从新建开始。" : "没有匹配的笔记").font(.caption).foregroundStyle(.secondary).padding(12) }
                 }

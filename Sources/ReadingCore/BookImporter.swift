@@ -26,7 +26,7 @@ public enum PDFPasswordError: LocalizedError, Equatable, Sendable {
 /// Imports original text into bounded, located units. Coverage records describe processing,
 /// not a promise that a model understood every detail of the original book.
 public enum BookImporter {
-    static let maximumSourceBytes = 256 * 1_024 * 1_024
+    public static let maximumSourceBytes = 256 * 1_024 * 1_024
     static let maximumTextBytes = 64 * 1_024 * 1_024
     static let maximumUnits = 100_000
 

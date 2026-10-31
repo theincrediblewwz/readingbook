@@ -296,6 +296,8 @@ public struct BookProject: Codable, Identifiable, Sendable {
     /// Reader-owned folders, collapsed answers and explicit archive boundaries.
     /// Absent in older books; organizing never rewrites answer or note content.
     public var readerCollections: ReaderCollectionState? = nil
+    /// User-selected visual asset, independent of the original book and AI data.
+    public var coverImage: BookCoverImage? = nil
     /// In-memory delivery order only; never part of library data, grants or caches.
     public internal(set) var publicationStamp: LibraryPublicationStamp? = nil
     private enum CodingKeys: String, CodingKey {
@@ -303,7 +305,7 @@ public struct BookProject: Codable, Identifiable, Sendable {
         case views, methods, plan, insights, syntheses, documents, nodes, edges, chats, audit, aiRequestHistory
         case plugins, disabledPluginIDs, appliedOperationIDs, lastUnitID, bookmarks, ocrPages, paragraphReceipts
         case readingStepResults, workflowRuns, receiptBatch, smartReading, readerAnnotations, readingExperience
-        case bookSchemes, mathVerifications, temporalKnowledge, graphGroups, controlledChanges, manualTrash, readingKnowledge, generatedOutline, originalBookOutline, readerCollections
+        case bookSchemes, mathVerifications, temporalKnowledge, graphGroups, controlledChanges, manualTrash, readingKnowledge, generatedOutline, originalBookOutline, readerCollections, coverImage
     }
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units

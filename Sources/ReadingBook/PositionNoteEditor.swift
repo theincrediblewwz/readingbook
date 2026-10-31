@@ -35,14 +35,8 @@ struct PositionNoteBindingRequest: Identifiable {
     let owner: WorkspacePickerOwner
     let documentID: String
 }
-enum PositionNoteCommand { case edit, openNotebook, relocate, trash }
-@MainActor final class PositionNoteActionRelay: ObservableObject {
-    var pending: (id: String, owner: WorkspacePickerOwner, command: PositionNoteCommand)?
-    func finish(store: AppStore) {
-        guard let value = pending else { return }; pending = nil
-        store.performPositionNoteCommand(value.command, id: value.id, owner: value.owner)
-    }
-}
+enum PositionNoteCommand { case edit, openNotebook, relocate, unbind, trash }
+
 
 @MainActor extension AppStore {
     func performPositionNoteCommand(_ command: PositionNoteCommand, id: String, owner: WorkspacePickerOwner) {
@@ -51,6 +45,7 @@ enum PositionNoteCommand { case edit, openNotebook, relocate, trash }
         case .edit: Task { await editPositionNote(id) }
         case .openNotebook: Task { await openDocument(document) }
         case .relocate: requestPositionNoteBinding(id)
+        case .unbind: Task { await organizeReaderCollections(.setNotePlacement(id, nil), owner: owner) }
         case .trash: requestDeletion(.document, id: id, title: document.title)
         }
     }

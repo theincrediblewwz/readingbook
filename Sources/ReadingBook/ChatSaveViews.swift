@@ -348,7 +348,7 @@ private struct BookChatComposer: View {
                 scopeControls
                 modeStyleControl
                 Spacer(minLength: 0)
-                QueryAttachmentsControl().labelStyle(.iconOnly).frame(width: 28)
+                QueryAttachmentsControl().labelStyle(.iconOnly).frame(width: 44, height: 44)
                     .overlay(alignment: .topTrailing) {
                         if attachmentCount > 0 {
                             Text("\(attachmentCount)").font(.system(size: 9, weight: .semibold)).foregroundStyle(Palette.accent)
@@ -437,7 +437,7 @@ private struct BookChatComposer: View {
     }
     private var questionOptions: some View {
         Button { composerPopover = .actions } label: {
-            Image(systemName: "ellipsis").font(.system(size: 14, weight: .medium)).frame(width: 30, height: 40)
+            Image(systemName: "ellipsis").font(.system(size: 14, weight: .medium)).frame(width: 44, height: 44)
         }.buttonStyle(ReadingQuietButtonStyle()).help("历史对话、自动摘要、查阅记录与字号")
             .accessibilityLabel("对话更多设置").accessibilityHint("查看历史对话、自动摘要、查阅记录与字号")
     }
@@ -530,6 +530,7 @@ struct SavedConversationHistory: View {
     @State private var folderID: String?
     @State private var kind = "chat"
     @State private var owner: WorkspacePickerOwner?
+    @StateObject private var browser = ReaderRecordBrowserState()
     private var current: BookProject { owner?.matches(store) == true && store.book?.id == project.id ? store.book! : project }
     private var messages: [ChatMessage] {
         let state = ReaderCollectionRuntime.state(in: current)
@@ -579,6 +580,7 @@ struct SavedConversationHistory: View {
                     .init(id: "companion", title: "伴读", detail: "已移入历史的解释、译文和资料对读。")
                 ]).frame(maxWidth: 210)
             }.padding(.horizontal, 18).padding(.bottom, 8)
+            ReaderRecordGroupingBar(state: browser).padding(.horizontal, 18).padding(.bottom, 8)
             Divider().opacity(0.4)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
@@ -588,7 +590,7 @@ struct SavedConversationHistory: View {
                                 .buttonStyle(ReadingToolbarButtonStyle()).accessibilityIdentifier("history.load-earlier")
                                 .help("向前显示最多60条已保存对话，已显示的内容会保留。")
                         }
-                        ForEach(Array(messages[displayedRange])) { message in historyMessage(message) }
+                        chatRecords
                         if messages.isEmpty { emptyHistory }
                         if displayedRange.upperBound < messages.count {
                             Button("显示后续的对话") { windowEnd = min(messages.count, displayedRange.upperBound + 60) }
@@ -596,11 +598,13 @@ struct SavedConversationHistory: View {
                                 .help("继续显示最多60条后续对话，已显示的内容会保留。")
                         }
                     } else {
-                        ForEach(companion) { reference in
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack { Text(reference.title).font(.headline); Spacer(); referenceActions(reference.id, archived: true) }
-                                ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(reference.content, bookID: current.id, project: current), presentationActiveOverride: true)
-                            }.padding(16).background(Palette.paper.opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
+                        ReaderRecordSections(state: browser, ids: companion.map(\.id)) { record, expanded in
+                            if let reference = companion.first(where: { $0.id == record.id }) {
+                                ReaderRecordFoldCard(record: record, expanded: expanded,
+                                    actions: AnyView(referenceActions(reference.id, archived: true))) {
+                                    ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(reference.content, bookID: current.id, project: current), presentationActiveOverride: true)
+                                }
+                            }
                         }
                         if companion.isEmpty { emptyHistory }
                     }
@@ -621,19 +625,23 @@ struct SavedConversationHistory: View {
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }.frame(maxWidth: .infinity, minHeight: 200)
     }
-    private func historyMessage(_ message: ChatMessage) -> some View {
-        let archived = current.readerCollections?.archivedChatIDs.contains(message.id) == true
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(message.role == "user" ? "你" : "伴读").font(.system(size: 13, weight: .semibold))
-                Text(archived ? "已归档" : "当前对话").font(.system(size: 11)).foregroundStyle(.secondary)
-                    .help(archived ? "不自动带入后续问题。" : "仍可参与当前范围的对话上下文。")
-                Spacer()
-                if message.role == "assistant" { referenceActions("chat:" + message.id, archived: archived) }
+    private var chatRecords: some View {
+        let visible = Array(messages[displayedRange])
+        let byID = Dictionary(visible.map { ("chat:" + $0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ReaderRecordSections(state: browser, ids: visible.map { "chat:" + $0.id }, focusedID: focusedMessageID.map { "chat:" + $0 }) { record, expanded in
+            if let message = byID[record.id] {
+                let archived = current.readerCollections?.archivedChatIDs.contains(message.id) == true
+                ReaderRecordFoldCard(record: record, expanded: expanded,
+                    actions: AnyView(message.role == "assistant" ? AnyView(referenceActions(record.id, archived: archived)) : AnyView(EmptyView()))) {
+                    HStack {
+                        Text(message.role == "user" ? "你" : "伴读").font(.system(size: 12, weight: .medium))
+                        Text(archived ? "已归档" : "当前对话").font(.system(size: 11)).foregroundStyle(.secondary)
+                            .help(archived ? "不自动带入后续问题。" : "仍可参与当前范围的对话上下文。")
+                    }
+                    ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(message.content, bookID: current.id, project: current), presentationActiveOverride: true)
+                }.background(message.id == focusedMessageID ? Palette.accent.opacity(0.055) : Color.clear)
             }
-            ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(message.content, bookID: current.id, project: current), presentationActiveOverride: true)
-        }.padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
-            .background(message.id == focusedMessageID ? Palette.accent.opacity(0.055) : Color.clear).id(message.id)
+        }
     }
     private func referenceActions(_ id: String, archived: Bool) -> some View {
         HStack(spacing: 4) {
@@ -641,11 +649,11 @@ struct SavedConversationHistory: View {
             Button {
                 guard owner?.matches(store) == true else { return }
                 store.setReferencedAnswer(id, included: true); store.readingCompanionTab = "chat"; onClose()
-            } label: { Label("引用", systemImage: "paperclip").font(.system(size: 12)).frame(minHeight: 36) }
+            } label: { Label("引用", systemImage: "paperclip").font(.system(size: 12)).frame(minWidth: 44, minHeight: 44) }
                 .buttonStyle(ReadingQuietButtonStyle()).help("仅把这条回答附加到下一次提问，不恢复其他历史。").disabled(store.isQueryBusy)
             if archived {
                 Button { guard let owner else { return }; Task { await store.organizeReaderCollections(.restore([id]), owner: owner) } } label: {
-                    Image(systemName: "arrow.uturn.backward").frame(width: 32, height: 36)
+                    Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44)
                 }.buttonStyle(ReadingQuietButtonStyle()).help("放回当前对话，后续提问可再次自动使用。").accessibilityLabel("放回当前对话").disabled(store.isOrganizingCollections)
             }
         }.disabled(owner?.matches(store) != true)

@@ -107,7 +107,7 @@ public actor LibraryRepository {
     @discardableResult
     public func create(_ project: BookProject, sourceURL: URL) throws -> BookProject {
         try validate(project)
-        guard project.documents.isEmpty else { throw ReadingError.invalid("创建书籍时不能引用尚未写入的 Markdown。请随后使用 saveDocument 保存。") }
+        guard project.documents.isEmpty, project.coverImage == nil else { throw ReadingError.invalid("创建书籍时不能引用尚未写入的 Markdown 或封面。请随后单独保存。") }
         let destination = try bookDirectory(project.id, mustExist: false)
         guard !files.fileExists(atPath: destination.path) else { throw ReadingError.invalid("书籍 ID 已存在；没有覆盖原项目。") }
         try verifyOriginal(at: sourceURL, expectedHash: project.sourceHash)
@@ -149,6 +149,7 @@ public actor LibraryRepository {
         updated.generatedOutline = generatedOutline ?? existing.generatedOutline
         updated.originalBookOutline = originalBookOutline ?? existing.originalBookOutline
         updated.readerCollections = readerCollections ?? existing.readerCollections
+        updated.coverImage = existing.coverImage
         // Only the explicit trash/restore API changes this canonical status. A stale reader
         // or editor window cannot silently revive a document through a routine save.
         let documentIndices = Dictionary(updated.documents.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
@@ -195,6 +196,7 @@ public actor LibraryRepository {
         updated.generatedOutline = existing.generatedOutline
         updated.originalBookOutline = existing.originalBookOutline
         updated.readerCollections = existing.readerCollections
+        updated.coverImage = existing.coverImage
         // Retain references written by another window before this editor was opened.
         // Index positions only: leave the original array intact so validation
         // still rejects duplicate proposed IDs instead of silently deduplicating.
@@ -539,6 +541,7 @@ public actor LibraryRepository {
 
     func validate(_ project: BookProject) throws {
         try ReaderCollectionRuntime.validate(project.readerCollections)
+        try project.coverImage?.validate()
         let requests = project.aiRequestHistory ?? []
         guard requests.count <= 1000, Set(requests.map(\.id)).count == requests.count,
               requests.allSatisfy({ UUID(uuidString: $0.id) != nil && $0.title.count <= 160 && $0.number > 0 &&
@@ -729,7 +732,7 @@ public actor LibraryRepository {
 
     func validatePackageFiles(_ project: BookProject, in directory: URL, strictContents: Bool,
                                       verifySourceHash: Bool, pendingDocumentID: String? = nil, pendingDocumentBytes: Int = 0,
-                                      encodedMetadataSize: Int? = nil, reuseDocumentValidation: Bool = false, pendingDocumentSizes: [String: Int] = [:]) throws {
+                                      encodedMetadataSize: Int? = nil, reuseDocumentValidation: Bool = false, pendingDocumentSizes: [String: Int] = [:], pendingCoverData: Data? = nil) throws {
         try requireDirectory(directory)
         let source = try child(try child(directory, "source"), project.originalName)
         try requireDirectory(try child(directory, "source"))
@@ -741,6 +744,21 @@ public actor LibraryRepository {
         let metadataSize = try encodedMetadataSize ?? encode(project).count
         guard pendingDocumentSizes.values.allSatisfy({ (0...Self.documentLimit).contains($0) }) else { throw ReadingError.invalid("待写文档大小无效。") }
         total += max(storedSize, metadataSize) + pendingDocumentBytes + pendingDocumentSizes.values.reduce(0, +)
+        if let cover = project.coverImage {
+            try cover.validate()
+            let data: Data?
+            if let pendingCoverData { data = pendingCoverData }
+            else {
+                let file = try child(try child(directory, "cover"), cover.sha256 + "." + cover.fileExtension)
+                let bytes = try regularFileSize(file, limit: BookCoverImage.maximumBytes - 1)
+                guard bytes == cover.byteCount else { throw ReadingError.invalid("封面文件与记录不一致；原书和笔记保留。") }
+                data = verifySourceHash ? try readLimited(file, limit: BookCoverImage.maximumBytes - 1) : nil
+            }
+            if let data {
+                guard data.count == cover.byteCount, try BookCoverImage.inspect(data) == cover else { throw ReadingError.invalid("封面内容与记录不一致。") }
+            }
+            total += cover.byteCount
+        }
         guard total <= Self.packageLimit else { throw ReadingError.invalid("书籍与文档总大小超过 512 MiB。") }
         if verifySourceHash { try verifyOriginal(at: source, expectedHash: project.sourceHash) }
         for document in project.documents where document.id != pendingDocumentID && pendingDocumentSizes[document.id] == nil {
@@ -750,7 +768,12 @@ public actor LibraryRepository {
         }
         if strictContents {
             let rootNames = try files.contentsOfDirectory(atPath: directory.path).filter { $0 != ".DS_Store" }
-            guard Set(rootNames) == Set(["project.json", "source", "docs"]) else { throw ReadingError.invalid(".readingbook 包含未声明的文件或内部恢复目录。") }
+            let expectedRoots = ["project.json", "source", "docs"] + (project.coverImage == nil ? [] : ["cover"])
+            guard Set(rootNames) == Set(expectedRoots) else { throw ReadingError.invalid(".readingbook 包含未声明的文件或内部恢复目录。") }
+            if let cover = project.coverImage {
+                let names = try files.contentsOfDirectory(atPath: child(directory, "cover").path).filter { $0 != ".DS_Store" }
+                guard names == [cover.sha256 + "." + cover.fileExtension] else { throw ReadingError.invalid(".readingbook 封面目录与记录不一致。") }
+            }
             let sourceNames = try files.contentsOfDirectory(atPath: source.deletingLastPathComponent().path).filter { $0 != ".DS_Store" }
             guard sourceNames == [project.originalName] else { throw ReadingError.invalid(".readingbook 原书目录与元数据不一致。") }
             let docNames = try files.contentsOfDirectory(atPath: try child(directory, "docs").path).filter { $0 != ".DS_Store" }
@@ -952,6 +975,12 @@ public actor LibraryRepository {
             for document in project.documents {
                 let data = try readLimited(try documentURL(document, in: original), limit: Self.documentLimit)
                 try atomicWrite(data, to: try documentURL(document, in: directory))
+            }
+            if let cover = project.coverImage {
+                let bytes = try readLimited(child(child(original, "cover"), cover.sha256 + "." + cover.fileExtension), limit: BookCoverImage.maximumBytes - 1)
+                guard try BookCoverImage.inspect(bytes) == cover else { throw ReadingError.invalid("导出封面校验失败；原书保留。") }
+                let folder = try ensureDirectory(child(directory, "cover"))
+                try atomicWrite(bytes, to: child(folder, cover.sha256 + "." + cover.fileExtension))
             }
         }
         try atomicWrite(encode(project), to: try child(directory, "project.json"))
@@ -1318,5 +1347,53 @@ extension LibraryRepository {
         try recoverDocument(in: directory)
         _ = try checkedRecords(readProject(in: directory))
         return texts
+    }
+}
+
+// User cover changes read the latest canonical project; AI/editor snapshots
+// cannot erase or replace this host-owned visual asset.
+extension LibraryRepository {
+    public func setBookCover(bookID: String, expectedSourceHash: String, data: Data?) throws -> BookProject {
+        let directory = try bookDirectory(bookID, mustExist: true)
+        try recoverDocument(in: directory)
+        let canonical = try readProject(in: directory)
+        guard canonical.sourceHash == expectedSourceHash else { throw ReadingError.invalid("这本书的原文身份已变化，未更换封面。") }
+        try Task.checkCancellation()
+        let record = try data.map(BookCoverImage.inspect)
+        var updated = canonical; updated.coverImage = record
+        try validate(updated)
+        let metadata = try encode(updated)
+        try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false,
+                                 encodedMetadataSize: metadata.count, pendingCoverData: data)
+        try Task.checkCancellation()
+        if let record, let data {
+            let folder = try ensureDirectory(child(directory, "cover"))
+            let target = try child(folder, record.sha256 + "." + record.fileExtension)
+            if files.fileExists(atPath: target.path) {
+                let current = try readLimited(target, limit: BookCoverImage.maximumBytes - 1)
+                if current != data { try atomicWrite(data, to: target) }
+            } else { try atomicWrite(data, to: target) }
+        }
+        // The new image exists before this atomic metadata publication. An
+        // interrupted change leaves the old declared image usable, never absent.
+        try atomicWrite(metadata, to: child(directory, "project.json"))
+        if let previous = canonical.coverImage, previous != record {
+            let folder = try child(directory, "cover")
+            let old = try child(folder, previous.sha256 + "." + previous.fileExtension)
+            if (try? regularFileSize(old, limit: BookCoverImage.maximumBytes - 1)) != nil { try? files.removeItem(at: old) }
+            if (try? files.contentsOfDirectory(atPath: folder.path).isEmpty) == true { try? files.removeItem(at: folder) }
+        }
+        return stampForPublication(updated)
+    }
+
+    public func bookCoverData(for project: BookProject) throws -> Data? {
+        let directory = try bookDirectory(project.id, mustExist: true)
+        try recoverDocument(in: directory)
+        let canonical = try readProject(in: directory)
+        guard canonical.sourceHash == project.sourceHash, canonical.coverImage == project.coverImage else { throw ReadingError.invalid("封面已更新，请重新打开书库。") }
+        guard let record = canonical.coverImage else { return nil }
+        let data = try readLimited(child(child(directory, "cover"), record.sha256 + "." + record.fileExtension), limit: BookCoverImage.maximumBytes - 1)
+        guard try BookCoverImage.inspect(data) == record else { throw ReadingError.invalid("封面文件无法校验，原书保留。") }
+        return data
     }
 }

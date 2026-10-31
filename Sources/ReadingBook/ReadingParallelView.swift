@@ -5,6 +5,7 @@ import ReadingCore
 struct ReadingParallelView: View {
     @EnvironmentObject var store: AppStore
     var mode: String
+    var noteMargin: CGFloat = 0
     var onSourceDecorationTap: ((String) -> Void)? = nil
     var onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil
     var body: some View {
@@ -19,10 +20,10 @@ struct ReadingParallelView: View {
                     Text("对照按原文片段排列。AI 译注另列来源；没有译注的片段保留原文，不把局部翻译算成整页已译。")
                         .font(.system(size: 14)).foregroundStyle(.secondary).lineSpacing(5)
                     ForEach(store.visibleSourceUnits) { unit in
-                        ReadingParallelUnit(unit: unit, mode: mode, sideBySide: mode == "parallel" && geometry.size.width >= 820,
+                        ReadingParallelUnit(unit: unit, mode: mode, sideBySide: mode == "parallel" && geometry.size.width - noteMargin >= 820,
                             onSourceDecorationTap: onSourceDecorationTap, onSourceDecorationHover: onSourceDecorationHover)
                     }
-                }.padding(.horizontal, 28).padding(.top, 100).padding(.bottom, 100).frame(maxWidth: mode == "parallel" ? 1320 : 890).frame(maxWidth: .infinity)
+                }.padding(.horizontal, 28).padding(.top, 100).padding(.bottom, 100).frame(maxWidth: mode == "parallel" ? 1320 : 890).frame(maxWidth: .infinity).padding(.trailing, noteMargin)
             }.background(Palette.canvas)
         }
     }

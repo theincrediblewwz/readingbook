@@ -9,53 +9,72 @@ struct QueryAttachmentsControl: View {
     @State private var search = ""
     @State private var noteFolderID: String?
     @State private var historyFolderID: String?
+    @State private var owner: WorkspacePickerOwner?
+    @StateObject private var browser = ReaderRecordBrowserState()
     private var count: Int { (store.queryScope == .notes ? 0 : store.queryAttachedDocuments.count) + store.queryReferencedAnswerIDs.count + (store.queryInteractionMode == .functional ? store.queryAuthorizedNodes.count : 0) }
     var body: some View {
-        Button { presented.toggle() } label: {
+        Button { owner = WorkspacePickerOwner(store: store); presented.toggle() } label: {
             Label(count == 0 ? "附加内容" : "附加 \(count) 项", systemImage: "paperclip")
-                .font(.system(size: 13)).frame(minHeight: 44)
+                .font(.system(size: 13)).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         }.buttonStyle(ReadingQuietButtonStyle()).fixedSize().disabled(store.isQueryBusy)
             .popover(isPresented: $presented) { attachmentPicker.frame(width: 430, height: 560) }
             .help("附加本次可读取的笔记、历史回答与可整理的节点")
     }
     private var attachmentPicker: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let notes = documents, answers = references
+        let noteByID = Dictionary(notes.map { ("note:" + $0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let answerByID = Dictionary(answers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(store.queryInteractionMode == .reading ? "这次一起读" : "这次一起读与整理").font(.system(size: 17, weight: .semibold))
                 Spacer()
                 Button { presented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("关闭附加内容")
             }.padding(.horizontal, 16)
             TextField("搜索笔记、历史回答或节点", text: $search).textFieldStyle(.roundedBorder).padding(.horizontal, 16).padding(.bottom, 12)
+            ReaderRecordGroupingBar(state: browser).padding(.horizontal, 16).padding(.bottom, 8)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     if store.queryScope != .notes {
                         HStack { Text("笔记正文").font(.subheadline.weight(.semibold)); Spacer(); ReaderFolderControl(kind: .notes, selection: $noteFolderID) }
                         if let current = store.selectedDocumentID, store.book?.activeDocuments.contains(where: { $0.id == current }) == true {
-                            Button("附加正在编辑的笔记") { store.setQueryAttachedDocument(current, included: true) }.buttonStyle(ReadingQuietButtonStyle())
+                            Button("附加正在编辑的笔记") { if owner?.matches(store) == true { store.setQueryAttachedDocument(current, included: true) } }.buttonStyle(ReadingQuietButtonStyle())
                         }
-                        ForEach(documents) { document in
-                            Toggle(document.title, isOn: Binding(get: { store.queryAttachedDocumentIDs.contains(document.id) },
-                                set: { store.setQueryAttachedDocument(document.id, included: $0) }))
-                                .toggleStyle(.checkbox).frame(minHeight: 36, alignment: .leading)
+                        ReaderRecordSections(state: browser, ids: notes.map { "note:" + $0.id }, searching: !search.isEmpty) { record, expanded in
+                            if let document = noteByID[record.id] {
+                                ReaderRecordFoldCard(record: record, expanded: expanded,
+                                    selection: Binding(get: { store.queryAttachedDocumentIDs.contains(document.id) }, set: { included in
+                                        guard owner?.matches(store) == true else { return }; store.setQueryAttachedDocument(document.id, included: included)
+                                    })) {
+                                    ReaderNoteRecordPreview(documentID: document.id)
+                                    Button("打开完整笔记") {
+                                        guard owner?.matches(store) == true else { return }; presented = false
+                                        Task { await store.openDocument(document) }
+                                    }.buttonStyle(ReadingToolbarButtonStyle())
+                                }
+                            }
                         }
                         if documents.isEmpty { Text("没有匹配的已保存笔记").font(.caption).foregroundStyle(.secondary) }
                         Divider().padding(.vertical, 8)
                     }
                     HStack { Text("历史回答").font(.subheadline.weight(.semibold)); Spacer(); ReaderFolderControl(kind: .history, selection: $historyFolderID) }
-                    ForEach(references) { reference in
-                        Toggle(reference.title, isOn: Binding(get: { store.queryReferencedAnswerIDs.contains(reference.id) },
-                            set: { store.setReferencedAnswer(reference.id, included: $0) }))
-                            .toggleStyle(.checkbox).font(.system(size: 14)).frame(minHeight: 44, alignment: .leading)
-                            .help("只引用这条完整回答供本次提问使用；不恢复整份历史，也不扩大原文阅读范围。")
+                    ReaderRecordSections(state: browser, ids: answers.map(\.id), searching: !search.isEmpty) { record, expanded in
+                        if let reference = answerByID[record.id] {
+                            ReaderRecordFoldCard(record: record, expanded: expanded,
+                                selection: Binding(get: { store.queryReferencedAnswerIDs.contains(reference.id) }, set: { included in
+                                    guard owner?.matches(store) == true else { return }; store.setReferencedAnswer(reference.id, included: included)
+                                })) {
+                                ChatMarkdownBody(markdown: MarkdownReferenceLinks.render(reference.content, bookID: store.bookID ?? "", project: store.book), presentationActiveOverride: true)
+                            }
+                        }
                     }
                     if references.isEmpty { Text("没有匹配的历史回答").font(.caption).foregroundStyle(.secondary) }
                     Divider().padding(.vertical, 8)
                     if store.queryInteractionMode == .functional {
                         Text("画布节点").font(.subheadline.weight(.semibold))
-                        Button("附加画布中已选节点") { store.addSelectedQueryNodes() }.buttonStyle(ReadingQuietButtonStyle())
+                        Button("附加画布中已选节点") { if owner?.matches(store) == true { store.addSelectedQueryNodes() } }.buttonStyle(ReadingQuietButtonStyle())
                         ForEach(nodes) { node in
                             Toggle(store.queryNodeTitle(node), isOn: Binding(get: { store.queryAuthorizedNodeIDs.contains(node.id) },
-                                set: { store.setQueryAuthorizedNode(node.id, included: $0) }))
+                                    set: { if owner?.matches(store) == true { store.setQueryAuthorizedNode(node.id, included: $0) } }))
                                 .toggleStyle(.checkbox).frame(minHeight: 36, alignment: .leading)
                         }
                         if nodes.isEmpty { Text("没有匹配的节点").font(.caption).foregroundStyle(.secondary) }
@@ -66,26 +85,27 @@ struct QueryAttachmentsControl: View {
             }
             Divider()
             HStack {
-                Button("清空附加") { store.clearQueryTaskAttachments() }.buttonStyle(ReadingQuietButtonStyle())
+                Button("清空附加") { if owner?.matches(store) == true { store.clearQueryTaskAttachments() } }.buttonStyle(ReadingQuietButtonStyle())
                 Spacer()
                 Button("完成") { presented = false }.buttonStyle(.borderedProminent).controlSize(.large)
             }.padding(14)
         }.onExitCommand { presented = false }
+            .onChange(of: store.collectionOwnerKey) { _, _ in presented = false; owner = nil; search = ""; noteFolderID = nil; historyFolderID = nil }
     }
     private var documents: [DocumentRecord] {
-        Array((store.book?.activeDocuments ?? []).filter { document in
+        (store.book?.activeDocuments ?? []).filter { document in
             let folder = store.readerCollections.assignments["note:" + document.id]
             let matches = noteFolderID.map { $0 == "@unfiled" ? folder == nil : folder == $0 } ?? true
             return matches && (search.isEmpty || document.title.localizedCaseInsensitiveContains(search))
-        }.prefix(80))
+        }.sorted { $0.updatedAt > $1.updatedAt }
     }
     private var references: [ReadingAnswerReference] {
         guard let book = store.book else { return [] }
-        return Array(ReaderCollectionRuntime.references(in: book).reversed().filter { reference in
+        return ReaderCollectionRuntime.references(in: book).reversed().filter { reference in
             let folder = store.readerCollections.assignments[reference.id]
             let matches = historyFolderID.map { $0 == "@unfiled" ? folder == nil : folder == $0 } ?? true
             return matches && (search.isEmpty || reference.title.localizedCaseInsensitiveContains(search) || reference.content.localizedCaseInsensitiveContains(search))
-        }.prefix(80))
+        }
     }
     private var nodes: [CanvasNode] {
         Array(store.querySelectableNodes.filter { search.isEmpty || store.queryNodeTitle($0).localizedCaseInsensitiveContains(search) }.prefix(80))

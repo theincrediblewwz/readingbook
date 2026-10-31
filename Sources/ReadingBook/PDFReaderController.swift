@@ -1,12 +1,26 @@
 import SwiftUI
 import ReadingCore
 
+struct PDFNoteConnector: Equatable {
+    let start: CGPoint
+    let pageExit: CGPoint
+}
+
+enum PositionNoteSurface {
+    static let marginWidth: CGFloat = 292
+    static let topInset: CGFloat = 94
+}
+
 @MainActor final class PDFNotePositionState: ObservableObject {
     @Published private(set) var points: [String: CGPoint] = [:]
     @Published private(set) var owner = ""
-    func update(_ next: [String: CGPoint], owner: String = "") {
+    @Published private(set) var connectors: [String: PDFNoteConnector] = [:]
+    @Published private(set) var scrollerWidth: CGFloat = 17
+    func update(_ next: [String: CGPoint], owner: String = "", connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17) {
         if self.owner != owner { self.owner = owner }
         if points != next { points = next }
+        if self.connectors != connectors { self.connectors = connectors }
+        if abs(self.scrollerWidth - scrollerWidth) > 0.1 { self.scrollerWidth = scrollerWidth }
     }
 }
 
@@ -17,6 +31,7 @@ enum PDFReaderCommand {
     case setDirection(PDFReadingDirection)
     /// Offsets from an extracted SourceUnit must never be reused as PDF offsets.
     case focusQuote(page: Int, quote: String)
+    case scrollNoteArea(NSEvent)
 }
 
 /// One instance belongs to one window. A mounted PDF view owns its command binding.
@@ -41,8 +56,8 @@ enum PDFReaderCommand {
     private var handler: ((PDFReaderCommand) -> Void)?
 
     func command(_ command: PDFReaderCommand) { handler?(command) }
-    func reportNotePositions(id: UUID, points: [String: CGPoint], owner: String) {
-        guard bindingID == id else { return }; notePositions.update(points, owner: owner)
+    func reportNotePositions(id: UUID, points: [String: CGPoint], owner: String, connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17) {
+        guard bindingID == id else { return }; notePositions.update(points, owner: owner, connectors: connectors, scrollerWidth: scrollerWidth)
     }
     func bind(id: UUID, handler: @escaping (PDFReaderCommand) -> Void) { bindingID = id; self.handler = handler }
     func update(id: UUID, page: Int, pageCount: Int, zoomPercent: Int, isReady: Bool, hasSelection: Bool, canEditAnnotations: Bool, isSearchVisible: Bool, isContinuous: Bool, direction: PDFReadingDirection, thumbnailsVisible: Bool, fitMode: String, chromeFrame: CGRect, thumbnailFrame: CGRect) {

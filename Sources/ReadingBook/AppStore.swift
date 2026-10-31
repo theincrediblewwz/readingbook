@@ -259,6 +259,7 @@ import ReadingCore
     var navigationGeneration = 0
     private var documentGeneration = 0
     var task: Task<Void, Never>?
+    @Published var bookCoverOperations: [String: UUID] = [:]
     var companionScopeRunID: UUID?
     var book: BookProject? { books.first { $0.id == bookID } }
     var selectedUnit: SourceUnit? { book?.units.first { $0.id == selectedUnitID } }

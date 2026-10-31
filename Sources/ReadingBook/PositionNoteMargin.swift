@@ -1,11 +1,6 @@
 import SwiftUI
 import ReadingCore
 
-private struct PositionNoteStackPresentation: Identifiable {
-    let id = UUID()
-    let ids: [String]
-}
-
 enum PositionNotePreview {
     /// This is a display-only, bounded preview. The ordinary Markdown document
     /// remains byte-for-byte intact for editing, saving, export and backup.
@@ -22,24 +17,41 @@ enum PositionNotePreview {
     }
 }
 
-/// Paper is confined to a separate part of the book surface. It cannot cover
-/// a PDF glyph, even at a large scale, after rotation or in a narrow window.
+/// The note host owns only the reserved margin. Wheel events bubble through
+/// its native responder to the same PDF scroll view, including single-page mode.
+@MainActor final class PositionNoteNativeHost: NSHostingView<AnyView> {
+    var onScroll: ((NSEvent) -> Void)?
+    override var intrinsicContentSize: NSSize { .init(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
+    override func scrollWheel(with event: NSEvent) { if let onScroll { onScroll(event) } else { super.scrollWheel(with: event) } }
+}
+struct PositionNoteMarginHost: NSViewRepresentable {
+    @EnvironmentObject private var store: AppStore
+    let content: PositionNoteMargin
+    let controller: PDFReaderController
+    func makeNSView(context: Context) -> PositionNoteNativeHost {
+        let host = PositionNoteNativeHost(rootView: root)
+        host.onScroll = { controller.command(.scrollNoteArea($0)) }; return host
+    }
+    func updateNSView(_ view: PositionNoteNativeHost, context: Context) {
+        view.rootView = root; view.onScroll = { controller.command(.scrollNoteArea($0)) }
+    }
+    private var root: AnyView { AnyView(content.environmentObject(store).modifier(ReadingPreferencesEnvironment())) }
+}
+
 struct PositionNoteMargin: View {
     @EnvironmentObject private var store: AppStore
     @ObservedObject var nativePositions: PDFNotePositionState
     let height: CGFloat
     let isPDF: Bool
-    var collapse: () -> Void
+    var onExpand: ([String], [String: String], CGPoint) -> Void
     @State private var snippets: [String: String] = [:]
     @State private var noteDates: [String: Date] = [:]
-    @State private var expanded: PositionNoteStackPresentation?
-    @StateObject private var actionRelay = PositionNoteActionRelay()
     private var positions: [ReadingNoteScreenPosition] {
         if isPDF { return nativePositions.owner == store.collectionOwnerKey ? nativePositions.points.map { .init(id: $0.key, y: $0.value.y) } : [] }
         return store.activeNotePlacements.filter { $0.value.unitID == store.selectedUnitID }.map { .init(id: $0.key, y: $0.value.y * height) }
     }
     private var stacks: [ReadingNoteStack] {
-        ReadingNoteLayout.stacks(positions, height: height).map { stack in
+        ReadingNoteLayout.stacks(positions, height: height, topInset: PositionNoteSurface.topInset).map { stack in
             ReadingNoteStack(ids: stack.ids.sorted {
                 let lhs = noteDates[$0] ?? .distantPast, rhs = noteDates[$1] ?? .distantPast
                 return lhs == rhs ? $0 < $1 : lhs > rhs
@@ -52,21 +64,8 @@ struct PositionNoteMargin: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             Palette.paper
-            ForEach(stacks, id: \.ids) { stack in
-                if let id = stack.ids.first, let point = positions.first(where: { $0.id == id }) {
-                    Path { path in
-                        path.move(to: CGPoint(x: 3, y: point.y)); path.addCurve(to: CGPoint(x: 23, y: stack.top + 85), control1: CGPoint(x: 12, y: point.y), control2: CGPoint(x: 13, y: stack.top + 85))
-                    }.stroke(Color.primary.opacity(0.17), lineWidth: 0.7).allowsHitTesting(false)
-                    Circle().fill(Palette.accent.opacity(0.55)).frame(width: 4, height: 4).position(x: 3, y: point.y).allowsHitTesting(false)
-                }
-                stackView(stack).padding(.leading, 20).offset(y: stack.top)
-            }
-            Button(action: collapse) { Image(systemName: "chevron.right").font(.system(size: 12, weight: .medium)).frame(width: 30, height: 30) }
-                .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.95), in: Circle())
-                .overlay { Circle().strokeBorder(Color.primary.opacity(0.06)) }.shadow(color: .black.opacity(0.04), radius: 5, y: 2)
-                .padding(14).frame(maxWidth: .infinity, alignment: .trailing)
-                .help("收起便签与右侧留白，恢复原来的阅读宽度").accessibilityLabel("收起页边便签")
-        }.frame(width: 292, height: height).clipped()
+            ForEach(stacks, id: \.ids) { stack in stackView(stack).padding(.leading, 20).offset(y: stack.top) }
+        }.frame(width: PositionNoteSurface.marginWidth, height: height).clipped()
             .task(id: preparationKey) {
                 guard let book = store.book else { return }
                 let owner = WorkspacePickerOwner(store: store), wanted = Set(positions.map(\.id))
@@ -81,29 +80,48 @@ struct PositionNoteMargin: View {
                 }
                 guard !Task.isCancelled, owner.matches(store) else { return }; snippets = values; noteDates = dates
             }
-            .sheet(item: $expanded, onDismiss: {
-                actionRelay.finish(store: store)
-            }) { presentation in
-                PositionNoteStackBrowser(ids: presentation.ids, snippets: snippets, close: { expanded = nil }, onCommand: { id, command in actionRelay.pending = (id, WorkspacePickerOwner(store: store), command); expanded = nil }).environmentObject(store)
-            }
-            .onChange(of: store.collectionOwnerKey) { _, _ in snippets = [:]; actionRelay.pending = nil; expanded = nil }
+            .onChange(of: store.collectionOwnerKey) { _, _ in snippets = [:] }
     }
     private func stackView(_ stack: ReadingNoteStack) -> some View {
         HStack(alignment: .center, spacing: 5) {
             ZStack(alignment: .topLeading) {
                 if stack.ids.count > 2 { paper.offset(x: 7, y: 13) }
                 if stack.ids.count > 1 { paper.offset(x: 4, y: 7) }
-                if let id = stack.ids.first {
-                    PositionNotePaper(id: id, text: snippets[id] ?? "", height: 170)
-                }
+                if let id = stack.ids.first { PositionNotePaper(id: id, text: snippets[id] ?? "", height: 170) }
             }.frame(width: 230, height: 184, alignment: .topLeading)
-            if stack.ids.count > 1 || (stack.ids.first.flatMap { snippets[$0]?.count } ?? 0) > 80 {
-                Button { expanded = PositionNoteStackPresentation(ids: stack.ids) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11)).frame(width: 26, height: 32) }
-                    .buttonStyle(ReadingQuietButtonStyle()).help("展开这叠 \(stack.ids.count) 张便签").accessibilityLabel("展开 \(stack.ids.count) 张便签")
-            }
+            Button { onExpand(stack.ids, snippets, CGPoint(x: 135, y: stack.top + 85)) } label: {
+                Image(systemName: "rectangle.stack").font(.system(size: 12)).frame(width: 32, height: 44)
+            }.buttonStyle(ReadingQuietButtonStyle()).help("在书页中央摊开这叠 \(stack.ids.count) 张便签")
+                .accessibilityLabel("展开 \(stack.ids.count) 张便签")
         }
     }
     private var paper: some View { RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)).overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.07)) }.frame(width: 230, height: 170) }
+}
+
+struct PositionNoteConnections: View {
+    @EnvironmentObject private var store: AppStore
+    @ObservedObject var positions: PDFNotePositionState
+    let size: CGSize
+    var body: some View {
+        Canvas { context, _ in
+            guard positions.owner == store.collectionOwnerKey else { return }
+            let points = positions.points.map { ReadingNoteScreenPosition(id: $0.key, y: $0.value.y) }
+            let stacks = ReadingNoteLayout.stacks(points, height: size.height, topInset: PositionNoteSurface.topInset)
+            let left = size.width - positions.scrollerWidth - PositionNoteSurface.marginWidth
+            for stack in stacks {
+                for id in stack.ids {
+                    guard let connector = positions.connectors[id] else { continue }
+                    let end = CGPoint(x: left + 20, y: stack.top + 85)
+                    var line = Path(); line.move(to: connector.start)
+                    let exit = CGPoint(x: max(connector.start.x + 5, connector.pageExit.x), y: connector.pageExit.y)
+                    line.addLine(to: exit)
+                    line.addCurve(to: end, control1: CGPoint(x: exit.x + 14, y: exit.y), control2: CGPoint(x: end.x - 18, y: end.y))
+                    context.stroke(line, with: .color(.primary.opacity(0.18)), style: StrokeStyle(lineWidth: 0.7, lineCap: .round, lineJoin: .round))
+                    context.fill(Path(ellipseIn: CGRect(x: connector.start.x - 1.7, y: connector.start.y - 1.7, width: 3.4, height: 3.4)), with: .color(Palette.accent.opacity(0.5)))
+                }
+            }
+        }.allowsHitTesting(false).accessibilityHidden(true)
+    }
 }
 
 struct PositionNotePaper: View {
@@ -132,7 +150,7 @@ struct PositionNotePaper: View {
             .lineLimit(max(1, Int((resolvedHeight - 36) / ((placement?.fontSize ?? 15) + 5))))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(18)
             .frame(width: width, height: resolvedHeight, alignment: .topLeading).clipped()
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.96), in: RoundedRectangle(cornerRadius: 6))
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
             .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(hovered ? 0.14 : 0.065)) }
             .shadow(color: .black.opacity(hovered ? 0.055 : 0.035), radius: 8, y: 5)
             .contentShape(Rectangle()).onTapGesture(count: clickCount, perform: edit)
@@ -145,7 +163,7 @@ struct PositionNotePaper: View {
                 }
                 Divider()
                 Button("重新选择原文位置…", systemImage: "mappin.and.ellipse") { perform(.relocate) }
-                Button("取消位置绑定", systemImage: "mappin.slash") { Task { await store.organizeReaderCollections(.setNotePlacement(id, nil)) } }
+                Button("取消位置绑定", systemImage: "mappin.slash") { perform(.unbind) }
                 Button("移入回收站…", systemImage: "trash") {
                     perform(.trash)
                 }
@@ -156,45 +174,5 @@ struct PositionNotePaper: View {
     private func perform(_ command: PositionNoteCommand) {
         if let onCommand { onCommand(id, command) }
         else { store.performPositionNoteCommand(command, id: id, owner: WorkspacePickerOwner(store: store)) }
-    }
-}
-
-struct PositionNoteStackBrowser: View {
-    @EnvironmentObject private var store: AppStore
-    let ids: [String]
-    let snippets: [String: String]
-    var close: () -> Void
-    var onCommand: ((String, PositionNoteCommand) -> Void)?
-    @State private var contents: [String: String] = [:]
-    private var activeIDs: [String] { let current = store.activeNotePlacements; return ids.filter { current[$0] != nil } }
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack { Label("这一处的便签 · \(activeIDs.count)", systemImage: "square.stack").font(.system(size: 19, weight: .semibold)); Spacer()
-                Button(action: close) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("收起这叠便签")
-            }.padding(20)
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), alignment: .top)], alignment: .leading, spacing: 22) {
-                    ForEach(activeIDs, id: \.self) { id in
-                        VStack(spacing: 10) {
-                            PositionNotePaper(id: id, text: contents[id] ?? snippets[id] ?? "", height: nil, width: 244, clickCount: 1, onCommand: onCommand)
-                                .accessibilityAddTraits(.isButton).help("点击查看与编辑完整便签；右键调整字体或取消位置绑定。")
-                        }
-                    }
-                }.padding(24)
-            }
-        }.frame(minWidth: 860, idealWidth: 960).frame(height: min(720, max(360, 160 + CGFloat((ids.count + 2) / 3) * 240))).background(Palette.canvas).onExitCommand(perform: close)
-            .task {
-                guard let book = store.book else { return }; let owner = WorkspacePickerOwner(store: store)
-                var loaded: [String: String] = [:]
-                for document in book.activeDocuments where ids.contains(document.id) {
-                    if Task.isCancelled { return }
-                    if let text = try? await store.repository.readDocument(bookID: book.id, document: document) {
-                        let source = String(text.prefix(2400))
-                        loaded[document.id] = await Task.detached(priority: .utility) { PositionNotePreview.make(source, project: book) }.value
-                    }
-                }
-                guard owner.matches(store), !Task.isCancelled else { return }; contents = loaded
-            }.onChange(of: store.collectionOwnerKey) { _, _ in close() }
-            .onChange(of: activeIDs.isEmpty) { _, empty in if empty { close() } }
     }
 }
