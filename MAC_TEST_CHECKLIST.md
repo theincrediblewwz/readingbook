@@ -1,3 +1,25 @@
+> 2026-10-31：0.23.26/build57 已同步 main、发布、替换安装并完成原书原生 GUI 验收。本批地图与可编辑导图两项采用，78 个 Release 新进程、216 组完整阶段输出及 10 对解码图像核对；完整 CI730/73 与所有既有原生门槛通过，零警告。详见[本批结果](Design/2026-10-31-map-graph-optimization-results.md)。
+
+# 0.23.26 接续要点
+
+产品源 `840a80269c97bc3af39a85f3d11b8df29b559e0e`，CI `41167816277`、artifact `13029894102`、Release `429724472`；本机 About 26/57 与 36 文件清单核验，发布、安装、原书 GUI 已全部完成，不要重复发布/安装/跑 CI。只有 `SpatialTimelineView.swift`、`GraphCanvas.swift` 两个产品 UI 文件及 Info 版本变更；Core、桥接、工作流和测试脚本未改。
+
+千地点全局地图连续时间指针更新 CPU 配对中位 −83.61%；千节点可编辑导图固定 0.2 远缩放平移 −43.51%，混合相机 −8.56%。人物/轨迹/小地图无明确收益，不外推整 App、FPS 或输入延迟；小地图初始化的慢组与追加六对均保留，全部十二对一起核对通过回退门槛。完整节点交互与所有地图标记保留。未采用共用相机变换和标签复用试验，不能恢复为产品。
+
+重复点击已经选中的地图标记、此前先手动平移后不重新居中，在精确基线和候选均可复现；最初判为新回归不准确。相机 Subject/nonce 试验未证明解决，已撤回；MapReuseScenario 原生 region 诊断也未成为有效回归门槛。失败和原生相机快照保留，不声称本版修复。下一步先查清原生命中和重复声明式相机请求，再决定最小修法。
+
+真实当前产品对象的隔离地图 14 项及导图 CUA（新回调、当前缩放拖动、保存失败、连线、Unicode 改名、取消、删除、菜单、键盘、深浅色）通过，未冒称 helper 的粘贴/Undo。安装版原书本来无非空地图/导图，实际验收只检查组件目录与原书；非空数据验证见 `current-source-component-ui.json`。用户解锁后实际 PID `53475/53528`：About26/57、104/1484 页与343%、102已有句译、伴读/对话、空草稿、书库顶部重选和正常重启均通过；三类运行警告0，无真实模型/原库新笔记/新增组件。
+
+20 文件集合、原书/笔记/分析字节与全部偏好保持，仅 Workspace 正常导航更新。最新保护及25 App回滚在 `private-books/map-graph-20261031/install-before-0.23.26/`，不覆盖原库。最终入口 `logs/map-graph-20261031/delivery/final-delivery.json`、`post-install-check-26` 和 `ui-native-logs-26`，没有锁屏/验收待办。用户 dirty progress 文档 SHA `9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4` 原样保留，不要修改/提交。
+
+canonical `dist/ReadingBook-0.23.26-Mac.zip` 为25,241,521字节，SHA `e0c8c895ea20fa2143fa5ebec75d768381960d0355f6ccdd105100ef410a945f`。远端仅 main 与26/25两 Release/tag/Actions包；旧24精确退役，提交历史及非 App 私人保护保留。当前重复ZIP/解包App已退役，从canonical恢复并比对 verification 清单后才可使用旧 readyappPath。
+
+`.build/map-graph-20261031`、结束的 native-ui-harness 和归档后展开 capture/PNG 已退役；唯一 `replay-evidence.zip` 83,515,604字节、SHA `4385c4912bffa3c78d0124dc57d350878e81ecbf250b488c443cbe062305c49d`，1032路径/314去重块及恢复均核验。先读 `logs/map-graph-20261031/REPLAY_AND_RETIRED.md` 用窄前缀恢复，不盲跑退役路径。两轮清理约1.64GiB；全批5.16→5.26GiB，净增约104.6MiB为新证据/保护/共享内容，不把清理量当净下降。活跃mac-debug及共享缓存保留。
+
+其余16类组件与跨组件优化继续轮转，不恢复数学核查。下方25及更旧接续为历史。
+
+---
+
 > 2026-10-31：0.23.25/build56 已同步main、发布、替换安装，完整CI730/73与所有原生门槛通过，零警告；安装后的20原库文件/全部偏好及36程序文件均核对。**用户解锁后已完成安装版原书原生GUI验收，全部交付完成。** 详见[本批结果](Design/2026-10-31-operations-workspace-optimization-results.md)。
 
 # 0.23.25 接续要点
