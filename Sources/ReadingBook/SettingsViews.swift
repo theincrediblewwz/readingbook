@@ -86,7 +86,7 @@ struct ProviderSettingsView: View {
                             }.padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
                                 .background(Palette.accent.opacity(service.id == store.selectedServiceID ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 12))
                                 .contentShape(Rectangle())
-                        }.buttonStyle(.plain).disabled(!store.canEditAISettings)
+                        }.buttonStyle(ReadingQuietButtonStyle()).disabled(!store.canEditAISettings)
                     }
                     if store.savedServices.isEmpty { Text("还没有保存的服务").font(.subheadline).foregroundStyle(.secondary).padding(16) }
                 }.padding(10)
@@ -156,7 +156,7 @@ struct ProviderSettingsView: View {
             Divider()
             ForEach(store.providerCatalog.providers) { provider in Button { store.newService(provider) } label: { Label(provider.name, systemImage: "network") } }
         } label: { ManagementMenuLabel(title: "新建服务", icon: "plus") }
-            .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize()
+            .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize()
             .frame(minHeight: ReadingLayout.controlHeight).disabled(!store.canEditAISettings)
             .help("新建自定义兼容服务，或使用已收录的服务预设")
     }
@@ -188,7 +188,7 @@ struct ProviderSettingsView: View {
                     TextField("精确模型 API ID", text: $store.settings.model).settingsTextField()
                     if let preset = store.matchingPreset {
                         Menu { ForEach(preset.models) { model in Button { store.chooseModel(model) } label: { Label(model.name, systemImage: "cpu") } } } label: { ManagementMenuLabel(title: "选择已核实预设", icon: "cpu") }
-                            .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize()
+                            .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize()
                             .help("选择此服务目录中已核实的精确模型 ID 与能力参数")
                     }
                 }
@@ -432,7 +432,7 @@ private struct PluginLibraryWorkspace: View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: "magnifyingglass").readingSearchIcon()
             TextField("搜索插件或组件…", text: $search).readingSearchInput()
-            if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).help("清空插件或组件搜索").accessibilityLabel("清空插件搜索") }
+            if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(ReadingQuietButtonStyle()).help("清空插件或组件搜索").accessibilityLabel("清空插件搜索") }
         }.padding(.leading, 14).padding(.trailing, search.isEmpty ? 14 : 0).frame(minWidth: 160, minHeight: 44)
             .background(Palette.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Palette.line, lineWidth: 0.7))

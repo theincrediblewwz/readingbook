@@ -89,7 +89,7 @@ struct ModelCatalogManagerView: View {
             HStack(alignment: .center, spacing: 8) {
                 Image(systemName: "magnifyingglass").readingSearchIcon()
                 TextField("搜索服务或型号", text: $search).readingSearchInput()
-                if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).accessibilityLabel("清空型号搜索") }
+                if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(ReadingQuietButtonStyle()).accessibilityLabel("清空型号搜索") }
             }.padding(.leading, 14).padding(.trailing, search.isEmpty ? 14 : 0).frame(height: 44)
                 .background(Palette.paper.opacity(0.75), in: RoundedRectangle(cornerRadius: 16)).padding(16)
             ScrollView {

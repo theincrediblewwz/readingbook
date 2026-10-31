@@ -179,8 +179,9 @@ extension ReadingQuerySession {
             func permits(_ ids: [String]) -> Bool { !ids.isEmpty && Set(ids).isSubset(of: anchorIDs) }
             experience.anchors = anchors
             experience.mentions = experience.mentions.filter { anchorIDs.contains($0.anchorID) }
-            experience.layers = experience.layers.filter { permits($0.sourceAnchorIDs) }
-            experience.alignments = experience.alignments.filter { permits($0.sourceAnchorIDs) }
+            let archived = Set(project.readerCollections?.archivedCompanionIDs ?? [])
+            experience.layers = experience.layers.filter { !archived.contains("layer:" + $0.id) && permits($0.sourceAnchorIDs) }
+            experience.alignments = experience.alignments.filter { !archived.contains("alignment:" + $0.id) && permits($0.sourceAnchorIDs) }
             experience.decisions = experience.decisions.filter { permits($0.sourceAnchorIDs) }
             project.readingExperience = experience
         }

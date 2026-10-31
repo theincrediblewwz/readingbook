@@ -199,7 +199,7 @@ struct ReaderFloatingPanel<Content: View>: View {
                             ReaderAIPanelTabs().fixedSize(horizontal: true, vertical: false)
                             Button { NotificationCenter.default.post(name: Notification.Name("ReadingBookExpandCompanion"), object: nil) } label: {
                                 Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 12)).frame(width: ReadingCompanionToolbarMetrics.compactHeaderControlWidth, height: 32)
-                            }.buttonStyle(.plain).foregroundStyle(.secondary)
+                            }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(.secondary)
                                 .help("放大或还原伴读与对话窗口").accessibilityLabel("放大或还原伴读与对话窗口")
                         }
                         if unifiedDismiss {

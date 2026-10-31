@@ -73,7 +73,7 @@ struct ReadingContinuationHistoryView: View {
                                 in: RoundedRectangle(cornerRadius: 10))
                             .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(selectedID == entry.id ? Palette.accent.opacity(0.5) : Palette.line, lineWidth: 1) }
                             .contentShape(RoundedRectangle(cornerRadius: 10))
-                    }.buttonStyle(.plain).help("查看这次任务保留的分析，不切换当前版本。")
+                    }.buttonStyle(ReadingQuietButtonStyle()).help("查看这次任务保留的分析，不切换当前版本。")
                         .accessibilityAddTraits(selectedID == entry.id ? .isSelected : [])
                         .accessibilityIdentifier("reading-history-session-" + entry.id)
                 }
@@ -141,7 +141,7 @@ struct ReadingContinuationHistoryView: View {
                             Text(expandedRecords.contains(id) ? "收起全文" : "查看全文")
                         }.font(.system(size: 11)).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, minHeight: 46, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(.plain).help("展开完整的历史 Markdown，保留公式和文本选择。")
+                }.buttonStyle(ReadingQuietButtonStyle()).help("展开完整的历史 Markdown，保留公式和文本选择。")
                 Button {
                     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(markdown, forType: .string)
                 } label: { Image(systemName: "doc.on.doc").frame(width: 30, height: 30) }

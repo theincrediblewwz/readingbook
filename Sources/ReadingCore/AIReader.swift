@@ -59,6 +59,13 @@ public actor AIReader {
         }
     }
 
+    public func suggestReadingQuestions(snapshot: ReadingQuerySnapshot, title: String, settings: ProviderSettings, apiKey: String) async throws -> ReadingQuestionSuggestions {
+        try beginOperation(settings: settings); defer { operationActive = false }
+        return try await ReadingQuestionSuggestionEngine.generate(snapshot: snapshot, title: title, settings: settings) { [self] messages, settings, budget in
+            try await self.request(messages: messages, tools: [], settings: settings, apiKey: apiKey, remainingTokens: budget)
+        }
+    }
+
     /// Run on a separate foreground reader so keyword assistance does not take
     /// ownership of an in-flight companion operation. No source text or tools
     /// are granted; the returned words must still be searched locally.

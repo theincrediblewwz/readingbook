@@ -42,7 +42,7 @@ struct ReaderAIPanelTabs: View {
             store.readingCompanionTab = value
             if value != "chat" { store.queryAllowsOrganizing = false }
         } label: { Text(title).font(.system(size: 13, weight: .medium)).frame(width: ReadingCompanionToolbarMetrics.modeTabWidth, height: 32).contentShape(Rectangle()) }
-            .buttonStyle(.plain).foregroundStyle(store.readingCompanionTab == value ? Palette.accent : .secondary)
+            .buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(store.readingCompanionTab == value ? Palette.accent : .secondary)
             .background(store.readingCompanionTab == value ? Palette.surface : .clear, in: RoundedRectangle(cornerRadius: 9))
             .accessibilityAddTraits(store.readingCompanionTab == value ? .isSelected : [])
             .accessibilityLabel(title)

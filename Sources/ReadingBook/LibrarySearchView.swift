@@ -77,7 +77,7 @@ struct LibrarySearchView: View {
                         ForEach(session.expandedKeywords, id: \.self) { word in
                             Button { query = word } label: { Text(word).font(.system(size: 13)).padding(.horizontal, 10).padding(.vertical, 6)
                                     .background(Palette.accent.opacity(0.08), in: Capsule()).overlay(Capsule().strokeBorder(Palette.accent.opacity(0.16))) }
-                                .buttonStyle(.plain).help("只搜索“\(word)”")
+                                .buttonStyle(ReadingQuietButtonStyle()).help("只搜索“\(word)”")
                         }
                     }
                 }.frame(height: 32)
@@ -153,7 +153,7 @@ struct LibrarySearchView: View {
                 }
             }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Palette.surface.opacity(0.72), in: RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line.opacity(0.5), lineWidth: 1)).contentShape(Rectangle())
-        }.buttonStyle(.plain).disabled(opening || (store.isBusy && match.bookID != store.bookID))
+        }.buttonStyle(ReadingQuietButtonStyle()).disabled(opening || (store.isBusy && match.bookID != store.bookID))
     }
 
     private func entityRow(_ match: LibraryEntityMatch) -> some View {
@@ -169,7 +169,7 @@ struct LibrarySearchView: View {
                 Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(.secondary)
             }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Palette.surface.opacity(0.72), in: RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Palette.line.opacity(0.5), lineWidth: 1)).contentShape(Rectangle())
-        }.buttonStyle(.plain).disabled(opening || (store.isBusy && match.bookID != store.bookID))
+        }.buttonStyle(ReadingQuietButtonStyle()).disabled(opening || (store.isBusy && match.bookID != store.bookID))
     }
 
     private func scheduleSearch(debounce: Bool = true) {

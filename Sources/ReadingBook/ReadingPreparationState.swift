@@ -152,7 +152,7 @@ struct ReadingPreparationStatusDot: View {
                     .frame(width: 22, height: 24).contentShape(Rectangle())
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ReadingQuietButtonStyle())
         .help(detail)
         .accessibilityLabel("页面读取状态")
         .accessibilityValue(Text(detail))

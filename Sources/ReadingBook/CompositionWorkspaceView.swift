@@ -319,7 +319,7 @@ struct CompositionWorkspaceView: View {
                         if collapsed.contains(part.id) { collapsed.remove(part.id) } else { collapsed.insert(part.id) }
                     }
                 } label: { Image(systemName: collapsed.contains(part.id) ? "plus" : "minus").frame(width: 48, height: 48) }
-                    .buttonStyle(.plain).contentShape(Rectangle()).help(collapsed.contains(part.id) ? "展开\(title(part))" : "收起\(title(part))")
+                    .buttonStyle(ReadingQuietButtonStyle()).contentShape(Rectangle()).help(collapsed.contains(part.id) ? "展开\(title(part))" : "收起\(title(part))")
                     .accessibilityLabel(collapsed.contains(part.id) ? "展开\(title(part))" : "收起\(title(part))")
             }.padding(.leading, 18).padding(.trailing, 6).frame(minHeight: 60)
             if !collapsed.contains(part.id) {
@@ -450,7 +450,7 @@ private struct CompositionObjectTable: View {
                         if selected.contains(item.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.accent) }
                         Text(item.title).font(typography.font(for: .knowledge, weight: .medium)).multilineTextAlignment(.leading).lineLimit(3)
                     }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(.plain)
+                }.buttonStyle(ReadingQuietButtonStyle())
                 Button("完整内容") { detailID = item.id }.font(.caption).buttonStyle(.borderless).frame(minHeight: 36)
                     .popover(isPresented: Binding(get: { detailID == item.id }, set: { if !$0 { detailID = nil } })) {
                         CompositionObjectDetails(items: items.filter { $0.id == item.id }, selected: [item.id]).frame(width: 480, height: 480)
@@ -500,7 +500,7 @@ private struct CompositionObjectList: View {
             HStack(alignment: .center, spacing: 9) {
                 Image(systemName: "magnifyingglass").readingSearchIcon()
                 TextField("查找要素", text: $search).readingSearchInput()
-                if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill").frame(width: 48, height: 48) }.buttonStyle(.plain).accessibilityLabel("清空搜索") }
+                if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill").frame(width: 48, height: 48) }.buttonStyle(ReadingQuietButtonStyle()).accessibilityLabel("清空搜索") }
             }.padding(.horizontal, 14).frame(minHeight: 48).background(Palette.paper.opacity(0.6), in: RoundedRectangle(cornerRadius: 14)).padding(12)
             if filtered.isEmpty { CompositionEmptyState(text: search.isEmpty ? "当前范围还没有这类要素。" : "没有匹配的要素。", icon: "rectangle.stack") }
             else {
@@ -519,7 +519,7 @@ private struct CompositionObjectList: View {
                                     if selected.contains(id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.accent) }
                                 }.padding(12).frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
                                     .background(Palette.accent.opacity(selected.contains(id) ? 0.1 : 0), in: RoundedRectangle(cornerRadius: 15)).contentShape(Rectangle())
-                            }.buttonStyle(.plain)
+                            }.buttonStyle(ReadingQuietButtonStyle())
                         }
                     }.padding(.horizontal, 10).padding(.bottom, 12)
                 }.frame(maxHeight: 420)
@@ -639,7 +639,7 @@ private struct CompositionMarkdown: View {
                     Text(document.title).font(.system(size: 18, weight: .medium, design: .serif)).lineLimit(2)
                     Spacer()
                     Button { Task { await store.openDocument(document) } } label: { Image(systemName: "arrow.up.right").frame(width: 48, height: 48) }
-                        .buttonStyle(.plain).help("打开这篇笔记").accessibilityLabel("打开这篇笔记")
+                        .buttonStyle(ReadingQuietButtonStyle()).help("打开这篇笔记").accessibilityLabel("打开这篇笔记")
                 }.padding(.horizontal, 18)
                 if loadedRequest == loadRequest, let issue { Text(issue).font(.callout).foregroundStyle(.secondary).textSelection(.enabled).padding(20) }
                 else if loadedRequest == loadRequest, let markdown { ScrollView { MarkdownText(markdown: markdown).readingTextContext(.notes).padding(20) }.frame(maxHeight: 460) }
@@ -679,7 +679,7 @@ private struct CompositionMap: View {
                                 .font(.system(size: 17, weight: .semibold)).foregroundStyle(selected.contains(point.targetID) ? Color.white : Palette.accent)
                                 .frame(width: 48, height: 48).background(selected.contains(point.targetID) ? Palette.accent : Palette.paper, in: Circle())
                                 .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 2)).shadow(color: .black.opacity(0.12), radius: 8, y: 3)
-                        }.buttonStyle(.plain).help(point.subtitle).accessibilityLabel(point.title + "，" + point.subtitle)
+                        }.buttonStyle(ReadingQuietButtonStyle()).help(point.subtitle).accessibilityLabel(point.title + "，" + point.subtitle)
                     }
                 }
             }.mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll))

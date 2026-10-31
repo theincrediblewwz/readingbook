@@ -3,6 +3,16 @@
   'use strict';
   const md = global.markdownit({ html: false, linkify: true, typographer: false, breaks: false });
   const escape = md.utils.escapeHtml;
+  // Hide only ReadingBook's standalone provenance marker. HTML stays disabled;
+  // code blocks/inline code and every other user comment remain literal. Token
+  // line/source offsets still refer to the original, unmodified Markdown.
+  md.block.ruler.before('paragraph', 'readingbook_provenance', function (state, startLine, endLine, silent) {
+    if (state.blkIndent !== 0 || state.parentType === 'blockquote' || state.sCount[startLine] >= 4) return false;
+    const line = state.src.slice(state.bMarks[startLine] + state.tShift[startLine], state.eMarks[startLine]);
+    if (!/^<!-- conversation-message: [A-Za-z0-9][A-Za-z0-9_.:-]{0,127} -->\s*$/.test(line)) return false;
+    if (!silent) state.line = startLine + 1;
+    return true;
+  }, { alt: ['paragraph'] });
   const environments = '(?:equation|align|alignat|gather|multline|aligned|alignedat|gathered|split|cases|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix|CD)\\*?';
   const beginEnvironment = new RegExp('^\\\\begin\\{(' + environments + ')\\}');
   let currentRevision = 0;

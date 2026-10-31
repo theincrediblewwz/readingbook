@@ -158,7 +158,7 @@ struct SmartReadingProgressPanel: View {
         Button(action: expandProgress) {
             Image(systemName: statusIcon).font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
                 .frame(width: 52, height: 52).contentShape(Circle())
-        }.buttonStyle(.plain).readingGlass(radius: 26, interactive: true)
+        }.buttonStyle(ReadingQuietButtonStyle()).readingGlass(radius: 26, interactive: true)
             .overlay { minimizedPointerInput }
             .help("\(title)；点击展开进度，拖动调整位置")
             .accessibilityLabel("展开" + title + "进度").accessibilityValue(Text(progressAccessibilityValue))
@@ -182,7 +182,7 @@ struct SmartReadingProgressPanel: View {
                     Text(title + " · " + state.phaseTitle).font(.system(size: 14, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
                     Spacer(minLength: 0)
                 }.padding(.leading, 15).padding(.trailing, 5).frame(maxWidth: .infinity, minHeight: 52).contentShape(Rectangle())
-            }.buttonStyle(.plain).help("\(title)正在进行；点击查看模型响应与请求详情")
+            }.buttonStyle(ReadingQuietButtonStyle()).help("\(title)正在进行；点击查看模型响应与请求详情")
                 .accessibilityLabel(title + "进度").accessibilityValue(Text(state.phaseTitle))
             Button { store.cancelAIActivity(state.runID) } label: { Image(systemName: "pause") }
                 .buttonStyle(ReadingToolbarButtonStyle()).help("只停止本次\(title)，其他AI任务继续").accessibilityLabel("停止本次" + title)
@@ -205,7 +205,7 @@ struct SmartReadingProgressPanel: View {
                     Spacer(minLength: 0)
                     if let countText { Text(countText).font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85).layoutPriority(1) }
                 }.padding(.leading, 15).padding(.trailing, 5).frame(maxWidth: .infinity, minHeight: 52).contentShape(Rectangle())
-            }.buttonStyle(.plain).help("\(readingTitle)；点击\(expanded ? "收起" : "展开")进度")
+            }.buttonStyle(ReadingQuietButtonStyle()).help("\(readingTitle)；点击\(expanded ? "收起" : "展开")进度")
                 .accessibilityLabel(expanded ? "收起阅读任务详情" : "展开阅读任务详情").accessibilityValue(Text(progressAccessibilityValue))
             if readingRunning || hasActivity {
                 Button(action: cancelReadingActivity) { Image(systemName: "pause") }
@@ -227,6 +227,6 @@ struct SmartReadingProgressPanel: View {
             ForEach(views) { view in Button { store.requestedWorkspaceRoute = view.id } label: { Label(view.title, systemImage: view.kind.icon) } }
             if views.isEmpty { Text("适用组件会随分析创建") }
         } label: { Image(systemName: "square.grid.2x2").frame(width: 24, height: 28) }
-            .menuStyle(.borderlessButton).help("查看已创建的组件，不重新生成。")
+            .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).help("查看已创建的组件，不重新生成。")
     }
 }

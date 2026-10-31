@@ -108,7 +108,7 @@ struct SourceIndexWorkspaceView: View {
             Menu("恢复已移除伴读 · \(removed.count)") {
                 ForEach(removed) { item in Button(item.title) { Task { await store.restoreReadingItem(item.id) } }.disabled(store.isBusy) }
             }.disabled(removed.isEmpty)
-        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("增强、流程与伴读恢复")
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().help("增强、流程与伴读恢复")
     }
 
     private var directory: some View {
@@ -148,10 +148,10 @@ struct SourceIndexWorkspaceView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.padding(13).frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
                 .background(selectedID == entry.id ? Palette.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 13)).contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }.buttonStyle(ReadingQuietButtonStyle())
     }
     private func typeButton(_ title: String, id: String) -> some View {
-        Button { typeFilter = id } label: { Text(title).font(.system(size: 14, weight: typeFilter == id ? .semibold : .regular)).padding(.horizontal, 15).frame(minHeight: 40).background(typeFilter == id ? Palette.accent.opacity(0.10) : Palette.canvas.opacity(0.8), in: RoundedRectangle(cornerRadius: 11)).overlay(RoundedRectangle(cornerRadius: 11).stroke(typeFilter == id ? Palette.accent.opacity(0.8) : .clear, lineWidth: 1)).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(typeFilter == id ? Palette.accent : .secondary)
+        Button { typeFilter = id } label: { Text(title).font(.system(size: 14, weight: typeFilter == id ? .semibold : .regular)).padding(.horizontal, 15).frame(minHeight: 40).background(typeFilter == id ? Palette.accent.opacity(0.10) : Palette.canvas.opacity(0.8), in: RoundedRectangle(cornerRadius: 11)).overlay(RoundedRectangle(cornerRadius: 11).stroke(typeFilter == id ? Palette.accent.opacity(0.8) : .clear, lineWidth: 1)).contentShape(Rectangle()) }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(typeFilter == id ? Palette.accent : .secondary)
     }
 
     @ViewBuilder private var detail: some View {
@@ -227,7 +227,7 @@ struct SourceIndexWorkspaceView: View {
         Button { detailTab = id } label: {
             Text(title).font(.system(size: 16, weight: detailTab == id ? .semibold : .regular)).padding(.horizontal, 8).frame(minHeight: 48)
                 .overlay(alignment: .bottom) { if detailTab == id { Rectangle().fill(Palette.accent).frame(height: 3) } }.contentShape(Rectangle())
-        }.buttonStyle(.plain).foregroundStyle(detailTab == id ? Palette.accent : .secondary)
+        }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(detailTab == id ? Palette.accent : .secondary)
     }
     private func objectMenu(_ entry: SourceIndexedObject) -> some View {
         Menu {
@@ -235,7 +235,7 @@ struct SourceIndexWorkspaceView: View {
             Button("围绕此对象记一笔") { createNote(entry) }.disabled(store.isBusy || store.editorDirty)
             Button("围绕此对象提问") { store.readingContextDocumentID = nil; store.focus(entry.id); store.askAboutReadingContext() }
             if entry.hasMapContent { Button("在时间与地图查看") { store.focus(entry.id); store.readingScopeCurrent = false; store.activate(.map) } }
-        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().disabled(loading).help("编辑、记笔记、提问与地图")
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().disabled(loading).help("编辑、记笔记、提问与地图")
     }
     private func mentionSection(_ entry: SourceIndexedObject) -> some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -266,7 +266,7 @@ struct SourceIndexWorkspaceView: View {
                                 .font(typography.font(for: .source)).lineSpacing(7).lineLimit(selectedSourceID == mention.id ? nil : 6).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
                         }
                     }.padding(16).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(Palette.line.opacity(0.7), lineWidth: 0.7)).contentShape(Rectangle())
-                }.buttonStyle(.plain).help("展开此处的原文上下文")
+                }.buttonStyle(ReadingQuietButtonStyle()).help("展开此处的原文上下文")
                 if selectedSourceID == mention.id, let unit = store.book?.units.first(where: { $0.id == mention.anchor.unitID }) {
                     DisclosureGroup("所在片段") { MarkdownText(markdown: unit.text).readingTextContext(.source).padding(.top, 12) }.font(.system(size: 14)).tint(Palette.accent)
                 }
@@ -310,7 +310,7 @@ struct SourceIndexWorkspaceView: View {
                 ForEach(entry.related) { relation in
                     Button { selectRelated(relation.targetID) } label: {
                         HStack(spacing: 12) { Image(systemName: relation.icon).foregroundStyle(Palette.accent); Text(relation.name).font(.system(size: 15, weight: .medium)); Spacer(); Text(relation.label).font(.system(size: 13)).foregroundStyle(.secondary); Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(.secondary) }.padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 48).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12)).contentShape(Rectangle())
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(ReadingQuietButtonStyle())
                 }
             }
         }

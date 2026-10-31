@@ -37,7 +37,12 @@ private struct CompanionProjection: Sendable {
                       companionScope: ReadingQueryScope, frozenScope: ReadingQuerySnapshot?,
                       selectedUnitID: String?, chapterAnchor: SourceAnchor?, focusedAnchorID: String?, avoidsSpoilers: Bool) -> Self? {
         guard !Task.isCancelled else { return nil }
-        let state = book.readingExperience ?? ReadingExperienceState()
+        var state = book.readingExperience ?? ReadingExperienceState()
+        let archived = Set(book.readerCollections?.archivedCompanionIDs ?? [])
+        if !archived.isEmpty {
+            state.layers.removeAll { archived.contains("layer:" + $0.id) }
+            state.alignments.removeAll { archived.contains("alignment:" + $0.id) }
+        }
         var items: ReadingContextItems
         let count: Int
         var selectedUnits: [SourceUnit] = []
@@ -227,6 +232,7 @@ struct ReadingCompanionPanel: View {
     @State private var layerPlan = ReadingCompanionRecordPlan()
     @State private var alignmentPlan = ReadingCompanionRecordPlan()
     @State private var historyExpanded = false
+    @State private var archiveHistoryBook: BookProject?
     @State private var referenceHistoryExpanded = false
     @State private var expandedRecords: Set<String> = []
     @State private var projectionTask: Task<Void, Never>?
@@ -307,6 +313,7 @@ struct ReadingCompanionPanel: View {
                         }.allowsHitTesting(false)
                     }
             }.padding(.horizontal, 16).padding(.bottom, 4)
+            if effectiveSection != "mentions" { companionCollectionBar }
             ScrollViewReader { scroller in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
@@ -370,6 +377,9 @@ struct ReadingCompanionPanel: View {
             Button("移除", role: .destructive) { Task { await store.removeReadingItem(item.id, kind: item.kind) } }
         } message: { item in Text("\(item.title)\n原书和已保存的 Markdown 保留。") }
         .companionGenerationConfirmation($generationReview, generate: startEnhancement)
+        .sheet(item: $archiveHistoryBook) { book in
+            SavedConversationHistory(project: book, focusedMessageID: nil, initialKind: "companion", onClose: { archiveHistoryBook = nil }).environmentObject(store)
+        }
     }
     @ViewBuilder private var companionSelectors: some View {
                 if section == "context" {
@@ -389,7 +399,7 @@ struct ReadingCompanionPanel: View {
                             } label: { Label("恢复已移除的伴读", systemImage: "arrow.uturn.backward") }
                         }
                     } label: { Label(contentTitle, systemImage: contentIcon).font(.system(size: 15, weight: .medium)).frame(minHeight: 44) }
-                        .menuStyle(.borderlessButton).fixedSize().help(contentHelp)
+                        .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().help(contentHelp)
                 } else { Label(contentTitle, systemImage: contentIcon).font(.system(size: 15, weight: .medium)).lineLimit(1) }
                 if scope != "book" {
                     Menu {
@@ -399,7 +409,7 @@ struct ReadingCompanionPanel: View {
                     } label: {
                         Label(companionScope == .page ? "当前页" : "当前章节", systemImage: frozenScope == nil ? "book.closed" : "lock")
                             .font(.system(size: 13, weight: .medium)).frame(minHeight: 44)
-                    }.menuStyle(.borderlessButton).fixedSize().disabled(store.isCompanionGenerating)
+                    }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().disabled(store.isCompanionGenerating)
                         .help(scopeTitle + "\n选择按当前页或完整章节生成；伴读生成期间固定这次范围，对话可独立使用。")
                 } else { Text("全书").font(.system(size: 13)).foregroundStyle(.secondary) }
     }
@@ -418,7 +428,7 @@ struct ReadingCompanionPanel: View {
                             .help(style == .mentor ? "补充必要背景并解释思路；书外知识与原文依据分开。" : "只围绕原文证据分析，不把不确定背景当成书中事实。")
                     }
                 } label: { Image(systemName: "textformat.size").frame(width: 32, height: 44) }
-                    .menuStyle(.borderlessButton).fixedSize().help("伴读字号与讲解方式")
+                    .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().help("伴读字号与讲解方式")
                 if showsHeader {
                     Button { NotificationCenter.default.post(name: Notification.Name("ReadingBookExpandCompanion"), object: nil) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
                         .buttonStyle(ReadingToolbarButtonStyle()).help("放大或还原伴读窗口").accessibilityLabel("放大伴读窗口")
@@ -428,7 +438,7 @@ struct ReadingCompanionPanel: View {
                         ForEach(recoverableItems) { item in
                             Button { Task { await store.restoreReadingItem(item.id) } } label: { Label("恢复 \(item.title)", systemImage: "arrow.uturn.backward") }.disabled(store.isBusy)
                         }
-                    } label: { Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44) }.menuStyle(.borderlessButton).fixedSize().help("恢复已移除的伴读")
+                    } label: { Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44) }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().help("恢复已移除的伴读")
                 }
                 if scope != "book" {
                     Button { showsSourceContext.toggle() } label: { Image(systemName: "info.circle") }
@@ -458,7 +468,7 @@ struct ReadingCompanionPanel: View {
                 Menu {
                     Button(action: noteThisScope) { Label("为这部分记笔记", systemImage: "square.and.pencil") }
                 } label: { Image(systemName: "ellipsis").frame(width: 44, height: 48) }
-                    .menuStyle(.borderlessButton).fixedSize().disabled(sourceUnits.isEmpty || store.isBusy).help("更多操作")
+                    .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().disabled(sourceUnits.isEmpty || store.isBusy).help("更多操作")
             }
         }.padding(16).fixedSize(horizontal: false, vertical: true)
     }
@@ -594,42 +604,36 @@ struct ReadingCompanionPanel: View {
         finishProjectionProgress()
     }
     @ViewBuilder private var layerSection: some View {
-        if layerPlan.primaryID == nil && (!layerPlan.historyIDs.isEmpty || !items.alignments.isEmpty) {
-            HStack(spacing: 8) { Spacer(minLength: 0); layerHistoryControls }
-        }
         if let id = store.focusedReadingAnchorID,
            let anchor = store.readingExperienceIndex.anchors.first(where: { $0.id == id }) ?? store.book?.readingExperience?.anchors.first(where: { $0.id == id }) {
             SentenceTranslationCard(anchor: anchor)
         } else if items.layers.isEmpty {
             empty(scope == "book" ? "还没有保存的伴读" : "这一页，还可以读得更深", detail: scope == "book" ? "回到原文页，生成解释或留下笔记。" : "生成解释，或围绕当前内容提一个问题。")
         }
-        if let id = layerPlan.primaryID, let layer = layersByID[id] {
+        let historyIDs = layerPlan.orderedIDs.filter { $0 != layerPlan.primaryID || store.readerCollections.collapsedReferenceIDs.contains("layer:" + $0) }
+        if let id = layerPlan.primaryID, let layer = layersByID[id], !store.readerCollections.collapsedReferenceIDs.contains("layer:" + id) {
             VStack(alignment: .leading, spacing: 8) {
-                itemHeader(layer.title, label: layer.sourceLabel, id: layer.id, kind: "layer") { layerHistoryControls }
+                itemHeader(layer.title, label: layer.sourceLabel, id: layer.id, kind: "layer") { EmptyView() }
                 layerContent(layer)
             }.readingCompanionSection(inset: 8).id("companion-current-layer")
         }
-        if historyExpanded && !layerPlan.historyIDs.isEmpty {
+        if historyExpanded && !historyIDs.isEmpty {
             historyContainer {
-                    ForEach(Array(layerPlan.historyIDs.prefix(layerLimit)), id: \.self) { id in
+                    ForEach(Array(historyIDs.prefix(layerLimit)), id: \.self) { id in
                         if let layer = layersByID[id] {
                             VStack(alignment: .leading, spacing: 6) {
                                 historyRecordHeader(layer.title, source: layer.sourceLabel, id: layer.id, kind: "layer")
-                                if expandedRecords.contains("layer:" + id) { layerContent(layer) }
+                    if expandedRecords.contains("layer:" + id) { layerContent(layer) }
                             }.padding(8).background(Palette.surface.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
                         }
                     }
-                    if layerPlan.historyIDs.count > layerLimit {
-                        Button("继续显示记录 · 还有 \(layerPlan.historyIDs.count - layerLimit) 条") { layerLimit += 8 }
+                    if historyIDs.count > layerLimit {
+                        Button("继续显示记录 · 还有 \(historyIDs.count - layerLimit) 条") { layerLimit += 8 }
                             .buttonStyle(.borderless).font(.system(size: 12)).frame(minHeight: 28).help("按保存顺序从新到旧继续列出；点击每条标题查看完整内容。")
                     }
             }
         }
         if !items.alignments.isEmpty { referenceSection }
-    }
-    @ViewBuilder private var layerHistoryControls: some View {
-        if !layerPlan.historyIDs.isEmpty { historyButton("历史", count: layerPlan.historyIDs.count, expanded: $historyExpanded) }
-        if !items.alignments.isEmpty { historyButton("对读", count: alignmentPlan.orderedIDs.count, expanded: $referenceHistoryExpanded) }
     }
     private func layerContent(_ layer: ReadingLayer) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -644,18 +648,13 @@ struct ReadingCompanionPanel: View {
     @ViewBuilder private var referenceSection: some View {
         if items.alignments.isEmpty { empty("资料对读", detail: "把同一书内相关段落放在一起，分别回到出处。外部资料需有来源，AI 的解释会单独标识。") }
         let showPrimary = effectiveSection == "references"
-        if showPrimary, let id = alignmentPlan.primaryID, let alignment = alignmentsByID[id] {
+        if showPrimary, let id = alignmentPlan.primaryID, let alignment = alignmentsByID[id], !store.readerCollections.collapsedReferenceIDs.contains("alignment:" + id) {
             VStack(alignment: .leading, spacing: 8) {
-                itemHeader(alignment.title, label: "资料对齐 · \(alignment.status == "proposed" ? "待核对" : alignment.status)", id: alignment.id, kind: "alignment") {
-                    if !alignmentPlan.historyIDs.isEmpty { historyButton("历史", count: alignmentPlan.historyIDs.count, expanded: $referenceHistoryExpanded) }
-                }
+                itemHeader(alignment.title, label: "资料对齐 · \(alignment.status == "proposed" ? "待核对" : alignment.status)", id: alignment.id, kind: "alignment") { EmptyView() }
                 alignmentContent(alignment)
             }.readingCompanionSection(inset: 8)
         }
-        let historyIDs = showPrimary ? alignmentPlan.historyIDs : alignmentPlan.orderedIDs
-        if showPrimary && alignmentPlan.primaryID == nil && !historyIDs.isEmpty {
-            HStack { Spacer(minLength: 0); historyButton("历史", count: historyIDs.count, expanded: $referenceHistoryExpanded) }
-        }
+        let historyIDs = alignmentPlan.orderedIDs.filter { !showPrimary || $0 != alignmentPlan.primaryID || store.readerCollections.collapsedReferenceIDs.contains("alignment:" + $0) }
         if referenceHistoryExpanded && !historyIDs.isEmpty {
             historyContainer {
                     ForEach(Array(historyIDs.prefix(alignmentLimit)), id: \.self) { id in
@@ -688,6 +687,7 @@ struct ReadingCompanionPanel: View {
         return HStack(spacing: 6) {
             Button {
                 if expanded { expandedRecords.remove(key) } else { expandedRecords.insert(key) }
+                Task { await store.organizeReaderCollections(.collapse([key], expanded)) }
             } label: {
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -696,24 +696,58 @@ struct ReadingCompanionPanel: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     Text(expanded ? "收起" : "查看").font(.system(size: 11)).foregroundStyle(Palette.accent)
                 }.frame(minHeight: 32).contentShape(Rectangle())
-            }.buttonStyle(.plain).help("查看或收起这条已保存记录；原始内容保留。")
+            }.buttonStyle(ReadingQuietButtonStyle()).help("查看或收起这条已保存记录；原始内容保留。")
                 .accessibilityValue(expanded ? "已展开" : "已收起")
             removalMenu(title, id: id, kind: kind)
         }
     }
-    private func historyButton(_ title: String, count: Int, expanded: Binding<Bool>) -> some View {
-        Button { expanded.wrappedValue.toggle() } label: {
-            Label("\(title) \(count)", systemImage: "clock").font(.system(size: 11, weight: .medium))
-                .lineLimit(1).padding(.horizontal, 6).frame(minHeight: 26).contentShape(Capsule())
-        }.buttonStyle(.plain).foregroundStyle(expanded.wrappedValue ? Palette.accent : .secondary)
-            .background(Palette.accent.opacity(expanded.wrappedValue ? 0.07 : 0), in: Capsule())
-            .fixedSize(horizontal: true, vertical: false)
-            .help("已有记录默认收起；点击后按保存顺序从新到旧查看，不会重新生成或删除。")
-            .accessibilityValue(expanded.wrappedValue ? "已展开" : "已收起")
-    }
     private func historyContainer<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         LazyVStack(alignment: .leading, spacing: 8, content: content).padding(8)
             .background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+    }
+    private var companionRecordIDs: [String] {
+        layerPlan.orderedIDs.map { "layer:" + $0 } + alignmentPlan.orderedIDs.map { "alignment:" + $0 }
+    }
+    private var foldedCompanionIDs: [String] {
+        let collapsed = Set(store.readerCollections.collapsedReferenceIDs)
+        return companionRecordIDs.filter { id in
+            if collapsed.contains(id) { return true }
+            if expandedRecords.contains(id) { return false }
+            let primary = effectiveSection == "references" ? alignmentPlan.primaryID.map({ "alignment:" + $0 }) : layerPlan.primaryID.map({ "layer:" + $0 })
+            return id != primary
+        }
+    }
+    private var companionCollectionBar: some View {
+        HStack(spacing: 6) {
+            if !foldedCompanionIDs.isEmpty {
+                Button {
+                    let expanded = historyExpanded || referenceHistoryExpanded
+                    historyExpanded = !expanded; referenceHistoryExpanded = !expanded
+                    if expanded { expandedRecords = [] }
+                } label: { Label("已收起 \(foldedCompanionIDs.count)", systemImage: "tray.full").font(.system(size: 12, weight: .medium)).frame(minHeight: 32) }
+                    .buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
+                    .help("查看或收起当前伴读记录列表。它们仍可参与当前范围的上下文；移入历史后不再自动带入。")
+            }
+            Spacer(minLength: 4)
+            if !companionRecordIDs.isEmpty {
+                Button {
+                    expandedRecords = []; historyExpanded = false; referenceHistoryExpanded = false
+                    Task { await store.organizeReaderCollections(.collapse(companionRecordIDs, true)) }
+                } label: { Image(systemName: "rectangle.compress.vertical").frame(width: 32, height: 32) }
+                    .buttonStyle(ReadingQuietButtonStyle()).help("一键收起当前范围全部伴读，保留上下文。").accessibilityLabel("收起全部伴读")
+                    .disabled(store.isOrganizingCollections)
+            }
+            if !foldedCompanionIDs.isEmpty {
+                Button {
+                    let ids = foldedCompanionIDs
+                    Task { await store.organizeReaderCollections(.archive(ids, store.newHistoryFolderTitle)); expandedRecords = [] }
+                } label: { Label("移入历史", systemImage: "archivebox").font(.system(size: 12)).frame(minHeight: 32) }
+                    .buttonStyle(ReadingQuietButtonStyle()).help("把收起的解释和对读完整收纳到历史文件夹，退出自动上下文；内容保留，可恢复和引用。")
+                    .disabled(store.isOrganizingCollections)
+            }
+            Button { archiveHistoryBook = store.book } label: { Image(systemName: "folder").frame(width: 32, height: 32) }
+                .buttonStyle(ReadingQuietButtonStyle()).help("查看历史伴读文件夹，恢复或引用旧记录。").accessibilityLabel("历史伴读文件夹")
+        }.padding(.horizontal, 16).padding(.bottom, 4)
     }
     @ViewBuilder private var objectSection: some View {
         if items.entities.isEmpty && items.events.isEmpty { empty("读到的人与事", detail: "这一页整理好的人物、地点和线索会留在这里。") }
@@ -808,7 +842,7 @@ struct ReadingCompanionPanel: View {
                 Text(title).font(.system(size: 15, weight: expanded ? .semibold : .medium)).foregroundStyle(expanded ? Palette.accent : Palette.ink)
                 Spacer(minLength: 0)
             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel(title).accessibilityValue(expanded ? "已展开" : "已收起")
+        }.buttonStyle(ReadingQuietButtonStyle()).accessibilityLabel(title).accessibilityValue(expanded ? "已展开" : "已收起")
     }
     private func discussObject(_ name: String) {
         guard store.canStartQuery else { return }
@@ -840,11 +874,9 @@ struct ReadingCompanionPanel: View {
         }
     }
     private func removalMenu(_ title: String, id: String, kind: String) -> some View {
-        Menu {
-            Button(role: .destructive) { removal = ReadingItemRemoval(id: id, kind: kind, title: title) } label: { Label("移入伴读回收站", systemImage: "trash") }
-                .help("移除后可在伴读菜单中恢复；原书和Markdown笔记保留。")
-        } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28) }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("这条记录的操作：移入伴读回收站，可恢复。")
+        CompanionRecordManagementControl(title: title, id: id, kind: kind) {
+            removal = ReadingItemRemoval(id: id, kind: kind, title: title)
+        }
     }
     @ViewBuilder private func provenance(_ value: ReadingProvenance?) -> some View {
         if let value {
@@ -867,7 +899,7 @@ struct ReadingCompanionPanel: View {
         return VStack(alignment: .leading, spacing: 6) {
             Text("原文出现处").font(.system(size: 13)).foregroundStyle(.secondary)
             ForEach(Array(visible.prefix(24).enumerated()), id: \.offset) { _, source in
-                Button { store.follow(source) } label: { Text(source.quote).font(.system(size: 13)).lineLimit(3).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                Button { store.follow(source) } label: { Text(source.quote).font(.system(size: 13)).lineLimit(3).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
             }
         }
     }
@@ -890,7 +922,7 @@ struct ReadingCompanionPanel: View {
             ForEach(relations.prefix(16)) { relation in
                 let other = relation.fromID == id ? relation.toID : relation.fromID
                 if let title = visibleTitle(other) {
-                    Button { store.showReadingObject(other) } label: { Label("\(relation.label) · \(title)", systemImage: "point.3.connected.trianglepath.dotted").font(.system(size: 13)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain)
+                    Button { store.showReadingObject(other) } label: { Label("\(relation.label) · \(title)", systemImage: "point.3.connected.trianglepath.dotted").font(.system(size: 13)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(ReadingQuietButtonStyle())
                 }
             }
         }
@@ -909,14 +941,14 @@ private struct ReadingDecisionView: View {
     private var draftKey: String { "decision-draft-\(store.bookID ?? "")-\(card.id)" }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text(card.title).font(.subheadline.weight(.semibold)); Spacer(); Menu { Button("移除", role: .destructive, action: onRemove) } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 32, height: 32) }
+            HStack { Text(card.title).font(.subheadline.weight(.semibold)); Spacer(); Menu { Button("移除", role: .destructive, action: onRemove) } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).frame(width: 32, height: 32) }
             Text(card.sourceLabel).font(.caption2).foregroundStyle(.secondary)
             MarkdownText(markdown: card.contextMarkdown)
             ForEach(card.options) { option in
                 Button { choice = option.id } label: {
                     HStack(alignment: .top, spacing: 10) { Image(systemName: choice == option.id ? "checkmark.circle.fill" : "circle"); Text(option.title).font(.subheadline); Spacer(minLength: 0) }.padding(12).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                         .background(Palette.accent.opacity(choice == option.id ? 0.12 : 0.04), in: RoundedRectangle(cornerRadius: 12))
-                }.buttonStyle(.plain)
+                }.buttonStyle(ReadingQuietButtonStyle())
                 if choice == option.id { MarkdownText(markdown: option.markdown) }
             }
             TextField("我这样判断的理由…", text: $thought, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(2...5)
@@ -961,5 +993,35 @@ private extension View {
     func readingCompanionSection(inset: CGFloat = 12) -> some View {
         frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, inset)
             .overlay(alignment: .top) { Rectangle().fill(Palette.line.opacity(0.4)).frame(height: 0.5) }
+    }
+}
+
+private struct CompanionRecordManagementControl: View {
+    @EnvironmentObject private var store: AppStore
+    let title: String
+    let id: String
+    let kind: String
+    let onRemove: () -> Void
+    @State private var owner: WorkspacePickerOwner?
+    @State private var presented = false
+    var body: some View {
+        Button { owner = WorkspacePickerOwner(store: store); presented = true } label: { Image(systemName: "ellipsis").frame(width: 32, height: 32) }
+            .buttonStyle(ReadingQuietButtonStyle()).help("管理这条伴读：收纳到历史，或移入可恢复的回收站。")
+            .popover(isPresented: $presented) {
+                ManagementActionPopover(title: "这条伴读", options: [
+                    .init(id: "archive", title: "移入历史", detail: "保留完整内容，退出自动上下文；之后可恢复或引用。", icon: "archivebox"),
+                    .init(id: "trash", title: "移入伴读回收站…", detail: "确认后移除这条伴读，原书和笔记保留。", icon: "trash", destructive: true)
+                ], width: 360, close: { presented = false }, select: { action in
+                    guard let owner, owner.matches(store), let book = store.book,
+                          ReaderCollectionRuntime.reference(kind + ":" + id, in: book) != nil else { return }
+                    presented = false
+                    Task { @MainActor in
+                        await Task.yield(); guard owner.matches(store) else { return }
+                        if action == "archive" { await store.organizeReaderCollections(.archive([kind + ":" + id], store.newHistoryFolderTitle), owner: owner) }
+                        else if action == "trash" { onRemove() }
+                    }
+                })
+            }
+            .onChange(of: store.collectionOwnerKey) { _, _ in presented = false; owner = nil }
     }
 }

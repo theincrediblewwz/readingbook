@@ -16,7 +16,8 @@ import ReadingCore
                 readingPreparationState.reset()
                 readerChapterAnchor = nil
                 teacherBackground.cancelAll(); sentenceTranslation.cancelAll()
-                queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []; queryComposerDraft.text = ""
+                queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []; queryReferencedAnswerIDs = []; queryComposerDraft.text = ""
+                questionSuggestions.reset()
                 queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil
                 queryAllowsOrganizing = false; renderedWorkspaceVisibility = nil; renderedSelectedNodeIDs = []
                 smartReadingPlanReady = false
@@ -63,6 +64,7 @@ import ReadingCore
     @Published var focusedReadingAnchorID: String?
     @Published var readerChapterAnchor: SourceAnchor?
     let queryComposerDraft = QueryComposerDraft()
+    let questionSuggestions = ReadingQuestionSuggestionState()
     let teacherBackground = TeacherBackgroundState()
     let sentenceTranslation = SentenceTranslationState()
     let readingPreparationState = ReadingPreparationState()
@@ -82,6 +84,8 @@ import ReadingCore
     /// Added only by the reader's explicit attachment controls; never inferred from visibility.
     @Published var queryAttachedDocumentIDs: Set<String> = []
     @Published var queryAuthorizedNodeIDs: Set<String> = []
+    @Published var queryReferencedAnswerIDs: Set<String> = []
+    @Published var isOrganizingCollections = false
     @Published var queryMemoryEnabled = UserDefaults.standard.object(forKey: "query-memory-enabled") as? Bool ?? true {
         didSet { UserDefaults.standard.set(queryMemoryEnabled, forKey: "query-memory-enabled") }
     }
@@ -208,7 +212,7 @@ import ReadingCore
     }
     @Published var catalogOperations = 0
     @Published var libraryRootURL: URL {
-        didSet { if oldValue != libraryRootURL { auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
+        didSet { if oldValue != libraryRootURL { auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); questionSuggestions.reset(); queryReferencedAnswerIDs = []; queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
     }
     @Published var lastTrashedProjectURL: URL?
     let storageState = StorageSettingsState()
@@ -519,6 +523,7 @@ import ReadingCore
         let documentIDs = queryDocumentIDs.map { Array($0).sorted() }
         let attachedDocumentIDs = scope == .notes ? [] : queryAttachedDocumentIDs.sorted()
         let authorizedNodeIDs = preferences.interaction == .functional ? queryAuthorizedNodeIDs.sorted() : []
+        let referencedAnswerIDs = queryReferencedAnswerIDs.sorted()
         let memoryEnabled = queryMemoryEnabled
         let requestRoot = libraryRootURL
         let repository = repository
@@ -533,6 +538,7 @@ import ReadingCore
         let requestRunID = UUID()
         queryRunID = requestRunID
         isQueryBusy = true
+        questionSuggestions.cancelActive()
         lastQuestionContext = queryScopePreview; queryDisclosure = "正在准备阅读内容…"; queryRetryQuestion = nil
         let previousChangeIDs = Set(current.controlledChanges?.receipts.map(\.operationID) ?? [])
         queryTask = Task {
@@ -554,7 +560,7 @@ import ReadingCore
                 let worker = Task.detached(priority: .userInitiated) {
                     try ReadingPreparedAnswer.freeze(project: requestProject, scope: scope, context: context,
                         documentIDs: documentIDs, appendedDocumentIDs: attachedDocumentIDs,
-                        authorizedNodeIDs: authorizedNodeIDs, preferences: preferences)
+                        authorizedNodeIDs: authorizedNodeIDs, preferences: preferences, referencedAnswerIDs: referencedAnswerIDs)
                 }
                 let prepared = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
                 let snapshot = prepared.snapshot, chatContext = prepared.chatContext, history = prepared.history
@@ -597,6 +603,7 @@ import ReadingCore
                 let committed = try await repository.commitAIResult(base: questionBase, result: result, operationID: "answer-" + answer.message.id)
                 guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
                 publish(committed); requestsUsed = await sharedAIRequests.requestsUsed
+                queryReferencedAnswerIDs.subtract(referencedAnswerIDs)
                 queryDisclosure = ([answer.diagnostics.disclosure] + answer.diagnostics.notices).joined(separator: "\n")
                 if memoryEnabled { await saveQueryMemory(answer.memory, for: snapshot, root: requestRoot) }
                 if !isSmartReadingRunning { activity = "回答已生成，可以选一段记入笔记。" }

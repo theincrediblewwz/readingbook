@@ -49,8 +49,9 @@ public enum ReadingChatHistory {
     }
 
     private static func matchingMessages(in project: BookProject, preferences: ReadingAnswerPreferences) -> [ChatMessage] {
-        project.chats.filter {
-            ($0.conversationMode ?? .functional) == preferences.interaction && ($0.answerStyle ?? .research) == preferences.style
+        let archived = Set(project.readerCollections?.archivedChatIDs ?? [])
+        return project.chats.filter {
+            !archived.contains($0.id) && ($0.conversationMode ?? .functional) == preferences.interaction && ($0.answerStyle ?? .research) == preferences.style
         }
     }
 

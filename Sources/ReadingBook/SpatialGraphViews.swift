@@ -28,7 +28,7 @@ struct EntityCardsView: View {
                                     Text(entity.summary).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(4).frame(maxWidth: .infinity, minHeight: 66, alignment: .topLeading)
                                     HStack { Text("\(entity.evidence.count) 处原文依据").font(.system(size: 12)).foregroundStyle(.secondary); Spacer(); Image(systemName: "arrow.up.right").font(.system(size: 13)).foregroundStyle(Palette.accent) }
                                 }.softPanel().overlay(RoundedRectangle(cornerRadius: 14).stroke(store.selectedObjectID == entity.id ? Palette.accent.opacity(0.5) : .clear, lineWidth: 1)).contentShape(Rectangle())
-                            }.buttonStyle(.plain)
+                            }.buttonStyle(ReadingQuietButtonStyle())
                         }
                     }.padding(.horizontal, 24).padding(.bottom, 24)
                 }
@@ -47,7 +47,7 @@ struct EntityCardsView: View {
                 HStack(spacing: 9) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("查找卡片", text: $query).textFieldStyle(.plain).font(.system(size: 15))
-                    if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).help("清除卡片搜索").accessibilityLabel("清除卡片搜索") }
+                    if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(ReadingQuietButtonStyle()).help("清除卡片搜索").accessibilityLabel("清除卡片搜索") }
                 }.padding(.horizontal, 14).frame(width: 260, height: 44)
                     .background(Palette.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
                 Menu {
@@ -55,7 +55,7 @@ struct EntityCardsView: View {
                         Text("全部类型").tag("")
                         ForEach((store.book?.types ?? []).filter { typeIDs.isEmpty || typeIDs.contains($0.id) }) { type in Text(type.name).tag(type.id) }
                     }
-                } label: { Image(systemName: filter.isEmpty ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("筛选卡片类型")
+                } label: { Image(systemName: filter.isEmpty ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().help("筛选卡片类型")
         }
     }
 
@@ -328,7 +328,7 @@ struct KnowledgeLibraryView: View {
                         Text(document.updatedAt, style: .date).font(.caption2).foregroundStyle(.secondary)
                         Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(Palette.accent)
                     }.padding(20).frame(maxWidth: .infinity, minHeight: 88, alignment: .leading).background(Palette.surface, in: RoundedRectangle(cornerRadius: 16)).contentShape(Rectangle())
-                }.buttonStyle(.plain).contextMenu {
+                }.buttonStyle(ReadingQuietButtonStyle()).contextMenu {
                     Button("加入导图") { Task { await store.addDocumentToGraph(document) } }.disabled(store.isBusy)
                     Button("移入回收站", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy)
                 }
@@ -371,7 +371,7 @@ struct KnowledgeLibraryView: View {
                         }
                         Spacer(minLength: 0)
                     }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(Palette.surface, in: RoundedRectangle(cornerRadius: 10)).contentShape(Rectangle())
-                }.buttonStyle(.plain)
+                }.buttonStyle(ReadingQuietButtonStyle())
             }
             if entities.isEmpty, query.isEmpty { Text("AI 创建的概念、人物或自定义要素会出现在这里。").font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 20) }
         }
@@ -398,7 +398,7 @@ struct KnowledgeLibraryView: View {
         HStack(spacing: 9) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("搜索全部内容", text: $query).textFieldStyle(.plain).font(.system(size: 15))
-            if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).help("清除知识搜索").accessibilityLabel("清除知识搜索") }
+            if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(ReadingQuietButtonStyle()).help("清除知识搜索").accessibilityLabel("清除知识搜索") }
         }.padding(.horizontal, 14).frame(width: 260, height: 44)
             .background(Palette.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
     }

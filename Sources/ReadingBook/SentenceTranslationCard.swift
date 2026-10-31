@@ -216,7 +216,7 @@ private struct SentenceTranslationCardBody: View {
                         .foregroundStyle(selectedTab == "translation" ? Palette.accent : .secondary)
                         .help("优先读取这句话的已存译文；没有译文时才生成，不覆盖已有内容")
                     Spacer(minLength: 0)
-                }.font(.system(size: 13, weight: .medium)).buttonStyle(.plain)
+                }.font(.system(size: 13, weight: .medium)).buttonStyle(ReadingQuietButtonStyle())
             }
             if !showsTranslation, let fallbackMarkdown { MarkdownText(markdown: fallbackMarkdown) }
             if showsTranslation, let markdown = entry?.markdown {
@@ -226,7 +226,7 @@ private struct SentenceTranslationCardBody: View {
             if let entry, entry.running {
                 HStack {
                     ProgressView().controlSize(.small); Text(entry.progress.phaseTitle).font(.system(size: 13))
-                    Spacer(); Button { dwell.suppress(key: key); state.cancel(anchor: anchor, store: store) } label: { Image(systemName: "stop.circle") }.buttonStyle(.plain).help("停止翻译")
+                    Spacer(); Button { dwell.suppress(key: key); state.cancel(anchor: anchor, store: store) } label: { Image(systemName: "stop.circle") }.buttonStyle(ReadingQuietButtonStyle()).help("停止翻译")
                 }
                 if entry.progress.reasoningCharacters > 0 || entry.progress.answerCharacters > 0 {
                     Text("思考 \(entry.progress.reasoningCharacters.formatted()) · 输出 \(entry.progress.answerCharacters.formatted()) 字符").font(.system(size: 11)).foregroundStyle(.secondary)

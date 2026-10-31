@@ -122,7 +122,7 @@ private struct WorkspaceNavigationPicker: View {
                 Text(title).font(.system(size: 15, weight: .semibold))
                 Spacer(minLength: 0)
                 Button(action: close) { Image(systemName: "xmark").font(.system(size: 13)).frame(width: 32, height: 32) }
-                    .buttonStyle(.plain).help("关闭选择").accessibilityLabel("关闭" + title)
+                    .buttonStyle(ReadingQuietButtonStyle()).help("关闭选择").accessibilityLabel("关闭" + title)
             }.padding(.leading, 16).padding(.trailing, 8).frame(height: 50)
             Divider().opacity(0.4)
             ScrollView {
@@ -136,7 +136,7 @@ private struct WorkspaceNavigationPicker: View {
                                     Text(option.detail).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                             }.padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).contentShape(Rectangle())
-                        }.buttonStyle(.plain).modifier(WorkspacePickerRowHighlight()).disabled(!option.enabled).focused($focusedID, equals: option.id)
+                        }.buttonStyle(ReadingQuietButtonStyle()).modifier(WorkspacePickerRowHighlight()).disabled(!option.enabled).focused($focusedID, equals: option.id)
                             .help(option.title + "\n" + option.detail).accessibilityElement(children: .combine)
                             .padding(.horizontal, 5)
                     }

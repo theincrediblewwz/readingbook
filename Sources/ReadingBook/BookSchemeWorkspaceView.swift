@@ -130,7 +130,7 @@ private struct BookSchemeWorkspaceContent: View {
             Button { store.importBookSchemeTemplate() } label: { Label("导入模板", systemImage: "square.and.arrow.down") }
             Button { store.makePlan() } label: { Label("AI 预读方案", systemImage: "sparkles") }
         } label: { ManagementMenuLabel(title: "更多", icon: "ellipsis") }
-            .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize()
+            .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize()
             .help("导入方案模板，或用 AI 预读方案。待确认方案处理后可继续操作。")
             .accessibilityLabel("书本方案更多操作")
             .disabled(store.isBusy || pending != nil || store.book == nil)

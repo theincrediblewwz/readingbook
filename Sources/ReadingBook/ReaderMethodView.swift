@@ -196,7 +196,7 @@ struct ReaderMethodView: View {
                 }.padding(18).frame(maxWidth: .infinity, minHeight: 94, alignment: .leading)
                     .background(Palette.accent.opacity(automatic ? 0.07 : 0.015), in: RoundedRectangle(cornerRadius: 17))
                     .overlay(RoundedRectangle(cornerRadius: 17).strokeBorder(Palette.accent.opacity(automatic ? 0.5 : 0.1))).contentShape(RoundedRectangle(cornerRadius: 17))
-            }.buttonStyle(.plain)
+            }.buttonStyle(ReadingQuietButtonStyle())
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) { ForEach(PluginEngine.recommendedMethods) { methodChoice($0) } }
             Text("也可以组合书型。历史小说能同时关注人物、时空与叙事。").font(.system(size: 13)).foregroundStyle(.secondary).lineSpacing(4)
             if !customMethods.isEmpty {
@@ -420,7 +420,7 @@ struct ReaderMethodView: View {
                         }.padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 56)
                             .background(Palette.accent.opacity(execution.componentKinds.contains(kind) ? 0.1 : 0.035), in: RoundedRectangle(cornerRadius: 12))
                             .contentShape(RoundedRectangle(cornerRadius: 12))
-                    }.buttonStyle(.plain).accessibilityAddTraits(execution.componentKinds.contains(kind) ? .isSelected : [])
+                    }.buttonStyle(ReadingQuietButtonStyle()).accessibilityAddTraits(execution.componentKinds.contains(kind) ? .isSelected : [])
                 }
             }
             DisclosureGroup("自定义阅读步骤") {
@@ -487,7 +487,7 @@ struct ReaderMethodView: View {
             }.padding(16).frame(minWidth: 180, maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
                 .background(Palette.accent.opacity(selected ? 0.09 : 0.03), in: RoundedRectangle(cornerRadius: 14))
                 .contentShape(RoundedRectangle(cornerRadius: 14))
-        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
+        }.buttonStyle(ReadingQuietButtonStyle()).accessibilityAddTraits(selected ? .isSelected : [])
     }
     private var prepareButton: some View {
         Button { store.prepareSmartReading(selection) } label: { Label(activeMethods.isEmpty ? "预读并制定方案" : "预读新方案", systemImage: "sparkles") }

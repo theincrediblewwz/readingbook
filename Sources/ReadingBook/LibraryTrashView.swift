@@ -134,7 +134,7 @@ import ReadingCore
                     ForEach(TrashFilter.allCases) { value in Label(value.title, systemImage: value.icon).tag(value) }
                 }.pickerStyle(.inline).labelsHidden()
             } label: { ManagementMenuLabel(title: filter.title) }
-                .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).frame(width: 126)
+                .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).menuIndicator(.visible).modifier(ManagementMenuSurface()).frame(width: 126)
                 .accessibilityLabel("筛选回收内容类型").help("按书籍、笔记、对象、连线或组件筛选回收内容")
         }.padding(.leading, 14).padding(.trailing, 8).frame(minHeight: 48)
             .background(Palette.paper, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

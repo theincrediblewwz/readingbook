@@ -40,10 +40,10 @@ struct CompanionTaskStatusRow: View {
                     Circle().fill(Palette.accent.opacity(0.7)).frame(width: 4, height: 4)
                     Text("\(title) · \(state.value.phaseTitle)").font(.system(size: 11, weight: .medium)).lineLimit(1)
                 }.frame(maxWidth: .infinity, minHeight: 32, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).help("\(title)：\(state.value.phaseTitle)。点击查看请求详情。")
+            }.buttonStyle(ReadingQuietButtonStyle()).help("\(title)：\(state.value.phaseTitle)。点击查看请求详情。")
                 .accessibilityLabel("\(title) · \(state.value.phaseTitle)；查看请求详情")
             Button(action: cancel) { Image(systemName: "pause").font(.system(size: 11)).frame(width: 28, height: 32) }
-                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(.secondary)
                 .help("只停止这次\(title)，其他AI任务继续").accessibilityLabel("停止这次\(title)")
         }.frame(maxWidth: .infinity)
     }

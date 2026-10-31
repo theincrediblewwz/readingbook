@@ -365,12 +365,12 @@ struct AIProgressStatusView: View {
                             HStack(spacing: 7) {
                                 Image(systemName: step.requiresReview ? "clock" : step.succeeded == nil ? "circle.dotted" : step.succeeded == true ? "checkmark.circle.fill" : "exclamationmark.circle")
                                     .foregroundStyle(step.succeeded == false ? Palette.copper : Palette.accent)
-                                Button(step.title) { showingDetails = true }.buttonStyle(.plain).font(.system(size: 12)).lineLimit(1)
+                                Button(step.title) { showingDetails = true }.buttonStyle(ReadingQuietButtonStyle()).font(.system(size: 12)).lineLimit(1)
                                 if step.requiresReview { Text("审阅后应用").font(.system(size: 11)).foregroundStyle(.secondary) }
                             }
                         }
                     }
-                    Button { showingDetails = true } label: { Label("请求记录与详情", systemImage: "clock.arrow.circlepath").font(.system(size: 12)) }.buttonStyle(.plain).foregroundStyle(Palette.accent).frame(minHeight: 30)
+                    Button { showingDetails = true } label: { Label("请求记录与详情", systemImage: "clock.arrow.circlepath").font(.system(size: 12)) }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent).frame(minHeight: 30)
                 }.font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading)
             }
             .sheet(isPresented: $showingDetails) { AIRequestHistoryView(state: state) }

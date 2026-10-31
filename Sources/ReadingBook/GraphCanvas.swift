@@ -499,7 +499,7 @@ struct GraphSurface: View {
             if let scopeTitle, let toggleScope { Button(action: toggleScope) { Label(scopeTitle, systemImage: "line.3.horizontal.decrease") } }
             if let createDocument { Button(action: createDocument) { Label("新建节点", systemImage: "plus") } }
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("画布工具与状态").accessibilityLabel("更多画布工具与状态")
+            .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).menuIndicator(.hidden).fixedSize().help("画布工具与状态").accessibilityLabel("更多画布工具与状态")
     }
 
     /// Measure intrinsic chrome once per content change. Hidden measurements

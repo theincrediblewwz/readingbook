@@ -107,7 +107,7 @@ import ReadingCore
     func clearCurrentQueryMemory() {
         guard !isQueryBusy, !isManagingQueryMemory, !storageState.working else { return }
         guard let project = book else { return }
-        let key = queryMemoryPreparationKey
+        let key = queryMemoryPreparationKey, preferences = currentQueryPreferences
         isManagingQueryMemory = true
         Task {
             defer { isManagingQueryMemory = false }
@@ -115,10 +115,11 @@ import ReadingCore
                 let snapshot = try await Task.detached(priority: .userInitiated) {
                     try ReadingQuerySnapshot.freeze(scope: key.scope, in: project, context: key.context,
                         documentIDs: key.documents, appendedDocumentIDs: key.scope == .notes ? [] : key.attachments, authorizedNodeIDs: key.nodes)
-                        .withContextIdentity(key.mode)
+                        .withContextIdentity(try ReaderCollectionRuntime.contextIdentity(preferences: preferences,
+                            references: ReaderCollectionRuntime.explicitReferences(key.references, in: project)))
                 }.value
                 try await QueryMemoryFiles.shared.remove(snapshot: snapshot, root: key.root)
-                if bookID == key.bookID, libraryRootURL == key.root { queryMemoryRevision += 1; queryDisclosure = "已清除本范围的派生记忆；原始问答和笔记保留。" }
+                if bookID == key.bookID, libraryRootURL == key.root { queryMemoryRevision += 1; queryDisclosure = "已清除当前范围的对话摘要，原始问答和笔记都保留。聊得长时可重新自动整理。" }
             } catch { if bookID == key.bookID, libraryRootURL == key.root { errorMessage = "派生记忆未能清除：\(error.localizedDescription)" } }
         }
     }
@@ -150,7 +151,7 @@ struct QueryScopeControl: View {
         } label: {
             Label(store.queryScope.title, systemImage: icon(store.queryScope))
                 .font(.system(size: compact ? 14 : 15, weight: .medium)).frame(minHeight: 44)
-        }.menuStyle(.borderlessButton).fixedSize().disabled(store.isQueryBusy).help("选择这次提问允许读取的内容")
+        }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().disabled(store.isQueryBusy).help("选择这次提问允许读取的内容")
     }
     private func icon(_ scope: ReadingQueryScope) -> String {
         switch scope {

@@ -8,7 +8,7 @@ struct ReadingDockSurface<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
         HStack(spacing: spacing, content: content)
-            .buttonStyle(ReadingToolbarButtonStyle()).menuStyle(.borderlessButton)
+            .buttonStyle(ReadingToolbarButtonStyle()).menuStyle(.borderlessButton).modifier(ReadingHoverSurface())
             .padding(.horizontal, 6).padding(.vertical, 4)
             .readingGlass(radius: 26).fixedSize(horizontal: true, vertical: true)
             .accessibilityElement(children: .contain)
@@ -125,6 +125,6 @@ struct DockMenuRow: View {
                 Spacer(minLength: 8)
                 if selected { Image(systemName: "checkmark.circle").font(.system(size: 14)).foregroundStyle(Palette.accent) }
             }.padding(.horizontal, 12).padding(.vertical, 7).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }.buttonStyle(ReadingQuietButtonStyle())
     }
 }

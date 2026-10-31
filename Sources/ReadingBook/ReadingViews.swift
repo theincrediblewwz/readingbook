@@ -379,7 +379,7 @@ struct ReadingProcessingDetailsView: View {
                                 VStack(alignment: .leading, spacing: 4) { Text(unit.locator).font(.caption.weight(.medium)); Text(reviewMessage(unit, in: book)).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
                                 Spacer(minLength: 0); Image(systemName: "arrow.up.right").font(.caption)
                             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(ReadingQuietButtonStyle())
                     }
                 }.padding(.top, 10)
             } label: {
@@ -445,12 +445,17 @@ struct DocumentEditorView: View {
     @State private var listDragging = false
     @State private var panelEpoch = 0
     @State private var documentSearch = ""
+    @State private var documentFolderID: String?
     @State private var showingSources = false
     @State private var memoryScope: String?
     private var hasDocument: Bool { store.selectedDocumentID != nil || store.editorDirty }
     private var currentDocument: DocumentRecord? { store.book?.activeDocuments.first { $0.id == store.selectedDocumentID } }
     private var documents: [DocumentRecord] {
-        let all = store.book?.activeDocuments ?? []
+        let all = (store.book?.activeDocuments ?? []).filter { document in
+            guard let documentFolderID else { return true }
+            let folder = store.readerCollections.assignments["note:" + document.id]
+            return documentFolderID == "@unfiled" ? folder == nil : folder == documentFolderID
+        }
         return documentSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? all : all.filter { $0.title.localizedCaseInsensitiveContains(documentSearch.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
     var body: some View {
@@ -694,10 +699,15 @@ struct DocumentEditorView: View {
     }
     private var documentPicker: some View {
         VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                ReaderFolderControl(kind: .notes, selection: $documentFolderID, organizeNotes: true)
+                Spacer(minLength: 0)
+                Text("\(documents.count) 篇").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
             HStack(alignment: .center) {
                 Image(systemName: "magnifyingglass").readingSearchIcon(pointSize: 15)
                 TextField("搜索笔记…", text: $documentSearch).readingSearchInput(pointSize: 15)
-                if !documentSearch.isEmpty { Button { documentSearch = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空笔记搜索").frame(width: 44, height: 44) }
+                if !documentSearch.isEmpty { Button { documentSearch = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(ReadingQuietButtonStyle()).accessibilityLabel("清空笔记搜索").frame(width: 44, height: 44) }
             }.padding(.horizontal, 12).frame(minHeight: 46).background(Palette.surface.opacity(0.65), in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(Palette.line.opacity(0.8)))
             if store.editorDirty { Text("有未保存的修改，请先保存或放弃再切换。").font(.system(size: 13)).foregroundStyle(Palette.copper).fixedSize(horizontal: false, vertical: true) }
             ScrollView {
@@ -712,10 +722,13 @@ struct DocumentEditorView: View {
                                     Text(document.title).font(.system(size: 16, weight: .medium)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                                     Text(document.updatedAt, format: .dateTime.month().day().hour().minute()).font(.system(size: 12)).foregroundStyle(.secondary)
                                 }
-                                if store.selectedDocumentID == document.id { Image(systemName: "checkmark").foregroundStyle(Palette.accent).font(.caption.weight(.semibold)) }
+                                Color.clear.frame(width: 28)
                             }.padding(.horizontal, 12).padding(.vertical, 14).frame(maxWidth: .infinity, minHeight: 76, alignment: .leading).contentShape(Rectangle())
                                 .background(store.selectedDocumentID == document.id ? Palette.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 12))
-                        }.buttonStyle(.plain).disabled(store.isBusy || (store.editorDirty && store.selectedDocumentID != document.id))
+                        }.buttonStyle(ReadingQuietButtonStyle()).disabled(store.isBusy || (store.editorDirty && store.selectedDocumentID != document.id))
+                            .overlay(alignment: .trailing) {
+                                ReaderMoveToFolderButton(kind: .notes, recordIDs: ["note:" + document.id]).padding(.trailing, 4)
+                            }
                             .contextMenu {
                                 Button { Task { await store.addDocumentToGraph(document) } } label: { Label("加入导图", systemImage: "point.3.connected.trianglepath.dotted") }.disabled(store.isBusy)
                                 Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }.disabled(store.isBusy || store.editorDirty)
@@ -726,7 +739,7 @@ struct DocumentEditorView: View {
             }.frame(maxHeight: .infinity)
             Divider().opacity(0.5)
             Button { store.newDocument(); preview = false } label: { Label("新建笔记", systemImage: "plus.circle.fill").font(.system(size: 15, weight: .medium)).frame(maxWidth: .infinity, minHeight: 46).contentShape(Rectangle()) }
-                .buttonStyle(.plain).foregroundStyle(Palette.accent).background(Palette.surface.opacity(0.65), in: RoundedRectangle(cornerRadius: 12)).disabled(store.editorDirty || store.isBusy)
+                .buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent).background(Palette.surface.opacity(0.65), in: RoundedRectangle(cornerRadius: 12)).disabled(store.editorDirty || store.isBusy)
         }.padding(.horizontal, 16).padding(.bottom, 16)
     }
 }

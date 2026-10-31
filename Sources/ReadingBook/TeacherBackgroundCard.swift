@@ -33,7 +33,7 @@ private struct TeacherBackgroundCardBody: View {
                     Text(entry.progress.phaseTitle).font(.system(size: 13)).foregroundStyle(.secondary)
                     Spacer()
                     Button { state.cancel(objectID: objectID, unitID: unitID, store: store) } label: { Image(systemName: "stop.circle") }
-                        .buttonStyle(.plain).help("停止这次介绍")
+                        .buttonStyle(ReadingQuietButtonStyle()).help("停止这次介绍")
                 }
                 if entry.progress.reasoningCharacters > 0 || entry.progress.answerCharacters > 0 {
                     Text("思考 \(entry.progress.reasoningCharacters.formatted()) · 输出 \(entry.progress.answerCharacters.formatted()) 字符")

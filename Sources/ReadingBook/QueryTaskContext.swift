@@ -10,9 +10,10 @@ import CryptoKit
             avoidsSpoilers: book?.temporalKnowledge?.profile?.avoidsSpoilers != false)
     }
     func queryHistory(in project: BookProject, preferences: ReadingAnswerPreferences) -> [ChatMessage] {
-        project.chats.filter {
+        let archived = Set(project.readerCollections?.archivedChatIDs ?? [])
+        return project.chats.filter {
             // Earlier versions had only functional, evidence-bound questions.
-            ($0.conversationMode ?? .functional) == preferences.interaction && ($0.answerStyle ?? .research) == preferences.style
+            !archived.contains($0.id) && ($0.conversationMode ?? .functional) == preferences.interaction && ($0.answerStyle ?? .research) == preferences.style
         }
     }
     var currentQueryHistory: [ChatMessage] { book.map { queryHistory(in: $0, preferences: currentQueryPreferences) } ?? [] }
@@ -25,11 +26,12 @@ import CryptoKit
     }
     func currentQueryTaskSnapshot() throws -> ReadingQuerySnapshot {
         guard let book else { throw ReadingError.invalid("请先打开一本书。") }
+        let references = try ReaderCollectionRuntime.explicitReferences(queryReferencedAnswerIDs.sorted(), in: book)
         return try ReadingQuerySnapshot.freeze(scope: queryScope, in: book, context: queryReadingContext,
             documentIDs: queryDocumentIDs.map { Array($0).sorted() },
             appendedDocumentIDs: queryScope == .notes ? [] : queryAttachedDocumentIDs.sorted(),
             authorizedNodeIDs: queryInteractionMode == .functional ? queryAuthorizedNodeIDs.sorted() : [])
-            .withContextIdentity(currentQueryPreferences.contextIdentity)
+            .withContextIdentity(try ReaderCollectionRuntime.contextIdentity(preferences: currentQueryPreferences, references: references))
     }
 
     var queryAttachedDocuments: [DocumentRecord] {
@@ -73,7 +75,7 @@ import CryptoKit
     }
     func clearQueryTaskAttachments() {
         guard !isQueryBusy else { return }
-        queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []
+        queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []; queryReferencedAnswerIDs = []
     }
 
     var currentQueryMemory: ConversationMemory? {

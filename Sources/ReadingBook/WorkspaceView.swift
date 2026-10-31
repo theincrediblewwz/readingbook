@@ -339,7 +339,7 @@ struct WorkspaceView: View {
                 Image(systemName: store.isSmartReadingRunning || store.isCompanionGenerating || store.isQueryBusy ? "sparkles" : "book.pages")
                     .font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
                     .frame(width: 52, height: 52).contentShape(Circle())
-            }.buttonStyle(.plain).readingGlass(radius: 26, interactive: true)
+            }.buttonStyle(ReadingQuietButtonStyle()).readingGlass(radius: 26, interactive: true)
                 .overlay { FloatingLauncherPointerInput(interaction: interaction(at: compactCenter, fallback: true), activate: openActiveProgress) }
                 .help("点击查看当前AI任务进度与结果；拖动调整位置")
                 .accessibilityLabel("查看AI任务进度")
@@ -422,7 +422,7 @@ struct WorkspaceView: View {
             transferPickerOwner = nil; pendingTransferOwner = nil
             componentPickerOwner = WorkspacePickerOwner(store: store)
         } label: { WorkspacePickerEntryLabel(title: "添加组件", icon: "plus.square.on.square", expanded: componentPickerOwner != nil) }
-            .buttonStyle(.plain).disabled(!navigationPickerEnabled || addableComponents.isEmpty)
+            .buttonStyle(ReadingQuietButtonStyle()).disabled(!navigationPickerEnabled || addableComponents.isEmpty)
             .help(store.editorDirty ? "先保存当前笔记草稿，再添加组件。" : addableComponents.isEmpty ? "本书可添加的组件均已保存；可从导航或插件与组件中管理。" : "选择要加入本书导航的组件")
             .popover(item: $componentPickerOwner, arrowEdge: .trailing) { owner in
                 WorkspaceComponentPicker(components: addableComponents, width: navigationPickerWidth, maximumHeight: navigationPickerHeight,
@@ -435,7 +435,7 @@ struct WorkspaceView: View {
             componentPickerOwner = nil; pendingTransferOwner = nil
             transferPickerOwner = WorkspacePickerOwner(store: store)
         } label: { WorkspacePickerEntryLabel(title: "导入与导出", icon: "square.and.arrow.up", expanded: transferPickerOwner != nil) }
-            .buttonStyle(.plain).disabled(!navigationPickerEnabled)
+            .buttonStyle(ReadingQuietButtonStyle()).disabled(!navigationPickerEnabled)
             .help(store.editorDirty ? "先保存当前笔记草稿，再导入或导出。" : "导入书籍、导入书项目，或导出完整书项目")
             .popover(item: $transferPickerOwner, arrowEdge: .trailing) { owner in
                 WorkspaceTransferPicker(width: navigationPickerWidth, maximumHeight: navigationPickerHeight, enabled: navigationPickerEnabled,
@@ -511,7 +511,7 @@ struct WorkspaceView: View {
                 }
                 .contentShape(Rectangle())
                 .overlay(alignment: .leading) { if store.route == route { Capsule().fill(Palette.accent).frame(width: 2, height: 15).padding(.leading, 3) } }
-        }.buttonStyle(.plain).foregroundStyle(store.route == route ? Palette.accent : .primary)
+        }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(store.route == route ? Palette.accent : .primary)
             .animation(ReadingMotion.animation(reduce: reduceMotion), value: store.route)
     }
     private var viewingPDF: Bool { store.route == "reader" && store.readingSourceMode == "original" && readerShowsPDF && store.sourceFileURL?.pathExtension.lowercased() == "pdf" }
@@ -567,7 +567,7 @@ struct WorkspaceView: View {
                         Text(workspaceTitle).font(.system(size: 14, weight: .medium)).lineLimit(1).truncationMode(.middle).frame(width: min(limit, max(36, measured)), alignment: .leading)
                         Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
                     }.padding(.horizontal, 10).frame(height: 44).contentShape(Capsule())
-                }.buttonStyle(.plain).help("图书与工作区").accessibilityLabel("图书与工作区菜单")
+                }.buttonStyle(ReadingQuietButtonStyle()).help("图书与工作区").accessibilityLabel("图书与工作区菜单")
                     .popover(isPresented: $bookPopover) {
                         if servicePopover {
                             ServiceSwitcherPanel(back: { servicePopover = false }, manage: { navigate("models") }, dismissForConfirmation: { servicePopover = false; bookPopover = false }).environmentObject(store)
@@ -1001,7 +1001,7 @@ struct WelcomeView: View {
                 feature("随书生长", "puzzlepiece.extension", "AI 选择组件和内容类型")
                 feature("写下理解", "square.and.pencil", "Markdown 留在自己手中")
             }.padding(.top, 12)
-            Button("连接自己的 AI") { store.showingSettings = true }.buttonStyle(.plain).foregroundStyle(Palette.accent).padding(.top, 8)
+            Button("连接自己的 AI") { store.showingSettings = true }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent).padding(.top, 8)
         }.frame(maxWidth: .infinity).padding(30)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1056,7 +1056,7 @@ private struct EvidenceReferenceRow: View {
                     }.foregroundStyle(Palette.accent)
                     if !expanded { Text(reference.quote).font(typography.font(for: .source)).foregroundStyle(.secondary).lineLimit(3).multilineTextAlignment(.leading) }
                 }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(.vertical, 10).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel(expanded ? "收起原文依据" : "展开原文依据")
+            }.buttonStyle(ReadingQuietButtonStyle()).accessibilityLabel(expanded ? "收起原文依据" : "展开原文依据")
             if expanded {
                 VStack(alignment: .leading, spacing: 12) {
                     if let unit, !unit.chapter.isEmpty { Text(unit.chapter).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -1081,7 +1081,7 @@ struct EvidenceDisclosure: View {
                     Spacer(minLength: 0)
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
                 }.font(.system(size: 14)).foregroundStyle(Palette.accent).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain)
+            }.buttonStyle(ReadingQuietButtonStyle())
             if expanded { EvidenceList(evidence: evidence, showsHeading: false).padding(.top, 8) }
         }
     }

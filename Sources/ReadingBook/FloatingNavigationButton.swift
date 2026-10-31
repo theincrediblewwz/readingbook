@@ -19,7 +19,7 @@ struct FloatingNavigationButton: View {
             Image(systemName: "sidebar.left").font(.system(size: 20, weight: .medium)).foregroundStyle(Palette.accent)
                 .frame(width: NavigationOrbGeometry.buttonDiameter, height: NavigationOrbGeometry.buttonDiameter)
                 .readingGlass(radius: 24, interactive: true)
-        }.buttonStyle(.plain).keyboardShortcut("b", modifiers: .command)
+        }.buttonStyle(ReadingQuietButtonStyle()).keyboardShortcut("b", modifiers: .command)
             .overlay {
                 NavigationOrbPointerInput(epoch: epoch, begin: { origin = center }, move: { delta, finished in
                     let start = origin ?? NavigationOrbGeometry.center(in: viewport, dock: dock)

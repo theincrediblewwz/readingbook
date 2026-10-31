@@ -26,6 +26,7 @@ enum AIProjectMerge {
         try protect("bookmarks", \.bookmarks); try protect("ocrPages", \.ocrPages)
         try protect("readerAnnotations", \.readerAnnotations); try protect("manualTrash", \.manualTrash)
         try protect("aiRequestHistory", \.aiRequestHistory); try protect("readingKnowledge", \.readingKnowledge)
+        try protect("readerCollections", \.readerCollections)
         try protect("controlledChanges", \.controlledChanges)
         try protect("generatedOutline", \.generatedOutline)
         try protect("originalBookOutline", \.originalBookOutline)

@@ -293,6 +293,9 @@ public struct BookProject: Codable, Identifiable, Sendable {
     /// Host-verified chapter starts from the original PDF, independent of AI navigation.
     /// Missing in older libraries; original units and completion records are unchanged.
     public var originalBookOutline: BookChapterOutline? = nil
+    /// Reader-owned folders, collapsed answers and explicit archive boundaries.
+    /// Absent in older books; organizing never rewrites answer or note content.
+    public var readerCollections: ReaderCollectionState? = nil
     /// In-memory delivery order only; never part of library data, grants or caches.
     public internal(set) var publicationStamp: LibraryPublicationStamp? = nil
     private enum CodingKeys: String, CodingKey {
@@ -300,7 +303,7 @@ public struct BookProject: Codable, Identifiable, Sendable {
         case views, methods, plan, insights, syntheses, documents, nodes, edges, chats, audit, aiRequestHistory
         case plugins, disabledPluginIDs, appliedOperationIDs, lastUnitID, bookmarks, ocrPages, paragraphReceipts
         case readingStepResults, workflowRuns, receiptBatch, smartReading, readerAnnotations, readingExperience
-        case bookSchemes, mathVerifications, temporalKnowledge, graphGroups, controlledChanges, manualTrash, readingKnowledge, generatedOutline, originalBookOutline
+        case bookSchemes, mathVerifications, temporalKnowledge, graphGroups, controlledChanges, manualTrash, readingKnowledge, generatedOutline, originalBookOutline, readerCollections
     }
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units

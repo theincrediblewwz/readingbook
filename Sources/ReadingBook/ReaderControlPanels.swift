@@ -75,7 +75,7 @@ struct ReaderNavigationPanel: View {
                 .frame(maxWidth: .infinity, minHeight: 68).contentShape(RoundedRectangle(cornerRadius: 12))
                 .foregroundStyle(selected ? Palette.accent : Palette.ink)
                 .background(Palette.accent.opacity(selected ? 0.11 : 0.035), in: RoundedRectangle(cornerRadius: 12))
-        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
+        }.buttonStyle(ReadingQuietButtonStyle()).accessibilityAddTraits(selected ? .isSelected : [])
     }
     private func choice(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -87,7 +87,7 @@ struct ReaderNavigationPanel: View {
             }.padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 44).contentShape(RoundedRectangle(cornerRadius: 11))
                 .foregroundStyle(selected ? Palette.accent : Palette.ink)
                 .background(Palette.accent.opacity(selected ? 0.1 : 0.035), in: RoundedRectangle(cornerRadius: 11))
-        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
+        }.buttonStyle(ReadingQuietButtonStyle()).accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -109,7 +109,7 @@ struct ReaderZoomPanel: View {
     }
     private func zoomChoice(_ title: String, active: Bool, command: PDFReaderCommand) -> some View {
         Button { pdf.command(command) } label: { Text(title).font(.system(size: 14, weight: .medium)).frame(maxWidth: .infinity, minHeight: 44).contentShape(RoundedRectangle(cornerRadius: 11)) }
-            .buttonStyle(.plain).foregroundStyle(active ? Palette.accent : Palette.ink)
+            .buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(active ? Palette.accent : Palette.ink)
             .background(Palette.accent.opacity(active ? 0.1 : 0.035), in: RoundedRectangle(cornerRadius: 11))
             .accessibilityAddTraits(active ? .isSelected : [])
     }

@@ -26,7 +26,7 @@ struct ManagementActionPopover: View {
                 Text(title).font(.system(size: 15, weight: .semibold))
                 Spacer(minLength: 0)
                 Button(action: close) { Image(systemName: "xmark").frame(width: 32, height: 32) }
-                    .buttonStyle(.plain).help("关闭" + title).accessibilityLabel("关闭" + title)
+                    .buttonStyle(ReadingQuietButtonStyle()).help("关闭" + title).accessibilityLabel("关闭" + title)
             }.padding(.leading, 16).padding(.trailing, 8).frame(height: 48)
             Divider().opacity(0.4)
             ScrollView {

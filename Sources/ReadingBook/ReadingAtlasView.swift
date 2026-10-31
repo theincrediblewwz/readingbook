@@ -15,7 +15,7 @@ struct ReadingAtlasView: View {
             CompactWorkspaceHeader(definition?.title ?? "全书总览") {
                 Menu {
                     Picker("总览内容", selection: $section) { Text("章节与覆盖").tag("chapters"); Text("内容类型").tag("types"); Text("事件年代").tag("time"); Text("原文共现").tag("cooccurrence") }
-                } label: { Label(sectionTitle, systemImage: "chart.bar.xaxis") }.menuStyle(.borderlessButton)
+                } label: { Label(sectionTitle, systemImage: "chart.bar.xaxis") }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface())
             }
             if let snapshot {
                 if section == "cooccurrence" { cooccurrenceView(snapshot) }
@@ -64,7 +64,7 @@ struct ReadingAtlasView: View {
                         coverageLine("完整译文", count: chapter.translatedUnits, total: chapter.unitIDs.count, color: .blue)
                         Text("局部或完整译注涉及 \(chapter.translationTouchedUnits) 个单元").font(.caption2).foregroundStyle(.secondary)
                     }.padding(22).background(Palette.surface.opacity(0.88), in: RoundedRectangle(cornerRadius: 18)).overlay(RoundedRectangle(cornerRadius: 18).stroke(Palette.line.opacity(0.7), lineWidth: 0.8)).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(.plain)
+                }.buttonStyle(ReadingQuietButtonStyle())
             }
         }
     }
@@ -96,7 +96,7 @@ struct ReadingAtlasView: View {
                 ForEach(snapshot.yearBuckets) { bucket in
                     Button { selectedBucket = bucket.id } label: {
                         VStack(alignment: .leading, spacing: 10) { Text("\(bucket.start) – \(bucket.end)").font(.caption.monospacedDigit()).lineLimit(1); Text("\(bucket.count)").font(.system(size: 26, weight: .medium)); Text("个事件").font(.caption2) }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Palette.accent.opacity(0.08 + 0.28 * Double(bucket.count) / Double(maximum)), in: RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(selectedBucket == bucket.id ? Palette.accent : .clear, lineWidth: 1.5)).contentShape(Rectangle())
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(ReadingQuietButtonStyle())
                 }
             }
             Button("时间待考：\(snapshot.undatedEventIDs.count) 条，单独查看") { selectedBucket = nil }.buttonStyle(.borderless)

@@ -48,7 +48,7 @@ struct AppSettingsView: View {
                                     .foregroundStyle(tab == category.id ? Palette.accent : Palette.ink)
                                     .background(Palette.accent.opacity(tab == category.id ? 0.1 : 0), in: RoundedRectangle(cornerRadius: 11))
                                     .contentShape(RoundedRectangle(cornerRadius: 11))
-                            }.buttonStyle(.plain).help(category.detail).accessibilityAddTraits(tab == category.id ? .isSelected : [])
+                            }.buttonStyle(ReadingQuietButtonStyle()).help(category.detail).accessibilityAddTraits(tab == category.id ? .isSelected : [])
                         }
                         Spacer(minLength: 0)
                     }.padding(14).frame(width: 180).frame(maxHeight: .infinity)

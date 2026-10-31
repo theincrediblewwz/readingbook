@@ -27,28 +27,32 @@ public struct ReadingPreparedAnswer: Sendable {
     public let snapshot: ReadingQuerySnapshot
     public let chatContext: ReadingChatContext
     public let history: [ChatMessage]
+    public let referencedAnswers: [ReadingAnswerReference]
 
     private init(project: BookProject, context: ReadingContext?, scope: ReadingQueryScope,
                  preferences: ReadingAnswerPreferences, snapshot: ReadingQuerySnapshot,
-                 chatContext: ReadingChatContext, history: [ChatMessage]) {
+                 chatContext: ReadingChatContext, history: [ChatMessage], referencedAnswers: [ReadingAnswerReference]) {
         self.project = project; self.context = context; self.scope = scope
         self.preferences = preferences; self.snapshot = snapshot
         self.chatContext = chatContext; self.history = history
+        self.referencedAnswers = referencedAnswers
     }
 
     public static func freeze(project: BookProject, scope: ReadingQueryScope, context: ReadingContext? = nil,
                               documentIDs: [String]? = nil, appendedDocumentIDs: [String] = [],
-                              authorizedNodeIDs: [String] = [], preferences: ReadingAnswerPreferences = .init()) throws -> Self {
+                              authorizedNodeIDs: [String] = [], preferences: ReadingAnswerPreferences = .init(),
+                              referencedAnswerIDs: [String] = []) throws -> Self {
         try Task.checkCancellation()
+        let references = try ReaderCollectionRuntime.explicitReferences(referencedAnswerIDs, in: project)
         let snapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: project, context: context,
             documentIDs: documentIDs, appendedDocumentIDs: appendedDocumentIDs,
             authorizedNodeIDs: preferences.interaction == .functional ? authorizedNodeIDs : [])
-            .withContextIdentity(preferences.contextIdentity)
+            .withContextIdentity(try ReaderCollectionRuntime.contextIdentity(preferences: preferences, references: references))
         let chatContext = try ReadingChatContext(snapshot: snapshot, avoidsSpoilers: preferences.avoidsSpoilers)
         let history = ReadingChatHistory.automaticHistory(in: FreshReadingAnswerInput(project: project,
             preferences: preferences, snapshot: snapshot, chatContext: chatContext))
         try Task.checkCancellation()
         return Self(project: project, context: context, scope: scope, preferences: preferences,
-                    snapshot: snapshot, chatContext: chatContext, history: history)
+                    snapshot: snapshot, chatContext: chatContext, history: history, referencedAnswers: references)
     }
 }

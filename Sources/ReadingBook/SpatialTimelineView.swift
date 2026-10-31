@@ -491,7 +491,7 @@ struct SpatialTimelineView: View {
                 }
             } label: {
                 Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle())
-            }.menuStyle(.borderlessButton).fixedSize().help("时间与地图选项").accessibilityLabel("时间与地图选项")
+            }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().help("时间与地图选项").accessibilityLabel("时间与地图选项")
                 .popover(isPresented: $showingEvents) { eventList }
             Button { cancelPanelDrag(); withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { timelineCollapsed.toggle() } } label: {
                 Image(systemName: timelineCollapsed ? "plus" : "minus")
@@ -544,7 +544,7 @@ struct SpatialTimelineView: View {
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
             }.font(.system(size: 15)).padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
-        }.menuStyle(.borderlessButton).menuIndicator(.hidden)
+        }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).menuIndicator(.hidden)
             .help(store.selectedTemporalEntityID.map(store.objectTitle) ?? "选择人物，查看其行动与时空")
     }
     private var eventListButton: some View {
@@ -670,7 +670,7 @@ struct SpatialTimelineView: View {
                                 }.padding(10).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                                     .background(store.selectedObjectID == event.id ? Palette.accent.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 10))
                                     .contentShape(Rectangle())
-                            }.buttonStyle(.plain).id(event.id)
+                            }.buttonStyle(ReadingQuietButtonStyle()).id(event.id)
                         }
                         if visibleEvents.isEmpty { Text("当前范围没有事件。调整端点或显示全部时间。").font(.caption).foregroundStyle(.secondary).padding(16) }
                         else if filteredEvents.isEmpty { Text("没有匹配的事件。请调整搜索词。").font(.caption).foregroundStyle(.secondary).padding(16) }
@@ -861,7 +861,7 @@ private struct ReadingMapRenderer: View, Equatable {
                     Text(point.subtitle).font(.system(size: 13)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 240).padding(.horizontal, 9).padding(.vertical, 5).background(Palette.surface.opacity(0.94), in: Capsule())
                 }
             }.frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
-        }.buttonStyle(.plain).help("\(point.title) · \(point.subtitle)").accessibilityLabel("\(point.title)，\(point.subtitle)")
+        }.buttonStyle(ReadingQuietButtonStyle()).help("\(point.title) · \(point.subtitle)").accessibilityLabel("\(point.title)，\(point.subtitle)")
     }
 
 }

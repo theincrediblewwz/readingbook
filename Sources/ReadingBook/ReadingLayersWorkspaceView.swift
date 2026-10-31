@@ -132,7 +132,7 @@ struct ReadingLayersWorkspaceView: View {
                 .background(sourceID == value.id ? Palette.accent.opacity(0.1) : Palette.paper.opacity(0.65), in: RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(sourceID == value.id ? Palette.accent.opacity(0.4) : Palette.line.opacity(0.7), lineWidth: 0.7))
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }.buttonStyle(ReadingQuietButtonStyle())
     }
 
     private func paper(wide: Bool) -> some View {
@@ -189,7 +189,7 @@ struct ReadingLayersWorkspaceView: View {
                     Button("恢复 · \(item.kind == "alignment" ? "资料对读" : kindTitle(item.layer?.kind ?? "explanation")) · \(item.title)") { restore(item) }.disabled(store.isBusy)
                 }
             } label: { ManagementMenuLabel(title: "恢复", icon: "arrow.uturn.backward") }
-                .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize().help("查看并恢复已移除的释义、译文或资料对读")
+                .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize().help("查看并恢复已移除的释义、译文或资料对读")
                 .accessibilityLabel("伴读回收与恢复")
         }
     }
@@ -246,7 +246,7 @@ struct ReadingLayersWorkspaceView: View {
             Spacer(minLength: 0)
             Menu { Button("移入伴读回收站", role: .destructive) { restorationNotice = ""; removal = LayerRemoval(id: id, kind: kind, title: title) }.disabled(store.isBusy) }
                 label: { ManagementMenuLabel(title: "更多", icon: "ellipsis") }
-                .menuStyle(.borderlessButton).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize().help("移入伴读回收站前会确认，原书与笔记保留")
+                .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).menuIndicator(.visible).modifier(ManagementMenuSurface()).fixedSize().help("移入伴读回收站前会确认，原书与笔记保留")
                 .accessibilityLabel("这条伴读的更多操作")
         }
     }
@@ -262,7 +262,7 @@ struct ReadingLayersWorkspaceView: View {
                             Label(sources.locator(unitID: anchor.unitID) ?? "原文依据", systemImage: "arrow.uturn.backward").font(.system(size: 13, weight: .medium))
                             Text(anchor.quote).font(.system(size: 15, design: .serif)).lineLimit(4).multilineTextAlignment(.leading)
                         }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(14).background(Palette.accent.opacity(0.04), in: RoundedRectangle(cornerRadius: 12)).contentShape(Rectangle())
-                    }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                    }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
                 }
             }
         }

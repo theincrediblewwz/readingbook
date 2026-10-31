@@ -44,7 +44,7 @@ struct ReadingContinuationIntentPicker: View {
                     Spacer(minLength: 0)
                 }.padding(.leading, 15).padding(.trailing, 8).frame(maxWidth: .infinity, minHeight: 46, alignment: .leading)
                     .contentShape(Rectangle())
-            }.buttonStyle(.plain).help(intent.readerDetail)
+            }.buttonStyle(ReadingQuietButtonStyle()).help(intent.readerDetail)
                 .accessibilityLabel(intent.readerTitle).accessibilityHint(intent.readerDetail)
                 .accessibilityValue(selection == intent ? "已选中" : "未选中")
                 .accessibilityAddTraits(selection == intent ? .isSelected : [])
@@ -141,7 +141,7 @@ struct ReadingContinuationInfoButton: View {
         Button { isPresented.toggle() } label: {
             Image(systemName: "info.circle").font(.system(size: 14)).foregroundStyle(.secondary)
                 .frame(width: 30, height: 30).contentShape(Rectangle())
-        }.buttonStyle(.plain).help(detail).accessibilityLabel(title + "说明")
+        }.buttonStyle(ReadingQuietButtonStyle()).help(detail).accessibilityLabel(title + "说明")
             .popover(isPresented: $isPresented, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 11) {
                     HStack {

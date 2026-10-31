@@ -29,7 +29,7 @@ struct CompanionRecordBody: View {
                 Button { expanded.toggle() } label: {
                     Label(expanded ? "收起全文" : "展开全文", systemImage: expanded ? "arrow.up.to.line" : "arrow.down.to.line")
                         .font(.system(size: 12, weight: .medium)).frame(minHeight: 28).contentShape(Rectangle())
-                }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
                     .help("展开完整解释；复制与存为笔记始终包含全部 Markdown、公式和出处。")
                     .accessibilityValue(expanded ? "已显示全文" : "当前为有限高度预览")
                     .accessibilityHint("点击切换完整正文；复制与存为笔记始终包含全部内容。")
@@ -63,12 +63,12 @@ struct CompanionRecordActions: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(markdown, forType: .string)
             } label: { Image(systemName: "doc.on.doc").font(.system(size: 12)).frame(width: 28, height: 32) }
-                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(.secondary)
                 .help("复制完整 Markdown，包含未展开的正文和公式源文。")
                 .accessibilityLabel("复制完整 Markdown")
             Button(action: onSave) {
                 Label("存为笔记", systemImage: "square.and.pencil").font(.system(size: 12)).frame(minHeight: 32).contentShape(Rectangle())
-            }.buttonStyle(.plain).foregroundStyle(Palette.accent).fixedSize(horizontal: true, vertical: false)
+            }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent).fixedSize(horizontal: true, vertical: false)
                 .help("把完整内容与原文出处放入可编辑草稿；保存后才成为笔记。")
         }.frame(minHeight: 32)
     }
@@ -77,7 +77,7 @@ struct CompanionRecordActions: View {
             Button { onSource(source.id) } label: {
                 Label(source.quote, systemImage: "arrow.uturn.backward").font(.system(size: 12)).lineLimit(1)
                     .frame(minHeight: 32, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+            }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
                 .help(source.locator + "\n" + source.quote + "\n返回原文并高亮，不会重新生成。")
                 .accessibilityLabel("返回原文：" + source.quote).accessibilityHint(source.locator)
         } else if sourceCount == 1, let externalSource {
@@ -86,7 +86,7 @@ struct CompanionRecordActions: View {
         } else if sourceCount > 1 {
             Button { showsSources.toggle() } label: {
                 Label("原文 · \(sourceCount) 处", systemImage: "arrow.uturn.backward").font(.system(size: 12)).frame(minHeight: 32).contentShape(Rectangle())
-            }.buttonStyle(.plain).foregroundStyle(Palette.accent).fixedSize(horizontal: true, vertical: false)
+            }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent).fixedSize(horizontal: true, vertical: false)
                 .help("查看这条记录的全部出处，再选择要返回的位置。")
                 .popover(isPresented: $showsSources) { sourcePicker }
         }
@@ -97,7 +97,7 @@ struct CompanionRecordActions: View {
                 Text("原文出处 · \(sourceCount) 处").font(.system(size: 14, weight: .semibold))
                 Spacer(minLength: 8)
                 Button { showsSources = false } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
-                    .buttonStyle(.plain).help("关闭出处列表").accessibilityLabel("关闭出处列表")
+                    .buttonStyle(ReadingQuietButtonStyle()).help("关闭出处列表").accessibilityLabel("关闭出处列表")
             }.padding(.horizontal, 14).padding(.vertical, 8)
             Divider().opacity(0.4)
             ScrollView {
@@ -108,7 +108,7 @@ struct CompanionRecordActions: View {
                                 Label(source.locator, systemImage: "arrow.uturn.backward").font(.system(size: 11)).foregroundStyle(Palette.accent)
                                 Text(source.quote).font(.system(size: 13)).multilineTextAlignment(.leading).foregroundStyle(.primary)
                             }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 10).contentShape(Rectangle())
-                        }.buttonStyle(.plain).help("返回这处原文并高亮")
+                        }.buttonStyle(ReadingQuietButtonStyle()).help("返回这处原文并高亮")
                     }
                     if let externalSource {
                         Link(destination: externalSource) {

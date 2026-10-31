@@ -60,7 +60,7 @@ struct GraphNodeBrowser: View {
             Image(systemName: "magnifyingglass").readingSearchIcon()
             TextField("搜索节点…", text: $query).readingSearchInput()
             if !query.isEmpty {
-                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(.plain).help("清除节点搜索").accessibilityLabel("清除节点搜索")
+                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }.buttonStyle(ReadingQuietButtonStyle()).help("清除节点搜索").accessibilityLabel("清除节点搜索")
             }
         }.padding(.horizontal, 14).frame(height: 44).background(Palette.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 13))
             .overlay(RoundedRectangle(cornerRadius: 13).stroke(Palette.line, lineWidth: 1)).padding(.horizontal, 16).padding(.bottom, 12)
@@ -204,7 +204,7 @@ private struct GraphNodeDetails: View {
                     Menu {
                         ForEach(documents) { document in Button(document.title) { previewDocumentID = document.id } }
                     } label: { Label(document?.title ?? "挂载的笔记", systemImage: "doc.on.doc").frame(minHeight: 44) }
-                        .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
+                        .menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize(horizontal: false, vertical: true)
                 }
                 if let document {
                     Text(document.origin == "user" ? "我的笔记 · 已保存内容" : "主动保存的 AI 摘记").font(.caption).foregroundStyle(.secondary)

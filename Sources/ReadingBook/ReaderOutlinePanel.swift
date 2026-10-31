@@ -109,7 +109,7 @@ struct ReaderOutlinePanel: View {
                 TextField("搜索原文或章节", text: $query).readingSearchInput()
                 if !query.isEmpty {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain).frame(width: 44, height: 44).accessibilityLabel("清空原文搜索")
+                        .buttonStyle(ReadingQuietButtonStyle()).frame(width: 44, height: 44).accessibilityLabel("清空原文搜索")
                 }
             }.padding(.horizontal, 14).frame(minHeight: 46)
                 .background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
@@ -236,7 +236,7 @@ struct ReaderOutlinePanel: View {
             if row.hasChildren {
                 Button { if !collapsed.insert(entry.id).inserted { collapsed.remove(entry.id) } } label: {
                     Image(systemName: collapsed.contains(entry.id) ? "chevron.right" : "chevron.down").font(.system(size: 11)).frame(width: 22, height: 24)
-                }.buttonStyle(.plain).accessibilityLabel(collapsed.contains(entry.id) ? "展开章节" : "收起章节")
+                }.buttonStyle(ReadingQuietButtonStyle()).accessibilityLabel(collapsed.contains(entry.id) ? "展开章节" : "收起章节")
             } else { Color.clear.frame(width: 22, height: 24) }
             Button {
                 store.navigateToChapter(entry)
@@ -246,7 +246,7 @@ struct ReaderOutlinePanel: View {
                     Spacer(minLength: 0)
                     if let page = entry.page { Text(String(page)).font(.system(size: 11).monospacedDigit()).foregroundStyle(.secondary) }
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).disabled(isPDF && entry.page == nil)
+            }.buttonStyle(ReadingQuietButtonStyle()).disabled(isPDF && entry.page == nil)
         }.padding(.leading, CGFloat(min(8, entry.level)) * 12).padding(.trailing, 12).padding(.vertical, 10)
             .background(selected ? Palette.accent.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
             .id(entry.id)
@@ -269,7 +269,7 @@ struct ReaderOutlinePanel: View {
             }.padding(12).frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
                 .background(store.selectedUnitID == unit.id ? Palette.accent.opacity(0.11) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).id(unit.id).accessibilityLabel("\(unit.locator)，点击定位原文")
+        }.buttonStyle(ReadingQuietButtonStyle()).id(unit.id).accessibilityLabel("\(unit.locator)，点击定位原文")
     }
 
     private func refreshSource(from books: [BookProject]) {
@@ -357,7 +357,7 @@ private struct ReaderOutlineGenerationProgress: View {
     let pause: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack { ProgressView().controlSize(.small); Text(state.value.phaseTitle).font(.system(size: 13)); Spacer(); Button("暂停", action: pause).buttonStyle(.plain) }
+            HStack { ProgressView().controlSize(.small); Text(state.value.phaseTitle).font(.system(size: 13)); Spacer(); Button("暂停", action: pause).buttonStyle(ReadingQuietButtonStyle()) }
             if state.value.reasoningCharacters > 0 || state.value.answerCharacters > 0 {
                 Text("思考 \(state.value.reasoningCharacters.formatted()) · 输出 \(state.value.answerCharacters.formatted()) 字符").font(.caption2).foregroundStyle(.secondary)
             }

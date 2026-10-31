@@ -165,7 +165,7 @@ struct ReadingLedgerView: View {
                     ForEach(filtered) { item in
                         Button { chosenUnitID = item.id; showingUnits = false } label: {
                             HStack { Text(item.locator).lineLimit(2); Spacer(); if item.id == unit?.id { Image(systemName: "checkmark").foregroundStyle(Palette.accent) } }.font(.subheadline).padding(8).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(ReadingQuietButtonStyle())
                     }
                     if filtered.isEmpty { Text("没有匹配的原文单元").font(.caption).foregroundStyle(.secondary).padding(8) }
                 }

@@ -83,7 +83,7 @@ struct TemporalPersonContents: View {
                     ForEach(snapshot.events.filter { $0.match == .matches }, id: \.object.id) { event in
                         Button { store.focus(event.object.id) } label: {
                             Label(event.object.name, systemImage: "flag").font(.system(size: 15)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(ReadingQuietButtonStyle())
                     }
                     if !snapshot.relations.isEmpty {
                         Text("此时关系").font(.system(size: 16, weight: .semibold))

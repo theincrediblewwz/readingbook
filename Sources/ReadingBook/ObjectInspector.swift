@@ -87,9 +87,12 @@ private struct ObjectInspectorProjection: Sendable {
                                 .font(.caption).tint(Palette.accent).disabled(saving)
                         }
                     } else {
-                        Picker("讲解方式", selection: $store.queryAnswerStyle) {
-                            ForEach(ReadingAnswerStyle.allCases, id: \.self) { Text($0.title).tag($0) }
-                        }.pickerStyle(.segmented).labelsHidden().padding(.bottom, 2)
+                        if presentedEntity != nil || presentedEvent != nil {
+                            ManagementSegmentedControl(selection: Binding(get: { store.queryAnswerStyle.rawValue }, set: { if let style = ReadingAnswerStyle(rawValue: $0) { store.queryAnswerStyle = style } }), options: [
+                                .init(id: "mentor", title: "老师伴读", detail: "先解释人物与事件，背景补充单独显示。"),
+                                .init(id: "research", title: "原文考据", detail: "查看当前阅读范围内的原文介绍和真实出处。")
+                            ]).padding(.bottom, 2)
+                        }
                         objectContents
                     }
                 }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
@@ -161,7 +164,7 @@ private struct ObjectInspectorProjection: Sendable {
                     draft = EntityEditDraft(entity: original); localError = nil; restoredDraft = false
                 } label: { Label("编辑", systemImage: "square.and.pencil") }
                 Spacer(minLength: 0)
-                Menu { Button("移入回收站…", role: .destructive) { store.requestDeletion(.entity, id: entity.id, title: entity.name) } } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).fixedSize().help("卡片管理")
+                ObjectManagementControl(kind: .entity, id: entity.id, title: entity.name)
             }.buttonStyle(ReadingToolbarButtonStyle()).font(.system(size: 15)).disabled(store.isBusy)
             ForEach(entity.properties.keys.sorted().filter { canShow(entity.evidence) && entity.properties[$0]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }, id: \.self) { key in
                 VStack(alignment: .leading, spacing: 5) {
@@ -176,7 +179,7 @@ private struct ObjectInspectorProjection: Sendable {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
             ForEach((store.book?.events ?? []).filter { $0.participantIDs.contains(objectID) || $0.placeIDs.contains(objectID) }.compactMap(visibleEvent)) { event in
-                Button { showObject(event.id) } label: { Label(event.name, systemImage: "calendar").frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                Button { showObject(event.id) } label: { Label(event.name, systemImage: "calendar").frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
             }
             EvidenceList(evidence: visibleEvidence(entity.evidence))
         } else if let event = presentedEvent {
@@ -188,7 +191,7 @@ private struct ObjectInspectorProjection: Sendable {
             explanationButton(event.name)
             if canShow(event.evidence) { linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs) }
             EvidenceList(evidence: visibleEvidence(event.evidence))
-            Menu { Button("移入回收站…", role: .destructive) { store.requestDeletion(.event, id: event.id, title: event.name) } } label: { Label("事件管理", systemImage: "ellipsis").frame(minHeight: 44) }.menuStyle(.borderlessButton).fixedSize().font(.system(size: 14)).disabled(store.isBusy)
+            ObjectManagementControl(kind: .event, id: event.id, title: event.name, showsTitle: true).disabled(store.isBusy)
         } else if projection?.owner != projectionOwner {
             HStack(spacing: 8) { ProgressView().controlSize(.small); Text("读取本地介绍…").font(.callout).foregroundStyle(.secondary) }
         } else if store.book?.entities.contains(where: { $0.id == objectID }) == true || store.book?.events.contains(where: { $0.id == objectID }) == true {
@@ -197,10 +200,7 @@ private struct ObjectInspectorProjection: Sendable {
             Text("Markdown 文档").font(.system(size: 13)).foregroundStyle(Palette.accent)
             Text(document.title).font(.system(size: 25, weight: .semibold))
             Button { store.openObject(document.id) } label: { Label("打开文档", systemImage: "doc.text").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(ReadingToolbarButtonStyle())
-            Menu {
-                Button("添加画布节点") { Task { await store.addDocumentToGraph(document) } }
-                Button("移入回收站…", role: .destructive) { store.requestDeletion(.document, id: document.id, title: document.title) }
-            } label: { Label("文档管理", systemImage: "ellipsis").frame(minHeight: 44) }.menuStyle(.borderlessButton).fixedSize().font(.system(size: 14)).disabled(store.isBusy)
+            ObjectManagementControl(kind: .document, id: document.id, title: document.title, showsTitle: true).disabled(store.isBusy)
             EvidenceList(evidence: document.evidence)
         } else if let unit = store.book?.units.first(where: { $0.id == objectID }) {
             Text(unit.chapter).font(.title3); Text(unit.locator).font(.caption).foregroundStyle(.secondary)
@@ -212,7 +212,7 @@ private struct ObjectInspectorProjection: Sendable {
             if let title = visibleObjectTitle(relation.fromID == objectID ? relation.toID : relation.fromID) { HStack {
                 Button { showObject(relation.fromID == objectID ? relation.toID : relation.fromID) } label: {
                     Label("\(relation.label) · \(title)", systemImage: "arrow.up.right").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
                 Spacer(minLength: 0)
                 Button {
                     let sourceBookID = store.bookID
@@ -223,7 +223,7 @@ private struct ObjectInspectorProjection: Sendable {
         }
         ForEach((store.book?.activeDocuments ?? []).filter { $0.linkedIDs.contains(objectID) }) { document in
             Button { Task { await store.openDocument(document) } } label: { Label(document.title, systemImage: "doc.text").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }
-                .buttonStyle(.plain).foregroundStyle(Palette.accent)
+                .buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
         }
     }
 
@@ -332,9 +332,43 @@ private struct ObjectInspectorProjection: Sendable {
             if !ids.isEmpty { Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary) }
             ForEach(ids, id: \.self) { target in
                 if let name = visibleObjectTitle(target) {
-                    Button { showObject(target) } label: { Text(name).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                    Button { showObject(target) } label: { Text(name).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
                 }
             }
         }
+    }
+}
+
+private struct ObjectManagementControl: View {
+    @EnvironmentObject private var store: AppStore
+    let kind: WorkspaceDeletion.Kind
+    let id: String
+    let title: String
+    var showsTitle = false
+    @State private var owner: WorkspacePickerOwner?
+    @State private var presented = false
+    private var heading: String { kind == .document ? "文档管理" : kind == .event ? "事件管理" : "卡片管理" }
+    var body: some View {
+        Button { owner = WorkspacePickerOwner(store: store); presented = true } label: {
+            if showsTitle { Label(heading, systemImage: "ellipsis").font(.system(size: 14)).frame(minHeight: 44).padding(.horizontal, 8) }
+            else { Image(systemName: "ellipsis").frame(width: 40, height: 40) }
+        }.buttonStyle(ReadingQuietButtonStyle()).help(heading + "：查看可执行的操作与说明。")
+            .popover(isPresented: $presented) {
+                ManagementActionPopover(title: heading, options: options, width: 360, close: { presented = false }, select: { action in
+                    guard let owner, owner.matches(store), !store.isBusy else { return }; presented = false
+                    Task { @MainActor in
+                        await Task.yield(); guard owner.matches(store), !store.isBusy else { return }
+                        if action == "graph", let document = store.book?.activeDocuments.first(where: { $0.id == id }) { await store.addDocumentToGraph(document) }
+                        else if action == "trash" { store.requestDeletion(kind, id: id, title: title) }
+                    }
+                })
+            }
+            .onChange(of: store.collectionOwnerKey) { _, _ in presented = false; owner = nil }
+    }
+    private var options: [ManagementActionOption] {
+        var values: [ManagementActionOption] = []
+        if kind == .document { values.append(.init(id: "graph", title: "加入导图", detail: "为这篇笔记添加一个导图节点，正文保留。", icon: "point.3.connected.trianglepath.dotted")) }
+        values.append(.init(id: "trash", title: "移入回收站…", detail: "确认后移入回收站，之后仍可恢复。", icon: "trash", destructive: true))
+        return values
     }
 }

@@ -64,7 +64,7 @@ struct ReaderQuestionComposer: View {
                         .overlay(alignment: .topTrailing) {
                             if !question.isEmpty { Circle().fill(Palette.accent).frame(width: 8, height: 8).padding(5) }
                         }
-                }.buttonStyle(.plain).readingGlass(radius: 29, interactive: true)
+                }.buttonStyle(ReadingQuietButtonStyle()).readingGlass(radius: 29, interactive: true)
                     .help(question.isEmpty ? "问 AI" : "继续未发送的问题").accessibilityLabel("展开 AI 提问")
                     .position(x: orbFrame.midX, y: orbFrame.midY)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
