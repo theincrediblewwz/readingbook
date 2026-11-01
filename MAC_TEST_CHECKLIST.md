@@ -1,4 +1,8 @@
-> 2026-11-01 当前接续：32安装及原书验收已完成，正按用户新增反馈做33/64“少量便签更大、更疏”。本机32独立断言及三张原生展开/Esc通过，完整CI与33发布安装待做。先读[扇形精修范围](Design/2026-11-01-sparse-note-fan.md)和logs/fan-density-20261101/STATUS.md。勿重复发布安装32；当前安装仍32/63。不得修改或提交用户dirty进度文档。
+> 2026-11-01 当前接续：33/64“少量便签更大、更疏”已同步main、完整CI通过并发布，尚未安装。当前安装仍为已经完成原书验收的32/63。Mac再次锁屏，解锁问题已发出待答，不改锁屏设置，不强退原程序。先读[扇形精修状态](Design/2026-11-01-sparse-note-fan.md)和logs/fan-density-20261101/STATUS.md。勿重复跑CI、创建发布或重新安装32；不得修改或提交用户dirty进度文档。
+
+33产品源9f8611519d71f1d0ea700249bae7260ca3cac1c1，CI41274853292通过790 Core/133指定回归、两种滚动条各20动态布局及全部旧原生/Markdown门槛，零编译警告。Release430379391、artifact13070638275。canonical dist/ReadingBook-0.23.33-Mac.zip为27296298B，SHA253c63bfa2b50e0c7c8f10a1a4151982b57238dc56dd64c98b08efd4eb4a6701；两架构、签名、32资源及36文件均核验。三张宽松原生截图/收回已看过，147组数量/尺寸含悬停边界与48组密集几何逐值相同对照通过；本机32项为独立断言，不冒称XCTest运行时。当前source UI封存明确最终33安装验收=false。
+
+解锁后正常关闭仍运行的隔离helper，再复用本批build-ui-host.py --dense --run-tag native-dense看7张及窄窗分页（测试源有FAN_DENSE模式，当前跑的二进制仍是3张样本，不能覆盖运行中App）。随后正常退出32，直接用本批delivery/install-verified.py安装dist/0.23.33-ci-41274853292/unpacked/ReadingBook.app，保护到private-books/fan-density-20261101/install-before-0.23.33；核About33/64、104页/适宽343%、102旧句译、原历史和正常重启，再按已有严格工具收尾。待33安装通过后retire-31.py与cleanup-completed.py精确退役31，保留33/32及32回滚。新33检查程序/Debug重复产物已先清理182244KiB，待安装包、活动helper和增量对象/共享缓存仍在；旧helper路径先读本批RETIRED_GENERATED。之后继续文件夹完整投影和跨组件状态，准备见本批next-performance-preparation.md，不算成已采用收益。
 
 > 2026-11-01：0.23.32/build63已同步main、发布、替换安装并完成原书两次启动验收。七项便签、折叠收纳与大封面需求已交付；用户实际悬停确认可平滑抬卡。当前新增反馈是“少量卡片更大、更疏，数量多才保持现密度”，先做这处精修，再继续16类组件性能优化。见[逐项结果](Design/2026-11-01-note-layout-and-library-results.md)。下方31及更旧都是历史，不再当待办。
 
