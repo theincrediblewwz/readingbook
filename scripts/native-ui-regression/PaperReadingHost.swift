@@ -11,6 +11,7 @@ import PDFKit
     var window: NSWindow!
     var checks: [String: Bool] = [:]
     var turns: [[String: Any]] = []
+    var observations: [String: Any] = [:]
     init(_ output: URL) { self.output = output }
     func applicationDidFinishLaunching(_ notification: Notification) { Task { await run() } }
     func descendants<T: NSView>(_ root: NSView, _ type: T.Type) -> [T] {
@@ -18,6 +19,9 @@ import PDFKit
     }
     func settle(_ milliseconds: Int = 450) async { try? await Task.sleep(for: .milliseconds(milliseconds)) }
     func turn(_ command: PDFReaderCommand, target: Int, name: String, interrupt: Bool = false) async {
+        let startPage = controller.page
+        let pdf = descendants(reader, PDFView.self).first
+        let nativeStart = pdf?.currentPage.flatMap { page in pdf?.document.map { $0.index(for: page) + 1 } } ?? 0
         controller.command(command)
         var captured: PDFPaperCurl?
         for _ in 0..<120 {
@@ -30,10 +34,16 @@ import PDFKit
         let samples = captured?.progressSamples ?? []
         checks[name + "RendersIntermediateFrames"] = (captured?.renderedFrames ?? 0) > 2 && samples.contains { $0 > 0 && $0 < 1 }
         checks[name + "CompletesAndRemovesOverlay"] = samples.last == 1 && captured?.superview == nil
-        checks[name + "LandsOnExactPage"] = controller.page == target
+        checks[name + "LandsOnExactPage"] = controller.page == target && nativeStart == (target == 2 ? 1 : 2)
         checks[name + "ProgressIsMonotonic"] = zip(samples, samples.dropFirst()).allSatisfy { $0 <= $1 }
         checks[name + "BoundsRasterAllocation"] = captured.map { $0.drawableSize.width * $0.drawableSize.height <= 4_000_000 && max($0.drawableSize.width, $0.drawableSize.height) <= 4096 } == true
-        turns.append(["name": name, "frames": captured?.renderedFrames ?? 0, "progress": samples,
+        if captured == nil, let pdf, let document = pdf.document, let from = document.page(at: 0), let to = document.page(at: 1) {
+            let frame = reader.convert(pdf.convert(from.bounds(for: .cropBox), from: from), from: pdf)
+            let test = PDFPaperCurl(frame: frame, from: from, fromFrame: frame, to: to, toFrame: frame,
+                                   backwards: false, paper: .warmCotton, background: .white, scale: 1)
+            observations[name + "RendererCanInitializeIndependently"] = test != nil; test?.cancel()
+        }
+        turns.append(["name": name, "startPage": startPage, "nativeStartPage": nativeStart, "frames": captured?.renderedFrames ?? 0, "progress": samples,
                       "page": controller.page, "drawable": captured.map { NSStringFromSize($0.drawableSize) } ?? "missing"])
     }
     func run() async {
@@ -58,6 +68,9 @@ import PDFKit
             reader.update(from: input)
             for _ in 0..<200 { if controller.isReady { break }; await settle(20) }
             guard controller.isReady, let pdf = descendants(reader, PDFView.self).first else { throw ReadingError.invalid("Reader did not become ready") }
+            observations["systemReduceMotion"] = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            observations["appReduceMotion"] = UserDefaults.standard.bool(forKey: "appearance.reduceMotion")
+            observations["metalSupported"] = PDFPaperCurl.supported
             controller.command(.setDirection(.vertical)); controller.command(.setContinuous(true)); controller.command(.fitWidth); await settle()
             let scale = pdf.scaleFactor
             input.noteMarginVisible = true; reader.update(from: input)
@@ -77,6 +90,11 @@ import PDFKit
             }
             reader.setPaperStyle(.warmCotton)
             controller.command(.setPaperBook(true)); await settle()
+            // Continuous PDF layout may make another page dominant while the
+            // earlier margin checks restore its visible rectangle. Establish an
+            // explicit, settled page before testing an adjacent turn.
+            controller.command(.jump(1)); await settle(800)
+            observations["pageBeforeForward"] = controller.page
             checks["PaperBookIsHorizontalSinglePage"] = controller.paperBookMode && controller.direction == .horizontal && pdf.displayMode == .singlePage
             checks["SpineAndLeavesOnlyInBookMode"] = descendants(reader, PDFBookEdges.self).contains { !$0.isHidden && !$0.pageFrame.isEmpty }
             await turn(.next, target: 2, name: "Forward", interrupt: true)
@@ -93,7 +111,7 @@ import PDFKit
             checks["OriginalPDFBytesUnchanged"] = try Data(contentsOf: source) == original
             let passed = checks.values.allSatisfy { $0 }
             let result: [String: Any] = ["probe": "paper-reading", "status": passed ? "passed" : "failed", "checks": checks,
-                "checkCount": checks.count, "turns": turns, "marginWidths": widths, "realNetworkRequests": 0]
+                "checkCount": checks.count, "turns": turns, "observations": observations, "marginWidths": widths, "realNetworkRequests": 0]
             try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("result.json"))
             reader.shutdown(); exit(passed ? 0 : 1)
         } catch { try? Data(String(describing: error).utf8).write(to: output.appendingPathComponent("error.txt")); exit(2) }
