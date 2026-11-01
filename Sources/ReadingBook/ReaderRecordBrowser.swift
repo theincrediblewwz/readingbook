@@ -72,7 +72,11 @@ struct ReaderRecordSections<Content: View>: View {
                 let expanded = expandedGroups.contains(group.id)
                 Button { if expanded { expandedGroups.remove(group.id) } else { expandedGroups.insert(group.id) } } label: {
                     HStack(spacing: 8) {
-                        Text(group.title).font(.system(size: 13, weight: .medium)); Spacer(minLength: 4)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(group.title).font(.system(size: 13, weight: .medium))
+                            if !expanded, let first = group.records.first { ReaderFoldedRecordPreview(record: first) }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                        Spacer(minLength: 4)
                         Text("\(group.records.count)").font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 7).padding(.vertical, 3).background(Palette.line.opacity(0.3), in: Capsule())
                         Image(systemName: expanded ? "minus" : "plus").font(.system(size: 10, weight: .medium)).frame(width: 20)
                     }.padding(.horizontal, 9).frame(maxWidth: .infinity, minHeight: 38).contentShape(Rectangle())
@@ -148,6 +152,7 @@ struct ReaderRecordFoldCard<Content: View>: View {
                 Button { if let open { open() } else { expanded.toggle() } } label: {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(record.title).font(.system(size: 14, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+                        if !expanded { ReaderFoldedRecordPreview(record: record) }
                         HStack(spacing: 7) {
                             if let date = record.date { Text(date, format: .dateTime.hour().minute()) }
                             Text(record.chapterTitle).lineLimit(1)
@@ -180,6 +185,28 @@ struct ReaderNoteRecordPreview: View {
                     let preview = await Task.detached(priority: .utility) { PositionNotePreview.make(source, project: book) }.value
                     guard !Task.isCancelled, owner.matches(store) else { return }; text = preview + (body.count > 1800 ? "\n…（完整内容保留在笔记中）" : "")
                 }
+            }
+    }
+}
+
+/// Every record browser (notes, history, references and companion history)
+/// exposes a quiet body hint while keeping its full record folded.
+private struct ReaderFoldedRecordPreview: View {
+    @EnvironmentObject private var store: AppStore
+    let record: ReadingRecordDescriptor
+    @State private var notePreview = ""
+    var body: some View {
+        Text(record.id.hasPrefix("note:") ? notePreview : record.preview)
+            .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .task(id: store.collectionOwnerKey + "|" + record.id + "|" + String(store.projectRevision)) {
+                notePreview = ""
+                guard record.id.hasPrefix("note:"), let book = store.book,
+                      let document = book.activeDocuments.first(where: { "note:" + $0.id == record.id }) else { return }
+                let owner = WorkspacePickerOwner(store: store)
+                let preview = try? await store.repository.readFoldedNotePreview(bookID: book.id, sourceHash: book.sourceHash, document: document)
+                guard !Task.isCancelled, owner.matches(store) else { return }
+                notePreview = preview ?? "暂时无法预览，展开查看正文"
             }
     }
 }

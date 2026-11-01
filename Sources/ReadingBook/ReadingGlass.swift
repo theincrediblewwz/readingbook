@@ -98,7 +98,7 @@ struct ReadingToolbarButtonStyle: ButtonStyle {
             .padding(.horizontal, 10).frame(minWidth: ReadingLayout.controlHeight, minHeight: ReadingLayout.controlHeight)
             .background {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Palette.accent.opacity(configuration.isPressed ? 0.18 : selected ? 0.14 : hovered ? 0.075 : 0))
+                    .fill(Palette.accent.opacity(configuration.isPressed ? (selected ? 0.24 : 0.18) : selected ? (hovered ? 0.20 : 0.14) : hovered ? 0.075 : 0))
                     .padding(4)
             }
             .overlay {

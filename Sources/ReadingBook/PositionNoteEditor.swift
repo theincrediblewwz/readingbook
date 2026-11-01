@@ -61,12 +61,14 @@ enum PositionNoteCommand { case edit, openNotebook, relocate, unbind, trash }
         guard positionNoteRequest == nil else { return }
         guard let book, let unit = page.flatMap({ p in book.units.first { $0.page == p } }) ?? selectedUnit else { return }
         if let binding = positionNoteBinding {
-            positionNoteBinding = nil
-            guard binding.owner.matches(self) else { return }
+            guard binding.owner.matches(self), !isOrganizingCollections else { return }
             var placement = readerCollections.notePlacements?[binding.documentID]
                 ?? ReadingNotePlacement(sourceHash: book.sourceHash, unitID: unit.id, page: unit.page, x: x, y: y)
             placement.sourceHash = book.sourceHash; placement.unitID = unit.id; placement.page = unit.page; placement.x = x; placement.y = y
-            Task { await organizeReaderCollections(.setNotePlacement(binding.documentID, placement), owner: binding.owner) }
+            Task {
+                await organizeReaderCollections(.setNotePlacement(binding.documentID, placement), owner: binding.owner)
+                if positionNoteBinding?.id == binding.id { positionNoteBinding = nil }
+            }
             return
         }
         if let data = UserDefaults.standard.data(forKey: positionNoteDraftKey()), data.count <= 20_000_000,
@@ -79,6 +81,7 @@ enum PositionNoteCommand { case edit, openNotebook, relocate, unbind, trash }
         positionNoteRequest = PositionNoteRequest(owner: WorkspacePickerOwner(store: self), placement: placement)
     }
     func requestPositionNoteBinding(_ id: String) {
+        guard !isOrganizingCollections else { return }
         guard !editorDirty, book?.activeDocuments.contains(where: { $0.id == id }) == true else { errorMessage = "请先保存当前笔记，再选择位置。"; return }
         if let notes = notesPresentation { dismissWorkspaceAuxiliary(notes.id) }
         readingCompanionVisible = false; readingSourceMode = "original"
@@ -139,65 +142,88 @@ struct PositionNoteEditor: View {
     @State private var placement: ReadingNotePlacement?
     @State private var error: String?
     @State private var saving = false
-    @State private var confirmDiscard = false
+    @State private var showsTypography = false
+    @State private var showsError = false
     @StateObject private var editorSession = NoteMarkdownEditorSession()
     @State private var draftSaveTask: Task<Void, Never>?
     init(request: PositionNoteRequest) { self.request = request; _text = State(initialValue: request.text); _placement = State(initialValue: request.placement) }
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text(request.document == nil ? "写一张便签" : "编辑笔记").font(.system(size: 20, weight: .semibold)); Spacer()
-                Button { close() } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭编辑")
+        NoteMarkdownEditor(session: editorSession, markdown: $text, libraryRoot: request.owner.libraryRoot,
+            bookID: request.owner.bookID, documentID: request.document?.id, font: noteNSFont,
+            expanded: false, editable: !saving, visible: true)
+            .padding(.horizontal, 28).padding(.top, 58).padding(.bottom, 58)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Palette.paper, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 4) {
+                    Button(action: close) { Image(systemName: "xmark") }
+                        .buttonStyle(ReadingToolbarButtonStyle()).disabled(saving)
+                        .help("放弃这次编辑并关闭；已保存的笔记保留。")
+                        .accessibilityLabel("取消便签编辑").keyboardShortcut(.cancelAction)
+                    Button(action: save) { Image(systemName: "checkmark") }
+                        .buttonStyle(ReadingToolbarButtonStyle(selected: true))
+                        .help(saving ? "正在保存便签" : "保存这张便签")
+                        .accessibilityLabel("保存便签").keyboardShortcut("s", modifiers: .command)
+                        .disabled(saving || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }.padding(8)
             }
-            if request.recovered { Text("已恢复上次未保存的便签").font(.system(size: 12)).foregroundStyle(.secondary) }
-            NoteMarkdownEditor(session: editorSession, markdown: $text, libraryRoot: request.owner.libraryRoot,
-                bookID: request.owner.bookID, documentID: request.document?.id, font: noteNSFont,
-                expanded: false, editable: !saving, visible: true)
-                .padding(16).background(Palette.paper, in: RoundedRectangle(cornerRadius: 16))
-                .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(Palette.accent.opacity(0.12)) }.accessibilityLabel("便签正文")
-            if placement != nil {
-                HStack(spacing: 16) {
-                    Picker("字体", selection: Binding(get: { placement?.fontFamily ?? "serif" }, set: { placement?.fontFamily = $0 })) {
-                        Text("宋体").tag("serif"); Text("系统字体").tag("system"); Text("等宽字体").tag("monospaced")
-                        ForEach(typography.availableFontFamilies, id: \.self) { Text($0).tag($0) }
-                    }.frame(maxWidth: 300).help("只调整这张便签的字体，不改变原书或其他笔记。")
-                    Stepper("字号 \(Int(placement?.fontSize ?? 15))", value: Binding(get: { placement?.fontSize ?? 15 }, set: { placement?.fontSize = $0 }), in: 10...28, step: 1)
+            .overlay(alignment: .bottomTrailing) {
+                if placement != nil {
+                    Button { showsTypography.toggle() } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 0) {
+                            Text("A").font(.system(size: 12, weight: .medium))
+                            Text("A").font(.system(size: 19, weight: .medium))
+                        }.accessibilityHidden(true)
+                    }
+                        .buttonStyle(ReadingToolbarButtonStyle(selected: showsTypography)).padding(8)
+                        .help("调整这张便签的字体与字号").accessibilityLabel("便签文字外观")
+                        .popover(isPresented: $showsTypography, arrowEdge: .bottom) {
+                            VStack(alignment: .leading, spacing: 18) {
+                                Text("文字外观").font(.system(size: 15, weight: .semibold))
+                                Picker("字体", selection: Binding(get: { placement?.fontFamily ?? "serif" }, set: { placement?.fontFamily = $0 })) {
+                                    Text("宋体").tag("serif"); Text("系统字体").tag("system"); Text("等宽字体").tag("monospaced")
+                                    ForEach(typography.availableFontFamilies, id: \.self) { Text($0).tag($0) }
+                                }.controlSize(.large)
+                                Stepper("字号 \(Int(placement?.fontSize ?? 15))", value: Binding(get: { placement?.fontSize ?? 15 }, set: { placement?.fontSize = $0 }), in: 10...28, step: 1)
+                                    .frame(minHeight: 40)
+                            }.padding(22).frame(width: 300)
+                        }
                 }
             }
-            if let error { Text(error).font(.callout).foregroundStyle(Palette.copper).textSelection(.enabled) }
-            if error != nil && request.document != nil {
-                Button("保留原笔记，另存为新笔记") {
-                    guard editorSession.finishEditing() else { return }; saving = true
-                    Task { do { try await store.savePositionNote(request, text: text, placement: placement, asNew: true) }
-                        catch { self.error = error.localizedDescription }; saving = false }
-                }.buttonStyle(ReadingToolbarButtonStyle()).disabled(saving)
+            .overlay(alignment: .bottomLeading) {
+                if let error {
+                    Button { showsError.toggle() } label: { Label("尚未保存", systemImage: "exclamationmark.circle").font(.system(size: 12)) }
+                        .buttonStyle(ReadingToolbarButtonStyle()).foregroundStyle(Palette.copper).padding(8)
+                        .help(error).popover(isPresented: $showsError, arrowEdge: .bottom) {
+                            VStack(alignment: .leading, spacing: 16) {
+                                Text(error).font(.system(size: 13)).textSelection(.enabled)
+                                if request.document != nil {
+                                    Button("保留原笔记，另存为新笔记") { save(asNew: true) }
+                                        .buttonStyle(ReadingToolbarButtonStyle()).disabled(saving)
+                                }
+                            }.padding(20).frame(width: 320)
+                        }
+                }
             }
-            HStack {
-                Label(placement?.page.map { "绑定第 \($0) 页的位置" } ?? (placement == nil ? "未绑定位置" : "绑定当前章节"), systemImage: placement == nil ? "note.text" : "mappin")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
-                Spacer()
-                Button("取消") { close() }.buttonStyle(ReadingToolbarButtonStyle()).disabled(saving)
-                Button(saving ? "保存中…" : "保存") {
-                    guard editorSession.finishEditing() else { error = "请先完成当前文字输入，再保存。"; return }
-                    saving = true; error = nil
-                    Task { do { try await store.savePositionNote(request, text: text, placement: placement) }
-                        catch { self.error = error.localizedDescription }; saving = false }
-                }.buttonStyle(ReadingToolbarButtonStyle(selected: true)).keyboardShortcut("s", modifiers: .command)
-                    .disabled(saving || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }.padding(24).frame(minWidth: 640, idealWidth: 720, minHeight: 450, idealHeight: 560)
-            .background(Palette.canvas).interactiveDismissDisabled(hasChanges || saving)
-            .confirmationDialog("放弃这次未保存的修改？", isPresented: $confirmDiscard) {
-                Button("继续编辑", role: .cancel) { }
-                Button("保留草稿并关闭") { store.persistPositionNoteDraft(request, text: text, placement: placement); store.positionNoteRequest = nil }
-                Button("放弃修改", role: .destructive) { store.discardPositionNoteDraft(request); store.positionNoteRequest = nil }
-            } message: { Text("已经保存的笔记与原书保留。") }
+            .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(Palette.line.opacity(0.6)).allowsHitTesting(false) }
+            .shadow(color: .black.opacity(0.13), radius: 30, y: 12)
+            .accessibilityElement(children: .contain).accessibilityLabel("便签编辑纸张")
+            .onAppear { DispatchQueue.main.async { editorSession.focusEditing() } }
             .onExitCommand { close() }
             .onChange(of: text) { _, _ in scheduleDraft() }
             .onChange(of: placement) { _, _ in scheduleDraft() }
             .onDisappear { draftSaveTask?.cancel() }
     }
-    private var hasChanges: Bool { text != request.text || placement != request.placement || request.recovered || (request.document == nil && !text.isEmpty) }
+    private func save() { save(asNew: false) }
+    private func save(asNew: Bool) {
+        guard !saving, editorSession.finishEditing() else { error = "请先完成当前文字输入，再保存。"; return }
+        saving = true; error = nil
+        Task {
+            do { try await store.savePositionNote(request, text: text, placement: placement, asNew: asNew) }
+            catch { self.error = error.localizedDescription; showsError = true }
+            saving = false
+        }
+    }
     private var noteNSFont: NSFont {
         PositionNoteTypography.native(placement)
     }
@@ -208,5 +234,10 @@ struct PositionNoteEditor: View {
             store.persistPositionNoteDraft(request, text: text, placement: placement)
         }
     }
-    private func close() { if saving { return }; guard editorSession.finishEditing() else { return }; if hasChanges { confirmDiscard = true } else { store.positionNoteRequest = nil } }
+    private func close() {
+        guard !saving, editorSession.finishEditing() else { return }
+        draftSaveTask?.cancel()
+        store.discardPositionNoteDraft(request)
+        store.positionNoteRequest = nil
+    }
 }

@@ -153,7 +153,7 @@ private struct BookChatContent: View {
             Button { Task { await store.organizeReaderCollections(.collapse(["chat:" + message.id], false)) } } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "text.bubble").foregroundStyle(Palette.accent)
-                    Text(String(message.content.prefix(100))).lineLimit(2).font(.system(size: 13)).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(FoldedReadingPreview.make(message.content)).lineLimit(2).font(.system(size: 12)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                     Text("展开").font(.system(size: 12)).foregroundStyle(Palette.accent)
                 }.padding(12).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
             }.buttonStyle(ReadingQuietButtonStyle()).help("展开这条回答；不会重新生成。").disabled(store.isOrganizingCollections)

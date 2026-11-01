@@ -11,6 +11,8 @@ private let pdfDecorationSignposter = OSSignposter(subsystem: "org.readingbook.a
 struct PDFReaderView: NSViewRepresentable {
     @Environment(\.workspaceCanvasBlocked) private var interactionBlocked
     @Environment(\.readingReduceTransparency) private var reduceTransparency
+    @Environment(\.readingReduceMotion) private var reduceMotion
+    @AppStorage("reading.paperStyle") private var paperStyleName = ReadingPaperStyle.plain.rawValue
     var controller: PDFReaderController
     var url: URL
     var sourceHash: String
@@ -43,8 +45,10 @@ struct PDFReaderView: NSViewRepresentable {
     var noteMarginVisible: Bool
     var notePlacementOwner: String
     var onCancelPositionNote: (() -> Void)?
+    var onAddBookmark: ((Int) -> Void)?
+    var noteBindingDocumentID: String?
 
-    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((PDFWorkspaceMemoryReceipt) -> Void)? = nil, interactionResetID: UUID? = nil, notePlacements: [String: ReadingNotePlacement] = [:], onCreatePositionNote: ((Int, Double, Double) -> Void)? = nil, noteMarginVisible: Bool = false, notePlacementOwner: String = "", onCancelPositionNote: (() -> Void)? = nil) {
+    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((PDFWorkspaceMemoryReceipt) -> Void)? = nil, interactionResetID: UUID? = nil, notePlacements: [String: ReadingNotePlacement] = [:], onCreatePositionNote: ((Int, Double, Double) -> Void)? = nil, noteMarginVisible: Bool = false, notePlacementOwner: String = "", onCancelPositionNote: (() -> Void)? = nil, onAddBookmark: ((Int) -> Void)? = nil, noteBindingDocumentID: String? = nil) {
         self.controller = controller; self.url = url; self.sourceHash = sourceHash; self.password = password; self.annotations = annotations
         self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
         self.onUnlock = onUnlock; self.onSaveAnnotations = onSaveAnnotations; self.onTrashAnnotation = onTrashAnnotation
@@ -56,6 +60,7 @@ struct PDFReaderView: NSViewRepresentable {
         self.onPreparationChanged = onPreparationChanged
         self.workspaceMemory = workspaceMemory; self.memoryRevision = memoryRevision; self.onWorkspaceMemory = onWorkspaceMemory
         self.interactionResetID = interactionResetID
+        self.onAddBookmark = onAddBookmark; self.noteBindingDocumentID = noteBindingDocumentID
         self.onCancelPositionNote = onCancelPositionNote
         self.notePlacementOwner = notePlacementOwner
         self.noteMarginVisible = noteMarginVisible
@@ -65,6 +70,8 @@ struct PDFReaderView: NSViewRepresentable {
     func makeNSView(context: Context) -> PDFReaderContainerView {
         let view = PDFReaderContainerView()
         view.setInteractionBlocked(interactionBlocked)
+        view.setPaperStyle(ReadingPaperStyle(rawValue: paperStyleName) ?? .plain)
+        view.setReducedMotion(reduceMotion)
         view.setReducedTransparency(reduceTransparency)
         view.update(from: self)
         return view
@@ -72,6 +79,8 @@ struct PDFReaderView: NSViewRepresentable {
 
     func updateNSView(_ nsView: PDFReaderContainerView, context: Context) {
         nsView.setInteractionBlocked(interactionBlocked)
+        nsView.setPaperStyle(ReadingPaperStyle(rawValue: paperStyleName) ?? .plain)
+        nsView.setReducedMotion(reduceMotion)
         nsView.setReducedTransparency(reduceTransparency)
         nsView.update(from: self)
     }
@@ -82,8 +91,21 @@ struct PDFReaderView: NSViewRepresentable {
 /// The PDF fills the reader; navigation is controlled by the window toolbar.
 /// Search and annotation editing appear only when requested.
 @MainActor final class PDFReaderContainerView: NSView, NSSearchFieldDelegate {
+    private let paperProvider = ReadingPaperPageProvider()
+    private let bookEdges = PDFBookEdges(frame: .zero)
+    private var paperBookMode = false
+    private var flatBookMode: (PDFReadingDirection, PDFDisplayMode, FitMode, CGFloat)?
+    private var pageCurl: PDFPaperCurl? { didSet { pdfView.paperTurnInProgress = pageCurl != nil } }
+    func setPaperStyle(_ style: ReadingPaperStyle) { paperProvider.style = style; bookEdges.paper = style }
     private var notePlacementOwner = ""
+    private var noteBindingDocumentID: String?
+    private var noteBindingPreview: (PDFPage, CGPoint)?
     private var noteMarginWidth: CGFloat = 0
+    private var noteMarginTargetWidth: CGFloat = 0
+    private var noteMarginAnimation: Timer?
+    private var noteMarginDestination: PDFDestination?
+    private var reducedMotion = false
+    func setReducedMotion(_ value: Bool) { reducedMotion = value }
     private var noteInsetsNeedLayout = false
     private weak var noteInsetScrollView: NSScrollView?
     private var originalContentInsets = NSEdgeInsetsZero
@@ -351,6 +373,7 @@ struct PDFReaderView: NSViewRepresentable {
         let fitMode: String
         let searchFrame: CGRect
         let thumbnailFrame: CGRect
+        let paperBook: Bool
     }
     private var pendingControlSnapshot: ControlSnapshot?
     private var lastControlSnapshot: ControlSnapshot?
@@ -406,7 +429,9 @@ struct PDFReaderView: NSViewRepresentable {
         pdfView.displayDirection = readingDirection == .vertical ? .vertical : .horizontal
         pdfView.readingDirection = readingDirection
         pdfView.displayBox = .cropBox
+        pdfView.pageOverlayViewProvider = paperProvider
         pdfView.displaysPageBreaks = true
+        pdfView.pageBreakMargins = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 0)
         pdfView.minScaleFactor = 0.05
         pdfView.maxScaleFactor = 12
         pdfView.backgroundColor = .windowBackgroundColor
@@ -504,7 +529,7 @@ struct PDFReaderView: NSViewRepresentable {
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         header.translatesAutoresizingMaskIntoConstraints = false; header.isHidden = true
         thumbnailPanel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(contentStack); addSubview(sourceCanvas); addSubview(thumbnailPanel); addSubview(header)
+        addSubview(contentStack); addSubview(bookEdges); bookEdges.isHidden = true; addSubview(sourceCanvas); addSubview(thumbnailPanel); addSubview(header)
         let thumbnailTop = thumbnailPanel.topAnchor.constraint(equalTo: topAnchor, constant: 76)
         self.thumbnailTop = thumbnailTop
         NSLayoutConstraint.activate([
@@ -562,10 +587,8 @@ struct PDFReaderView: NSViewRepresentable {
     func update(from input: PDFReaderView) {
         let url = input.url, requestedPage = input.page, navigationToken = input.navigationToken
         let margin = input.noteMarginVisible ? PositionNoteSurface.marginWidth : 0
-        if noteMarginWidth != margin {
-            noteMarginWidth = margin; noteInsetsNeedLayout = true; needsLayout = true
-        }
-        pdfView.pageShadowsEnabled = !input.noteMarginVisible
+        changeNoteMargin(to: margin)
+        pdfView.pageShadowsEnabled = false
         pdfView.backgroundColor = input.noteMarginVisible ? .textBackgroundColor : .windowBackgroundColor
         let sourceChanged = sourceHash != input.sourceHash
         if notePlacements != input.notePlacements {
@@ -575,7 +598,20 @@ struct PDFReaderView: NSViewRepresentable {
         }
         notePlacementOwner = input.notePlacementOwner
         onCreatePositionNote = input.onCreatePositionNote
-        pdfView.onNotePlacementCancelled = input.onCancelPositionNote
+        if noteBindingDocumentID != input.noteBindingDocumentID { noteBindingPreview = nil }
+        noteBindingDocumentID = input.noteBindingDocumentID
+        pdfView.onNotePlacementCancelled = { [weak self] in
+            self?.noteBindingPreview = nil; self?.scheduleVisiblePages(); input.onCancelPositionNote?()
+        }
+        pdfView.onNotePreview = { [weak self] page, point in
+            guard let self, self.noteBindingDocumentID != nil, !self.interactionBlocked else { return }
+            self.noteBindingPreview = (page, point); self.scheduleVisiblePages()
+        }
+        pdfView.onBookmarkPoint = { [weak self] page in
+            guard let self, !self.interactionBlocked, let document = self.document else { return }
+            let index = document.index(for: page)
+            if index != NSNotFound { input.onAddBookmark?(index + 1) }
+        }
         pdfView.onNotePoint = { [weak self] page, point in self?.createPositionNote(page: page, point: point) }
         scheduleVisiblePages()
         if controller !== input.controller {
@@ -712,6 +748,7 @@ struct PDFReaderView: NSViewRepresentable {
         pdfView.document = nil; document = nil
         if securityScoped { loadedURL?.stopAccessingSecurityScopedResource() }
         securityScoped = false; loadedURL = url
+        pageCurl?.cancel(); pageCurl = nil; sourceCanvas.isHidden = false
         documentGeneration += 1; lastEmittedPage = nil
         passwordField.stringValue = ""
         guard url.isFileURL else { showError("无法打开 PDF", "请选择本地 PDF 文件；查看器不会从远程地址载入文件。"); return }
@@ -779,12 +816,59 @@ struct PDFReaderView: NSViewRepresentable {
             if document?.isLocked != true { setStatus("页码超出 PDF 的有效范围。") }
             return
         }
+        let oldPage = pdfView.currentPage
+        let oldNumber = currentPageNumber
+        let oldFrame = oldPage.map { convert(pdfView.convert($0.bounds(for: .cropBox), from: $0), from: pdfView) }
+        pageCurl?.cancel(); pageCurl = nil; sourceCanvas.isHidden = false
         invalidateNavigation()
         setStatus("")
         let request = navigationRequestID, generation = documentGeneration
         pendingNavigation = (request, number, notifyParent, landing)
         position(at: target, landing: landing)
+        if paperBookMode, notifyParent, !reduceReadingMotion, !reducedMotion,
+           let oldPage, let oldFrame, let oldNumber, abs(oldNumber - number) == 1 {
+            beginPageCurl(from: oldPage, fromFrame: oldFrame, to: target, backwards: number < oldNumber)
+        }
         DispatchQueue.main.async { [weak self] in self?.settleNavigation(request, generation: generation, attempt: 0) }
+    }
+
+    private func beginPageCurl(from old: PDFPage, fromFrame: CGRect, to next: PDFPage, backwards: Bool) {
+        pageCurl?.cancel(); pageCurl = nil
+        let nextFrame = convert(pdfView.convert(next.bounds(for: .cropBox), from: next), from: pdfView)
+        let contentBounds = CGRect(x: 0, y: 0, width: max(1, bounds.width - appliedNoteReservedWidth), height: bounds.height)
+        let frame = fromFrame.union(nextFrame).intersection(contentBounds)
+        guard let curl = PDFPaperCurl(frame: frame, from: old, fromFrame: fromFrame, to: next, toFrame: nextFrame, backwards: backwards,
+            paper: paperProvider.style, background: pdfView.backgroundColor, scale: window?.backingScaleFactor ?? 2) else { sourceCanvas.isHidden = false; return }
+        pageCurl = curl; sourceCanvas.isHidden = true
+        addSubview(curl, positioned: .above, relativeTo: bookEdges)
+        curl.completion = { [weak self, weak curl] in
+            guard let self, let curl, self.pageCurl === curl else { return }
+            curl.removeFromSuperview(); self.pageCurl = nil; self.sourceCanvas.isHidden = false
+            self.sourceCanvas.needsDisplay = true; self.scheduleVisiblePages(); self.layoutBookEdges()
+        }
+    }
+    private func layoutBookEdges() {
+        bookEdges.frame = bounds; bookEdges.isHidden = !paperBookMode
+        if let page = pdfView.currentPage { bookEdges.pageFrame = convert(pdfView.convert(page.bounds(for: .cropBox), from: page), from: pdfView) }
+    }
+    private func setPaperBookMode(_ enabled: Bool) {
+        guard paperBookMode != enabled else { return }
+        if enabled, !PDFPaperCurl.supported { setStatus("这台 Mac 暂不支持纸书翻页，仍可使用上下或左右阅读。"); return }
+        pageCurl?.cancel(); pageCurl = nil; sourceCanvas.isHidden = false
+        let page = currentPageNumber ?? sourcePage ?? 1
+        if enabled {
+            flatBookMode = (readingDirection, pdfView.displayMode, fitMode, pdfView.scaleFactor)
+            readingDirection = .horizontal; pdfView.displayDirection = .horizontal
+            pdfView.readingDirection = .horizontal; pdfView.displayMode = .singlePage; fitMode = .page
+        } else if let previous = flatBookMode {
+            readingDirection = previous.0; pdfView.readingDirection = previous.0
+            pdfView.displayDirection = previous.0 == .vertical ? .vertical : .horizontal
+            pdfView.displayMode = previous.1; fitMode = previous.2
+            isApplyingFit = true; pdfView.scaleFactor = previous.3; isApplyingFit = false
+        }
+        paperBookMode = enabled; flatBookMode = enabled ? flatBookMode : nil
+        resetPageGesture(); pdfView.layoutDocumentView(); navigate(to: page, notifyParent: false)
+        layoutBookEdges(); refreshControls(); scheduleWorkspaceCapture()
     }
 
     private func invalidateNavigation() {
@@ -995,6 +1079,8 @@ struct PDFReaderView: NSViewRepresentable {
         return !(hit is NSScroller)
     }
     private func consumePageScroll(_ event: NSEvent, fromNoteMargin: Bool = false) -> Bool {
+        if pageCurl != nil, let owner = window, event.window === owner,
+           fromNoteMargin || ownsPDFHit(event, in: owner) { return true }
         guard pdfView.displayMode == .singlePage, !interactionBlocked,
               !isHiddenOrHasHiddenAncestor, !installingDocument,
               let owner = window, event.window === owner, owner.isKeyWindow,
@@ -1012,7 +1098,7 @@ struct PDFReaderView: NSViewRepresentable {
         }
         // A gesture-owned turn may still be completing PDFKit layout. Preserve
         // its one-turn latch and swallow the tail until that navigation settles.
-        if pendingNavigation != nil { return true }
+        if pendingNavigation != nil || pageCurl != nil { return true }
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
               !pdfView.isRegionSelectionArmed, let edges = pageBoundaries() else { return false }
         let wheelAlongReadingAxis = readingDirection == .horizontal && event.scrollingDeltaX == 0
@@ -1084,7 +1170,7 @@ struct PDFReaderView: NSViewRepresentable {
         // has laid out. Always measure the settled child, including a first note.
         contentStack.layoutSubtreeIfNeeded()
         let changedInsets = layoutNoteInsets()
-        sourceCanvas.frame = bounds; sourceCanvas.needsDisplay = true
+        sourceCanvas.frame = bounds; sourceCanvas.needsDisplay = true; layoutBookEdges()
         scheduleVisiblePages()
         let chrome = visibleChromeFrame(header)
         let nextTop: CGFloat = chrome.isEmpty ? 76 : max(76, chrome.maxY + 12)
@@ -1100,6 +1186,34 @@ struct PDFReaderView: NSViewRepresentable {
             scheduleSourceHoverRefresh()
         }
         refreshControls()
+    }
+
+    private func changeNoteMargin(to target: CGFloat) {
+        guard noteMarginTargetWidth != target else { return }
+        noteMarginTargetWidth = target; noteMarginAnimation?.invalidate(); noteMarginAnimation = nil
+        guard !reducedMotion, document != nil, bounds.width > 40 else {
+            noteMarginWidth = target; noteInsetsNeedLayout = true; needsLayout = true; return
+        }
+        let start = noteMarginWidth, began = ProcessInfo.processInfo.systemUptime
+        noteMarginDestination = pdfView.currentDestination
+        let generation = documentGeneration
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+            guard let self, self.documentGeneration == generation else { timer.invalidate(); return }
+            let t = min(1, (ProcessInfo.processInfo.systemUptime - began) / 0.38)
+            let eased = t * t * (3 - 2 * t)
+            self.noteMarginWidth = start + (target - start) * eased
+            self.noteInsetsNeedLayout = true; self.needsLayout = true; self.layoutSubtreeIfNeeded()
+            self.scheduleVisiblePages()
+            if t >= 1 {
+                timer.invalidate(); self.noteMarginAnimation = nil
+                if let destination = self.noteMarginDestination { self.pdfView.go(to: destination) }
+                self.noteMarginDestination = nil
+                self.scheduleVisiblePages(); self.scheduleWorkspaceCapture()
+            }
+            }
+        }
+        noteMarginAnimation = timer; RunLoop.main.add(timer, forMode: .common)
     }
 
     @discardableResult private func layoutNoteInsets() -> Bool {
@@ -1133,7 +1247,7 @@ struct PDFReaderView: NSViewRepresentable {
         guard size.width > 0, size.height > 0 else { return }
         let scroll = observedClip?.enclosingScrollView ?? pdfScrollView(in: pdfView)
         let viewport = scroll?.contentSize ?? pdfView.bounds.size
-        let width = max(1, viewport.width - appliedNoteReservedWidth - 32) / size.width
+        let width = max(1, viewport.width - appliedNoteReservedWidth - (paperBookMode ? 16 : 0)) / size.width
         let height = max(1, viewport.height - 32) / size.height
         let scale: CGFloat = fitMode == .actual ? 1 : (fitMode == .width ? width : min(width, height))
         pdfView.autoScales = false
@@ -1220,12 +1334,15 @@ struct PDFReaderView: NSViewRepresentable {
     }
     private func applyWorkspaceDisplayPreferences() {
         let saved = pendingWorkspaceMemory
+        paperBookMode = saved?.paperBook == true
+        flatBookMode = nil
+        bookEdges.isHidden = !paperBookMode
         resetPageGesture()
-        readingDirection = saved.map { $0.direction ?? .vertical } ?? defaultReadingDirection
+        readingDirection = paperBookMode ? .horizontal : (saved.map { $0.direction ?? .vertical } ?? defaultReadingDirection)
         pdfView.readingDirection = readingDirection
         pdfView.displayDirection = readingDirection == .vertical ? .vertical : .horizontal
         switch saved?.fitMode { case "page": fitMode = .page; case "actual": fitMode = .actual; case "custom": fitMode = .custom; default: fitMode = .width }
-        let continuous = saved?.continuous ?? defaultContinuous
+        let continuous = paperBookMode ? false : (saved?.continuous ?? defaultContinuous)
         pdfView.displayMode = continuous ? .singlePageContinuous : .singlePage
         if saved == nil, !continuous { fitMode = .page }
         thumbnailPanel.isHidden = !(saved?.thumbnails ?? false)
@@ -1325,7 +1442,7 @@ struct PDFReaderView: NSViewRepresentable {
         let location = WorkspacePoint(x: Double((point.x - box.minX) / box.width), y: Double((point.y - box.minY) / box.height))
         let mode: String
         switch fitMode { case .page: mode = "page"; case .width: mode = "width"; case .actual: mode = "actual"; case .custom: mode = "custom" }
-        let memory = WorkspacePDFMemory(page: index + 1, location: location, scale: Double(pdfView.scaleFactor), fitMode: mode, continuous: pdfView.displayMode == .singlePageContinuous, thumbnails: !thumbnailPanel.isHidden, direction: readingDirection)
+        let memory = WorkspacePDFMemory(page: index + 1, location: location, scale: Double(pdfView.scaleFactor), fitMode: mode, continuous: pdfView.displayMode == .singlePageContinuous, thumbnails: !thumbnailPanel.isHidden, direction: readingDirection, paperBook: paperBookMode ? true : nil)
         guard memory.isValid else { return }
         let receipt = PDFWorkspaceMemoryReceipt(memory: memory)
         let callback = memoryCallback
@@ -1354,7 +1471,7 @@ struct PDFReaderView: NSViewRepresentable {
         let snapshot = ControlSnapshot(controllerID: controller.map { ObjectIdentifier($0) }, generation: documentGeneration,
             page: number, pageCount: count, zoom: zoom, ready: ready, selected: ready && selected, canEdit: canEditAnnotations,
             searchVisible: searchVisible, continuous: continuous, direction: readingDirection, thumbnailsVisible: thumbnailsVisible, fitMode: mode,
-            searchFrame: searchFrame, thumbnailFrame: thumbnailFrame)
+            searchFrame: searchFrame, thumbnailFrame: thumbnailFrame, paperBook: paperBookMode)
         if let previous = pendingControlSnapshot ?? lastControlSnapshot, previous == snapshot { return }
         pendingControlSnapshot = snapshot
         guard !controlPublishScheduled else { return }
@@ -1373,7 +1490,7 @@ struct PDFReaderView: NSViewRepresentable {
             isReady: snapshot.ready, hasSelection: snapshot.selected, canEditAnnotations: snapshot.canEdit,
             isSearchVisible: snapshot.searchVisible, isContinuous: snapshot.continuous, direction: snapshot.direction,
             thumbnailsVisible: snapshot.thumbnailsVisible, fitMode: snapshot.fitMode,
-            chromeFrame: snapshot.searchFrame, thumbnailFrame: snapshot.thumbnailFrame)
+            chromeFrame: snapshot.searchFrame, thumbnailFrame: snapshot.thumbnailFrame, paperBookMode: snapshot.paperBook)
     }
     private func visibleChromeFrame(_ view: NSView) -> CGRect {
         guard overlay.isHidden, !view.isHidden, view.bounds.width > 0, view.bounds.height > 0 else { return .zero }
@@ -1499,6 +1616,8 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     func shutdown() {
+        noteMarginAnimation?.invalidate(); noteMarginAnimation = nil
+        pageCurl?.cancel(); pageCurl = nil
         pendingControlSnapshot = nil; lastControlSnapshot = nil
         memoryCaptureTask?.cancel(); captureWorkspaceMemory(deferDelivery: true); memoryCallback = nil; observedClip = nil
         invalidateNavigation(); installingDocument = true
@@ -1519,8 +1638,8 @@ struct PDFReaderView: NSViewRepresentable {
     private func perform(_ command: PDFReaderCommand) {
         awaitingSourceFocusProof = false
         switch command {
-        case .prev: previousPage()
-        case .next: nextPage()
+        case .prev: if pageCurl == nil { previousPage() }
+        case .next: if pageCurl == nil { nextPage() }
         case .jump(let page):
             guard let document, (1...document.pageCount).contains(page) else { setStatus("页码超出原PDF范围。"); return }
             navigate(to: page); window?.makeFirstResponder(pdfView)
@@ -1534,9 +1653,10 @@ struct PDFReaderView: NSViewRepresentable {
         case .toggleSearch: toggleSearch()
         case .toggleThumbnails: toggleThumbnails()
         case .setThumbnails(let visible): setThumbnailsVisible(visible)
-        case .toggleContinuous: changePDFDisplayMode(pdfView.displayMode == .singlePageContinuous ? .singlePage : .singlePageContinuous)
-        case .setContinuous(let continuous): changePDFDisplayMode(continuous ? .singlePageContinuous : .singlePage)
-        case .setDirection(let direction): changePDFDirection(direction)
+        case .toggleContinuous: setPaperBookMode(false); changePDFDisplayMode(pdfView.displayMode == .singlePageContinuous ? .singlePage : .singlePageContinuous)
+        case .setContinuous(let continuous): setPaperBookMode(false); changePDFDisplayMode(continuous ? .singlePageContinuous : .singlePage)
+        case .setDirection(let direction): setPaperBookMode(false); changePDFDirection(direction)
+        case .setPaperBook(let enabled): setPaperBookMode(enabled)
         case .createHighlight: createHighlight()
         case .createRegion:
             guard canEditAnnotations else { setStatus("当前任务运行中，请稍后添加区域批注。"); return }
@@ -1759,43 +1879,49 @@ struct PDFReaderView: NSViewRepresentable {
         let index = document.index(for: page), crop = page.bounds(for: .cropBox)
         guard index != NSNotFound, crop.width > 0, crop.height > 0, crop.contains(point) else { return }
         setStatus("")
+        if noteBindingDocumentID != nil { noteBindingPreview = (page, point); scheduleVisiblePages() }
         onCreatePositionNote?(index + 1, Double((point.x - crop.minX) / crop.width), Double((point.y - crop.minY) / crop.height))
     }
     private func publishNoteAnchorPoints() {
-        guard let document else { controller?.reportNotePositions(id: bindingID, points: [:], owner: notePlacementOwner); return }
-        var points: [String: CGPoint] = [:]
-        var connectors: [String: PDFNoteConnector] = [:]
+        guard let document, pageCurl == nil else { controller?.reportNotePositions(id: bindingID, points: [:], owner: notePlacementOwner, marginWidth: noteMarginWidth); return }
+        var points: [String: CGPoint] = [:], connectors: [String: PDFNoteConnector] = [:]
         func topLeft(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x, y: isFlipped ? point.y : bounds.height - point.y) }
-        if !notePlacementsByPage.isEmpty {
-            for page in pdfView.visiblePages {
-                let index = document.index(for: page)
-                guard index != NSNotFound else { continue }
-                for (id, placement) in notePlacementsByPage[index + 1] ?? [] where placement.sourceHash == sourceHash {
-                    let crop = page.bounds(for: .cropBox)
-                    let original = CGPoint(x: crop.minX + crop.width * placement.x, y: crop.minY + crop.height * placement.y)
-                    let local = convert(pdfView.convert(original, from: page), from: pdfView)
-                    guard bounds.contains(local) else { continue }
-                    points[id] = CGPoint(x: local.x, y: isFlipped ? local.y : bounds.height - local.y)
-                    let glyphIndex = page.characterIndex(at: original)
-                    var start = points[id]!
-                    if glyphIndex >= 0, glyphIndex < page.numberOfCharacters {
-                        let glyph = page.characterBounds(at: glyphIndex)
-                        if !glyph.isEmpty, !glyph.isNull, glyph.insetBy(dx: -4, dy: -4).contains(original) {
-                            let line = page.selectionForLine(at: original)?.bounds(for: page) ?? glyph
-                            let screenGlyph = convert(pdfView.convert(glyph, from: page), from: pdfView)
-                            let screenLine = convert(pdfView.convert(line, from: page), from: pdfView)
-                            let top = topLeft(CGPoint(x: screenGlyph.midX, y: screenLine.maxY))
-                            let bottom = topLeft(CGPoint(x: screenGlyph.midX, y: screenLine.minY))
-                            start = CGPoint(x: screenGlyph.midX, y: min(bounds.height - 3, max(top.y, bottom.y) + 2))
-                        }
-                    }
-                    let screenPage = convert(pdfView.convert(crop, from: page), from: pdfView)
-                    connectors[id] = .init(start: start, pageExit: CGPoint(x: min(bounds.width - noteMarginWidth - 4, screenPage.maxX + 8), y: start.y))
+        func append(_ id: String, page: PDFPage, original: CGPoint) {
+            let crop = page.bounds(for: .cropBox)
+            guard crop.contains(original) else { return }
+            let local = convert(pdfView.convert(original, from: page), from: pdfView)
+            guard bounds.contains(local) else { return }
+            points[id] = topLeft(local)
+            let glyphIndex = page.characterIndex(at: original)
+            var start = points[id]!
+            if glyphIndex >= 0, glyphIndex < page.numberOfCharacters {
+                let glyph = page.characterBounds(at: glyphIndex)
+                if !glyph.isEmpty, !glyph.isNull, glyph.insetBy(dx: -4, dy: -4).contains(original) {
+                    let line = page.selectionForLine(at: original)?.bounds(for: page) ?? glyph
+                    let screenGlyph = convert(pdfView.convert(glyph, from: page), from: pdfView)
+                    let screenLine = convert(pdfView.convert(line, from: page), from: pdfView)
+                    let top = topLeft(CGPoint(x: screenGlyph.midX, y: screenLine.maxY))
+                    let bottom = topLeft(CGPoint(x: screenGlyph.midX, y: screenLine.minY))
+                    start = CGPoint(x: screenGlyph.midX, y: min(bounds.height - 3, max(top.y, bottom.y) + 2))
                 }
             }
+            let screenPage = convert(pdfView.convert(crop, from: page), from: pdfView)
+            connectors[id] = .init(start: start, pageExit: CGPoint(x: min(bounds.width - noteMarginWidth - 4, screenPage.maxX + 8), y: start.y))
+        }
+        for page in pdfView.visiblePages {
+            let index = document.index(for: page)
+            guard index != NSNotFound else { continue }
+            for (id, placement) in notePlacementsByPage[index + 1] ?? [] where placement.sourceHash == sourceHash {
+                if id == noteBindingDocumentID, noteBindingPreview != nil { continue }
+                let crop = page.bounds(for: .cropBox)
+                append(id, page: page, original: CGPoint(x: crop.minX + crop.width * placement.x, y: crop.minY + crop.height * placement.y))
+            }
+        }
+        if let id = noteBindingDocumentID, let (page, point) = noteBindingPreview, document.index(for: page) != NSNotFound {
+            append(id, page: page, original: point)
         }
         let width = (observedClip?.enclosingScrollView ?? pdfScrollView(in: pdfView))?.verticalScroller?.bounds.width ?? 17
-        controller?.reportNotePositions(id: bindingID, points: points, owner: notePlacementOwner, connectors: connectors, scrollerWidth: max(12, width))
+        controller?.reportNotePositions(id: bindingID, points: points, owner: notePlacementOwner, connectors: connectors, scrollerWidth: max(12, width), marginWidth: noteMarginWidth)
     }
     private func nativePreparationSession() -> NativePDFPreparationWorker.Session? {
         guard let loadedURL, !sourceHash.isEmpty else { return nil }
@@ -2455,6 +2581,7 @@ private extension ReaderAnnotationColor {
 /// Region mode intercepts PDFKit's text selection only while explicitly armed.
 /// Both endpoints must belong to the same page; coordinates are converted by PDFView, including rotation/crop.
 @MainActor private final class AnnotationPDFView: PDFView {
+    var paperTurnInProgress = false
     var onSourcePointerLeft: (() -> Void)?
     private var sourceTrackingArea: NSTrackingArea?
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); window?.acceptsMouseMovedEvents = true }
@@ -2470,19 +2597,33 @@ private extension ReaderAnnotationColor {
     var onNotePlacementCancelled: (() -> Void)?
     var onNotePoint: ((PDFPage, CGPoint) -> Void)?
     private var noteArmed = false
-    private var noteMenuPoint: (PDFPage, CGPoint)?
+    private let readingContext = ReadingContextPopover()
+    var onBookmarkPoint: ((PDFPage) -> Void)?
+    var onNotePreview: ((PDFPage, CGPoint) -> Void)?
     func armNotePlacement() { cancelRegionSelection(); noteArmed = true }
     override func menu(for event: NSEvent) -> NSMenu? {
-        let menu = super.menu(for: event) ?? NSMenu()
+        guard !interactionBlocked else { return nil }
         let point = convert(event.locationInWindow, from: nil)
-        if !interactionBlocked, let page = page(for: point, nearest: false) {
-            noteMenuPoint = (page, convert(point, to: page))
-            let item = NSMenuItem(title: "在此写便签…", action: #selector(createNoteFromMenu), keyEquivalent: "")
-            item.target = self; menu.insertItem(item, at: 0)
-        }
-        return menu
+        guard let page = page(for: point, nearest: false) else { return nil }
+        let original = convert(point, to: page)
+        readingContext.show([
+            .init(title: "在此写便签", icon: "square.and.pencil", action: { [weak self, weak page] in
+                guard let self, let page, !self.interactionBlocked else { return }; self.onNotePoint?(page, original)
+            }),
+            .init(title: "添加书签", icon: "bookmark", action: { [weak self, weak page] in
+                guard let self, let page, !self.interactionBlocked else { return }; self.onBookmarkPoint?(page)
+            })
+        ], at: point, in: self)
+        return nil
     }
-    @objc private func createNoteFromMenu() { if let (page, point) = noteMenuPoint { onNotePoint?(page, point) }; noteMenuPoint = nil }
+    override func mouseMoved(with event: NSEvent) {
+        if noteArmed, !interactionBlocked {
+            let point = convert(event.locationInWindow, from: nil)
+            if let page = page(for: point, nearest: false) { onNotePreview?(page, convert(point, to: page)) }
+            return
+        }
+        super.mouseMoved(with: event)
+    }
     var onRegion: ((PDFPage, CGRect) -> Void)?
     var onRegionError: ((String) -> Void)?
     var isManagedAnnotation: ((PDFAnnotation) -> Bool)?
@@ -2497,6 +2638,7 @@ private extension ReaderAnnotationColor {
     func cancelRegionSelection() { noteArmed = false; regionArmed = false; handlingManagedClick = false; regionStart = nil; regionPreview?.removeFromSuperview(); regionPreview = nil }
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
+        if paperTurnInProgress { return bounds.contains(local) ? self : nil }
         if regionArmed || noteArmed { return bounds.contains(local) ? self : nil }
         if NSApp.currentEvent?.modifierFlags.contains(.option) != true, managedAnnotation(at: local) != nil { return self }
         return super.hitTest(point)
@@ -2507,6 +2649,7 @@ private extension ReaderAnnotationColor {
         return page.annotations.reversed().first { isManagedAnnotation?($0) == true && $0.bounds.contains(local) }
     }
     override func mouseDown(with event: NSEvent) {
+        guard !paperTurnInProgress else { return }
         let point = convert(event.locationInWindow, from: nil)
         if noteArmed {
             defer { cancelRegionSelection() }
@@ -2543,7 +2686,7 @@ private extension ReaderAnnotationColor {
         onRegion?(start.page, rect)
     }
     override func keyDown(with event: NSEvent) {
-        guard !interactionBlocked else { return }
+        guard !interactionBlocked, !paperTurnInProgress else { return }
         if (regionArmed || noteArmed) && event.keyCode == 53 { let note = noteArmed; cancelRegionSelection(); if note { onNotePlacementCancelled?() }; onRegionError?(""); return }
         // Every plain arrow pans along its own axis. Only the selected reading
         // axis turns pages, and only after the current magnified page boundary.
@@ -2565,7 +2708,7 @@ private extension ReaderAnnotationColor {
         super.keyDown(with: event)
     }
     override func swipe(with event: NSEvent) {
-        guard !interactionBlocked else { return }
+        guard !interactionBlocked, !paperTurnInProgress else { return }
         guard !regionArmed, (displayMode == .singlePage || displayMode == .singlePageContinuous), let onReadingNavigation else {
             super.swipe(with: event); return
         }

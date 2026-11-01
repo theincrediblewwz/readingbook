@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import ReadingCore
 import SwiftUI
 import Darwin
@@ -73,6 +74,16 @@ private enum PackagedResourceVerification {
             }
             let data = try read(katex.appendingPathComponent(path), inside: expected)
             guard data.prefix(4) == Data("wOF2".utf8) else { throw Failure(message: "WOFF2 字体损坏：\(path)") }
+        }
+        for name in ["warm-cotton", "mist-white", "sage-paper"] {
+            guard let url = bundle.url(forResource: name, withExtension: "png", subdirectory: "Paper") else {
+                throw Failure(message: "缺少阅读纸张：\(name)。")
+            }
+            let data = try read(url, inside: expected)
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil), image.width >= 1024, image.height >= 1024 else {
+                throw Failure(message: "阅读纸张无法解码或尺寸不足：\(name)。")
+            }
         }
         guard let catalogURL = bundle.url(forResource: "provider-catalog", withExtension: "json") else {
             throw Failure(message: "缺少 provider-catalog.json。")

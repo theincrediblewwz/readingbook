@@ -130,6 +130,11 @@ import ReadingCore
         refreshFolds()
     }
 
+    func focusEditing() {
+        guard textView.isEditable, !scrollView.isHidden, let window = scrollView.window, window.isKeyWindow else { return }
+        window.makeFirstResponder(textView)
+    }
+
     /// End marked text through the ordinary native editor before showing the
     /// rendered body. The live editor/undo manager are retained behind preview.
     @discardableResult func finishEditing() -> Bool {

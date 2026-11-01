@@ -87,6 +87,8 @@ jobs:
         run: |
           python3 scripts/native-ui-regression/run-note-layout.py --bin-dir .build/tests/debug --tag ci-note-layout-legacy --scroller-style legacy
           python3 scripts/native-ui-regression/run-note-layout.py --bin-dir .build/tests/debug --tag ci-note-layout-overlay --scroller-style overlay
+      - name: Paper textures and real page curl regression
+        run: python3 scripts/native-ui-regression/run-paper-reading.py --bin-dir .build/tests/debug --tag ci-paper-reading
       - name: Native Markdown bridge and preservation regression
         run: |
           node scripts/test-markdown-provenance.cjs logs/ci-markdown-bridge/provenance/result.json

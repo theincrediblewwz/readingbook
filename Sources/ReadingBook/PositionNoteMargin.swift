@@ -107,7 +107,7 @@ struct PositionNoteConnections: View {
             guard positions.owner == store.collectionOwnerKey else { return }
             let points = positions.points.map { ReadingNoteScreenPosition(id: $0.key, y: $0.value.y) }
             let stacks = ReadingNoteLayout.stacks(points, height: size.height, topInset: PositionNoteSurface.topInset)
-            let left = size.width - positions.scrollerWidth - PositionNoteSurface.marginWidth
+            let left = size.width - positions.scrollerWidth - positions.marginWidth
             for stack in stacks {
                 for id in stack.ids {
                     guard let connector = positions.connectors[id] else { continue }
@@ -155,19 +155,15 @@ struct PositionNotePaper: View {
             .shadow(color: .black.opacity(hovered ? 0.055 : 0.035), radius: 8, y: 5)
             .contentShape(Rectangle()).onTapGesture(count: clickCount, perform: edit)
             .onHover { hovered = $0 }.animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: hovered)
-            .contextMenu {
-                Button("编辑便签…", systemImage: "pencil", action: edit)
-                Button("字体与字号…", systemImage: "textformat", action: edit)
-                Button("在我的笔记中打开", systemImage: "note.text") {
-                    perform(.openNotebook)
-                }
-                Divider()
-                Button("重新选择原文位置…", systemImage: "mappin.and.ellipse") { perform(.relocate) }
-                Button("取消位置绑定", systemImage: "mappin.slash") { perform(.unbind) }
-                Button("移入回收站…", systemImage: "trash") {
-                    perform(.trash)
-                }
-            }.help("右键可编辑、调整字体或取消绑定；双击打开完整正文。")
+            .overlay {
+                ReadingPaperContextAnchor(actions: [
+                    .init(title: "编辑便签", icon: "pencil", action: edit),
+                    .init(title: "在我的笔记中打开", icon: "note.text", action: { perform(.openNotebook) }),
+                    .init(title: "重新选择原文位置", icon: "mappin.and.ellipse", action: { perform(.relocate) }),
+                    .init(title: "取消位置绑定", icon: "mappin.slash", action: { perform(.unbind) }),
+                    .init(title: "移入回收站", icon: "trash", destructive: true, action: { perform(.trash) })
+                ], primary: edit, clickCount: clickCount)
+            }.accessibilityAction { edit() }.help("右键管理便签；双击编辑正文，字体在编辑纸张右下角的 AA 中调整。")
             .accessibilityLabel("位置笔记").accessibilityValue(text).accessibilityHint("右键或双击编辑；纸条正文保存在普通笔记中。")
     }
     private func edit() { perform(.edit) }

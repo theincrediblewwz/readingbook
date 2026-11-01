@@ -16,6 +16,7 @@ struct PositionNoteFan: View {
     @Environment(\.readingReduceMotion) private var reduceMotion
     let presentation: PositionNoteFanPresentation
     let size: CGSize
+    let paperNamespace: Namespace.ID
     var close: () -> Void
     @State private var opened = false
     @State private var closing = false
@@ -27,16 +28,20 @@ struct PositionNoteFan: View {
     private var pageSize: Int { ReadingNoteFanLayout.pageSize(width: size.width) }
     private var pageCount: Int { max(1, (ids.count + pageSize - 1) / pageSize) }
     private var visibleIDs: [String] { Array(ids.dropFirst(min(page, pageCount - 1) * pageSize).prefix(pageSize)) }
+    private var preparationKey: String {
+        store.collectionOwnerKey + "|" + String(store.projectRevision) + "|" + visibleIDs.joined(separator: ",")
+    }
     private var cards: [ReadingNoteFanCard] { ReadingNoteFanLayout.cards(count: visibleIDs.count, width: size.width, height: size.height) }
     var body: some View {
         ZStack {
             Color.clear.contentShape(Rectangle()).onTapGesture { dismiss() }
             ForEach(Array(visibleIDs.enumerated()), id: \.element) { index, id in
-                if index < cards.count {
+                if index < cards.count, store.positionNoteRequest?.document?.id != id {
                     let card = cards[index], raised = hoveredID == id
                     PositionNotePaper(id: id, text: contents[id] ?? presentation.snippets[id] ?? "",
                         height: opened ? card.height : 170, width: opened ? card.width : 230, clickCount: 1,
                         onCommand: { note, command in dismiss(note: note, command: command) })
+                        .matchedGeometryEffect(id: id, in: paperNamespace)
                         .rotationEffect(.degrees(opened ? (raised ? 0 : card.degrees) : Double(min(index, 2))))
                         .scaleEffect(opened && raised ? 1.035 : 1)
                         .onHover { inside in
@@ -74,7 +79,7 @@ struct PositionNoteFan: View {
             .focusable().focused($keyboardFocus).focusEffectDisabled()
             .onAppear { keyboardFocus = true; withAnimation(reduceMotion ? nil : .spring(duration: 0.5, bounce: 0.12)) { opened = true } }
             .onExitCommand { dismiss() }
-            .task(id: visibleIDs) {
+            .task(id: preparationKey) {
                 guard let book = store.book else { return }
                 var loaded: [String: String] = [:]
                 for document in book.activeDocuments where visibleIDs.contains(document.id) {
@@ -95,7 +100,12 @@ struct PositionNoteFan: View {
         }
     }
     private func dismiss(note: String? = nil, command: PositionNoteCommand? = nil) {
-        guard !closing else { return }; closing = true
+        guard !closing else { return }
+        if let note, let command, case .edit = command {
+            store.performPositionNoteCommand(command, id: note, owner: presentation.owner)
+            return
+        }
+        closing = true
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.34), completionCriteria: .logicallyComplete) {
             opened = false; hoveredID = nil
         } completion: {

@@ -11,6 +11,7 @@ public struct ReadingRecordDescriptor: Identifiable, Hashable, Sendable {
     public let chapterKey: String
     public let chapterTitle: String
     public let chapterOrder: Int
+    public var preview: String = ""
 }
 public struct ReadingRecordGroup: Identifiable, Hashable, Sendable {
     public let id: String
@@ -45,11 +46,11 @@ public struct ReadingRecordCatalog: Sendable {
             return first
         }
         var result: [String: ReadingRecordDescriptor] = [:]
-        func add(_ id: String, _ title: String, _ date: Date?, _ sourceIDs: [String]) throws {
+        func add(_ id: String, _ title: String, _ date: Date?, _ sourceIDs: [String], body: String = "") throws {
             guard result[id] == nil else { throw ReadingError.invalid("记录身份重复，未合并或丢弃原内容。") }
             let scope = chapter(sourceIDs)
             result[id] = .init(id: id, title: title.isEmpty ? "未命名记录" : title, date: date,
-                               chapterKey: scope.0, chapterTitle: scope.1, chapterOrder: scope.2)
+                               chapterKey: scope.0, chapterTitle: scope.1, chapterOrder: scope.2, preview: FoldedReadingPreview.make(body, title: title))
         }
         for document in project.activeDocuments {
             try Task.checkCancellation()
@@ -63,11 +64,11 @@ public struct ReadingRecordCatalog: Sendable {
             if message.role == "user" { question = String(message.content.prefix(120)) }
             let title = message.role == "assistant" ? (question.isEmpty ? String(message.content.prefix(120)) : question) : String(message.content.prefix(120))
             let contextual = message.readingContext?.sourceHash == project.sourceHash ? message.readingContext?.unitIDs ?? [] : []
-            try add("chat:" + message.id, (message.role == "assistant" ? "回答：" : "提问：") + title, message.createdAt, contextual + message.evidence.map(\.unitID))
+            try add("chat:" + message.id, (message.role == "assistant" ? "回答：" : "提问：") + title, message.createdAt, contextual + message.evidence.map(\.unitID), body: message.content)
         }
         let anchors = Dictionary((project.readingExperience?.anchors ?? []).map { ($0.id, $0.unitID) }, uniquingKeysWith: { first, _ in first })
-        for layer in project.readingExperience?.layers ?? [] { try add("layer:" + layer.id, layer.title, nil, layer.sourceAnchorIDs.compactMap { anchors[$0] }) }
-        for alignment in project.readingExperience?.alignments ?? [] { try add("alignment:" + alignment.id, alignment.title, nil, alignment.sourceAnchorIDs.compactMap { anchors[$0] }) }
+        for layer in project.readingExperience?.layers ?? [] { try add("layer:" + layer.id, layer.title, nil, layer.sourceAnchorIDs.compactMap { anchors[$0] }, body: layer.markdown) }
+        for alignment in project.readingExperience?.alignments ?? [] { try add("alignment:" + alignment.id, alignment.title, nil, alignment.sourceAnchorIDs.compactMap { anchors[$0] }, body: alignment.markdown) }
         return .init(records: result)
     }
     public func groups(ids: [String], by mode: ReadingRecordGrouping, calendar: Calendar = .current) -> [ReadingRecordGroup] {

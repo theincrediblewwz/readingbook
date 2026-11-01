@@ -15,6 +15,9 @@ import ReadingCore
     @State private var restoring = false
     @State private var checking = false
     @State private var showingRecoveryInfo = false
+    @State private var purgePreview: LibraryTrashPurgePlan?
+    @State private var purgeRoot: URL?
+    @State private var purging = false
 
     private var removedRows: [BookProject] {
         guard filter == .all || filter == .books else { return [] }
@@ -87,7 +90,7 @@ import ReadingCore
                 if checking {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text("正在核对恢复关联…")
+                        Text("正在核对回收内容…")
                     }.font(.system(size: 13)).foregroundStyle(.secondary).frame(minHeight: 24)
                 }
             }.padding(16)
@@ -95,6 +98,7 @@ import ReadingCore
         .background(embedded ? Color.clear : Palette.canvas).controlSize(.large)
         .task { await store.reloadTrash() }
         .sheet(item: $restorePreview) { preview in restorationSheet(preview) }
+        .sheet(item: $purgePreview) { preview in purgeSheet(preview) }
     }
 
     private var header: some View {
@@ -102,6 +106,10 @@ import ReadingCore
             Image(systemName: "trash").foregroundStyle(Palette.accent).font(.system(size: 18))
             Text("回收站").font(.system(size: 16, weight: .semibold)).lineLimit(1)
             Spacer(minLength: 8)
+            Button { beginPurge(allPurgeTargets) } label: { Image(systemName: "trash.slash") }
+                .buttonStyle(ReadingToolbarButtonStyle()).disabled(allPurgeTargets.isEmpty || store.isBusy || checking || restoring || purging || store.editorDirty)
+                .help("清空回收站；先核对实际删除清单。仅移出书库并保留文件的书不在清空范围内。")
+                .accessibilityLabel("清空回收站")
             Button { showingRecoveryInfo.toggle() } label: { Image(systemName: "info.circle") }
                 .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("查看回收与恢复说明").help("查看回收内容、恢复关联和保留方式")
                 .popover(isPresented: $showingRecoveryInfo, arrowEdge: .top) {
@@ -109,7 +117,7 @@ import ReadingCore
                         Text("回收与恢复").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
                         Text("按书保留回收内容及关联，原文件会继续保留。恢复前会核对当前版本与必要关联。")
                         Text("另行回收的 Markdown 笔记需要单独恢复，不会随其他内容自动恢复。")
-                        Text("这里保留恢复入口，不提供永久清空。")
+                        Text("可单项永久删除或清空回收站，操作前会显示实际清单。仅移出书库、明确保留文件的书不计入清空。关联恢复快照会在清单中一并列明。")
                     }.font(.system(size: 13)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true).padding(18).frame(width: 310)
                 }
@@ -163,6 +171,11 @@ import ReadingCore
             Button { beginRestore(item.action) } label: { Label("恢复", systemImage: "arrow.uturn.backward") }
                 .buttonStyle(SettingsActionButtonStyle()).disabled(store.isBusy || restoring || checking || store.editorDirty)
                 .help(store.editorDirty ? "请先保存正在编辑的 Markdown" : "恢复\(item.title)")
+            Button { beginPurge([purgeTarget(item.action)]) } label: { Image(systemName: "trash").frame(width: 40, height: 44) }
+                .buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.copper)
+                .disabled(store.isBusy || restoring || checking || purging || store.editorDirty)
+                .help("永久删除“\(item.title)”；先查看确认清单。")
+                .accessibilityLabel("永久删除：" + item.title)
         }.padding(12).frame(maxWidth: .infinity, minHeight: 80)
             .background(Palette.paper, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Palette.line.opacity(0.8), lineWidth: 0.8))
@@ -288,6 +301,65 @@ import ReadingCore
             restoring = false
             if saved { restorePreview = nil }
         }
+    }
+    private var allPurgeTargets: [LibraryTrashPurgeTarget] {
+        store.archivedBooks.map { .book($0.id) } + store.books.flatMap { book in
+            book.trashedDocuments.map { .document(bookID: book.id, id: $0.id) }
+                + (book.manualTrash?.items ?? []).map { .manual(bookID: book.id, id: $0.id) }
+        }
+    }
+    private func purgeTarget(_ action: TrashDisplayAction) -> LibraryTrashPurgeTarget {
+        switch action {
+        case .book(let id): return .book(id)
+        case .document(let bookID, let id): return .document(bookID: bookID, id: id)
+        case .manual(let bookID, let id): return .manual(bookID: bookID, id: id)
+        }
+    }
+    private func beginPurge(_ targets: [LibraryTrashPurgeTarget]) {
+        guard !targets.isEmpty, !store.isBusy, !checking, !restoring, !purging, !store.editorDirty else { return }
+        checking = true; localError = nil
+        let root = store.libraryRootURL, repository = store.repository
+        Task {
+            defer { checking = false }
+            do {
+                let plan = try await repository.previewTrashPurge(targets)
+                guard store.libraryRootURL == root else { return }
+                purgeRoot = root; purgePreview = plan
+            } catch { if store.libraryRootURL == root { localError = error.localizedDescription } }
+        }
+    }
+    private func purgeSheet(_ plan: LibraryTrashPurgePlan) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("永久删除 \(plan.titles.count) 项").font(.system(size: 18, weight: .semibold))
+                Spacer()
+                Button { purgePreview = nil } label: { Image(systemName: "xmark") }
+                    .buttonStyle(ReadingToolbarButtonStyle()).disabled(purging).help("取消永久删除")
+            }
+            Text("以下内容会从本机书库移除，不能再从 App 回收站恢复。整本书只删除 App 中的副本；导入前的原文件不动。")
+                .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(plan.titles.enumerated()), id: \.offset) { _, title in
+                        Text(title).font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
+                            .padding(.horizontal, 12).background(Palette.paper, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+            }.frame(minHeight: 160, maxHeight: 320)
+            HStack {
+                Text(ByteCountFormatter.string(fromByteCount: plan.bytes, countStyle: .file)).font(.system(size: 12)).foregroundStyle(.secondary)
+                Spacer()
+                Button("取消") { purgePreview = nil }.buttonStyle(SettingsActionButtonStyle()).disabled(purging)
+                Button(purging ? "正在删除…" : "永久删除", role: .destructive) {
+                    guard let root = purgeRoot, !purging else { return }; purging = true
+                    Task {
+                        defer { purging = false }
+                        do { try await store.purgeTrash(plan, expectedRoot: root); purgePreview = nil }
+                        catch { localError = error.localizedDescription; purgePreview = nil }
+                    }
+                }.buttonStyle(SettingsActionButtonStyle()).disabled(purging)
+            }
+        }.padding(22).frame(width: 560).background(Palette.canvas).interactiveDismissDisabled(purging)
     }
     private func close() { if let onClose { onClose() } else { dismiss() } }
 }

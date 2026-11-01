@@ -618,7 +618,7 @@ struct ReadingCompanionPanel: View {
                     ForEach(Array(historyIDs.prefix(layerLimit)), id: \.self) { id in
                         if let layer = layersByID[id] {
                             VStack(alignment: .leading, spacing: 6) {
-                                historyRecordHeader(layer.title, source: layer.sourceLabel, id: layer.id, kind: "layer")
+                                historyRecordHeader(layer.title, source: layer.sourceLabel, id: layer.id, kind: "layer", markdown: layer.markdown)
                     if expandedRecords.contains("layer:" + id) { layerContent(layer) }
                             }.padding(8).background(Palette.surface.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
                         }
@@ -656,7 +656,7 @@ struct ReadingCompanionPanel: View {
                     ForEach(Array(historyIDs.prefix(alignmentLimit)), id: \.self) { id in
                         if let alignment = alignmentsByID[id] {
                             VStack(alignment: .leading, spacing: 6) {
-                                historyRecordHeader(alignment.title, source: "资料对读 · " + alignment.status, id: alignment.id, kind: "alignment")
+                                historyRecordHeader(alignment.title, source: "资料对读 · " + alignment.status, id: alignment.id, kind: "alignment", markdown: alignment.markdown)
                                 if expandedRecords.contains("alignment:" + id) { alignmentContent(alignment) }
                             }.padding(8).background(Palette.surface.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
                         }
@@ -678,7 +678,7 @@ struct ReadingCompanionPanel: View {
             }
         }
     }
-    private func historyRecordHeader(_ title: String, source: String, id: String, kind: String) -> some View {
+    private func historyRecordHeader(_ title: String, source: String, id: String, kind: String, markdown: String) -> some View {
         let key = kind + ":" + id, expanded = expandedRecords.contains(key)
         return HStack(spacing: 6) {
             Button {
@@ -688,6 +688,7 @@ struct ReadingCompanionPanel: View {
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                        if !expanded { Text(FoldedReadingPreview.make(markdown, title: title)).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail) }
                         Text(source).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     Text(expanded ? "收起" : "查看").font(.system(size: 11)).foregroundStyle(Palette.accent)

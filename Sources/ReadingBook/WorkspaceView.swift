@@ -77,7 +77,7 @@ struct WorkspaceView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityHidden(hasWorkspaceOverlay)
                     .overlay {
-                        if store.route == "reader", store.selectedUnit != nil, !hasWorkspaceOverlay {
+                        if store.route == "reader", store.selectedUnit != nil, !hasWorkspaceOverlay, store.positionNoteRequest == nil {
                             FloatingReadingDock(id: "reader-tools", viewport: geometry.size, allowsDragging: !editingPDFPage) { readerControls }
                         }
                     }
@@ -87,7 +87,7 @@ struct WorkspaceView: View {
                         .padding(.trailing, 24).padding(.bottom, 86).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
                 topIslands(width: geometry.size.width).padding(.top, 14).padding(.leading, 104).padding(.trailing, 24)
-                    .allowsHitTesting(!hasWorkspaceOverlay)
+                    .allowsHitTesting(!hasWorkspaceOverlay && store.positionNoteRequest == nil)
                     .opacity(hasWorkspaceOverlay ? 0 : 1).accessibilityHidden(hasWorkspaceOverlay)
                 if (store.book?.smartReading != nil || (store.aiProgress.isRunning && store.aiProgress.bookID == store.bookID && store.aiProgress.libraryRoot == store.libraryRootURL) || (store.isCompanionGenerating && store.companionProgress.bookID == store.bookID && store.companionProgress.libraryRoot == store.libraryRootURL) || (store.isQueryBusy && store.queryProgressState.value.bookID == store.bookID && store.queryProgressState.value.libraryRoot == store.libraryRootURL) || (store.isSummaryRequestRunning && store.summaryProgressState.value.bookID == store.bookID && store.summaryProgressState.value.libraryRoot == store.libraryRootURL)) && !store.storageState.working && !hasWorkspaceOverlay && !navigationExpanded && store.route != "library" {
                     floatingProgress(in: geometry).zIndex(6)
@@ -533,7 +533,7 @@ struct WorkspaceView: View {
     private var canvasInteractionBlocked: Bool {
         navigationExpanded || bookPopover || readerPopover != nil || compactInspector || activeSheet != nil || sheetClosing || hasWorkspaceOverlay
             || showsRouteConfirmation || showsModelRouteConfirmation || resolvingNavigation || store.deletionRequest != nil
-            || store.errorMessage != nil || store.serviceProfileDraft.pendingChange != nil
+            || store.errorMessage != nil || store.serviceProfileDraft.pendingChange != nil || store.positionNoteRequest != nil
     }
     private var canvasExclusionRects: [CGRect] { chromeBounds.keys.sorted().compactMap { chromeBounds[$0] } }
     private var showsObjectInspector: Bool {
@@ -802,6 +802,8 @@ struct WorkspaceView: View {
                     .popover(isPresented: readerPopoverBinding(.zoom), arrowEdge: .bottom) { ReaderZoomPanel(pdf: pdfController) }
             }
             DockDivider()
+            DockIconButton(title: "阅读纸张与外观", icon: "paintpalette", isSelected: readerPopover == .appearance) { toggleReaderPopover(.appearance) }
+                .popover(isPresented: readerPopoverBinding(.appearance), arrowEdge: .bottom) { ReaderPaperPanel() }
             DockIconButton(title: "更多阅读操作", icon: "ellipsis", isSelected: readerPopover == .more) { toggleReaderPopover(.more) }
                 .popover(isPresented: readerPopoverBinding(.more), arrowEdge: .bottom) { readerMoreTools }
         }.font(.system(size: 14)).fixedSize()

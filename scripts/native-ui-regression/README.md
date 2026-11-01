@@ -262,3 +262,15 @@ page and stored anchor. This is native correctness coverage, not FPS or a claim
 that the separate continuous-page boundary-anchor issue is resolved. The helper
 has a bounded 120-second process limit in this mode and the usual five-second
 main-thread watchdog/runtime-warning gates.
+
+## Paper reading surface
+
+`run-paper-reading.py --bin-dir .build/tests/debug --tag ci-paper-reading`
+links the current product into an isolated native PDFKit/Metal host. Its 29 checks
+cover animated note insets, the three packaged paper textures, horizontal-only
+paper-book mode, real forward/backward curl frames, extra navigation during a
+turn, reduced motion, and restoration of the preceding flat reading mode.
+Only two pages are rasterized per turn; drawable allocation is bounded. Frame
+counts demonstrate execution, not an FPS benchmark. Original PDF bytes are
+checked after the run. Actual pointer menus, editor entry, and visual curl poses
+remain separate CUA checks; the harness does not synthesize OS input.

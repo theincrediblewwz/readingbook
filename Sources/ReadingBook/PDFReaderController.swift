@@ -16,11 +16,13 @@ enum PositionNoteSurface {
     @Published private(set) var owner = ""
     @Published private(set) var connectors: [String: PDFNoteConnector] = [:]
     @Published private(set) var scrollerWidth: CGFloat = 17
-    func update(_ next: [String: CGPoint], owner: String = "", connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17) {
+    @Published private(set) var marginWidth: CGFloat = 0
+    func update(_ next: [String: CGPoint], owner: String = "", connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17, marginWidth: CGFloat = 0) {
         if self.owner != owner { self.owner = owner }
         if points != next { points = next }
         if self.connectors != connectors { self.connectors = connectors }
         if abs(self.scrollerWidth - scrollerWidth) > 0.1 { self.scrollerWidth = scrollerWidth }
+        if abs(self.marginWidth - marginWidth) > 0.1 { self.marginWidth = marginWidth }
     }
 }
 
@@ -29,6 +31,7 @@ enum PDFReaderCommand {
     case showSearch, toggleSearch, toggleThumbnails, toggleContinuous, createHighlight, createRegion, showAnnotations, placeNote
     case hideSearch, setThumbnails(Bool), setContinuous(Bool)
     case setDirection(PDFReadingDirection)
+    case setPaperBook(Bool)
     /// Offsets from an extracted SourceUnit must never be reused as PDF offsets.
     case focusQuote(page: Int, quote: String)
     case scrollNoteArea(NSEvent)
@@ -46,6 +49,7 @@ enum PDFReaderCommand {
     @Published var direction = PDFReadingDirection.vertical
     @Published var thumbnailsVisible = false
     @Published var fitMode = "width"
+    @Published var paperBookMode = false
     /// Visible native chrome in the PDF container's top-left coordinate space.
     @Published var chromeFrame = CGRect.zero
     @Published var thumbnailFrame = CGRect.zero
@@ -56,11 +60,11 @@ enum PDFReaderCommand {
     private var handler: ((PDFReaderCommand) -> Void)?
 
     func command(_ command: PDFReaderCommand) { handler?(command) }
-    func reportNotePositions(id: UUID, points: [String: CGPoint], owner: String, connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17) {
-        guard bindingID == id else { return }; notePositions.update(points, owner: owner, connectors: connectors, scrollerWidth: scrollerWidth)
+    func reportNotePositions(id: UUID, points: [String: CGPoint], owner: String, connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17, marginWidth: CGFloat = 0) {
+        guard bindingID == id else { return }; notePositions.update(points, owner: owner, connectors: connectors, scrollerWidth: scrollerWidth, marginWidth: marginWidth)
     }
     func bind(id: UUID, handler: @escaping (PDFReaderCommand) -> Void) { bindingID = id; self.handler = handler }
-    func update(id: UUID, page: Int, pageCount: Int, zoomPercent: Int, isReady: Bool, hasSelection: Bool, canEditAnnotations: Bool, isSearchVisible: Bool, isContinuous: Bool, direction: PDFReadingDirection, thumbnailsVisible: Bool, fitMode: String, chromeFrame: CGRect, thumbnailFrame: CGRect) {
+    func update(id: UUID, page: Int, pageCount: Int, zoomPercent: Int, isReady: Bool, hasSelection: Bool, canEditAnnotations: Bool, isSearchVisible: Bool, isContinuous: Bool, direction: PDFReadingDirection, thumbnailsVisible: Bool, fitMode: String, chromeFrame: CGRect, thumbnailFrame: CGRect, paperBookMode: Bool = false) {
         guard bindingID == id else { return }
         if self.page != page { self.page = page }
         if self.pageCount != pageCount { self.pageCount = pageCount }
@@ -72,6 +76,7 @@ enum PDFReaderCommand {
         if self.direction != direction { self.direction = direction }
         if self.thumbnailsVisible != thumbnailsVisible { self.thumbnailsVisible = thumbnailsVisible }
         if self.fitMode != fitMode { self.fitMode = fitMode }
+        if self.paperBookMode != paperBookMode { self.paperBookMode = paperBookMode }
         if self.chromeFrame != chromeFrame { self.chromeFrame = chromeFrame }
         if self.thumbnailFrame != thumbnailFrame { self.thumbnailFrame = thumbnailFrame }
         if self.canEditAnnotations != canEditAnnotations { self.canEditAnnotations = canEditAnnotations }

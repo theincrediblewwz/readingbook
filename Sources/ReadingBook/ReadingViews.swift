@@ -16,6 +16,8 @@ struct ReaderWorkspaceView: View {
     @StateObject private var inlineReading = ReaderInlineState()
     @State private var notesCollapsed = false
     @State private var noteFan: PositionNoteFanPresentation?
+    @AppStorage("reading.paperStyle") private var paperStyleName = ReadingPaperStyle.plain.rawValue
+    @Namespace private var notePaperNamespace
     private var hasPositionNotes: Bool { !store.activeNotePlacements.isEmpty }
     private var isPDF: Bool {
         store.sourceFileURL?.pathExtension.lowercased() == "pdf"
@@ -29,6 +31,7 @@ struct ReaderWorkspaceView: View {
         GeometryReader { geometry in
             let showsMargin = hasPositionNotes && !notesCollapsed && geometry.size.width >= 680
             let nativePDF = isPDF && showPDF && store.readingSourceMode == "original"
+            let marginWidth = nativePDF ? pdfController.notePositions.marginWidth : (showsMargin ? PositionNoteSurface.marginWidth : 0)
             ZStack(alignment: .topLeading) {
                 Group {
                     if let unit = store.selectedUnit {
@@ -91,9 +94,16 @@ struct ReaderWorkspaceView: View {
                                onCreatePositionNote: { page, x, y in
                                    guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash else { return }; store.beginPositionNote(page: page, x: x, y: y)
                                }, noteMarginVisible: showsMargin, notePlacementOwner: store.collectionOwnerKey,
-                               onCancelPositionNote: { if store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash { store.positionNoteBinding = nil } })
+                               onCancelPositionNote: { if store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash { store.positionNoteBinding = nil } },
+                               onAddBookmark: { page in
+                                   guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
+                                         store.book?.sourceHash == preparationSourceHash,
+                                         let unit = store.book?.units.first(where: { $0.page == page }),
+                                         store.book?.bookmarks.contains(unit.id) == false else { return }
+                                   Task { await store.toggleBookmark(unit.id) }
+                               }, noteBindingDocumentID: store.positionNoteBinding?.documentID)
                             .id(store.pdfDisplayReloadID)
-                            .environment(\.workspaceCanvasBlocked, interactionBlocked || noteFan != nil)
+                            .environment(\.workspaceCanvasBlocked, interactionBlocked || noteFan != nil || store.positionNoteRequest != nil)
                         } else if isPDF, showPDF {
                             // The source URL arrives asynchronously after book
                             // selection. Do not mount a temporary text/WebKit
@@ -105,20 +115,21 @@ struct ReaderWorkspaceView: View {
                     }
                 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
-                if showsMargin {
-                    if nativePDF { PositionNoteConnections(positions: pdfController.notePositions, size: geometry.size).opacity(noteFan == nil ? 1 : 0) }
+                if showsMargin || (nativePDF && marginWidth > 0.1) {
                     let margin = PositionNoteMargin(nativePositions: pdfController.notePositions, height: geometry.size.height, isPDF: nativePDF) { ids, snippets, origin in
                         store.readingCompanionVisible = false; showOutline = false
                         noteFan = .init(ids: ids, snippets: snippets,
-                            origin: CGPoint(x: geometry.size.width - 17 - PositionNoteSurface.marginWidth + origin.x, y: origin.y), owner: WorkspacePickerOwner(store: store))
+                            origin: CGPoint(x: geometry.size.width - (nativePDF ? pdfController.notePositions.scrollerWidth : 17) - PositionNoteSurface.marginWidth + origin.x, y: origin.y), owner: WorkspacePickerOwner(store: store))
                     }
                     Group {
                         if nativePDF { PositionNoteMarginHost(content: margin, controller: pdfController) }
                         else { margin }
                     }.frame(width: PositionNoteSurface.marginWidth, height: geometry.size.height)
-                        .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 17)
+                        .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, nativePDF ? pdfController.notePositions.scrollerWidth : 17)
+                        .offset(x: PositionNoteSurface.marginWidth - marginWidth)
                         .opacity(noteFan == nil ? 1 : 0).allowsHitTesting(noteFan == nil && !interactionBlocked)
-                    Button { notesCollapsed = true } label: { Image(systemName: "chevron.right").font(.system(size: 12, weight: .medium)).frame(width: 32, height: 32) }
+                    if nativePDF { PositionNoteConnections(positions: pdfController.notePositions, size: geometry.size).opacity(noteFan == nil ? 1 : 0) }
+                    Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { notesCollapsed = true } } label: { Image(systemName: "chevron.right").font(.system(size: 12, weight: .medium)).frame(width: 32, height: 32) }
                         .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.96), in: Circle())
                         .overlay { Circle().strokeBorder(Color.primary.opacity(0.07)) }.shadow(color: .black.opacity(0.05), radius: 6, y: 2)
                         .padding(.top, 86).padding(.trailing, 20).frame(maxWidth: .infinity, alignment: .trailing)
@@ -130,7 +141,7 @@ struct ReaderWorkspaceView: View {
                         if geometry.size.width < 680 {
                             store.readingCompanionVisible = false; showOutline = false
                             noteFan = .init(ids: store.activeNotePlacements.filter { $0.value.unitID == store.selectedUnitID }.map(\.key).sorted(), snippets: [:], origin: .init(x: geometry.size.width - 36, y: 102), owner: WorkspacePickerOwner(store: store))
-                        } else { notesCollapsed = false }
+                        } else { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { notesCollapsed = false } }
                     } label: { Image(systemName: "note.text").font(.system(size: 13)).frame(width: 32, height: 32) }
                         .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.95), in: Circle())
                         .padding(.top, 86).padding(.trailing, 20).frame(maxWidth: .infinity, alignment: .trailing).help("展开页边便签").accessibilityLabel("展开页边便签")
@@ -163,8 +174,26 @@ struct ReaderWorkspaceView: View {
                 .onChange(of: store.positionNoteBinding?.id) { _, _ in armPositionBinding() }
                 .onChange(of: pdfController.isReady) { _, ready in if ready { armPositionBinding() } }
                 .onAppear { armPositionBinding() }
-                .sheet(item: $store.positionNoteRequest) { request in PositionNoteEditor(request: request).environmentObject(store) }
-                .overlay { if let noteFan { PositionNoteFan(presentation: noteFan, size: geometry.size, close: { self.noteFan = nil }).environmentObject(store) } }
+                .overlay {
+                    if let noteFan {
+                        PositionNoteFan(presentation: noteFan, size: geometry.size, paperNamespace: notePaperNamespace,
+                            close: { self.noteFan = nil }).environmentObject(store)
+                            .allowsHitTesting(store.positionNoteRequest == nil)
+                            .accessibilityHidden(store.positionNoteRequest != nil)
+                    }
+                }
+                .overlay {
+                    if let request = store.positionNoteRequest, request.owner.matches(store) {
+                        ZStack {
+                            Color.black.opacity(0.08).ignoresSafeArea().contentShape(Rectangle())
+                            PositionNoteEditor(request: request).environmentObject(store)
+                                .frame(width: max(280, min(720, geometry.size.width - 56)), height: max(240, min(600, geometry.size.height - 100)))
+                                .matchedGeometryEffect(id: request.document?.id ?? request.id.uuidString, in: notePaperNamespace)
+                                .id(request.id)
+                        }.zIndex(300)
+                    }
+                }
+                .animation(reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.04), value: store.positionNoteRequest?.id)
                 .onChange(of: store.collectionOwnerKey) { _, _ in noteFan = nil }
                 .onChange(of: store.selectedUnitID) { _, _ in inlineReading.clear() }
                 .onChange(of: store.readingSourceMode) { _, _ in inlineReading.clear() }
@@ -226,7 +255,7 @@ struct ReaderWorkspaceView: View {
                     }.softPanel()
                 }
             }.frame(maxWidth: 740).padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 100).padding(.trailing, noteMargin).frame(maxWidth: .infinity)
-        }.background(Palette.paper)
+        }.overlay { ReadingPaperTextVeil(style: ReadingPaperStyle(rawValue: paperStyleName) ?? .plain).allowsHitTesting(false) }.background(Palette.paper)
     }
     private func anchoredSource(_ text: String, plain: Bool) -> some View {
         RichMarkdownView(markdown: text, sourceText: text, plainText: plain,

@@ -169,6 +169,26 @@ public actor LibraryRepository {
         try readDocumentSnapshot(bookID: bookID, document: document).markdown
     }
 
+    /// Visible collapsed rows need only a bounded prefix. This never replaces
+    /// the full document read used by editing, export or AI attachment freezing.
+    public func readFoldedNotePreview(bookID: String, sourceHash: String, document: DocumentRecord) throws -> String {
+        let directory = try bookDirectory(bookID, mustExist: true)
+        try recoverDocument(in: directory)
+        let stored = try readProject(in: directory)
+        guard stored.sourceHash == sourceHash, stored.activeDocuments.contains(document) else {
+            throw ReadingError.invalid("笔记或原书已变化，请重新打开列表。")
+        }
+        let url = try documentURL(document, in: directory)
+        _ = try regularFileSize(url, limit: Self.documentLimit)
+        let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
+        var data = try handle.read(upToCount: 8192) ?? Data()
+        for _ in 0..<4 {
+            if let text = String(data: data, encoding: .utf8) { return FoldedReadingPreview.make(text, title: document.title) }
+            if !data.isEmpty { data.removeLast() }
+        }
+        throw ReadingError.invalid("笔记预览不是有效 UTF-8；原文件保留。")
+    }
+
     public func readDocumentSnapshot(bookID: String, document: DocumentRecord) throws -> DocumentContentSnapshot {
         let directory = try bookDirectory(bookID, mustExist: true)
         try recoverDocument(in: directory)
@@ -495,6 +515,7 @@ public actor LibraryRepository {
     // MARK: Recoverable document commit
 
     func recoverDocument(in directory: URL) throws {
+        try recoverTrashPurge(in: directory)
         try recoverControlledChanges(in: directory)
         let journalDirectory = try child(directory, ".journal")
         guard files.fileExists(atPath: journalDirectory.path) else { return }
@@ -1395,5 +1416,151 @@ extension LibraryRepository {
         let data = try readLimited(child(child(directory, "cover"), record.sha256 + "." + record.fileExtension), limit: BookCoverImage.maximumBytes - 1)
         guard try BookCoverImage.inspect(data) == record else { throw ReadingError.invalid("封面文件无法校验，原书保留。") }
         return data
+    }
+}
+
+
+extension LibraryRepository {
+    private struct TrashPurgeJournal: Codable {
+        var version = 1
+        let beforeHash: String
+        let afterHash: String
+        let project: BookProject
+        let documentHashes: [String: String]
+    }
+
+    /// A plan is issued only by this repository, with exact current metadata
+    /// and Markdown hashes. Its dependent recovery deltas are visible in titles.
+    public func previewTrashPurge(_ targets: [LibraryTrashPurgeTarget]) throws -> LibraryTrashPurgePlan {
+        guard !targets.isEmpty, targets.count <= 100_000, Set(targets).count == targets.count else {
+            throw ReadingError.invalid("没有可删除的回收项目，或选择包含重复条目。")
+        }
+        var requested: [String: (archived: Bool, documents: Set<String>, manual: Set<String>)] = [:]
+        for target in targets {
+            switch target {
+            case .book(let id):
+                guard requested[id] == nil else { throw ReadingError.invalid("不能同时选择整本回收书籍及其内部条目。") }
+                requested[id] = (true, [], [])
+            case .document(let bookID, let id):
+                guard requested[bookID]?.archived != true else { throw ReadingError.invalid("整本书已经选中。") }
+                if requested[bookID] == nil { requested[bookID] = (false, [], []) }
+                requested[bookID]!.documents.insert(id)
+            case .manual(let bookID, let id):
+                guard requested[bookID]?.archived != true else { throw ReadingError.invalid("整本书已经选中。") }
+                if requested[bookID] == nil { requested[bookID] = (false, [], []) }
+                requested[bookID]!.manual.insert(id)
+            }
+        }
+        var batches: [LibraryTrashPurgeBatch] = [], titles: [String] = [], bytes: Int64 = 0
+        for id in requested.keys.sorted() {
+            let selection = requested[id]!
+            let directory = try (selection.archived ? archivedBookDirectory(id, mustExist: true) : bookDirectory(id, mustExist: true))
+            try recoverDocument(in: directory)
+            let project = try readProject(in: directory)
+            guard project.id == id else { throw ReadingError.invalid("回收书籍身份不符。") }
+            try validate(project)
+            let metadataHash = try BookImporter.sha256(readLimited(child(directory, "project.json"), limit: Self.metadataLimit))
+            if selection.archived {
+                try validateArchiveTree(directory)
+                titles.append("整本书：" + project.title + "（含本机原书副本、笔记和分析）")
+                batches.append(.init(bookID: id, archived: true, metadataHash: metadataHash, documentHashes: [:], manualIDs: [], treeDigest: try purgeTreeDigest(directory)))
+                bytes += try storageBook(id: id, archived: true).bytes
+                continue
+            }
+            let manualIDs = try LibraryTrashPurgeRuntime.expandedManualIDs(selection.manual, documents: selection.documents, in: project)
+            let updated = try LibraryTrashPurgeRuntime.removing(documents: selection.documents, manualIDs: manualIDs, in: project)
+            try validate(updated)
+            var hashes: [String: String] = [:]
+            for document in project.documents where selection.documents.contains(document.id) {
+                let data = try readLimited(documentURL(document, in: directory), limit: Self.documentLimit)
+                hashes[document.id] = try BookImporter.sha256(data); bytes += Int64(data.count)
+                titles.append("笔记：" + document.title)
+            }
+            for item in project.manualTrash?.items ?? [] where manualIDs.contains(item.id) {
+                titles.append((selection.manual.contains(item.id) ? "回收项目：" : "关联恢复快照：") + item.title)
+            }
+            batches.append(.init(bookID: id, archived: false, metadataHash: metadataHash, documentHashes: hashes, manualIDs: manualIDs, treeDigest: nil))
+        }
+        return .init(id: UUID(), titles: titles, bytes: bytes, repositoryOwner: publicationOwner, targets: targets, batches: batches)
+    }
+
+    /// Recheck the complete confirmation before the first deletion. Books are
+    /// independent commits; an I/O failure reports its exact preserved location.
+    public func commitTrashPurge(_ plan: LibraryTrashPurgePlan) throws -> [BookProject] {
+        guard plan.repositoryOwner == publicationOwner else { throw ReadingError.invalid("书库已经变化，请重新确认删除。") }
+        let fresh = try previewTrashPurge(plan.targets)
+        guard fresh.batches.count == plan.batches.count,
+              zip(fresh.batches, plan.batches).allSatisfy({ a, b in
+                  a.bookID == b.bookID && a.archived == b.archived && a.metadataHash == b.metadataHash
+                      && a.documentHashes == b.documentHashes && a.manualIDs == b.manualIDs && a.treeDigest == b.treeDigest
+              }) else { throw ReadingError.invalid("确认后回收内容发生变化，没有开始删除；请重新查看。") }
+        var saved: [BookProject] = []
+        for batch in plan.batches {
+            let directory = try (batch.archived ? archivedBookDirectory(batch.bookID, mustExist: true) : bookDirectory(batch.bookID, mustExist: true))
+            if batch.archived {
+                try validateArchiveTree(directory)
+                try files.removeItem(at: directory)
+                try forgetRemovedBook(id: batch.bookID)
+            } else {
+                let canonical = try readProject(in: directory)
+                let updated = try LibraryTrashPurgeRuntime.removing(documents: Set(batch.documentHashes.keys), manualIDs: batch.manualIDs, in: canonical)
+                try validate(updated)
+                let metadata = try encode(updated)
+                let journal = TrashPurgeJournal(beforeHash: batch.metadataHash, afterHash: try BookImporter.sha256(metadata), project: updated, documentHashes: batch.documentHashes)
+                try atomicWrite(encode(journal), to: child(directory, ".trash-purge-pending.json"))
+                try recoverTrashPurge(in: directory)
+                saved.append(stampForPublication(updated))
+                _ = try? refreshReadableViews(id: batch.bookID)
+            }
+        }
+        _ = try? refreshReadableLibraryIndex()
+        return saved
+    }
+
+    private func purgeTreeDigest(_ directory: URL) throws -> String {
+        try validateArchiveTree(directory)
+        var pending = [directory], records: [String] = []
+        while let parent = pending.popLast() {
+            for entry in try files.contentsOfDirectory(at: parent, includingPropertiesForKeys: [.isDirectoryKey]) {
+                let checked = try child(parent, entry.lastPathComponent)
+                let relative = String(checked.path.dropFirst(directory.path.count + 1))
+                if try checked.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true { pending.append(checked); records.append("dir:" + relative) }
+                else { records.append("file:" + relative + ":" + (try BookImporter.sha256(readLimited(checked, limit: Self.packageLimit)))) }
+            }
+        }
+        return try BookImporter.sha256(Data(records.sorted().joined(separator: "\n").utf8))
+    }
+
+    private func recoverTrashPurge(in directory: URL) throws {
+        let marker = try child(directory, ".trash-purge-pending.json")
+        guard files.fileExists(atPath: marker.path) else { return }
+        let journal = try JSONDecoder().decode(TrashPurgeJournal.self, from: readLimited(marker, limit: Self.metadataLimit))
+        guard journal.version == 1, journal.project.id == directory.lastPathComponent,
+              journal.documentHashes.count <= 100_000,
+              journal.documentHashes.keys.allSatisfy(Self.isSafeID),
+              Set(journal.documentHashes.keys).isDisjoint(with: Set(journal.project.documents.map(\.id))) else {
+            throw ReadingError.invalid("删除恢复日志无效，已保留现场。")
+        }
+        try validate(journal.project)
+        let metadata = try encode(journal.project)
+        guard try BookImporter.sha256(metadata) == journal.afterHash else { throw ReadingError.invalid("删除恢复记录散列不符，已保留现场。") }
+        let metadataURL = try child(directory, "project.json")
+        let currentHash = try BookImporter.sha256(readLimited(metadataURL, limit: Self.metadataLimit))
+        guard currentHash == journal.beforeHash || currentHash == journal.afterHash else {
+            throw ReadingError.invalid("删除中断后书籍又被修改，已保留文件和日志，请先检查。")
+        }
+        var paths: [URL] = []
+        for (id, hash) in journal.documentHashes {
+            let file = try child(child(directory, "docs"), id + ".md")
+            guard files.fileExists(atPath: file.path) else { continue }
+            guard try BookImporter.sha256(readLimited(file, limit: Self.documentLimit)) == hash else {
+                throw ReadingError.invalid("删除过程中笔记内容改变，已保留该文件及恢复日志。")
+            }
+            paths.append(file)
+        }
+        try validatePackageFiles(journal.project, in: directory, strictContents: false, verifySourceHash: false)
+        if currentHash != journal.afterHash { try atomicWrite(metadata, to: metadataURL) }
+        for path in paths { try files.removeItem(at: path) }
+        try files.removeItem(at: marker)
     }
 }

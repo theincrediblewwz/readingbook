@@ -92,6 +92,26 @@ extension AppStore {
             }
         }
     }
+    func purgeTrash(_ plan: LibraryTrashPurgePlan, expectedRoot: URL) async throws {
+        guard !isBusy, !storageState.working, !editorDirty, pendingAIChanges.isEmpty,
+              libraryRootURL == expectedRoot else { throw ReadingError.invalid("请先保存当前编辑、处理待确认修改，并重新核对当前书库。") }
+        let repository = repository
+        isBusy = true; defer { isBusy = false }
+        do {
+            let projects = try await repository.commitTrashPurge(plan)
+            guard libraryRootURL == expectedRoot else { return }
+            for project in projects { publish(project) }
+            storageState.overview = nil
+            await reloadTrash()
+            activity = "已永久删除确认的回收内容。"
+        } catch {
+            if libraryRootURL == expectedRoot {
+                if let projects = try? await repository.loadAll() { for project in projects { publish(project) } }
+                await reloadTrash()
+            }
+            throw error
+        }
+    }
     func reloadTrash() async {
         do {
             let report = try await repository.trashReport(); archivedBooks = report.projects

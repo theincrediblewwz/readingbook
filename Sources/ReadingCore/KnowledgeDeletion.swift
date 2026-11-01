@@ -2,6 +2,21 @@ import Foundation
 
 /// Removes a derived object and its structured references while retaining original text and Markdown files.
 public enum KnowledgeDeletion {
+    static func removingTrashedDocument(id: String, from project: BookProject) throws -> BookProject {
+        try checkIdentity(id, in: project)
+        guard project.documents.contains(where: { $0.id == id && $0.trashedAt != nil }) else {
+            throw ReadingError.invalid("只能永久删除已回收的笔记。")
+        }
+        var updated = project
+        updated.documents.removeAll { $0.id == id }
+        removeReferences(to: id, from: &updated)
+        for index in updated.nodes.indices { updated.nodes[index].documentIDs?.removeAll { $0 == id } }
+        updated.documents.removeAll { $0.id == id }
+        updated.readerCollections?.notePlacements?.removeValue(forKey: id)
+        updated.readerCollections?.assignments.removeValue(forKey: "note:" + id)
+        updated.readerCollections?.collapsedReferenceIDs.removeAll { $0 == "note:" + id }
+        return updated
+    }
     public static func removingEntity(id: String, from project: BookProject) throws -> BookProject {
         try checkIdentity(id, in: project)
         guard project.entities.contains(where: { $0.id == id }) else { throw ReadingError.invalid("要删除的实体不存在。") }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum ReaderToolPopover: Equatable { case navigation, zoom, annotations, more }
+enum ReaderToolPopover: Equatable { case navigation, zoom, annotations, more, appearance }
 
 /// Clickable groups replace the long menu and its fragile hover submenus.
 struct ReaderNavigationPanel: View {
@@ -48,8 +48,10 @@ struct ReaderNavigationPanel: View {
                     }.disabled(!pdf.isReady)
                     sectionLabel("翻页方向")
                     HStack(spacing: 8) {
-                        choice("上下", icon: "arrow.up.arrow.down", selected: pdf.direction == .vertical) { pdf.command(.setDirection(.vertical)) }
-                        choice("左右", icon: "arrow.left.arrow.right", selected: pdf.direction == .horizontal) { pdf.command(.setDirection(.horizontal)) }
+                        choice("上下", icon: "arrow.up.arrow.down", selected: !pdf.paperBookMode && pdf.direction == .vertical) { pdf.command(.setDirection(.vertical)) }
+                        choice("左右", icon: "arrow.left.arrow.right", selected: !pdf.paperBookMode && pdf.direction == .horizontal) { pdf.command(.setDirection(.horizontal)) }
+                        choice("纸书", icon: "book.pages", selected: pdf.paperBookMode) { pdf.command(.setPaperBook(true)) }
+                            .help("左右翻动纸页，文字随纸张弯曲；保留原书的文字选择和便签。")
                     }.disabled(!pdf.isReady)
                 }
             }
