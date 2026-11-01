@@ -843,18 +843,15 @@ struct PDFReaderView: NSViewRepresentable {
 
     private func preparePageCurl(from old: PDFPage, fromFrame: CGRect, backwards: Bool) {
         pageCurl?.cancel(); pageCurl = nil
-        var frame = fromFrame.intersection(bounds)
-        if noteMarginWidth > 0 {
-            frame = CGRect(x: max(bounds.minX, fromFrame.minX), y: bounds.minY,
-                width: max(1, outerPaperEdge - max(bounds.minX, fromFrame.minX)), height: bounds.height)
-        }
+        let frame = CGRect(x: bounds.minX, y: bounds.minY, width: max(1, outerPaperEdge - bounds.minX), height: bounds.height)
         let margin = noteMarginWidth > 0 ? controller?.noteMarginSnapshot(in: self) : nil
         let connections = controller.map {
             PositionNoteConnectionGeometry.make(positions: $0.notePositions, size: bounds.size, owner: notePlacementOwner)
         } ?? []
         guard let curl = PDFPaperCurl(frame: frame, from: old, fromFrame: fromFrame, backwards: backwards,
             paper: paperSurface.style, background: pdfView.backgroundColor, scale: window?.backingScaleFactor ?? 2,
-            materialFrame: bounds, noteMarginWidth: noteMarginWidth, oldNoteMargin: margin, connections: connections) else { sourceCanvas.isHidden = false; return }
+            materialFrame: bounds, noteMarginWidth: noteMarginWidth, oldNoteMargin: margin, connections: connections,
+            fitsVisibleSheets: true) else { sourceCanvas.isHidden = false; return }
         pageCurl = curl; sourceCanvas.isHidden = true
         addSubview(curl, positioned: .above, relativeTo: bookEdges)
         curl.completion = { [weak self, weak curl] in

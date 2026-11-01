@@ -394,6 +394,27 @@ import SwiftUI
             checks["LargeZoomRasterStaysWithinVisiblePixelBudget"] = bitmap.map { $0.width * $0.height <= 4_000_000 && max($0.width,$0.height)<=4096 } == true
             observations["LargeZoom"] = ["pageFrame":NSStringFromRect(hugeFrame),"viewport":NSStringFromRect(smallViewport),"rasterPixels":bitmap.map { "\($0.width)x\($0.height)" } ?? "missing"]
             large?.cancel()
+            // These frames were captured from the real reader's portrait page
+            // followed by a cropped 90-degree page. The old moving surface
+            // began at235.5, leaving the destination's left195pt uncovered.
+            let shaped = PDFDocument(data:original)!, nextShape = shaped.page(at:1)!
+            nextShape.setBounds(CGRect(x:20,y:35,width:550,height:710),for:.cropBox); nextShape.rotation = 90
+            let whole = CGRect(x:0,y:0,width:1303,height:752)
+            let beforeShape = CGRect(x:235.5,y:16.1,width:540,height:720)
+            let afterShape = CGRect(x:40.5,y:15.7363636364,width:929.4545454545,height:720)
+            let shapeCurl = PDFPaperCurl(frame:whole,from:shaped.page(at:0)!,fromFrame:beforeShape,backwards:false,
+                paper:.warmCotton,background:.white,scale:2,materialFrame:whole,noteMarginWidth:292,fitsVisibleSheets:true)
+            checks["ChangingPageShapeStartsWithWholeViewportCover"] = shapeCurl?.frame == whole
+            let shapePrepared = shapeCurl?.prepareTarget(nextShape,in:afterShape) == true
+            checks["ChangingPageShapeCoversBothVisibleSheets"] = shapePrepared && shapeCurl.map {
+                $0.frame.contains(beforeShape.intersection(whole)) && $0.frame.contains(afterShape.intersection(whole))
+            } == true
+            checks["ChangingPageShapeRetainsRasterBudget"] = shapePrepared && shapeCurl.map {
+                $0.drawableSize.width * $0.drawableSize.height <= 4_000_000 && max($0.drawableSize.width,$0.drawableSize.height) <= 4096
+            } == true
+            observations["ChangingPageShape"] = ["old":NSStringFromRect(beforeShape),"destination":NSStringFromRect(afterShape),
+                "cover":shapeCurl.map { NSStringFromRect($0.frame) } ?? "missing"]
+            shapeCurl?.cancel()
             let lifecycle = PDFReaderController(), firstID = UUID(), nextID = UUID(), detached = NSView()
             lifecycle.attachNoteMargin(detached, owner:"old"); lifecycle.bind(id:firstID,handler:{_ in})
             lifecycle.reportPaperTurn(id:firstID,active:true); lifecycle.bind(id:nextID,handler:{_ in})

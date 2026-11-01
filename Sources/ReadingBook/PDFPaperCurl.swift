@@ -16,10 +16,12 @@ import SwiftUI
     private let imageContext: CIContext
     private let queue: MTLCommandQueue
     private let curl = CIFilter.pageCurlWithShadowTransition()
-    private let extent: CGRect
+    private var extent: CGRect
     private let backwards: Bool
     private let pixelScale: CGFloat
     private let materialFrame: CGRect
+    private let initialSurface: CGRect
+    private let fitsVisibleSheets: Bool
     private let paper: ReadingPaperStyle
     private let background: NSColor
     private let noteMarginWidth: CGFloat
@@ -47,7 +49,7 @@ import SwiftUI
     /// the destination's native layout has settled behind this opaque cover.
     init?(frame: CGRect, from: PDFPage, fromFrame: CGRect, backwards: Bool, paper: ReadingPaperStyle, background: NSColor,
           scale: CGFloat, materialFrame: CGRect? = nil, noteMarginWidth: CGFloat = 0,
-          oldNoteMargin: (image: CGImage, frame: CGRect)? = nil, connections: [PositionNoteConnection] = []) {
+          oldNoteMargin: (image: CGImage, frame: CGRect)? = nil, connections: [PositionNoteConnection] = [], fitsVisibleSheets: Bool = false) {
         guard frame.width > 10, frame.height > 10, let (device, queue, context) = Self.renderer else { return nil }
         let pixelScale = min(max(1, scale), 4096 / max(frame.width, frame.height), sqrt(4_000_000 / (frame.width * frame.height)))
         let pixels = CGSize(width: max(2, floor(frame.width * pixelScale)), height: max(2, floor(frame.height * pixelScale)))
@@ -57,6 +59,7 @@ import SwiftUI
                                    scale: pixelScale, paper: paper, background: background, noteMarginWidth: noteMarginWidth, note: oldNoteMargin, connections: connections) else { return nil }
         self.queue = queue; imageContext = context; extent = rect; self.backwards = backwards
         self.pixelScale = pixelScale; self.materialFrame = materialFrame; self.paper = paper
+        initialSurface = frame; self.fitsVisibleSheets = fitsVisibleSheets
         self.background = background; self.noteMarginWidth = noteMarginWidth; oldImage = CIImage(cgImage: old)
         originalPageFrame = fromFrame
         super.init(frame: frame, device: device)
@@ -64,7 +67,7 @@ import SwiftUI
         autoResizeDrawable = false; drawableSize = pixels
         preferredFramesPerSecond = 60; enableSetNeedsDisplay = false; isPaused = true
         clearColor = MTLClearColorMake(0, 0, 0, 0)
-        layer?.isOpaque = false
+        layer?.isOpaque = false; layer?.masksToBounds = true
         poster.frame = bounds; poster.autoresizingMask = [.width, .height]; poster.imageScaling = .scaleAxesIndependently
         poster.image = NSImage(cgImage: old, size: frame.size); addSubview(poster)
         curl.backsideImage = CIImage(color: CIColor(color: paper.color) ?? .white).cropped(to: rect)
@@ -75,13 +78,36 @@ import SwiftUI
         setAccessibilityElement(false)
     }
     @discardableResult func prepareTarget(_ page: PDFPage, in pageFrame: CGRect) -> Bool {
-        guard !targetPrepared, !finished,
+        guard !targetPrepared, !finished else { return false }
+        if fitsVisibleSheets {
+            // Cover the entire viewport while native PDFKit changes pages.
+            // Once both geometries are known, curl their visible union so a
+            // wider/rotated destination cannot appear beside the old sheet.
+            var visible = originalPageFrame.intersection(initialSurface).union(pageFrame.intersection(initialSurface))
+            if noteMarginWidth > 0 {
+                visible = CGRect(x: visible.minX, y: initialSurface.minY,
+                    width: initialSurface.maxX - visible.minX, height: initialSurface.height)
+            }
+            guard !visible.isNull, visible.width > 10, visible.height > 10 else { return false }
+            frame = visible
+            extent = CGRect(x: 0, y: 0, width: floor(visible.width * pixelScale), height: floor(visible.height * pixelScale))
+            drawableSize = extent.size
+            poster.autoresizingMask = []
+            poster.frame = CGRect(x: initialSurface.minX - visible.minX, y: initialSurface.minY - visible.minY,
+                width: initialSurface.width, height: initialSurface.height)
+            curl.extent = extent; curl.shadowExtent = extent
+            curl.backsideImage = CIImage(color: CIColor(color: paper.color) ?? .white).cropped(to: extent)
+            curl.radius = Float(extent.width * 0.13)
+        }
+        guard
               let rendered = Self.raster(page, in: pageFrame, surface: frame, material: materialFrame, extent: extent,
                   scale: pixelScale, paper: paper, background: background, noteMarginWidth: noteMarginWidth, note: nil) else { return false }
         targetRaster = rendered
         preparedPageFrame = pageFrame
         let next = CIImage(cgImage: rendered)
-        curl.inputImage = backwards ? next : oldImage; curl.targetImage = backwards ? oldImage : next
+        let old = oldImage.transformed(by: CGAffineTransform(translationX: (initialSurface.minX - frame.minX) * pixelScale,
+            y: (initialSurface.minY - frame.minY) * pixelScale)).cropped(to: extent)
+        curl.inputImage = backwards ? next : old; curl.targetImage = backwards ? old : next
         targetPrepared = true; isPaused = false; return true
     }
     private static func raster(_ page: PDFPage, in pageFrame: CGRect, surface: CGRect, material: CGRect, extent: CGRect,
@@ -169,7 +195,7 @@ import SwiftUI
     func cancel() { finished = true; isPaused = true; delegate = nil; completion = nil; removeFromSuperview() }
     private func finish() {
         guard !finished else { return }; finished = true; isPaused = true
-        if let targetRaster { poster.image = NSImage(cgImage: targetRaster, size: bounds.size); poster.isHidden = false }
+        if let targetRaster { poster.frame = bounds; poster.image = NSImage(cgImage: targetRaster, size: bounds.size); poster.isHidden = false }
         let done = completion; completion = nil
         DispatchQueue.main.async { done?() }
     }
