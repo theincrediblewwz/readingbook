@@ -121,18 +121,23 @@ import SwiftUI
     }
     func blackGlyphBox(_ image: NSImage) -> CGRect? {
         guard let cg = image.cgImage(forProposedRect:nil, context:nil, hints:nil) else { return nil }
-        let bitmap = NSBitmapImageRep(cgImage:cg)
-        var minX=bitmap.pixelsWide, minY=bitmap.pixelsHigh, maxX=0, maxY=0
-        for y in stride(from:0,to:bitmap.pixelsHigh,by:2) {
-            for x in stride(from:0,to:bitmap.pixelsWide,by:2) {
-                if let c=bitmap.colorAt(x:x,y:y)?.usingColorSpace(.sRGB), c.alphaComponent>0.8,
-                   max(c.redComponent,c.greenComponent,c.blueComponent)<0.25 {
+        guard let bitmap = CGContext(data:nil,width:cg.width,height:cg.height,bitsPerComponent:8,bytesPerRow:0,
+            space:CGColorSpace(name:CGColorSpace.sRGB)!,bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue),
+              let data = bitmap.data?.assumingMemoryBound(to:UInt8.self) else { return nil }
+        bitmap.draw(cg,in:CGRect(x:0,y:0,width:cg.width,height:cg.height))
+        // Decode color once. Creating and color-converting millions of NSColor
+        // objects made this test oracle exceed the CI host's finite deadline.
+        var minX=cg.width, minY=cg.height, maxX=0, maxY=0
+        for y in stride(from:0,to:cg.height,by:2) {
+            for x in stride(from:0,to:cg.width,by:2) {
+                let pixel = data.advanced(by:y * bitmap.bytesPerRow + x * 4)
+                if pixel[3]>204 && max(pixel[0],pixel[1],pixel[2])<64 {
                     minX=min(minX,x); minY=min(minY,y); maxX=max(maxX,x); maxY=max(maxY,y)
                 }
             }
         }
         guard minX<maxX, minY<maxY else { return nil }
-        return CGRect(x:Double(minX)/Double(bitmap.pixelsWide),y:Double(minY)/Double(bitmap.pixelsHigh),width:Double(maxX-minX)/Double(bitmap.pixelsWide),height:Double(maxY-minY)/Double(bitmap.pixelsHigh))
+        return CGRect(x:Double(minX)/Double(cg.width),y:Double(minY)/Double(cg.height),width:Double(maxX-minX)/Double(cg.width),height:Double(maxY-minY)/Double(cg.height))
     }
     func grainEnergy(_ image: NSImage) -> Double {
         guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return -1 }
