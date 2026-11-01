@@ -145,6 +145,31 @@ final class ReadingNoteSurfaceTests: XCTestCase {
                 XCTAssertGreaterThan(card.y - card.height / 2, 0); XCTAssertLessThan(card.y + card.height / 2, 600)
             }
         }
+        for width in [320.0, 440, 759, 760, 1120, 1320, 1800] {
+            for height in [480.0, 600, 820] {
+                for count in 1...7 {
+                    let cards = ReadingNoteFanLayout.cards(count: count, width: width, height: height)
+                    XCTAssertEqual(cards.count, min(count, ReadingNoteFanLayout.pageSize(width: width)))
+                    for card in cards {
+                        let a = abs(card.degrees) * .pi / 180
+                        let dx = cos(a) * card.width / 2 + sin(a) * card.height / 2
+                        let dy = sin(a) * card.width / 2 + cos(a) * card.height / 2
+                        XCTAssertGreaterThanOrEqual(card.x - dx, 0); XCTAssertLessThanOrEqual(card.x + dx, width)
+                        XCTAssertGreaterThanOrEqual(card.y - dy, 0); XCTAssertLessThanOrEqual(card.y + dy, height)
+                        // Hover straightens, enlarges and lifts the actual card.
+                        XCTAssertGreaterThanOrEqual(card.x - card.width * 1.035 / 2, 0)
+                        XCTAssertLessThanOrEqual(card.x + card.width * 1.035 / 2, width)
+                        XCTAssertGreaterThanOrEqual(card.y - 22 - card.height * 1.035 / 2, 0)
+                        XCTAssertLessThanOrEqual(card.y - 22 + card.height * 1.035 / 2, height)
+                    }
+                }
+            }
+        }
+        let sparse = ReadingNoteFanLayout.cards(count: 3, width: 1320, height: 820)
+        let crowded = ReadingNoteFanLayout.cards(count: 7, width: 1320, height: 820)
+        XCTAssertGreaterThan(sparse[0].width * sparse[0].height, crowded[0].width * crowded[0].height * 1.5)
+        XCTAssertGreaterThan(sparse[1].x - sparse[0].x, (crowded[1].x - crowded[0].x) * 2)
+        XCTAssertGreaterThan(sparse[1].x - sparse[0].x, sparse[0].width * 0.7)
         XCTAssertTrue(ReadingNoteFanLayout.cards(count: 10, width: .nan, height: 600).isEmpty)
         XCTAssertTrue(ReadingNoteFanLayout.cards(count: 0, width: 1120, height: 600).isEmpty)
     }
