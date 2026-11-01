@@ -337,7 +337,11 @@ import SwiftUI
                         backwards: false, paper: .plain, background: .white, scale: 1)
                     let sourceImage = scaled.flatMap { descendants($0, NSImageView.self).first?.image }
                     let targetImage = scaled?.targetRaster.map { NSImage(cgImage: $0, size: surface.size) }
-                    let expected = expectedBox.map { CGRect(x: (location.minX + $0.minX * location.width) / surface.width,
+                    // Ask PDFKit for the oracle at the tested resolution.
+                    // Scaling a 100% ink bounding box is not equivalent to
+                    // rasterizing 60% text: hinting can drop a thin edge stroke.
+                    let scaledReference = page.thumbnail(of: location.size, for: .cropBox)
+                    let expected = blackGlyphBox(scaledReference).map { CGRect(x: (location.minX + $0.minX * location.width) / surface.width,
                         y: (surface.height - location.maxY + $0.minY * location.height) / surface.height,
                         width: $0.width * location.width / surface.width, height: $0.height * location.height / surface.height) }
                     func glyphMatches(_ image: NSImage?) -> Bool {
