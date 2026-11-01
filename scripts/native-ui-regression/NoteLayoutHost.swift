@@ -106,7 +106,15 @@ import SwiftUI
                 for id in placements.keys { project = try await store.repository.organizeReaderCollections(bookID: project.id, sourceHash: project.sourceHash, command: .setNotePlacement(id, nil)) }
                 store.publish(project); await settle(); let hidden = snapshot("margin-off-"+mode)
                 checks[mode+"ModeSurvivesMarginRemoval"] = hidden["fitMode"] as? String == prior["fitMode"] as? String
-                if mode == "width" { checks["fitWidthRestoredAfterMarginRemoval"] = (hidden["pageMaxX"] as? Double ?? .infinity) <= 1120 && (hidden["scale"] as? Double ?? 0) > (prior["scale"] as? Double ?? 0) + 0.1 }
+                if mode == "width" {
+                    // Native coordinate conversion can return 1120 plus a few
+                    // floating-point ULPs. Still reject visible clipping: the
+                    // tolerance is only one physical display pixel.
+                    let tolerance = 1 / Double(window.backingScaleFactor)
+                    checks["fitWidthRestoredAfterMarginRemoval"] = (hidden["pageMaxX"] as? Double ?? .infinity)
+                        <= (hidden["windowWidth"] as? Double ?? 0) + tolerance
+                        && (hidden["scale"] as? Double ?? 0) > (prior["scale"] as? Double ?? 0) + 0.1
+                }
                 if mode == "custom" || mode == "actual" { checks[mode+"ScaleSurvivesMarginRemoval"] = abs((hidden["scale"] as? Double ?? 0) - (prior["scale"] as? Double ?? 0)) < 0.001 }
                 for (id, placement) in placements { project = try await store.repository.organizeReaderCollections(bookID: project.id, sourceHash: project.sourceHash, command: .setNotePlacement(id, placement)) }
                 store.publish(project); await settle()
