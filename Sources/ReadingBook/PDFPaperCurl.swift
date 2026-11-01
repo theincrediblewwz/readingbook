@@ -3,6 +3,7 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import MetalKit
 import PDFKit
+import SwiftUI
 
 /// GPU page geometry acts on the rendered original glyphs and paper together.
 /// Only the two pages in the current turn are rendered; no document is created,
@@ -17,6 +18,19 @@ import PDFKit
     private let curl = CIFilter.pageCurlWithShadowTransition()
     private let extent: CGRect
     private let backwards: Bool
+    private let pixelScale: CGFloat
+    private let materialFrame: CGRect
+    private let paper: ReadingPaperStyle
+    private let background: NSColor
+    private let noteMarginWidth: CGFloat
+    private let oldImage: CIImage
+    private let poster = NSImageView()
+    private(set) var targetRaster: CGImage?
+    let originalPageFrame: CGRect
+    private(set) var preparedPageFrame: CGRect?
+    private(set) var targetPrepared = false
+    var viewportSize: CGSize { materialFrame.size }
+    private var firstFramePresented = false
     private var began: CFTimeInterval?
     private var finished = false
     var completion: (() -> Void)?
@@ -24,41 +38,35 @@ import PDFKit
     private(set) var progressSamples: [Double] = []
     static var supported: Bool { renderer != nil }
 
-    init?(frame: CGRect, from: PDFPage, fromFrame: CGRect, to: PDFPage, toFrame: CGRect, backwards: Bool, paper: ReadingPaperStyle, background: NSColor, scale: CGFloat) {
+    convenience init?(frame: CGRect, from: PDFPage, fromFrame: CGRect, to: PDFPage, toFrame: CGRect, backwards: Bool, paper: ReadingPaperStyle, background: NSColor, scale: CGFloat) {
+        self.init(frame: frame, from: from, fromFrame: fromFrame, backwards: backwards, paper: paper, background: background, scale: scale)
+        guard prepareTarget(to, in: toFrame) else { return nil }
+    }
+
+    /// Mount the old sheet before PDFKit changes pages. Metal starts only after
+    /// the destination's native layout has settled behind this opaque cover.
+    init?(frame: CGRect, from: PDFPage, fromFrame: CGRect, backwards: Bool, paper: ReadingPaperStyle, background: NSColor,
+          scale: CGFloat, materialFrame: CGRect? = nil, noteMarginWidth: CGFloat = 0,
+          oldNoteMargin: (image: CGImage, frame: CGRect)? = nil, connections: [PositionNoteConnection] = []) {
         guard frame.width > 10, frame.height > 10, let (device, queue, context) = Self.renderer else { return nil }
         let pixelScale = min(max(1, scale), 4096 / max(frame.width, frame.height), sqrt(4_000_000 / (frame.width * frame.height)))
         let pixels = CGSize(width: max(2, floor(frame.width * pixelScale)), height: max(2, floor(frame.height * pixelScale)))
         let rect = CGRect(origin: .zero, size: pixels)
-        func image(_ page: PDFPage, in pageFrame: CGRect) -> CIImage? {
-            let pagePixels = CGSize(width: max(2, pageFrame.width * pixelScale), height: max(2, pageFrame.height * pixelScale))
-            let native = page.thumbnail(of: pagePixels, for: .cropBox)
-            guard let cg = native.cgImage(forProposedRect: nil, context: nil, hints: nil),
-                  let canvas = CGContext(data: nil, width: Int(pixels.width), height: Int(pixels.height), bitsPerComponent: 8,
-                    bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-            canvas.setFillColor(background.cgColor); canvas.fill(rect)
-            let location = CGRect(x: (pageFrame.minX - frame.minX) * pixelScale, y: (pageFrame.minY - frame.minY) * pixelScale,
-                                  width: pageFrame.width * pixelScale, height: pageFrame.height * pixelScale)
-            canvas.draw(cg, in: location)
-            guard let rendered = canvas.makeImage() else { return nil }
-            var result = CIImage(cgImage: rendered)
-            if let texture = ReadingPaperAssets.image(paper)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-                let material = CIImage(cgImage: texture)
-                let sheet = material.transformed(by: .init(scaleX: location.width / material.extent.width, y: location.height / material.extent.height))
-                    .transformed(by: .init(translationX: location.minX, y: location.minY)).cropped(to: location)
-                let background = sheet.composited(over: CIImage(color: .white).cropped(to: rect))
-                result = result.applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: background])
-            }
-            return result
-        }
-        guard let old = image(from, in: fromFrame), let next = image(to, in: toFrame) else { return nil }
+        let materialFrame = materialFrame ?? frame
+        guard let old = Self.raster(from, in: fromFrame, surface: frame, material: materialFrame, extent: rect,
+                                   scale: pixelScale, paper: paper, background: background, noteMarginWidth: noteMarginWidth, note: oldNoteMargin, connections: connections) else { return nil }
         self.queue = queue; imageContext = context; extent = rect; self.backwards = backwards
+        self.pixelScale = pixelScale; self.materialFrame = materialFrame; self.paper = paper
+        self.background = background; self.noteMarginWidth = noteMarginWidth; oldImage = CIImage(cgImage: old)
+        originalPageFrame = fromFrame
         super.init(frame: frame, device: device)
         framebufferOnly = false; colorPixelFormat = .bgra8Unorm
         autoResizeDrawable = false; drawableSize = pixels
-        preferredFramesPerSecond = 60; enableSetNeedsDisplay = false; isPaused = false
+        preferredFramesPerSecond = 60; enableSetNeedsDisplay = false; isPaused = true
         clearColor = MTLClearColorMake(0, 0, 0, 0)
         layer?.isOpaque = false
-        curl.inputImage = backwards ? next : old; curl.targetImage = backwards ? old : next
+        poster.frame = bounds; poster.autoresizingMask = [.width, .height]; poster.imageScaling = .scaleAxesIndependently
+        poster.image = NSImage(cgImage: old, size: frame.size); addSubview(poster)
         curl.backsideImage = CIImage(color: CIColor(color: paper.color) ?? .white).cropped(to: rect)
         curl.extent = rect; curl.shadowExtent = rect
         curl.radius = Float(pixels.width * 0.13); curl.angle = .pi - .pi / 10
@@ -66,11 +74,82 @@ import PDFKit
         delegate = self
         setAccessibilityElement(false)
     }
+    @discardableResult func prepareTarget(_ page: PDFPage, in pageFrame: CGRect) -> Bool {
+        guard !targetPrepared, !finished,
+              let rendered = Self.raster(page, in: pageFrame, surface: frame, material: materialFrame, extent: extent,
+                  scale: pixelScale, paper: paper, background: background, noteMarginWidth: noteMarginWidth, note: nil) else { return false }
+        targetRaster = rendered
+        preparedPageFrame = pageFrame
+        let next = CIImage(cgImage: rendered)
+        curl.inputImage = backwards ? next : oldImage; curl.targetImage = backwards ? oldImage : next
+        targetPrepared = true; isPaused = false; return true
+    }
+    private static func raster(_ page: PDFPage, in pageFrame: CGRect, surface: CGRect, material: CGRect, extent: CGRect,
+                               scale: CGFloat, paper: ReadingPaperStyle, background: NSColor, noteMarginWidth: CGFloat,
+                               note: (image: CGImage, frame: CGRect)?, connections: [PositionNoteConnection] = []) -> CGImage? {
+        guard let raw = page.pageRef,
+              let canvas = CGContext(data: nil, width: Int(extent.width), height: Int(extent.height), bitsPerComponent: 8,
+                  bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        func local(_ r: CGRect) -> CGRect { CGRect(x: (r.minX - surface.minX) * scale, y: (r.minY - surface.minY) * scale, width: r.width * scale, height: r.height * scale) }
+        canvas.setFillColor(background.cgColor); canvas.fill(extent)
+        let location = local(pageFrame)
+        var pageSize = page.bounds(for: .cropBox).size
+        if abs(page.rotation) % 180 == 90 { pageSize = CGSize(width: pageSize.height, height: pageSize.width) }
+        guard pageSize.width > 0, pageSize.height > 0 else { return nil }
+        canvas.saveGState(); canvas.clip(to: location); canvas.setFillColor(NSColor.white.cgColor); canvas.fill(location)
+        // Normalize crop/rotation at the page's own size, then explicitly use
+        // PDFKit's current viewport scale. The drawing transform alone can
+        // retain unit scale for an enlarged rectangle and shrink visible glyphs
+        // during the turn, even though its page frame is the right size.
+        canvas.translateBy(x: location.minX, y: location.minY)
+        canvas.scaleBy(x: location.width / pageSize.width, y: location.height / pageSize.height)
+        canvas.concatenate(raw.getDrawingTransform(.cropBox, rect: CGRect(origin: .zero, size: pageSize), rotate: 0, preserveAspectRatio: true))
+        canvas.drawPDFPage(raw)
+        canvas.restoreGState()
+        // PDFAnnotation.draw already accounts for its page's crop origin and
+        // rotation. Applying the raw PDF transform again would move it twice.
+        if !page.annotations.isEmpty {
+            canvas.saveGState(); canvas.clip(to: location)
+            canvas.translateBy(x: location.minX, y: location.minY)
+            canvas.scaleBy(x: location.width / pageSize.width, y: location.height / pageSize.height)
+            for annotation in page.annotations where annotation.shouldDisplay { annotation.draw(with: .cropBox, in: canvas) }
+            canvas.restoreGState()
+        }
+        var sheet = pageFrame
+        if noteMarginWidth > 0 { sheet.size.width = max(sheet.width, surface.maxX - sheet.minX) }
+        if let texture = ReadingPaperAssets.image(paper)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            canvas.saveGState()
+            var regions = [local(sheet)]
+            if noteMarginWidth > 0 { regions.append(local(CGRect(x: surface.maxX - noteMarginWidth, y: material.minY, width: noteMarginWidth, height: material.height))) }
+            canvas.clip(to: regions); canvas.setBlendMode(.multiply)
+            let k = max(material.width / CGFloat(texture.width), material.height / CGFloat(texture.height))
+            let textureRect = CGRect(x: material.midX - CGFloat(texture.width) * k / 2,
+                                     y: material.midY - CGFloat(texture.height) * k / 2,
+                                     width: CGFloat(texture.width) * k, height: CGFloat(texture.height) * k)
+            canvas.draw(texture, in: local(textureRect)); canvas.restoreGState()
+        }
+        if !connections.isEmpty {
+            canvas.saveGState()
+            canvas.translateBy(x: -surface.minX * scale, y: (material.height - surface.minY) * scale)
+            canvas.scaleBy(x: scale, y: -scale)
+            canvas.setStrokeColor(NSColor.black.withAlphaComponent(0.18).cgColor)
+            canvas.setLineWidth(0.7); canvas.setLineCap(.round); canvas.setLineJoin(.round)
+            for connection in connections {
+                canvas.addPath(connection.line.cgPath); canvas.strokePath()
+                canvas.setFillColor(NSColor(Palette.accent).withAlphaComponent(0.5).cgColor)
+                canvas.fillEllipse(in: CGRect(x: connection.start.x - 1.7, y: connection.start.y - 1.7, width: 3.4, height: 3.4))
+            }
+            canvas.restoreGState()
+        }
+        if let note { canvas.draw(note.image, in: local(note.frame)) }
+        PDFBookEdges.paint(pageFrame: local(sheet), paper: paper, unitScale: scale, in: canvas)
+        return canvas.makeImage()
+    }
     required init(coder: NSCoder) { fatalError("Paper curl views are created programmatically") }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) { }
     func draw(in view: MTKView) {
-        guard !finished, let drawable = currentDrawable, let buffer = queue.makeCommandBuffer() else { return }
+        guard !finished, targetPrepared, let drawable = currentDrawable, let buffer = queue.makeCommandBuffer() else { return }
         let now = CACurrentMediaTime()
         if began == nil { began = now }
         let t = min(1, (now - (began ?? now)) / 0.60)
@@ -78,14 +157,19 @@ import PDFKit
         curl.time = Float(backwards ? 1 - eased : eased)
         guard let output = curl.outputImage?.cropped(to: extent) else { finish(); return }
         imageContext.render(output, to: drawable.texture, commandBuffer: buffer, bounds: extent, colorSpace: CGColorSpaceCreateDeviceRGB())
+        if !firstFramePresented {
+            firstFramePresented = true
+            drawable.addPresentedHandler { [weak self] _ in Task { @MainActor in self?.poster.isHidden = true } }
+        }
+        if t >= 1 { buffer.addCompletedHandler { [weak self] _ in Task { @MainActor in self?.finish() } } }
         buffer.present(drawable); buffer.commit()
         renderedFrames += 1
         if progressSamples.count < 90 { progressSamples.append(t) }
-        if t >= 1 { finish() }
     }
     func cancel() { finished = true; isPaused = true; delegate = nil; completion = nil; removeFromSuperview() }
     private func finish() {
         guard !finished else { return }; finished = true; isPaused = true
+        if let targetRaster { poster.image = NSImage(cgImage: targetRaster, size: bounds.size); poster.isHidden = false }
         let done = completion; completion = nil
         DispatchQueue.main.async { done?() }
     }
@@ -98,14 +182,26 @@ import PDFKit
     var paper = ReadingPaperStyle.plain { didSet { needsDisplay = true } }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func draw(_ dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        Self.paint(pageFrame: pageFrame, paper: paper, in: context)
+    }
+    static func paint(pageFrame: CGRect, paper: ReadingPaperStyle, unitScale: CGFloat = 1, in context: CGContext) {
         guard !pageFrame.isEmpty else { return }
-        let width = min(38, pageFrame.width * 0.045)
-        NSGradient(starting: NSColor.black.withAlphaComponent(0.13), ending: .clear)?
-            .draw(in: CGRect(x: pageFrame.minX, y: pageFrame.minY, width: width, height: pageFrame.height), angle: 0)
+        let width = min(38 * unitScale, pageFrame.width * 0.045)
+        let spine = CGRect(x: pageFrame.minX, y: pageFrame.minY, width: width, height: pageFrame.height)
+        context.saveGState(); context.clip(to: spine)
+        if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: [NSColor.black.withAlphaComponent(0.13).cgColor, NSColor.clear.cgColor] as CFArray, locations: [0, 1]) {
+            context.drawLinearGradient(gradient, start: CGPoint(x: spine.minX, y: spine.midY),
+                end: CGPoint(x: spine.maxX, y: spine.midY), options: [])
+        }
+        context.restoreGState()
         for index in 0..<4 {
-            let x = pageFrame.maxX + CGFloat(index) * 1.7
-            let rect = CGRect(x: x, y: pageFrame.minY + CGFloat(index) * 1.3, width: 1.6, height: max(0, pageFrame.height - CGFloat(index) * 2.6))
-            paper.color.blended(withFraction: CGFloat(index + 1) * 0.04, of: .gray)?.setFill(); rect.fill()
+            let x = pageFrame.maxX + CGFloat(index) * 1.7 * unitScale
+            let rect = CGRect(x: x, y: pageFrame.minY + CGFloat(index) * 1.3 * unitScale, width: 1.6 * unitScale, height: max(0, pageFrame.height - CGFloat(index) * 2.6 * unitScale))
+            if let color = paper.color.blended(withFraction: CGFloat(index + 1) * 0.04, of: .gray) {
+                context.setFillColor(color.cgColor); context.fill(rect)
+            }
         }
     }
 }

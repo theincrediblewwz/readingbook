@@ -91,12 +91,22 @@ struct PDFReaderView: NSViewRepresentable {
 /// The PDF fills the reader; navigation is controlled by the window toolbar.
 /// Search and annotation editing appear only when requested.
 @MainActor final class PDFReaderContainerView: NSView, NSSearchFieldDelegate {
-    private let paperProvider = ReadingPaperPageProvider()
+    private let paperSurface = ReadingPaperNativeVeil(frame: .zero)
     private let bookEdges = PDFBookEdges(frame: .zero)
     private var paperBookMode = false
     private var flatBookMode: (PDFReadingDirection, PDFDisplayMode, FitMode, CGFloat)?
-    private var pageCurl: PDFPaperCurl? { didSet { pdfView.paperTurnInProgress = pageCurl != nil } }
-    func setPaperStyle(_ style: ReadingPaperStyle) { paperProvider.style = style; bookEdges.paper = style }
+    private var pageCurl: PDFPaperCurl? {
+        didSet {
+            pdfView.paperTurnInProgress = pageCurl != nil
+            controller?.reportPaperTurn(id: bindingID, active: pageCurl != nil)
+        }
+    }
+    private var paperGeometryScheduled = false
+    func setPaperStyle(_ style: ReadingPaperStyle) {
+        if paperSurface.style != style { pageCurl?.cancel(); pageCurl = nil; sourceCanvas.isHidden = false }
+        paperSurface.apply(style); bookEdges.paper = style
+        updatePaperBackground(); layoutPaperSurface()
+    }
     private var notePlacementOwner = ""
     private var noteBindingDocumentID: String?
     private var noteBindingPreview: (PDFPage, CGPoint)?
@@ -429,7 +439,6 @@ struct PDFReaderView: NSViewRepresentable {
         pdfView.displayDirection = readingDirection == .vertical ? .vertical : .horizontal
         pdfView.readingDirection = readingDirection
         pdfView.displayBox = .cropBox
-        pdfView.pageOverlayViewProvider = paperProvider
         pdfView.displaysPageBreaks = true
         pdfView.pageBreakMargins = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 0)
         pdfView.minScaleFactor = 0.05
@@ -529,7 +538,7 @@ struct PDFReaderView: NSViewRepresentable {
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         header.translatesAutoresizingMaskIntoConstraints = false; header.isHidden = true
         thumbnailPanel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(contentStack); addSubview(bookEdges); bookEdges.isHidden = true; addSubview(sourceCanvas); addSubview(thumbnailPanel); addSubview(header)
+        addSubview(contentStack); addSubview(paperSurface); addSubview(bookEdges); bookEdges.isHidden = true; addSubview(sourceCanvas); addSubview(thumbnailPanel); addSubview(header)
         let thumbnailTop = thumbnailPanel.topAnchor.constraint(equalTo: topAnchor, constant: 76)
         self.thumbnailTop = thumbnailTop
         NSLayoutConstraint.activate([
@@ -589,7 +598,7 @@ struct PDFReaderView: NSViewRepresentable {
         let margin = input.noteMarginVisible ? PositionNoteSurface.marginWidth : 0
         changeNoteMargin(to: margin)
         pdfView.pageShadowsEnabled = false
-        pdfView.backgroundColor = input.noteMarginVisible ? .textBackgroundColor : .windowBackgroundColor
+        updatePaperBackground()
         let sourceChanged = sourceHash != input.sourceHash
         if notePlacements != input.notePlacements {
             notePlacements = input.notePlacements
@@ -824,32 +833,80 @@ struct PDFReaderView: NSViewRepresentable {
         setStatus("")
         let request = navigationRequestID, generation = documentGeneration
         pendingNavigation = (request, number, notifyParent, landing)
-        position(at: target, landing: landing)
         if paperBookMode, notifyParent, !reduceReadingMotion, !reducedMotion,
            let oldPage, let oldFrame, let oldNumber, abs(oldNumber - number) == 1 {
-            beginPageCurl(from: oldPage, fromFrame: oldFrame, to: target, backwards: number < oldNumber)
+            preparePageCurl(from: oldPage, fromFrame: oldFrame, backwards: number < oldNumber)
         }
+        position(at: target, landing: landing)
         DispatchQueue.main.async { [weak self] in self?.settleNavigation(request, generation: generation, attempt: 0) }
     }
 
-    private func beginPageCurl(from old: PDFPage, fromFrame: CGRect, to next: PDFPage, backwards: Bool) {
+    private func preparePageCurl(from old: PDFPage, fromFrame: CGRect, backwards: Bool) {
         pageCurl?.cancel(); pageCurl = nil
-        let nextFrame = convert(pdfView.convert(next.bounds(for: .cropBox), from: next), from: pdfView)
-        let contentBounds = CGRect(x: 0, y: 0, width: max(1, bounds.width - appliedNoteReservedWidth), height: bounds.height)
-        let frame = fromFrame.union(nextFrame).intersection(contentBounds)
-        guard let curl = PDFPaperCurl(frame: frame, from: old, fromFrame: fromFrame, to: next, toFrame: nextFrame, backwards: backwards,
-            paper: paperProvider.style, background: pdfView.backgroundColor, scale: window?.backingScaleFactor ?? 2) else { sourceCanvas.isHidden = false; return }
+        var frame = fromFrame.intersection(bounds)
+        if noteMarginWidth > 0 {
+            frame = CGRect(x: max(bounds.minX, fromFrame.minX), y: bounds.minY,
+                width: max(1, outerPaperEdge - max(bounds.minX, fromFrame.minX)), height: bounds.height)
+        }
+        let margin = noteMarginWidth > 0 ? controller?.noteMarginSnapshot(in: self) : nil
+        let connections = controller.map {
+            PositionNoteConnectionGeometry.make(positions: $0.notePositions, size: bounds.size, owner: notePlacementOwner)
+        } ?? []
+        guard let curl = PDFPaperCurl(frame: frame, from: old, fromFrame: fromFrame, backwards: backwards,
+            paper: paperSurface.style, background: pdfView.backgroundColor, scale: window?.backingScaleFactor ?? 2,
+            materialFrame: bounds, noteMarginWidth: noteMarginWidth, oldNoteMargin: margin, connections: connections) else { sourceCanvas.isHidden = false; return }
         pageCurl = curl; sourceCanvas.isHidden = true
         addSubview(curl, positioned: .above, relativeTo: bookEdges)
         curl.completion = { [weak self, weak curl] in
             guard let self, let curl, self.pageCurl === curl else { return }
-            curl.removeFromSuperview(); self.pageCurl = nil; self.sourceCanvas.isHidden = false
-            self.sourceCanvas.needsDisplay = true; self.scheduleVisiblePages(); self.layoutBookEdges()
+            self.layoutPaperSurface(); self.pdfView.displayIfNeeded(); self.pdfView.documentView?.displayIfNeeded()
+            self.publishNoteAnchorPoints(allowDuringTurn: true)
+            self.controller?.reportPaperTurn(id: self.bindingID, active: false)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.08; curl.animator().alphaValue = 0
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self, weak curl] in
+                guard let self, let curl, self.pageCurl === curl else { return }
+                curl.removeFromSuperview(); self.pageCurl = nil; self.sourceCanvas.isHidden = false
+                self.sourceCanvas.needsDisplay = true; self.scheduleVisiblePages(); self.layoutPaperSurface()
+            }
         }
     }
-    private func layoutBookEdges() {
+    private func updatePaperBackground() {
+        pdfView.backgroundColor = noteMarginTargetWidth > 0 || paperSurface.style != .plain ? .white : .windowBackgroundColor
+    }
+    private var outerPaperEdge: CGFloat {
+        let scroll = observedClip?.enclosingScrollView ?? pdfScrollView(in: pdfView)
+        return bounds.maxX - (noteMarginWidth > 0 ? max(12, scroll?.verticalScroller?.bounds.width ?? 17) : 0)
+    }
+    private func sheetFrame(_ pageFrame: CGRect) -> CGRect {
+        guard noteMarginWidth > 0 else { return pageFrame }
+        return CGRect(x: pageFrame.minX, y: pageFrame.minY, width: max(1, outerPaperEdge - pageFrame.minX), height: pageFrame.height)
+    }
+    private func layoutPaperSurface() {
+        paperSurface.frame = bounds
+        var regions = pdfView.visiblePages.map { page in
+            convert(pdfView.convert(page.bounds(for: .cropBox), from: page), from: pdfView).intersection(bounds)
+        }.filter { !$0.isEmpty && !$0.isNull }
+        if noteMarginWidth > 0 {
+            regions.append(CGRect(x: outerPaperEdge - noteMarginWidth, y: bounds.minY, width: noteMarginWidth, height: bounds.height))
+            // The blank reserve between a centered page and the notes belongs
+            // to the same sheet, with one continuous material coordinate space.
+            regions += pdfView.visiblePages.map { page in
+                sheetFrame(convert(pdfView.convert(page.bounds(for: .cropBox), from: page), from: pdfView)).intersection(bounds)
+            }.filter { !$0.isEmpty && !$0.isNull }
+        }
+        paperSurface.cover(regions)
         bookEdges.frame = bounds; bookEdges.isHidden = !paperBookMode
-        if let page = pdfView.currentPage { bookEdges.pageFrame = convert(pdfView.convert(page.bounds(for: .cropBox), from: page), from: pdfView) }
+        if let page = pdfView.currentPage {
+            bookEdges.pageFrame = sheetFrame(convert(pdfView.convert(page.bounds(for: .cropBox), from: page), from: pdfView))
+        }
+    }
+    private func requestPaperGeometry() {
+        guard !paperGeometryScheduled else { return }; paperGeometryScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }; self.paperGeometryScheduled = false; self.layoutPaperSurface()
+        }
     }
     private func setPaperBookMode(_ enabled: Bool) {
         guard paperBookMode != enabled else { return }
@@ -868,7 +925,7 @@ struct PDFReaderView: NSViewRepresentable {
         }
         paperBookMode = enabled; flatBookMode = enabled ? flatBookMode : nil
         resetPageGesture(); pdfView.layoutDocumentView(); navigate(to: page, notifyParent: false)
-        layoutBookEdges(); refreshControls(); scheduleWorkspaceCapture()
+        layoutPaperSurface(); refreshControls(); scheduleWorkspaceCapture()
     }
 
     private func invalidateNavigation() {
@@ -908,11 +965,18 @@ struct PDFReaderView: NSViewRepresentable {
         // makeNSView can load a document before SwiftUI gives the PDF a viewport.
         // Keep the request pending; layout() will resume it once it has a size.
         guard pdfView.bounds.width > 40, pdfView.bounds.height > 40 else { return }
+        if pageCurl != nil, noteMarginAnimation != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+                self?.settleNavigation(request, generation: generation, attempt: attempt)
+            }
+            return
+        }
         // PDFKit may finish document/scale layout on the next run-loop turn.
         // An older attempt cannot move or notify after a newer request arrives.
         if attempt == 0 || currentPageNumber != pending.page {
             guard attempt < 3, let target = document?.page(at: pending.page - 1) else {
                 pendingNavigation = nil
+                pageCurl?.cancel(); pageCurl = nil; sourceCanvas.isHidden = false
                 setStatus("PDF 定位未完成，请重新选择页码。")
                 return
             }
@@ -922,6 +986,11 @@ struct PDFReaderView: NSViewRepresentable {
         }
         pendingNavigation = nil; refreshControls()
         restoreWorkspaceDestination()
+        layoutPaperSurface()
+        if let curl = pageCurl, !curl.targetPrepared, let page = pdfView.currentPage {
+            let frame = convert(pdfView.convert(page.bounds(for: .cropBox), from: page), from: pdfView)
+            if !curl.prepareTarget(page, in: frame) { curl.cancel(); pageCurl = nil; sourceCanvas.isHidden = false }
+        }
         if let quote = pendingQuote, quote.page == pending.page {
             pendingQuote = nil; applyQuoteFocus(on: quote.page, quote: quote.quote, prefix: quote.prefix, suffix: quote.suffix, decoration: quote.decoration)
         }
@@ -1166,11 +1235,14 @@ struct PDFReaderView: NSViewRepresentable {
 
     override func layout() {
         super.layout()
+        if let curl = pageCurl, curl.viewportSize != bounds.size {
+            curl.cancel(); pageCurl = nil; sourceCanvas.isHidden = false
+        }
         // SwiftUI can resize the representable before the nested stack/PDFView
         // has laid out. Always measure the settled child, including a first note.
         contentStack.layoutSubtreeIfNeeded()
         let changedInsets = layoutNoteInsets()
-        sourceCanvas.frame = bounds; sourceCanvas.needsDisplay = true; layoutBookEdges()
+        sourceCanvas.frame = bounds; sourceCanvas.needsDisplay = true
         scheduleVisiblePages()
         let chrome = visibleChromeFrame(header)
         let nextTop: CGFloat = chrome.isEmpty ? 76 : max(76, chrome.maxY + 12)
@@ -1186,11 +1258,13 @@ struct PDFReaderView: NSViewRepresentable {
             }
             scheduleSourceHoverRefresh()
         }
+        layoutPaperSurface()
         refreshControls()
     }
 
     private func changeNoteMargin(to target: CGFloat) {
         guard noteMarginTargetWidth != target else { return }
+        pageCurl?.cancel(); pageCurl = nil; sourceCanvas.isHidden = false
         noteMarginTargetWidth = target; noteMarginAnimation?.invalidate(); noteMarginAnimation = nil
         // At a continuous-page boundary PDFKit's destination may name the
         // preceding page, even though currentPage and the visible text belong
@@ -1305,6 +1379,7 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     @objc private func pageChanged(_ notification: Notification) {
+        requestPaperGeometry()
         scheduleVisiblePages(); sourceCanvas.needsDisplay = true
         refreshControls()
         guard !installingDocument, pendingNavigation == nil else { return }
@@ -1330,6 +1405,7 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     @objc private func scaleChanged(_ notification: Notification) {
+        requestPaperGeometry()
         invalidateSourcePress()
         if !isApplyingFit, !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil { fitMode = .custom }
         refreshControls(); sourceCanvas.needsDisplay = true; scheduleWorkspaceCapture(); scheduleVisiblePages()
@@ -1340,6 +1416,7 @@ struct PDFReaderView: NSViewRepresentable {
         guard let clip = notification.object as? NSClipView, clip === observedClip else { return }
         sourceScrollQuietUntil = ProcessInfo.processInfo.systemUptime + 0.15
         invalidateSourcePress(); reportSourceHover(nil)
+        layoutPaperSurface()
         sourceCanvas.needsDisplay = true; scheduleVisiblePages(); scheduleWorkspaceCapture()
         scheduleSourceHoverRefresh()
     }
@@ -1910,8 +1987,9 @@ struct PDFReaderView: NSViewRepresentable {
         if noteBindingDocumentID != nil { noteBindingPreview = (page, point); scheduleVisiblePages() }
         onCreatePositionNote?(index + 1, Double((point.x - crop.minX) / crop.width), Double((point.y - crop.minY) / crop.height))
     }
-    private func publishNoteAnchorPoints() {
-        guard let document, pageCurl == nil else { controller?.reportNotePositions(id: bindingID, points: [:], owner: notePlacementOwner, marginWidth: noteMarginWidth); return }
+    private func publishNoteAnchorPoints(allowDuringTurn: Bool = false) {
+        if pageCurl != nil && !allowDuringTurn { return }
+        guard let document else { controller?.reportNotePositions(id: bindingID, points: [:], owner: notePlacementOwner, marginWidth: noteMarginWidth); return }
         var points: [String: CGPoint] = [:], connectors: [String: PDFNoteConnector] = [:]
         func topLeft(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x, y: isFlipped ? point.y : bounds.height - point.y) }
         func append(_ id: String, page: PDFPage, original: CGPoint) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Run real PDFKit/Metal paper reading against the current linked product."""
-import argparse, datetime, hashlib, json, os, pathlib, plistlib, shutil, subprocess, sys
+import argparse, datetime, hashlib, json, os, pathlib, plistlib, re, shutil, subprocess, sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 p = argparse.ArgumentParser()
 p.add_argument('--bin-dir', type=pathlib.Path, required=True)
@@ -55,6 +55,7 @@ with (output/'runtime.log').open('x') as log:
 logs = subprocess.run(['/usr/bin/log', 'show', '--style', 'compact', '--start', started, '--predicate', 'processIdentifier == '+str(child.pid)], capture_output=True, text=True, timeout=30)
 runtime = logs.stdout + logs.stderr; (output/'unified.log').write_text(runtime)
 warnings = {key: runtime.count(pattern) for key, pattern in [('layout300', '300 iterations'), ('publishingDuringViewUpdates', 'Publishing changes from within view updates'), ('attributeGraphCycles', 'AttributeGraph: cycle detected')]}
+warnings['invalidViewGeometry'] = len(re.findall(r'invalid (?:frame|view) (?:dimension|geometry)', runtime, re.I))
 record = json.loads((output/'result.json').read_text()) if (output/'result.json').exists() else {}
 passed = status == 0 and logs.returncode == 0 and not any(warnings.values()) and record.get('status') == 'passed'
 report = {'probe': 'paper-reading', 'status': 'passed' if passed else 'failed', 'passed': passed, 'exitCode': status,

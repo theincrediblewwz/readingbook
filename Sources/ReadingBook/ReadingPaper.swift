@@ -20,6 +20,9 @@ enum ReadingPaperStyle: String, CaseIterable, Identifiable {
 }
 
 @MainActor enum ReadingPaperAssets {
+    /// Keep the material's tint, with just a trace of grain. The original PNGs
+    /// stay intact; all live surfaces and page turns share this bounded cache.
+    static let grainStrength: CGFloat = 0.14
     private static let images: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>(); cache.countLimit = 3; cache.totalCostLimit = 24 * 1024 * 1024; return cache
     }()
@@ -28,8 +31,18 @@ enum ReadingPaperStyle: String, CaseIterable, Identifiable {
         if let image = images.object(forKey: style.rawValue as NSString) { return image }
         guard let bundle = ReadingBookResources.bundle,
               let url = bundle.url(forResource: style.rawValue, withExtension: "png", subdirectory: "Paper"),
-              let image = NSImage(contentsOf: url) else { return nil }
-        images.setObject(image, forKey: style.rawValue as NSString, cost: 1536 * 1024 * 4)
+              let original = NSImage(contentsOf: url),
+              let source = original.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              source.width * source.height <= 4_000_000,
+              let canvas = CGContext(data: nil, width: source.width, height: source.height, bitsPerComponent: 8,
+                  bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let rect = CGRect(x: 0, y: 0, width: CGFloat(source.width), height: CGFloat(source.height))
+        canvas.setFillColor(style.color.cgColor); canvas.fill(rect)
+        canvas.setAlpha(grainStrength); canvas.draw(source, in: rect)
+        guard let material = canvas.makeImage() else { return nil }
+        let image = NSImage(cgImage: material, size: original.size)
+        images.setObject(image, forKey: style.rawValue as NSString, cost: source.width * source.height * 4)
         return image
     }
 }
@@ -61,23 +74,15 @@ struct ReaderPaperPanel: View {
     }
 }
 
-/// PDFKit supplies and retires only the visible page overlays. Multiplication
-/// changes the white paper without washing out black glyphs or editing the PDF.
-@MainActor final class ReadingPaperPageProvider: NSObject, @preconcurrency PDFPageOverlayViewProvider {
-    var style: ReadingPaperStyle = .plain {
-        didSet { if oldValue != style { for view in overlays.allObjects { view.apply(style) } } }
-    }
-    private let overlays = NSHashTable<ReadingPaperNativeVeil>.weakObjects()
-    func pdfView(_ view: PDFView, overlayViewFor page: PDFPage) -> NSView? {
-        let overlay = ReadingPaperNativeVeil(frame: .zero); overlay.apply(style); overlays.add(overlay); return overlay
-    }
-}
-
+/// One material spans the visible pages and their note reserve. Its mask keeps
+/// page gaps clear; multiplication preserves black glyphs and the original PDF.
 @MainActor final class ReadingPaperNativeVeil: NSView {
-    private var style: ReadingPaperStyle?
+    private(set) var style: ReadingPaperStyle = .plain
+    private(set) var paperRects: [CGRect]?
+    private var materialApplied = false
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     func apply(_ next: ReadingPaperStyle) {
-        guard style != next else { return }; style = next
+        guard !materialApplied || style != next else { return }; style = next; materialApplied = true
         wantsLayer = true
         isHidden = next == .plain
         layer?.contents = ReadingPaperAssets.image(next)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
@@ -85,10 +90,25 @@ struct ReaderPaperPanel: View {
         layer?.masksToBounds = true
         layer?.compositingFilter = next == .plain ? nil : CIFilter(name: "CIMultiplyCompositing")
     }
+    func cover(_ rects: [CGRect]) {
+        guard paperRects != rects || layer?.mask?.frame != bounds else { return }
+        paperRects = rects
+        let mask = CAShapeLayer(); mask.frame = bounds
+        let path = CGMutablePath(); path.addRects(rects); mask.path = path
+        mask.fillColor = NSColor.white.cgColor; layer?.mask = mask
+    }
 }
 
 struct ReadingPaperTextVeil: NSViewRepresentable {
     let style: ReadingPaperStyle
     func makeNSView(context: Context) -> ReadingPaperNativeVeil { let view = ReadingPaperNativeVeil(frame: .zero); view.apply(style); return view }
     func updateNSView(_ view: ReadingPaperNativeVeil, context: Context) { view.apply(style) }
+}
+
+struct ReadingPaperBackground: View {
+    @AppStorage("reading.paperStyle") private var styleName = ReadingPaperStyle.plain.rawValue
+    var body: some View {
+        let style = ReadingPaperStyle(rawValue: styleName) ?? .plain
+        Color(nsColor: style.color)
+    }
 }

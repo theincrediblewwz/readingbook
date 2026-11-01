@@ -17,7 +17,7 @@ struct ReaderNavigationPanel: View {
         ViewThatFits(in: .vertical) {
             panelContent
             ScrollView { panelContent }.scrollBounceBehavior(.basedOnSize)
-        }.frame(width: 354).frame(maxHeight: max(180, maximumHeight)).background(Palette.surface)
+        }.frame(width: 392).frame(maxHeight: max(180, maximumHeight)).background(Palette.surface)
             .onAppear { showsParallelModes = store.readingSourceMode != "original" }
     }
     private var panelContent: some View {
@@ -83,9 +83,11 @@ struct ReaderNavigationPanel: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Image(systemName: icon).font(.system(size: 15)).frame(width: 18)
-                Text(title).font(.system(size: 14, weight: selected ? .medium : .regular)).lineLimit(1)
+                Text(title).font(.system(size: 14, weight: selected ? .medium : .regular))
+                    .fixedSize(horizontal: true, vertical: false).layoutPriority(1)
                 Spacer(minLength: 0)
-                if selected { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)) }
+                Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold))
+                    .frame(width: 14).opacity(selected ? 1 : 0).accessibilityHidden(true)
             }.padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 44).contentShape(RoundedRectangle(cornerRadius: 11))
                 .foregroundStyle(selected ? Palette.accent : Palette.ink)
                 .background(Palette.accent.opacity(selected ? 0.1 : 0.035), in: RoundedRectangle(cornerRadius: 11))

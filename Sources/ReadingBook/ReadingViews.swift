@@ -127,7 +127,7 @@ struct ReaderWorkspaceView: View {
                     }.frame(width: PositionNoteSurface.marginWidth, height: geometry.size.height)
                         .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, nativePDF ? pdfController.notePositions.scrollerWidth : 17)
                         .offset(x: PositionNoteSurface.marginWidth - marginWidth)
-                        .opacity(noteFan == nil ? 1 : 0).allowsHitTesting(noteFan == nil && !interactionBlocked)
+                        .modifier(PositionNoteTurnVisibility(positions: pdfController.notePositions, visible: noteFan == nil, interactive: !interactionBlocked))
                     if nativePDF { PositionNoteConnections(positions: pdfController.notePositions, size: geometry.size).opacity(noteFan == nil ? 1 : 0) }
                     Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { notesCollapsed = true } } label: { Image(systemName: "chevron.right").font(.system(size: 12, weight: .medium)).frame(width: 32, height: 32) }
                         .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.96), in: Circle())

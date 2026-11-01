@@ -17,6 +17,8 @@ enum PositionNoteSurface {
     @Published private(set) var connectors: [String: PDFNoteConnector] = [:]
     @Published private(set) var scrollerWidth: CGFloat = 17
     @Published private(set) var marginWidth: CGFloat = 0
+    @Published private(set) var paperTurnActive = false
+    func setPaperTurn(_ active: Bool) { if paperTurnActive != active { paperTurnActive = active } }
     func update(_ next: [String: CGPoint], owner: String = "", connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17, marginWidth: CGFloat = 0) {
         if self.owner != owner { self.owner = owner }
         if points != next { points = next }
@@ -58,12 +60,45 @@ enum PDFReaderCommand {
     var noteAnchorPoints: [String: CGPoint] { notePositions.points }
     private var bindingID: UUID?
     private var handler: ((PDFReaderCommand) -> Void)?
+    private weak var noteMarginHost: NSView?
+    private var noteMarginOwner = ""
+    private var paperTurnIsActive = false
+
+    func attachNoteMargin(_ host: NSView, owner: String) {
+        noteMarginHost = host; noteMarginOwner = owner; host.isHidden = paperTurnIsActive
+    }
+    func detachNoteMargin(_ host: NSView) { if noteMarginHost === host { noteMarginHost = nil; noteMarginOwner = "" } }
+    func noteMarginSnapshot(in reader: NSView) -> (image: CGImage, frame: CGRect)? {
+        guard let host = noteMarginHost, !host.isHidden, host.window === reader.window,
+              noteMarginOwner == notePositions.owner, host.bounds.width > 0, host.bounds.height > 0 else { return nil }
+        let size = host.bounds.size
+        let scale = host.window?.backingScaleFactor ?? 1
+        guard size.width * size.height * scale * scale <= 4_000_000,
+              max(size.width, size.height) * scale <= 4096 else { return nil }
+        host.layoutSubtreeIfNeeded(); host.displayIfNeeded()
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        guard let image = bitmap.cgImage else { return nil }
+        return (image, reader.convert(host.bounds, from: host))
+    }
+    func reportPaperTurn(id: UUID, active: Bool) {
+        guard bindingID == id else { return }
+        paperTurnIsActive = active; noteMarginHost?.isHidden = active
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.bindingID == id else { return }; self.notePositions.setPaperTurn(self.paperTurnIsActive)
+        }
+    }
 
     func command(_ command: PDFReaderCommand) { handler?(command) }
     func reportNotePositions(id: UUID, points: [String: CGPoint], owner: String, connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17, marginWidth: CGFloat = 0) {
         guard bindingID == id else { return }; notePositions.update(points, owner: owner, connectors: connectors, scrollerWidth: scrollerWidth, marginWidth: marginWidth)
     }
-    func bind(id: UUID, handler: @escaping (PDFReaderCommand) -> Void) { bindingID = id; self.handler = handler }
+    func bind(id: UUID, handler: @escaping (PDFReaderCommand) -> Void) {
+        let changed = bindingID != id
+        if changed { paperTurnIsActive = false; noteMarginHost?.isHidden = false }
+        bindingID = id; self.handler = handler
+        if changed { reportPaperTurn(id: id, active: false) }
+    }
     func update(id: UUID, page: Int, pageCount: Int, zoomPercent: Int, isReady: Bool, hasSelection: Bool, canEditAnnotations: Bool, isSearchVisible: Bool, isContinuous: Bool, direction: PDFReadingDirection, thumbnailsVisible: Bool, fitMode: String, chromeFrame: CGRect, thumbnailFrame: CGRect, paperBookMode: Bool = false) {
         guard bindingID == id else { return }
         if self.page != page { self.page = page }
@@ -83,10 +118,12 @@ enum PDFReaderCommand {
     }
     func unbind(id: UUID) {
         guard bindingID == id else { return }; bindingID = nil; handler = nil
+        paperTurnIsActive = false; noteMarginHost?.isHidden = false
         DispatchQueue.main.async { [weak self] in
             guard let self, self.bindingID == nil else { return }
             self.isReady = false; self.hasSelection = false; self.isSearchVisible = false; self.pageCount = 0
             self.notePositions.update([:])
+            self.notePositions.setPaperTurn(false)
             self.chromeFrame = .zero; self.thumbnailFrame = .zero; self.thumbnailsVisible = false
         }
     }

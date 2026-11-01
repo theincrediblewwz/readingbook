@@ -21,6 +21,7 @@ enum PositionNotePreview {
 /// its native responder to the same PDF scroll view, including single-page mode.
 @MainActor final class PositionNoteNativeHost: NSHostingView<AnyView> {
     var onScroll: ((NSEvent) -> Void)?
+    var onDetach: (() -> Void)?
     override var intrinsicContentSize: NSSize { .init(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
     override func scrollWheel(with event: NSEvent) { if let onScroll { onScroll(event) } else { super.scrollWheel(with: event) } }
 }
@@ -30,12 +31,26 @@ struct PositionNoteMarginHost: NSViewRepresentable {
     let controller: PDFReaderController
     func makeNSView(context: Context) -> PositionNoteNativeHost {
         let host = PositionNoteNativeHost(rootView: root)
+        controller.attachNoteMargin(host, owner: store.collectionOwnerKey)
+        host.onDetach = { [weak controller, weak host] in if let host { controller?.detachNoteMargin(host) } }
         host.onScroll = { controller.command(.scrollNoteArea($0)) }; return host
     }
     func updateNSView(_ view: PositionNoteNativeHost, context: Context) {
         view.rootView = root; view.onScroll = { controller.command(.scrollNoteArea($0)) }
+        controller.attachNoteMargin(view, owner: store.collectionOwnerKey)
     }
+    static func dismantleNSView(_ view: PositionNoteNativeHost, coordinator: ()) { view.onScroll = nil; view.onDetach?(); view.onDetach = nil }
     private var root: AnyView { AnyView(content.environmentObject(store).modifier(ReadingPreferencesEnvironment())) }
+}
+
+struct PositionNoteTurnVisibility: ViewModifier {
+    @ObservedObject var positions: PDFNotePositionState
+    let visible: Bool
+    let interactive: Bool
+    func body(content: Content) -> some View {
+        content.opacity(visible && !positions.paperTurnActive ? 1 : 0)
+            .allowsHitTesting(visible && interactive && !positions.paperTurnActive)
+    }
 }
 
 struct PositionNoteMargin: View {
@@ -63,7 +78,8 @@ struct PositionNoteMargin: View {
     }
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Palette.paper
+            Color.clear
+            if !isPDF { ReadingPaperBackground() }
             ForEach(stacks, id: \.ids) { stack in stackView(stack).padding(.leading, 20).offset(y: stack.top) }
         }.frame(width: PositionNoteSurface.marginWidth, height: height).clipped()
             .task(id: preparationKey) {
@@ -90,21 +106,22 @@ struct PositionNoteMargin: View {
                 if let id = stack.ids.first { PositionNotePaper(id: id, text: snippets[id] ?? "", height: 170) }
             }.frame(width: 230, height: 184, alignment: .topLeading)
             Button { onExpand(stack.ids, snippets, CGPoint(x: 135, y: stack.top + 85)) } label: {
-                Image(systemName: "rectangle.stack").font(.system(size: 12)).frame(width: 32, height: 44)
+                Image(systemName: "rectangle.stack").font(.system(size: 12)).foregroundStyle(.black.opacity(0.6)).frame(width: 32, height: 44)
             }.buttonStyle(ReadingQuietButtonStyle()).help("在书页中央摊开这叠 \(stack.ids.count) 张便签")
                 .accessibilityLabel("展开 \(stack.ids.count) 张便签")
         }
     }
-    private var paper: some View { RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)).overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.07)) }.frame(width: 230, height: 170) }
+    private var paper: some View { ReadingPaperBackground().clipShape(RoundedRectangle(cornerRadius: 6)).overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.07)) }.frame(width: 230, height: 170) }
 }
 
-struct PositionNoteConnections: View {
-    @EnvironmentObject private var store: AppStore
-    @ObservedObject var positions: PDFNotePositionState
-    let size: CGSize
-    var body: some View {
-        Canvas { context, _ in
-            guard positions.owner == store.collectionOwnerKey else { return }
+struct PositionNoteConnection {
+    let line: Path
+    let start: CGPoint
+}
+@MainActor enum PositionNoteConnectionGeometry {
+    static func make(positions: PDFNotePositionState, size: CGSize, owner: String) -> [PositionNoteConnection] {
+            guard positions.owner == owner else { return [] }
+            var result: [PositionNoteConnection] = []
             let points = positions.points.map { ReadingNoteScreenPosition(id: $0.key, y: $0.value.y) }
             let stacks = ReadingNoteLayout.stacks(points, height: size.height, topInset: PositionNoteSurface.topInset)
             let left = size.width - positions.scrollerWidth - positions.marginWidth
@@ -116,11 +133,24 @@ struct PositionNoteConnections: View {
                     let exit = CGPoint(x: max(connector.start.x + 5, connector.pageExit.x), y: connector.pageExit.y)
                     line.addLine(to: exit)
                     line.addCurve(to: end, control1: CGPoint(x: exit.x + 14, y: exit.y), control2: CGPoint(x: end.x - 18, y: end.y))
-                    context.stroke(line, with: .color(.primary.opacity(0.18)), style: StrokeStyle(lineWidth: 0.7, lineCap: .round, lineJoin: .round))
-                    context.fill(Path(ellipseIn: CGRect(x: connector.start.x - 1.7, y: connector.start.y - 1.7, width: 3.4, height: 3.4)), with: .color(Palette.accent.opacity(0.5)))
+                    result.append(.init(line: line, start: connector.start))
                 }
             }
-        }.allowsHitTesting(false).accessibilityHidden(true)
+            return result
+    }
+}
+
+struct PositionNoteConnections: View {
+    @EnvironmentObject private var store: AppStore
+    @ObservedObject var positions: PDFNotePositionState
+    let size: CGSize
+    var body: some View {
+        Canvas { context, _ in
+            for connection in PositionNoteConnectionGeometry.make(positions: positions, size: size, owner: store.collectionOwnerKey) {
+                context.stroke(connection.line, with: .color(.black.opacity(0.18)), style: StrokeStyle(lineWidth: 0.7, lineCap: .round, lineJoin: .round))
+                context.fill(Path(ellipseIn: CGRect(x: connection.start.x - 1.7, y: connection.start.y - 1.7, width: 3.4, height: 3.4)), with: .color(Palette.accent.opacity(0.5)))
+            }
+        }.opacity(positions.paperTurnActive ? 0 : 1).allowsHitTesting(false).accessibilityHidden(true)
     }
 }
 
@@ -146,11 +176,11 @@ struct PositionNotePaper: View {
         return min(300, max(100, ceil(bounds.height) + 36))
     }
     var body: some View {
-        Text(text).font(font).foregroundStyle(Color.primary.opacity(0.67)).lineSpacing(5)
+        Text(text).font(font).foregroundStyle(Color.black.opacity(0.67)).lineSpacing(5)
             .lineLimit(max(1, Int((resolvedHeight - 36) / ((placement?.fontSize ?? 15) + 5))))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(18)
             .frame(width: width, height: resolvedHeight, alignment: .topLeading).clipped()
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+            .background { ReadingPaperBackground().clipShape(RoundedRectangle(cornerRadius: 6)) }
             .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(hovered ? 0.14 : 0.065)) }
             .shadow(color: .black.opacity(hovered ? 0.055 : 0.035), radius: 8, y: 5)
             .contentShape(Rectangle()).onTapGesture(count: clickCount, perform: edit)
