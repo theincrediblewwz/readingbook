@@ -1,8 +1,12 @@
-> 2026-11-01 当前接续：0.23.32/build63已同步main并发布，产品源6c3569678cd8e22482b87cd67f98e57482b8bc7c，完整CI41243871702通过790项Core/133项指定回归、两种滚动条各20项新增布局检查及全部旧门槛，零编译警告。Mac仍锁屏，安装版仍31/62；安装替换、原书GUI与被遮卡片的实际悬停验收尚未完成，不得报整批完成。先读[七项结果与待办](Design/2026-11-01-note-layout-and-library-results.md)和logs/note-layout-covers-20261101/STATUS.md。解锁问题已发出，不重复询问授权或改锁屏设置。用户dirty进度文档SHA不变，最新回收状态和新增译文都要保留，不用初始备份覆盖现库。
+> 2026-11-01：0.23.32/build63已同步main、发布、替换安装并完成原书两次启动验收。七项便签、折叠收纳与大封面需求已交付；用户实际悬停确认可平滑抬卡。当前新增反馈是“少量卡片更大、更疏，数量多才保持现密度”，接下来先做这处精修，再继续16类组件性能优化。见[逐项结果](Design/2026-11-01-note-layout-and-library-results.md)。下方31及更旧都是历史，不再当待办。
 
-32交付入口：该批delivery/verified-release-32.json、dist/0.23.32-ci-41243871702/verification.json、delivery/delivery-plan.json。Release430213965、artifact13058983743；canonical ZIP27295650B、SHA2df4e7058c9e90266028379eebf372541f40a29ab217302a05b94611e7b98dff。不要重复创建发布或重跑已通过CI。安装器要求正常退出原安装进程后才备份和替换，禁止强退。当前源CI与早先未变组件人工截图分开封存于current-source-ui.json，明确localFinalInstalledUICompleted=false，不能当成原安装验收。四种缩放恢复与外侧滚动条已自动验证；真实悬停顺滑程度仍待本机检查。两次旧CI失败与锁屏中断证据保留。
+32产品源6c3569678cd8e22482b87cd67f98e57482b8bc7c，完整CI41243871702通过790 Core/133指定回归、两种滚动条各20项新增动态布局与全部旧门槛，零编译警告。Release430213965、artifact13058983743。实际About32/63，PID11343/11921，104页、适宽343%（布局修正后重算）、102旧句译、2条既有历史、默认分组/逐条折叠、引用浮层、组件目录、书库顶部重选与正常重启均通过。没有新发问题、生成解释或保存原书笔记；模型问题可从既有派生缓存读取，不推断生产网络调用次数。
 
-两阶段已清理1425536KiB（约1.36GiB）可重建helper/调试程序/重复module cache，保留swift与clang两套共享缓存、增量对象、源、原始证据与私人保护。旧helper路径已退役，重建前读本批RETIRED_GENERATED.md。当前库27文件，原PDF/5篇笔记正文及旧分析保留；pre-install-preservation-32.json记录最新状态。原书104页、fitMode width，布局修正后适宽应按真实区域重算，自定义缩放须精确保留。新包重复载荷及30版的Release/tag/程序产物/回滚App清理须等32安装验收后，保留31回滚。七项完成后继续16类轮转，优先文件夹完整投影和跨组件状态，不恢复数学核查。
+新鲜安装保护的27文件全部保留，仅Workspace正常导航变化；PDF、笔记、分析、最新回收状态与新增译文保持，AI服务配置不变，其他偏好仅主窗口几何变化。当前库比03:05初始保护多出的句译和回收状态属于用户最新状态，不能覆盖回旧备份。当前保护和31回滚App在private-books/note-layout-covers-20261101/install-before-0.23.32。用户dirty进度文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，禁止修改/提交。
+
+交付入口logs/note-layout-covers-20261101/delivery/final-delivery.json、native-original-ui-passed-32.json、fan-user-hover-confirmation.json、post-install-check-32及ui-native-logs-32。两次早期CI固定滚动准备失败与锁屏中断证据保留；最终70原断言完整通过，不能把固定460距离前置失败称成产品滚动失效。current-source-ui.json是发布前CI与未变组件人工证据，最终原书GUI为独立新回执，不修改旧封存文件假称当时已验。
+
+canonical dist/ReadingBook-0.23.32-Mac.zip为27295650B、SHA2df4e7058c9e90266028379eebf372541f40a29ab217302a05b94611e7b98dff。重复ZIP和展开readyappPath已退役，先读dist/0.23.32-ci-41243871702/RETIRED_PAYLOADS.md再恢复。三阶段清理1899340KiB约1.81GiB；全批4331792→4380636KiB，净增48844KiB约47.7MiB。远端仅main与32/31版本，30 Release/tag/程序产物和本地30 App/ZIP精确退役，源历史、失败诊断、全部非App私人保护保留。共享swift/clang缓存和增量对象仍在；当前隔离UI helper为紧接的扇形精修复用，不另建重复树。之后继续文件夹完整投影与跨组件状态，确认收益再改，不恢复数学核查。
 
 > 2026-11-01：0.23.31/build62已同步main、发布、替换安装并完成原书两次启动验收。十点体验缺口、位置笔记与摘要紧凑布局已补齐；完整CI774/117、渲染15和新增原生38项及所有旧门槛通过，零编译警告。见[本批结果](Design/2026-11-01-ux-completion-results.md)和[逐项状态](Design/2026-10-31-ten-point-ux-status.md)。下方30及更旧是历史，不再作为当前待办。
 
