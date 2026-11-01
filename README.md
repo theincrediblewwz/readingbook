@@ -1,6 +1,20 @@
-# ReadingBook 0.23.21 · 后台样式更新优化
+# ReadingBook
 
-[下载0.23.24/build55](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.24) · [本批结果与边界](Design/2026-10-31-temporal-composition-optimization-results.md) · [组件计划](Design/2026-10-29-component-performance-plan.md)。已同步main并替换本机安装版，原书验收通过；产品源码`32e5a5872dc2afcc4c2acb399b3f0dac836ea28f`。
+本地书籍阅读、笔记与便签，配合伴读、对话和智能阅读。原书与用户笔记保存在你选择的书库；新分析与界面收纳保留明确来源。
+
+[下载0.23.37](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.37) · [33稳定回退版](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.33) · [数据存储说明](数据存储说明.md) · [组件优化计划](Design/2026-10-29-component-performance-plan.md)
+
+当前版 **0.23.37/build68**：更柔和的三款纸纹、连续的便签纸面、跟随实际页边的书脊、包含便签的真实翻页及完整的模式文字。前面的11项便签/编辑/回收与折叠预览改进继续保留。已同步main、发布通用安装包并更新本机程序；802项Core与全部原生门槛、原书两次正常启动验收通过。原书、笔记、分析及全部偏好保留。
+
+[本轮逐项说明](Design/2026-11-01-reading-surface-refinement.md) · [纸书反馈与证据边界](Design/2026-11-01-paper-book-followup.md)
+
+下方是各批历史记录，旧下载包已按保留策略退役；当前可用下载以上方稳定版入口为准。局部试验收益不等于整App提速。
+
+---
+
+# ReadingBook 0.23.21 · 后台样式更新优化（历史交付）
+
+0.23.24/build55（历史包已退役） · [本批结果与边界](Design/2026-10-31-temporal-composition-optimization-results.md) · [组件计划](Design/2026-10-29-component-performance-plan.md)。已同步main并替换本机安装版，原书验收通过；产品源码`32e5a5872dc2afcc4c2acb399b3f0dac836ea28f`。
 
 隐藏Markdown连续切换字号时合并后台样式工作。在60个新进程的固定对照中，20/128KiB两场景完整App与所属Web进程合计CPU配对中位下降约69.77%/65.92%；主题和可见内容的小波动不作为收益。重显延迟、单进程内存、完整来源/DOM/选区/权限守护通过。其他已有功能与此前优化保留。
 
@@ -10,11 +24,11 @@ GitHub保留main及21/20两版，提交历史保留。原始测量与测试程�
 
 ---
 
-# ReadingBook 0.23.20 · 历史引用修复（历史交付，现为回滚版）
+# ReadingBook 0.23.20 · 历史引用修复（历史交付，历史包已退役）
 
-[下载0.23.20/build51回滚版](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.20) · [该批记录](Design/2026-10-30-history-reference-results.md)。打开历史引用优先显示目标回答，前后分批可达全部历史，字号和宽度变化保留用户位置。该批完整CI及原书验收通过；无限延后隐藏CSS候选因重显回退拒绝，21采用的是另外独立验证的有界方案。
+0.23.20/build51（历史包已退役） · [该批记录](Design/2026-10-30-history-reference-results.md)。打开历史引用优先显示目标回答，前后分批可达全部历史，字号和宽度变化保留用户位置。该批完整CI及原书验收通过；无限延后隐藏CSS候选因重显回退拒绝，21采用的是另外独立验证的有界方案。
 
-下方保留各批历史记录，当前可用版本与保留情况以上方21/20为准。
+下方保留各批历史记录；历史中的版本保留情况只代表当时，以本文最顶部的当前说明为准。
 
 ---
 

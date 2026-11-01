@@ -1,4 +1,4 @@
-> 2026-11-01：四批非 PDF 首轮均已交付（22–25），随后 26–30 继续处理地图/导图、伴读工具和请求预览。31–35 优先处理收纳、便签、书库与纸书体验；35 正在完整 CI 和最终安装验收。已交付性能收益与这批体验修复分开记录，不能把动画实现算作整体提速。
+> 2026-11-02：四批非 PDF 首轮均已交付（22–25），26–30继续处理地图/导图、伴读工具和请求预览；31–37优先修复收纳、便签、书库与纸书体验。37完整功能回归、通用包、发布与原书安装验收已完成。文件夹完整投影的候选准备对照已有168项结果一致，但真实浮层、状态失效和额外内存尚未验，不当作已采用收益。动画实现不计为整App提速。
 
 # 下一阶段：组件性能、通信与组合验证
 
@@ -6,7 +6,7 @@
 
 [第一批](2026-10-30-companion-chat-scheduling-results.md)22、[第二批](2026-10-31-object-graph-optimization-results.md)23、[第三批](2026-10-31-temporal-composition-optimization-results.md)24和[第四批](2026-10-31-operations-workspace-optimization-results.md)25均已交付。[地图与图谱](2026-10-31-map-graph-optimization-results.md)、[重复定位与提纲](2026-10-31-map-recenter-outline-results.md)、[伴读工具](2026-10-31-companion-tools-optimization-results.md)和[请求预览](2026-10-31-request-preview-optimization-results.md)的后续结果也已保存。它们分别记录采用、否决和收益范围，不能据此说所有组件都已优化完。
 
-本轮[阅读表面精修](2026-11-01-reading-surface-refinement.md)交付后，下一批先审查文件夹完整投影与跨组件状态传播，再按下面 16 类轮转。文件夹候选只在一次当前快照内建立索引，先比较完整排序及所有行深度，再看实际浮层成本；跨书 owner、取消、来源和保存校验保留。没有完整入口收益就不改产品，不引入全局文件夹缓存。只读准备见 `logs/fan-density-20261101/next-performance-preparation.md`。
+本轮[阅读表面精修](2026-11-01-reading-surface-refinement.md)交付后，下一批先审查文件夹完整投影与跨组件状态传播，再按下面 16 类轮转。文件夹候选只在一次当前快照内建立索引，先比较完整排序及所有行深度，再看实际浮层成本；跨书 owner、取消、来源和保存校验保留。没有完整入口收益就不改产品，不引入全局文件夹缓存。只读准备见 `logs/fan-density-20261101/next-performance-preparation.md`。 新的原始候选和一手资料依据见[机制选择与采用条件](2026-11-02-next-component-mechanisms.md)。
 
 | 批次 | 覆盖组件 | 首轮重点 |
 | --- | --- | --- |
