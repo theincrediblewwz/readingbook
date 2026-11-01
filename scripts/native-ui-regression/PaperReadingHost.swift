@@ -120,6 +120,15 @@ import SwiftUI
         return count > 0 ? CGPoint(x: xSum/count, y: ySum/count) : nil
     }
     func blackGlyphBox(_ image: NSImage) -> CGRect? {
+        glyphInkBox(image, threshold: 64, step: 2)
+    }
+    func viewportGlyphBox(_ image: NSImage) -> CGRect? {
+        // At 60%, a visible thin stroke may consist entirely of antialiased
+        // grey pixels. Sample every pixel and include that visible ink, while
+        // still excluding the quiet paper spine (which is above 0.85).
+        glyphInkBox(image, threshold: 192, step: 1)
+    }
+    func glyphInkBox(_ image: NSImage, threshold: UInt8, step: Int) -> CGRect? {
         guard let cg = image.cgImage(forProposedRect:nil, context:nil, hints:nil) else { return nil }
         guard let bitmap = CGContext(data:nil,width:cg.width,height:cg.height,bitsPerComponent:8,bytesPerRow:0,
             space:CGColorSpace(name:CGColorSpace.sRGB)!,bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue),
@@ -128,10 +137,10 @@ import SwiftUI
         // Decode color once. Creating and color-converting millions of NSColor
         // objects made this test oracle exceed the CI host's finite deadline.
         var minX=cg.width, minY=cg.height, maxX=0, maxY=0
-        for y in stride(from:0,to:cg.height,by:2) {
-            for x in stride(from:0,to:cg.width,by:2) {
+        for y in stride(from:0,to:cg.height,by:step) {
+            for x in stride(from:0,to:cg.width,by:step) {
                 let pixel = data.advanced(by:y * bitmap.bytesPerRow + x * 4)
-                if pixel[3]>204 && max(pixel[0],pixel[1],pixel[2])<64 {
+                if pixel[3]>204 && max(pixel[0],pixel[1],pixel[2])<threshold {
                     minX=min(minX,x); minY=min(minY,y); maxX=max(maxX,x); maxY=max(maxY,y)
                 }
             }
@@ -346,11 +355,11 @@ import SwiftUI
                     // Scaling a 100% ink bounding box is not equivalent to
                     // rasterizing 60% text: hinting can drop a thin edge stroke.
                     let scaledReference = page.thumbnail(of: location.size, for: .cropBox)
-                    let expected = blackGlyphBox(scaledReference).map { CGRect(x: (location.minX + $0.minX * location.width) / surface.width,
+                    let expected = viewportGlyphBox(scaledReference).map { CGRect(x: (location.minX + $0.minX * location.width) / surface.width,
                         y: (surface.height - location.maxY + $0.minY * location.height) / surface.height,
                         width: $0.width * location.width / surface.width, height: $0.height * location.height / surface.height) }
                     func glyphMatches(_ image: NSImage?) -> Bool {
-                        expected.flatMap { a in image.flatMap(blackGlyphBox).map { b in
+                        expected.flatMap { a in image.flatMap(viewportGlyphBox).map { b in
                             zip([a.minX,a.minY,a.maxX,a.maxY],[b.minX,b.minY,b.maxX,b.maxY]).allSatisfy { abs($0-$1)<0.015 }
                         }} == true
                     }
@@ -364,8 +373,16 @@ import SwiftUI
                         pair.0.map { point in hypot(point.x-pair.1.x,point.y-pair.1.y)<0.02 } == true
                     }
                     observations["ViewportGlyphScale-" + name] = ["expected":expected.map(NSStringFromRect) ?? "missing",
-                        "source":sourceImage.flatMap(blackGlyphBox).map(NSStringFromRect) ?? "missing",
-                        "target":targetImage.flatMap(blackGlyphBox).map(NSStringFromRect) ?? "missing"]
+                        "source":sourceImage.flatMap(viewportGlyphBox).map(NSStringFromRect) ?? "missing",
+                        "target":targetImage.flatMap(viewportGlyphBox).map(NSStringFromRect) ?? "missing"]
+                    if angle == 0, factor == 2 {
+                        let wrongFrame = CGRect(x:location.midX-size.width/2,y:location.midY-size.height/2,width:size.width,height:size.height)
+                        let unscaled = PDFPaperCurl(frame:surface,from:page,fromFrame:wrongFrame,to:page,toFrame:wrongFrame,
+                            backwards:false,paper:.plain,background:.white,scale:1)
+                        let wrongImage = unscaled.flatMap { descendants($0,NSImageView.self).first?.image }
+                        checks["ViewportGlyphOracleRejectsMissingZoom"] = wrongImage != nil && !glyphMatches(wrongImage)
+                        unscaled?.cancel()
+                    }
                     scaled?.cancel()
                 }
                 if angle == 90, let image, let tiff=image.tiffRepresentation, let png=NSBitmapImageRep(data:tiff)?.representation(using:.png,properties:[:]) { try png.write(to:output.appendingPathComponent("rotated-raster.png")) }
