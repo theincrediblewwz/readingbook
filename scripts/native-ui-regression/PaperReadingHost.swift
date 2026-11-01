@@ -105,6 +105,44 @@ import PDFKit
             checks["FitWidthShrinksWithoutChangingMode"] = controller.fitMode == "width" && pdf.scaleFactor < scale
             input.noteMarginVisible = false; reader.update(from: input); await settle()
             checks["MarginCollapseRestoresFitWidth"] = controller.notePositions.marginWidth == 0 && abs(pdf.scaleFactor - scale) < 0.001
+            // Reproduce the real continuous-page boundary: the viewport starts
+            // on page 1's tail while page 2 is the displayed/current page.
+            // Replaying that raw destination used to change the page to 1.
+            for forceReduced in [false, true] {
+                reader.setReducedMotion(reducedReader || forceReduced)
+                let name = forceReduced ? "ReducedBoundary" : "ConfiguredBoundary"
+                input.noteMarginVisible = true; reader.update(from: input); await settle()
+                controller.command(.jump(2)); await settle()
+                if let clip = descendants(pdf, NSScrollView.self).first?.contentView {
+                    var origin = clip.bounds.origin
+                    origin.y += clip.documentView?.isFlipped == true ? -40 : 40
+                    clip.scroll(to: origin); clip.enclosingScrollView?.reflectScrolledClipView(clip)
+                }
+                await settle(200)
+                let page = pdf.document!.page(at: 1)!
+                func viewportPoint() -> CGPoint? {
+                    guard let destination = pdf.currentDestination, let owner = destination.page else { return nil }
+                    return pdf.convert(pdf.convert(destination.point, from: owner), to: page)
+                }
+                let before = viewportPoint()
+                checks[name + "Precondition"] = pdf.currentPage === page && controller.page == 2
+                    && pdf.currentDestination?.page === pdf.document?.page(at: 0)
+                input.noteMarginVisible = false; reader.update(from: input); await settle()
+                let closed = viewportPoint()
+                checks[name + "CollapseKeepsPage"] = pdf.currentPage === page && controller.page == 2
+                input.noteMarginVisible = true; reader.update(from: input); await settle()
+                let opened = viewportPoint()
+                checks[name + "ExpansionKeepsPage"] = pdf.currentPage === page && controller.page == 2
+                checks[name + "KeepsViewportAnchor"] = before.map { point in
+                    [closed, opened].allSatisfy { other in
+                        other.map { hypot($0.x - point.x, $0.y - point.y) * pdf.scaleFactor < 1 } == true
+                    }
+                } == true
+                observations[name] = ["before": before.map(NSStringFromPoint) ?? "missing",
+                    "closed": closed.map(NSStringFromPoint) ?? "missing", "opened": opened.map(NSStringFromPoint) ?? "missing"]
+            }
+            input.noteMarginVisible = false; reader.update(from: input); await settle()
+            reader.setReducedMotion(reducedReader)
             for style in ReadingPaperStyle.allCases {
                 reader.setPaperStyle(style); await settle(80)
                 let veils = descendants(pdf, ReadingPaperNativeVeil.self)

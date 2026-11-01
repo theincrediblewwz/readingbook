@@ -266,10 +266,12 @@ main-thread watchdog/runtime-warning gates.
 ## Paper reading surface
 
 `run-paper-reading.py --bin-dir .build/tests/debug --tag ci-paper-reading`
-links the current product into an isolated native PDFKit/Metal host. Its 31 checks
+links the current product into an isolated native PDFKit/Metal host. Its 39 checks
 cover animated note insets, the three packaged paper textures, horizontal-only
 paper-book mode, real forward/backward curl frames, extra navigation during a
 turn, reduced motion, and restoration of the preceding flat reading mode.
+Continuous-page boundary cases separately verify page identity and the exact
+viewport anchor through margin collapse/expansion, with both motion policies.
 Only two pages are rasterized per turn; drawable allocation is bounded. Frame
 counts demonstrate execution, not an FPS benchmark. Original PDF bytes are
 checked after the run. Actual pointer menus, editor entry, and visual curl poses

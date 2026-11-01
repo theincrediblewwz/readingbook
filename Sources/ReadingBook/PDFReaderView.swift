@@ -1179,6 +1179,7 @@ struct PDFReaderView: NSViewRepresentable {
         if changedInsets || abs(size.width - lastViewportSize.width) > 0.5 || abs(size.height - lastViewportSize.height) > 0.5 {
             invalidateSourcePress()
             lastViewportSize = size; layoutThumbnails(); applyFit()
+            if noteMarginAnimation == nil { restoreNoteMarginViewport() }
             if let pending = pendingNavigation, size.width > 40, size.height > 40 {
                 let request = pending.id, generation = documentGeneration
                 DispatchQueue.main.async { [weak self] in self?.settleNavigation(request, generation: generation, attempt: 0) }
@@ -1191,11 +1192,20 @@ struct PDFReaderView: NSViewRepresentable {
     private func changeNoteMargin(to target: CGFloat) {
         guard noteMarginTargetWidth != target else { return }
         noteMarginTargetWidth = target; noteMarginAnimation?.invalidate(); noteMarginAnimation = nil
+        // At a continuous-page boundary PDFKit's destination may name the
+        // preceding page, even though currentPage and the visible text belong
+        // to the next one. Keep that exact viewport point in the displayed
+        // page's coordinates; replaying the raw destination changes its page.
+        if let destination = pdfView.currentDestination, let destinationPage = destination.page,
+           let page = pdfView.currentPage {
+            let point = destinationPage === page ? destination.point
+                : pdfView.convert(pdfView.convert(destination.point, from: destinationPage), to: page)
+            noteMarginDestination = PDFDestination(page: page, at: point)
+        } else { noteMarginDestination = nil }
         guard !reduceReadingMotion, !reducedMotion, document != nil, bounds.width > 40 else {
             noteMarginWidth = target; noteInsetsNeedLayout = true; needsLayout = true; return
         }
         let start = noteMarginWidth, began = ProcessInfo.processInfo.systemUptime
-        noteMarginDestination = pdfView.currentDestination
         let generation = documentGeneration
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
@@ -1207,13 +1217,31 @@ struct PDFReaderView: NSViewRepresentable {
             self.scheduleVisiblePages()
             if t >= 1 {
                 timer.invalidate(); self.noteMarginAnimation = nil
-                if let destination = self.noteMarginDestination { self.pdfView.go(to: destination) }
-                self.noteMarginDestination = nil
+                self.restoreNoteMarginViewport()
                 self.scheduleVisiblePages(); self.scheduleWorkspaceCapture()
             }
             }
         }
         noteMarginAnimation = timer; RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func restoreNoteMarginViewport() {
+        guard let destination = noteMarginDestination else { return }
+        noteMarginDestination = nil
+        guard let page = destination.page, let document, document.index(for: page) != NSNotFound else { return }
+        pdfView.go(to: destination)
+        pdfView.layoutDocumentView()
+        // go(to:) can clamp an anchor just outside its page. Keep the original
+        // visible boundary through the native clip, including reduced motion.
+        if let clip = observedClip, let actual = pdfView.currentDestination, let actualPage = actual.page {
+            let desired = clip.convert(pdfView.convert(destination.point, from: page), from: pdfView)
+            let current = clip.convert(pdfView.convert(actual.point, from: actualPage), from: pdfView)
+            let origin = CGPoint(x: clip.bounds.origin.x + desired.x - current.x,
+                                 y: clip.bounds.origin.y + desired.y - current.y)
+            if origin.x.isFinite, origin.y.isFinite {
+                clip.scroll(to: origin); clip.enclosingScrollView?.reflectScrolledClipView(clip)
+            }
+        }
     }
 
     @discardableResult private func layoutNoteInsets() -> Bool {
