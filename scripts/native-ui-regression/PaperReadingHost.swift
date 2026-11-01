@@ -12,6 +12,7 @@ import PDFKit
     var checks: [String: Bool] = [:]
     var turns: [[String: Any]] = []
     var observations: [String: Any] = [:]
+    var reducedReader = false
     init(_ output: URL) { self.output = output }
     func applicationDidFinishLaunching(_ notification: Notification) { Task { await run() } }
     func descendants<T: NSView>(_ root: NSView, _ type: T.Type) -> [T] {
@@ -24,12 +25,31 @@ import PDFKit
         let nativeStart = pdf?.currentPage.flatMap { page in pdf?.document.map { $0.index(for: page) + 1 } } ?? 0
         controller.command(command)
         var captured: PDFPaperCurl?
-        for _ in 0..<120 {
-            if let curl = descendants(reader, PDFPaperCurl.self).first { captured = curl; break }
-            await settle(8)
+        if reducedReader {
+            // The application must honor its motion policy. Test that navigation
+            // separately, then exercise the same shipped GPU renderer directly
+            // in this synthetic host; never change the Mac's system preference.
+            await settle(200)
+            checks[name + "RespectsReaderMotionPolicy"] = descendants(reader, PDFPaperCurl.self).isEmpty
+            if let pdf, let document = pdf.document,
+               let from = document.page(at: nativeStart - 1), let to = document.page(at: target - 1), let page = pdf.currentPage {
+                let frame = reader.convert(pdf.convert(page.bounds(for: .cropBox), from: page), from: pdf)
+                let curl = PDFPaperCurl(frame: frame, from: from, fromFrame: frame, to: to, toFrame: frame,
+                    backwards: target < nativeStart, paper: .warmCotton, background: .white, scale: window.backingScaleFactor)
+                if let curl {
+                    captured = curl; reader.addSubview(curl)
+                    curl.completion = { [weak curl] in curl?.removeFromSuperview() }
+                }
+            }
+        } else {
+            for _ in 0..<120 {
+                if let curl = descendants(reader, PDFPaperCurl.self).first { captured = curl; break }
+                await settle(8)
+            }
+            checks[name + "RespectsReaderMotionPolicy"] = captured != nil
         }
         checks[name + "UsesActualMetalPage"] = captured != nil
-        if interrupt { controller.command(.next); controller.command(.next) }
+        if interrupt && !reducedReader { controller.command(.next); controller.command(.next) }
         await settle(800)
         let samples = captured?.progressSamples ?? []
         checks[name + "RendersIntermediateFrames"] = (captured?.renderedFrames ?? 0) > 2 && samples.contains { $0 > 0 && $0 < 1 }
@@ -43,7 +63,8 @@ import PDFKit
                                    backwards: false, paper: .warmCotton, background: .white, scale: 1)
             observations[name + "RendererCanInitializeIndependently"] = test != nil; test?.cancel()
         }
-        turns.append(["name": name, "startPage": startPage, "nativeStartPage": nativeStart, "frames": captured?.renderedFrames ?? 0, "progress": samples,
+        turns.append(["name": name, "mode": reducedReader ? "reduced-reader-navigation-and-isolated-renderer" : "animated-reader-integration",
+                      "startPage": startPage, "nativeStartPage": nativeStart, "frames": captured?.renderedFrames ?? 0, "progress": samples,
                       "page": controller.page, "drawable": captured.map { NSStringFromSize($0.drawableSize) } ?? "missing"])
     }
     func run() async {
@@ -70,13 +91,17 @@ import PDFKit
             guard controller.isReady, let pdf = descendants(reader, PDFView.self).first else { throw ReadingError.invalid("Reader did not become ready") }
             observations["systemReduceMotion"] = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             observations["appReduceMotion"] = UserDefaults.standard.bool(forKey: "appearance.reduceMotion")
+            observations["explicitReducedReaderProbe"] = ProcessInfo.processInfo.environment["PAPER_PROBE_REDUCED_READER"] == "1"
+            reducedReader = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || ProcessInfo.processInfo.environment["PAPER_PROBE_REDUCED_READER"] == "1"
+            reader.setReducedMotion(reducedReader)
             observations["metalSupported"] = PDFPaperCurl.supported
             controller.command(.setDirection(.vertical)); controller.command(.setContinuous(true)); controller.command(.fitWidth); await settle()
             let scale = pdf.scaleFactor
             input.noteMarginVisible = true; reader.update(from: input)
             var widths: [Double] = []
             for _ in 0..<35 { widths.append(Double(controller.notePositions.marginWidth)); await settle(16) }
-            checks["MarginUsesIntermediateWidths"] = Set(widths.map { Int($0) }).count > 5 && widths.last == 292
+            checks["MarginFollowsMotionPreference"] = widths.last == 292 && (reducedReader
+                ? widths.allSatisfy { $0 == 0 || $0 == 292 } : Set(widths.map { Int($0) }).count > 5)
             checks["FitWidthShrinksWithoutChangingMode"] = controller.fitMode == "width" && pdf.scaleFactor < scale
             input.noteMarginVisible = false; reader.update(from: input); await settle()
             checks["MarginCollapseRestoresFitWidth"] = controller.notePositions.marginWidth == 0 && abs(pdf.scaleFactor - scale) < 0.001
@@ -101,7 +126,7 @@ import PDFKit
             await turn(.prev, target: 1, name: "Backward")
             reader.setReducedMotion(true); controller.command(.next); await settle()
             checks["ReducedMotionNavigatesWithoutCurl"] = controller.page == 2 && descendants(reader, PDFPaperCurl.self).isEmpty
-            reader.setReducedMotion(false)
+            reader.setReducedMotion(reducedReader)
             controller.command(.setDirection(.vertical)); await settle()
             checks["ChoosingVerticalExitsPaperBook"] = !controller.paperBookMode && controller.direction == .vertical && descendants(reader, PDFBookEdges.self).allSatisfy(\.isHidden)
             controller.command(.setContinuous(true)); controller.command(.zoomIn); await settle()

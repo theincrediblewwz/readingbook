@@ -1191,7 +1191,7 @@ struct PDFReaderView: NSViewRepresentable {
     private func changeNoteMargin(to target: CGFloat) {
         guard noteMarginTargetWidth != target else { return }
         noteMarginTargetWidth = target; noteMarginAnimation?.invalidate(); noteMarginAnimation = nil
-        guard !reducedMotion, document != nil, bounds.width > 40 else {
+        guard !reduceReadingMotion, !reducedMotion, document != nil, bounds.width > 40 else {
             noteMarginWidth = target; noteInsetsNeedLayout = true; needsLayout = true; return
         }
         let start = noteMarginWidth, began = ProcessInfo.processInfo.systemUptime

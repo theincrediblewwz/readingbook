@@ -118,6 +118,14 @@ jobs:
           path: logs/ux-completion-20261031/ci-experience-completion
           if-no-files-found: ignore
           retention-days: 3
+      - name: Preserve failed paper reading evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-paper-reading-evidence
+          path: logs/note-paper-20261101/ci-paper-reading
+          if-no-files-found: ignore
+          retention-days: 3
       - name: Build universal app and package
         if: github.event_name != 'pull_request'
         run: bash scripts/build-macos.sh
