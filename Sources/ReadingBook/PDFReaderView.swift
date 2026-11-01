@@ -843,14 +843,14 @@ struct PDFReaderView: NSViewRepresentable {
 
     private func preparePageCurl(from old: PDFPage, fromFrame: CGRect, backwards: Bool) {
         pageCurl?.cancel(); pageCurl = nil
-        let frame = CGRect(x: bounds.minX, y: bounds.minY, width: max(1, outerPaperEdge - bounds.minX), height: bounds.height)
+        let frame = CGRect(x: bounds.minX, y: bounds.minY, width: max(1, viewportPaperEdge - bounds.minX), height: bounds.height)
         let margin = noteMarginWidth > 0 ? controller?.noteMarginSnapshot(in: self) : nil
         let connections = controller.map {
             PositionNoteConnectionGeometry.make(positions: $0.notePositions, size: bounds.size, owner: notePlacementOwner)
         } ?? []
         guard let curl = PDFPaperCurl(frame: frame, from: old, fromFrame: fromFrame, backwards: backwards,
             paper: paperSurface.style, background: pdfView.backgroundColor, scale: window?.backingScaleFactor ?? 2,
-            materialFrame: bounds, noteMarginWidth: noteMarginWidth, oldNoteMargin: margin, connections: connections,
+            materialFrame: bounds, noteMarginWidth: scaledNoteMarginWidth, oldNoteMargin: margin, connections: connections,
             fitsVisibleSheets: true) else { sourceCanvas.isHidden = false; return }
         pageCurl = curl; sourceCanvas.isHidden = true
         addSubview(curl, positioned: .above, relativeTo: bookEdges)
@@ -872,13 +872,36 @@ struct PDFReaderView: NSViewRepresentable {
     private func updatePaperBackground() {
         pdfView.backgroundColor = noteMarginTargetWidth > 0 || paperSurface.style != .plain ? .white : .windowBackgroundColor
     }
-    private var outerPaperEdge: CGFloat {
+    private var viewportPaperEdge: CGFloat {
         let scroll = observedClip?.enclosingScrollView ?? pdfScrollView(in: pdfView)
         return bounds.maxX - (noteMarginWidth > 0 ? max(12, scroll?.verticalScroller?.bounds.width ?? 17) : 0)
     }
+    private var widthFitScale: CGFloat {
+        guard let page = pdfView.currentPage else { return 1 }
+        var size = page.bounds(for: pdfView.displayBox).size
+        if abs(page.rotation) % 180 == 90 { size = CGSize(width: size.height, height: size.width) }
+        let scroll = observedClip?.enclosingScrollView ?? pdfScrollView(in: pdfView)
+        let rail = noteMarginWidth > 0 && scroll?.scrollerStyle == .overlay ? max(12, scroll?.verticalScroller?.bounds.width ?? 17) : 0
+        // A fit-page view can hide its legacy scroller, which must not change
+        // the reference ratio while zoom crosses the scrolling threshold.
+        let referenceWidth = noteMarginWidth > 0 && scroll?.scrollerStyle == .legacy
+            ? pdfView.bounds.width - max(12, scroll?.verticalScroller?.bounds.width ?? 17)
+            : (scroll?.contentSize.width ?? pdfView.bounds.width)
+        return max(1, referenceWidth - noteMarginWidth - rail - (paperBookMode ? 16 : 0)) / max(1, size.width)
+    }
+    private var scaledNoteMarginWidth: CGFloat {
+        noteMarginWidth * pdfView.scaleFactor / max(0.001, widthFitScale)
+    }
+    private var noteMarginFrame: CGRect {
+        guard noteMarginWidth > 0, let page = pdfView.currentPage else { return .zero }
+        let rect = convert(pdfView.convert(page.bounds(for: .cropBox), from: page), from: pdfView)
+        let low = paperBookMode ? max(bounds.minY, rect.minY) : bounds.minY
+        let high = paperBookMode ? min(bounds.maxY, rect.maxY) : bounds.maxY
+        return CGRect(x: rect.maxX, y: low, width: scaledNoteMarginWidth, height: max(0, high - low))
+    }
     private func sheetFrame(_ pageFrame: CGRect) -> CGRect {
         guard noteMarginWidth > 0 else { return pageFrame }
-        return CGRect(x: pageFrame.minX, y: pageFrame.minY, width: max(1, outerPaperEdge - pageFrame.minX), height: pageFrame.height)
+        return CGRect(x: pageFrame.minX, y: pageFrame.minY, width: pageFrame.width + scaledNoteMarginWidth, height: pageFrame.height)
     }
     private func layoutPaperSurface() {
         paperSurface.frame = bounds
@@ -886,7 +909,7 @@ struct PDFReaderView: NSViewRepresentable {
             convert(pdfView.convert(page.bounds(for: .cropBox), from: page), from: pdfView).intersection(bounds)
         }.filter { !$0.isEmpty && !$0.isNull }
         if noteMarginWidth > 0 {
-            regions.append(CGRect(x: outerPaperEdge - noteMarginWidth, y: bounds.minY, width: noteMarginWidth, height: bounds.height))
+            if !paperBookMode { regions.append(noteMarginFrame.intersection(bounds)) }
             // The blank reserve between a centered page and the notes belongs
             // to the same sheet, with one continuous material coordinate space.
             regions += pdfView.visiblePages.map { page in
@@ -940,6 +963,10 @@ struct PDFReaderView: NSViewRepresentable {
         // geometry and retain its old scroll offset in single-page mode.
         pdfView.layoutDocumentView()
         applyFit()
+        // A different crop/rotation changes the proportional margin too.
+        // Tile that width before capturing the target, not on a later pass
+        // after the paper animation has already started.
+        _ = layoutNoteInsets()
         pdfView.layoutDocumentView()
         let box = page.bounds(for: pdfView.displayBox)
         let point: CGPoint
@@ -983,10 +1010,11 @@ struct PDFReaderView: NSViewRepresentable {
         }
         pendingNavigation = nil; refreshControls()
         restoreWorkspaceDestination()
+        if layoutNoteInsets() { pdfView.layoutDocumentView() }
         layoutPaperSurface()
         if let curl = pageCurl, !curl.targetPrepared, let page = pdfView.currentPage {
             let frame = convert(pdfView.convert(page.bounds(for: .cropBox), from: page), from: pdfView)
-            if !curl.prepareTarget(page, in: frame) { curl.cancel(); pageCurl = nil; sourceCanvas.isHidden = false }
+            if !curl.prepareTarget(page, in: frame, noteMarginWidth: scaledNoteMarginWidth) { curl.cancel(); pageCurl = nil; sourceCanvas.isHidden = false }
         }
         if let quote = pendingQuote, quote.page == pending.page {
             pendingQuote = nil; applyQuoteFocus(on: quote.page, quote: quote.quote, prefix: quote.prefix, suffix: quote.suffix, decoration: quote.decoration)
@@ -1248,6 +1276,7 @@ struct PDFReaderView: NSViewRepresentable {
         if changedInsets || abs(size.width - lastViewportSize.width) > 0.5 || abs(size.height - lastViewportSize.height) > 0.5 {
             invalidateSourcePress()
             lastViewportSize = size; layoutThumbnails(); applyFit()
+            if layoutNoteInsets() { pdfView.layoutDocumentView() }
             if noteMarginAnimation == nil { restoreNoteMarginViewport() }
             if let pending = pendingNavigation, size.width > 40, size.height > 40 {
                 let request = pending.id, generation = documentGeneration
@@ -1323,7 +1352,7 @@ struct PDFReaderView: NSViewRepresentable {
             originalAutomaticInsets = scroll.automaticallyAdjustsContentInsets; noteInsetsNeedLayout = true
         }
         let overlayRail = scroll.scrollerStyle == .overlay ? max(12, scroll.verticalScroller?.bounds.width ?? 17) : 0
-        let reserved = noteMarginWidth == 0 ? 0 : noteMarginWidth + overlayRail
+        let reserved = noteMarginWidth == 0 ? 0 : scaledNoteMarginWidth + overlayRail
         guard noteInsetsNeedLayout || abs(appliedNoteReservedWidth - reserved) > 0.1 else { return false }
         noteInsetsNeedLayout = false; appliedNoteReservedWidth = reserved
         scroll.automaticallyAdjustsContentInsets = noteMarginWidth == 0 ? originalAutomaticInsets : false
@@ -1346,7 +1375,7 @@ struct PDFReaderView: NSViewRepresentable {
         guard size.width > 0, size.height > 0 else { return }
         let scroll = observedClip?.enclosingScrollView ?? pdfScrollView(in: pdfView)
         let viewport = scroll?.contentSize ?? pdfView.bounds.size
-        let width = max(1, viewport.width - appliedNoteReservedWidth - (paperBookMode ? 16 : 0)) / size.width
+        let width = widthFitScale
         let height = max(1, viewport.height - 32) / size.height
         let scale: CGFloat = fitMode == .actual ? 1 : (fitMode == .width ? width : min(width, height))
         pdfView.autoScales = false
@@ -1403,6 +1432,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     @objc private func scaleChanged(_ notification: Notification) {
         requestPaperGeometry()
+        noteInsetsNeedLayout = true; needsLayout = true
         invalidateSourcePress()
         if !isApplyingFit, !installingDocument, pendingNavigation == nil, pendingWorkspaceMemory == nil { fitMode = .custom }
         refreshControls(); sourceCanvas.needsDisplay = true; scheduleWorkspaceCapture(); scheduleVisiblePages()
@@ -2009,7 +2039,8 @@ struct PDFReaderView: NSViewRepresentable {
                 }
             }
             let screenPage = convert(pdfView.convert(crop, from: page), from: pdfView)
-            connectors[id] = .init(start: start, pageExit: CGPoint(x: min(bounds.width - noteMarginWidth - 4, screenPage.maxX + 8), y: start.y))
+            let scale = max(0.001, scaledNoteMarginWidth / PositionNoteSurface.marginWidth)
+            connectors[id] = .init(start: start, pageExit: CGPoint(x: screenPage.maxX + 8 * scale, y: start.y))
         }
         for page in pdfView.visiblePages {
             let index = document.index(for: page)
@@ -2024,7 +2055,9 @@ struct PDFReaderView: NSViewRepresentable {
             append(id, page: page, original: point)
         }
         let width = (observedClip?.enclosingScrollView ?? pdfScrollView(in: pdfView))?.verticalScroller?.bounds.width ?? 17
-        controller?.reportNotePositions(id: bindingID, points: points, owner: notePlacementOwner, connectors: connectors, scrollerWidth: max(12, width), marginWidth: noteMarginWidth)
+        let margin = noteMarginFrame
+        let topLeftFrame = CGRect(x: margin.minX, y: bounds.maxY - margin.maxY, width: margin.width, height: margin.height)
+        controller?.reportNotePositions(id: bindingID, points: points, owner: notePlacementOwner, connectors: connectors, scrollerWidth: max(12, width), marginWidth: scaledNoteMarginWidth, marginFrame: topLeftFrame, marginScale: max(0.001, scaledNoteMarginWidth / PositionNoteSurface.marginWidth))
     }
     private func nativePreparationSession() -> NativePDFPreparationWorker.Session? {
         guard let loadedURL, !sourceHash.isEmpty else { return nil }

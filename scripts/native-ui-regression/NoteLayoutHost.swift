@@ -96,6 +96,37 @@ import SwiftUI
             checks["differentGlyphsHaveDifferentConnectorOrigins"] = first != nil && second != nil && abs(first!.start.x - second!.start.x) > 10
             checks["connectorsLeaveTowardsMargin"] = [first,second].allSatisfy { $0 != nil && $0!.pageExit.x > $0!.start.x && abs($0!.pageExit.y - $0!.start.y) < 1 }
             samples.append(snapshot("separate-glyphs"))
+            // The page and its margin form one centered sheet, not a page
+            // centered independently from a window-pinned note column.
+            controller.command(.setPaperBook(true)); controller.command(.jump(1)); controller.command(.fitWidth); await settle()
+            func sheetSample(_ name: String) -> (page: CGRect, margin: CGRect, scale: CGFloat, width: CGFloat) {
+                let container = descendants(window.contentView!, PDFReaderContainerView.self).first!
+                let pdf = descendants(container, PDFView.self).first!, page = pdf.currentPage!
+                let frame = container.convert(pdf.convert(page.bounds(for: .cropBox), from: page), from: pdf)
+                let host = descendants(window.contentView!, PositionNoteNativeHost.self).first!
+                let margin = container.convert(host.bounds, from: host)
+                samples.append(["name":name,"page":NSStringFromRect(frame),"margin":NSStringFromRect(margin),"scale":Double(pdf.scaleFactor),"width":Double(container.bounds.width)])
+                return (frame,margin,pdf.scaleFactor,container.bounds.width)
+            }
+            let wide = sheetSample("book-width")
+            controller.command(.fitPage); await settle()
+            let fitted = sheetSample("book-page")
+            checks["bookNoteColumnFollowsPageEdge"] = abs(fitted.margin.minX - fitted.page.maxX) < 2
+            checks["bookWholeSheetCentered"] = abs(fitted.page.minX - (fitted.width - fitted.margin.maxX)) < 20
+            checks["bookMarginScalesWithPage"] = abs(fitted.margin.width / wide.margin.width - fitted.scale / wide.scale) < 0.02
+            let container = descendants(window.contentView!, PDFReaderContainerView.self).first!
+            let veil = descendants(container, ReadingPaperNativeVeil.self).first!
+            let sheet = CGRect(x:fitted.page.minX,y:fitted.page.minY,width:fitted.page.width+fitted.margin.width,height:fitted.page.height)
+            checks["bookMaterialDoesNotPaintOutsideSheet"] = veil.paperRects?.allSatisfy { sheet.insetBy(dx:-1,dy:-1).contains($0) } == true
+            controller.command(.zoomIn); await settle()
+            let enlarged = sheetSample("book-enlarged")
+            checks["bookZoomMovesNotesProportionally"] = abs(enlarged.margin.width / fitted.margin.width - enlarged.scale / fitted.scale) < 0.02
+            checks["bookZoomKeepsNotesBesidePage"] = abs(enlarged.margin.minX - enlarged.page.maxX) < 2
+            controller.command(.fitWidth); await settle()
+            let refitted = sheetSample("book-width-restored")
+            checks["bookWidthRestoresNoteProportion"] = abs(refitted.margin.width-wide.margin.width)<2
+            controller.command(.setPaperBook(false)); await settle()
+            checks["leavingBookRetainsOriginalPage"] = controller.page == 1
             // With no placements, the same production surface must remove the
             // reserved area and return to its earlier fit/zoom, without touching
             // the saved Markdown. Exercise all four reader modes.

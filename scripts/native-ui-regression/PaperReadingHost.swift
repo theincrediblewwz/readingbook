@@ -57,7 +57,9 @@ import SwiftUI
             checks[name + "FreezesNativeNotesDuringTurn"] = noteHost?.isHidden == true
             checks[name + "OldNotesAreInMovingSheet"] = captured.flatMap { descendants($0, NSImageView.self).first?.image }.map(containsMagenta) == true
             checks[name + "StartsWithOldPageCover"] = captured.map { !descendants($0, NSImageView.self).filter { !$0.isHidden && $0.image != nil }.isEmpty } == true
-            checks[name + "IncludesNoteOuterEdge"] = captured.map { abs($0.frame.maxX - (reader.bounds.maxX - controller.notePositions.scrollerWidth)) < 2 } == true
+            checks[name + "IncludesNoteOuterEdge"] = captured.map {
+                $0.frame.maxX >= min(reader.bounds.maxX, $0.originalPageFrame.maxX + controller.notePositions.marginWidth) - 2
+            } == true
         }
         if interrupt && !reducedReader { controller.command(.next); controller.command(.next) }
         // Wait for the actual GPU handoff, rather than sampling once in the
@@ -75,6 +77,11 @@ import SwiftUI
         checks[name + "RendersIntermediateFrames"] = (captured?.renderedFrames ?? 0) > 2 && samples.contains { $0 > 0 && $0 < 1 }
         checks[name + "CompletesAndRemovesOverlay"] = samples.last == 1 && captured?.superview == nil
         checks[name + "LandsOnExactPage"] = controller.page == target && nativeStart == (target == 2 ? 1 : 2)
+        if let pdf, let page = pdf.currentPage, let prepared = captured?.preparedPageFrame, !reducedReader {
+            let final = reader.convert(pdf.convert(page.bounds(for: .cropBox), from: page), from: pdf)
+            checks[name + "PreparedGeometryMatchesFinalPage"] = [abs(final.minX-prepared.minX),abs(final.minY-prepared.minY),abs(final.width-prepared.width),abs(final.height-prepared.height)].allSatisfy { $0 < 1 / window.backingScaleFactor }
+            observations[name + "PreparedAndFinalFrames"] = [NSStringFromRect(prepared),NSStringFromRect(final)]
+        }
         checks[name + "ProgressIsMonotonic"] = zip(samples, samples.dropFirst()).allSatisfy { $0 <= $1 }
         checks[name + "BoundsRasterAllocation"] = captured.map { $0.drawableSize.width * $0.drawableSize.height <= 4_000_000 && max($0.drawableSize.width, $0.drawableSize.height) <= 4096 } == true
         if captured == nil, let pdf, let document = pdf.document, let from = document.page(at: 0), let to = document.page(at: 1) {
@@ -281,12 +288,16 @@ import SwiftUI
             await settle(100); checks["ScrolledSpineTracksNativePage"] = spineMatches()
             controller.command(.fitWidth); await settle()
             input.noteMarginVisible = true; reader.update(from: input); await settle()
+            pdf.document?.page(at: 1)?.setBounds(CGRect(x:20,y:35,width:550,height:710), for:.cropBox)
+            pdf.document?.page(at: 1)?.rotation = 90
+            controller.command(.fitPage); await settle()
             let host = PositionNoteNativeHost(rootView: AnyView(ZStack(alignment: .topLeading) {
                 Color.clear
                 VStack(alignment: .leading) { Color(nsColor: .magenta).frame(width: 40, height: 40); Text("随纸页一起翻动的便签") }
                     .padding(18).frame(width: 230, height: 170, alignment: .topLeading).background(Color.white).padding(.leading, 20).padding(.top, 110)
             }))
-            host.frame = CGRect(x: reader.bounds.maxX - controller.notePositions.scrollerWidth - 292, y: 0, width: 292, height: reader.bounds.height)
+            let margin = controller.notePositions.marginFrame
+            host.frame = CGRect(x:margin.minX,y:reader.bounds.maxY-margin.maxY,width:margin.width,height:margin.height)
             root.addSubview(host); noteHost = host; controller.attachNoteMargin(host, owner: "isolated")
             host.layoutSubtreeIfNeeded(); await settle(150)
             let snapshot = controller.noteMarginSnapshot(in: reader)

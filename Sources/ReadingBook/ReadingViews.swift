@@ -31,7 +31,6 @@ struct ReaderWorkspaceView: View {
         GeometryReader { geometry in
             let showsMargin = hasPositionNotes && !notesCollapsed && geometry.size.width >= 680
             let nativePDF = isPDF && showPDF && store.readingSourceMode == "original"
-            let marginWidth = nativePDF ? pdfController.notePositions.marginWidth : (showsMargin ? PositionNoteSurface.marginWidth : 0)
             ZStack(alignment: .topLeading) {
                 Group {
                     if let unit = store.selectedUnit {
@@ -115,26 +114,13 @@ struct ReaderWorkspaceView: View {
                     }
                 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
-                if showsMargin || (nativePDF && marginWidth > 0.1) {
-                    let margin = PositionNoteMargin(nativePositions: pdfController.notePositions, height: geometry.size.height, isPDF: nativePDF) { ids, snippets, origin in
-                        store.readingCompanionVisible = false; showOutline = false
-                        noteFan = .init(ids: ids, snippets: snippets,
-                            origin: CGPoint(x: geometry.size.width - (nativePDF ? pdfController.notePositions.scrollerWidth : 17) - PositionNoteSurface.marginWidth + origin.x, y: origin.y), owner: WorkspacePickerOwner(store: store))
-                    }
-                    Group {
-                        if nativePDF { PositionNoteMarginHost(content: margin, controller: pdfController) }
-                        else { margin }
-                    }.frame(width: PositionNoteSurface.marginWidth, height: geometry.size.height)
-                        .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, nativePDF ? pdfController.notePositions.scrollerWidth : 17)
-                        .offset(x: PositionNoteSurface.marginWidth - marginWidth)
-                        .modifier(PositionNoteTurnVisibility(positions: pdfController.notePositions, visible: noteFan == nil, interactive: !interactionBlocked))
-                    if nativePDF { PositionNoteConnections(positions: pdfController.notePositions, size: geometry.size).opacity(noteFan == nil ? 1 : 0) }
-                    Button { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { notesCollapsed = true } } label: { Image(systemName: "chevron.right").font(.system(size: 12, weight: .medium)).frame(width: 32, height: 32) }
-                        .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.96), in: Circle())
-                        .overlay { Circle().strokeBorder(Color.primary.opacity(0.07)) }.shadow(color: .black.opacity(0.05), radius: 6, y: 2)
-                        .padding(.top, 86).padding(.trailing, 20).frame(maxWidth: .infinity, alignment: .trailing)
-                        .opacity(noteFan == nil ? 1 : 0).allowsHitTesting(noteFan == nil)
-                        .help("收起便签与右侧留白，恢复原来的阅读模式").accessibilityLabel("收起页边便签")
+                if hasPositionNotes {
+                    PositionNoteMarginLayer(positions: pdfController.notePositions, controller: pdfController, viewport: geometry.size,
+                        isPDF: nativePDF, showsMargin: showsMargin, visible: noteFan == nil, interactive: !interactionBlocked,
+                        onExpand: { ids, snippets, origin in
+                            store.readingCompanionVisible = false; showOutline = false
+                            noteFan = .init(ids: ids, snippets: snippets, origin: origin, owner: WorkspacePickerOwner(store: store))
+                        }, onCollapse: { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { notesCollapsed = true } })
                 }
                 if hasPositionNotes && (notesCollapsed || geometry.size.width < 680) {
                     Button {

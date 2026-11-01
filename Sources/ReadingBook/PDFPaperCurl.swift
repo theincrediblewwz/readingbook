@@ -77,17 +77,16 @@ import SwiftUI
         delegate = self
         setAccessibilityElement(false)
     }
-    @discardableResult func prepareTarget(_ page: PDFPage, in pageFrame: CGRect) -> Bool {
+    @discardableResult func prepareTarget(_ page: PDFPage, in pageFrame: CGRect, noteMarginWidth targetMarginWidth: CGFloat? = nil) -> Bool {
         guard !targetPrepared, !finished else { return false }
+        let nextMargin = targetMarginWidth ?? noteMarginWidth
         if fitsVisibleSheets {
             // Cover the entire viewport while native PDFKit changes pages.
             // Once both geometries are known, curl their visible union so a
             // wider/rotated destination cannot appear beside the old sheet.
-            var visible = originalPageFrame.intersection(initialSurface).union(pageFrame.intersection(initialSurface))
-            if noteMarginWidth > 0 {
-                visible = CGRect(x: visible.minX, y: initialSurface.minY,
-                    width: initialSurface.maxX - visible.minX, height: initialSurface.height)
-            }
+            var sourceSheet = originalPageFrame, targetSheet = pageFrame
+            sourceSheet.size.width += noteMarginWidth; targetSheet.size.width += nextMargin
+            let visible = sourceSheet.intersection(initialSurface).union(targetSheet.intersection(initialSurface))
             guard !visible.isNull, visible.width > 10, visible.height > 10 else { return false }
             frame = visible
             extent = CGRect(x: 0, y: 0, width: floor(visible.width * pixelScale), height: floor(visible.height * pixelScale))
@@ -101,7 +100,7 @@ import SwiftUI
         }
         guard
               let rendered = Self.raster(page, in: pageFrame, surface: frame, material: materialFrame, extent: extent,
-                  scale: pixelScale, paper: paper, background: background, noteMarginWidth: noteMarginWidth, note: nil) else { return false }
+                  scale: pixelScale, paper: paper, background: background, noteMarginWidth: nextMargin, note: nil) else { return false }
         targetRaster = rendered
         preparedPageFrame = pageFrame
         let next = CIImage(cgImage: rendered)
@@ -142,12 +141,10 @@ import SwiftUI
             canvas.restoreGState()
         }
         var sheet = pageFrame
-        if noteMarginWidth > 0 { sheet.size.width = max(sheet.width, surface.maxX - sheet.minX) }
+        sheet.size.width += noteMarginWidth
         if let texture = ReadingPaperAssets.image(paper)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
             canvas.saveGState()
-            var regions = [local(sheet)]
-            if noteMarginWidth > 0 { regions.append(local(CGRect(x: surface.maxX - noteMarginWidth, y: material.minY, width: noteMarginWidth, height: material.height))) }
-            canvas.clip(to: regions); canvas.setBlendMode(.multiply)
+            canvas.clip(to: local(sheet)); canvas.setBlendMode(.multiply)
             let k = max(material.width / CGFloat(texture.width), material.height / CGFloat(texture.height))
             let textureRect = CGRect(x: material.midX - CGFloat(texture.width) * k / 2,
                                      y: material.midY - CGFloat(texture.height) * k / 2,

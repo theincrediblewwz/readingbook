@@ -14,11 +14,13 @@ work.mkdir(parents=True, exist_ok=True)
 source = pathlib.Path(__file__).with_name('ExperienceCompletionHost.swift')
 objects = [x for x in (bindir/'ReadingBook.product/Objects.LinkFileList').read_text().splitlines() if not x.endswith('/ReadingBookLauncher.swift.o')]
 assert objects
-cache = ROOT/'.build/shared-module-cache'
+cache = ROOT/'.build/shared-module-cache/swift'
+clang_cache = ROOT/'.build/shared-module-cache/clang'
+cache.mkdir(parents=True, exist_ok=True); clang_cache.mkdir(parents=True, exist_ok=True)
 (ROOT/'logs/ux-completion-20261031/tmp').mkdir(parents=True, exist_ok=True)
-env = {**os.environ, 'CLANG_MODULE_CACHE_PATH':str(cache), 'TMPDIR':str(ROOT/'logs/ux-completion-20261031/tmp')}
+env = {**os.environ, 'CLANG_MODULE_CACHE_PATH':str(clang_cache), 'SWIFT_MODULECACHE_PATH':str(cache), 'TMPDIR':str(ROOT/'logs/ux-completion-20261031/tmp')}
 binary = work/'ExperienceCompletionHost'
-command = ['swiftc','-parse-as-library','-enable-testing','-g','-I',str(bindir/'Modules'),'-module-cache-path',str(cache),'-module-name','ExperienceCompletionHost',str(source),*objects,'-o',str(binary)]
+command = ['swiftc','-parse-as-library','-enable-testing','-g','-I',str(bindir/'Modules'),'-module-cache-path',str(cache),'-Xcc','-fmodules-cache-path='+str(clang_cache),'-module-name','ExperienceCompletionHost',str(source),*objects,'-o',str(binary)]
 with (work/'compile.log').open('w') as log:
     result = subprocess.run(command,cwd=ROOT,env=env,stdout=log,stderr=subprocess.STDOUT)
 if result.returncode:

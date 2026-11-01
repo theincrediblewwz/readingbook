@@ -10,9 +10,11 @@ work=R/'.build/note-layout-host';work.mkdir(exist_ok=True)
 source=Path(__file__).with_name('NoteLayoutHost.swift')
 objects=[Path(x) for x in (bindir/'ReadingBook.product/Objects.LinkFileList').read_text().splitlines() if not x.endswith('/ReadingBookLauncher.swift.o')]
 sha=lambda f:hashlib.sha256(f.read_bytes()).hexdigest()
-environment=dict(os.environ,NOTE_SCROLLER_STYLE=a.scroller_style,TMPDIR=str(out/'tmp'),CFFIXED_USER_HOME=str(out/'home'),CLANG_MODULE_CACHE_PATH=str(R/'.build/shared-module-cache'))
+swift_cache=R/'.build/shared-module-cache/swift';clang_cache=R/'.build/shared-module-cache/clang'
+swift_cache.mkdir(parents=True,exist_ok=True);clang_cache.mkdir(parents=True,exist_ok=True)
+environment=dict(os.environ,NOTE_SCROLLER_STYLE=a.scroller_style,TMPDIR=str(out/'tmp'),CFFIXED_USER_HOME=str(out/'home'),CLANG_MODULE_CACHE_PATH=str(clang_cache),SWIFT_MODULECACHE_PATH=str(swift_cache))
 binary=work/'NoteLayoutHost'
-command=['swiftc','-parse-as-library','-enable-testing','-I',str(bindir/'Modules'),'-module-cache-path',str(R/'.build/shared-module-cache'),str(source),*[str(x) for x in objects],'-o',str(binary)]
+command=['swiftc','-parse-as-library','-enable-testing','-I',str(bindir/'Modules'),'-module-cache-path',str(swift_cache),'-Xcc','-fmodules-cache-path='+str(clang_cache),str(source),*[str(x) for x in objects],'-o',str(binary)]
 with (out/'compile.log').open('x') as log:built=subprocess.run(command,cwd=R,env=environment,stdout=log,stderr=subprocess.STDOUT)
 assert built.returncode==0,'Native note-layout host compilation failed'
 app=work/'ReadingBook Note Layout Test.app';contents=app/'Contents';(contents/'MacOS').mkdir(parents=True,exist_ok=True);(contents/'Resources').mkdir(exist_ok=True)

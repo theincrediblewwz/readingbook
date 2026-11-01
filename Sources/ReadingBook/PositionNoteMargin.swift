@@ -29,6 +29,7 @@ struct PositionNoteMarginHost: NSViewRepresentable {
     @EnvironmentObject private var store: AppStore
     let content: PositionNoteMargin
     let controller: PDFReaderController
+    var scale: CGFloat = 1
     func makeNSView(context: Context) -> PositionNoteNativeHost {
         let host = PositionNoteNativeHost(rootView: root)
         controller.attachNoteMargin(host, owner: store.collectionOwnerKey)
@@ -40,7 +41,9 @@ struct PositionNoteMarginHost: NSViewRepresentable {
         controller.attachNoteMargin(view, owner: store.collectionOwnerKey)
     }
     static func dismantleNSView(_ view: PositionNoteNativeHost, coordinator: ()) { view.onScroll = nil; view.onDetach?(); view.onDetach = nil }
-    private var root: AnyView { AnyView(content.environmentObject(store).modifier(ReadingPreferencesEnvironment())) }
+    private var root: AnyView { AnyView(content.scaleEffect(scale, anchor: .topLeading)
+        .frame(width: PositionNoteSurface.marginWidth * scale, height: content.height * scale, alignment: .topLeading)
+        .environmentObject(store).modifier(ReadingPreferencesEnvironment())) }
 }
 
 struct PositionNoteTurnVisibility: ViewModifier {
@@ -58,15 +61,18 @@ struct PositionNoteMargin: View {
     @ObservedObject var nativePositions: PDFNotePositionState
     let height: CGFloat
     let isPDF: Bool
+    var scale: CGFloat = 1
+    var originY: CGFloat = 0
+    var topInset: CGFloat = PositionNoteSurface.topInset
     var onExpand: ([String], [String: String], CGPoint) -> Void
     @State private var snippets: [String: String] = [:]
     @State private var noteDates: [String: Date] = [:]
     private var positions: [ReadingNoteScreenPosition] {
-        if isPDF { return nativePositions.owner == store.collectionOwnerKey ? nativePositions.points.map { .init(id: $0.key, y: $0.value.y) } : [] }
+        if isPDF { return nativePositions.owner == store.collectionOwnerKey ? nativePositions.points.map { .init(id: $0.key, y: ($0.value.y - originY) / scale) } : [] }
         return store.activeNotePlacements.filter { $0.value.unitID == store.selectedUnitID }.map { .init(id: $0.key, y: $0.value.y * height) }
     }
     private var stacks: [ReadingNoteStack] {
-        ReadingNoteLayout.stacks(positions, height: height, topInset: PositionNoteSurface.topInset).map { stack in
+        ReadingNoteLayout.stacks(positions, height: height, topInset: topInset).map { stack in
             ReadingNoteStack(ids: stack.ids.sorted {
                 let lhs = noteDates[$0] ?? .distantPast, rhs = noteDates[$1] ?? .distantPast
                 return lhs == rhs ? $0 < $1 : lhs > rhs
@@ -114,6 +120,47 @@ struct PositionNoteMargin: View {
     private var paper: some View { ReadingPaperBackground().clipShape(RoundedRectangle(cornerRadius: 6)).overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.07)) }.frame(width: 230, height: 170) }
 }
 
+/// Only this leaf observes native position updates. Its frame, contents and
+/// connector ends use one page-relative transform, including during zoom.
+struct PositionNoteMarginLayer: View {
+    @EnvironmentObject private var store: AppStore
+    @ObservedObject var positions: PDFNotePositionState
+    let controller: PDFReaderController
+    let viewport: CGSize
+    let isPDF: Bool
+    let showsMargin: Bool
+    let visible: Bool
+    let interactive: Bool
+    var onExpand: ([String], [String: String], CGPoint) -> Void
+    var onCollapse: () -> Void
+    var body: some View {
+        let scale = isPDF ? max(0.001, positions.marginScale) : 1
+        let frame = isPDF ? positions.marginFrame : CGRect(x: viewport.width - 17 - PositionNoteSurface.marginWidth, y: 0, width: PositionNoteSurface.marginWidth, height: viewport.height)
+        ZStack(alignment: .topLeading) {
+            Color.clear
+            if showsMargin || (isPDF && positions.marginWidth > 0.1) {
+                let margin = PositionNoteMargin(nativePositions: positions, height: max(1, frame.height / scale), isPDF: isPDF,
+                    scale: scale, originY: frame.minY, topInset: max(12, PositionNoteSurface.topInset - frame.minY) / scale) { ids, snippets, origin in
+                        onExpand(ids, snippets, CGPoint(x: frame.minX + origin.x * scale, y: frame.minY + origin.y * scale))
+                    }
+                Group {
+                    if isPDF { PositionNoteMarginHost(content: margin, controller: controller, scale: scale) }
+                    else { margin }
+                }.frame(width: max(0, frame.width), height: max(0, frame.height)).clipped()
+                    .offset(x: frame.minX, y: frame.minY)
+                    .modifier(PositionNoteTurnVisibility(positions: positions, visible: visible, interactive: interactive))
+                if isPDF { PositionNoteConnections(positions: positions, size: viewport).opacity(visible ? 1 : 0) }
+                Button(action: onCollapse) { Image(systemName: "chevron.right").font(.system(size: 12, weight: .medium)).frame(width: 32, height: 32) }
+                    .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.96), in: Circle())
+                    .overlay { Circle().strokeBorder(Color.primary.opacity(0.07)) }.shadow(color: .black.opacity(0.05), radius: 6, y: 2)
+                    .offset(x: min(viewport.width - 52, frame.maxX + 8), y: 86)
+                    .opacity(visible ? 1 : 0).allowsHitTesting(visible && interactive)
+                    .help("收起便签与右侧留白，恢复原来的阅读模式").accessibilityLabel("收起页边便签")
+            }
+        }.frame(width: viewport.width, height: viewport.height)
+    }
+}
+
 struct PositionNoteConnection {
     let line: Path
     let start: CGPoint
@@ -122,17 +169,18 @@ struct PositionNoteConnection {
     static func make(positions: PDFNotePositionState, size: CGSize, owner: String) -> [PositionNoteConnection] {
             guard positions.owner == owner else { return [] }
             var result: [PositionNoteConnection] = []
-            let points = positions.points.map { ReadingNoteScreenPosition(id: $0.key, y: $0.value.y) }
-            let stacks = ReadingNoteLayout.stacks(points, height: size.height, topInset: PositionNoteSurface.topInset)
-            let left = size.width - positions.scrollerWidth - positions.marginWidth
+            let scale = max(0.001, positions.marginScale)
+            let frame = positions.marginFrame.width > 0 ? positions.marginFrame : CGRect(x: size.width - positions.scrollerWidth - positions.marginWidth, y: 0, width: positions.marginWidth, height: size.height)
+            let points = positions.points.map { ReadingNoteScreenPosition(id: $0.key, y: ($0.value.y - frame.minY) / scale) }
+            let stacks = ReadingNoteLayout.stacks(points, height: frame.height / scale, topInset: max(12, PositionNoteSurface.topInset - frame.minY) / scale)
             for stack in stacks {
                 for id in stack.ids {
                     guard let connector = positions.connectors[id] else { continue }
-                    let end = CGPoint(x: left + 20, y: stack.top + 85)
+                    let end = CGPoint(x: frame.minX + 20 * scale, y: frame.minY + (stack.top + 85) * scale)
                     var line = Path(); line.move(to: connector.start)
-                    let exit = CGPoint(x: max(connector.start.x + 5, connector.pageExit.x), y: connector.pageExit.y)
+                    let exit = CGPoint(x: max(connector.start.x + 5 * scale, connector.pageExit.x), y: connector.pageExit.y)
                     line.addLine(to: exit)
-                    line.addCurve(to: end, control1: CGPoint(x: exit.x + 14, y: exit.y), control2: CGPoint(x: end.x - 18, y: end.y))
+                    line.addCurve(to: end, control1: CGPoint(x: exit.x + 14 * scale, y: exit.y), control2: CGPoint(x: end.x - 18 * scale, y: end.y))
                     result.append(.init(line: line, start: connector.start))
                 }
             }
