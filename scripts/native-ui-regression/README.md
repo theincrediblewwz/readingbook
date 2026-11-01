@@ -281,3 +281,6 @@ The isolated test then hosts the shipped renderer directly to verify both GPU
 directions; its receipt identifies this separately from animated reader input.
 `PAPER_PROBE_REDUCED_READER=1` exercises that branch locally without changing any
 system preference. Both branches retain exact original-page and byte checks.
+The runner denies access to the separate SwiftPM build-tree resource bundle.
+The real helper app keeps its copy under Contents/Resources, matching the
+installed layout, so a direct Bundle.module regression fails before packaging.

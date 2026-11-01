@@ -26,7 +26,8 @@ enum ReadingPaperStyle: String, CaseIterable, Identifiable {
     static func image(_ style: ReadingPaperStyle) -> NSImage? {
         guard style != .plain else { return nil }
         if let image = images.object(forKey: style.rawValue as NSString) { return image }
-        guard let url = Bundle.module.url(forResource: style.rawValue, withExtension: "png", subdirectory: "Paper"),
+        guard let bundle = ReadingBookResources.bundle,
+              let url = bundle.url(forResource: style.rawValue, withExtension: "png", subdirectory: "Paper"),
               let image = NSImage(contentsOf: url) else { return nil }
         images.setObject(image, forKey: style.rawValue as NSString, cost: 1536 * 1024 * 4)
         return image

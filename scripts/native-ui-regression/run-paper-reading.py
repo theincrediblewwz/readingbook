@@ -36,8 +36,18 @@ subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none', str(ap
 (output/'build-manifest.json').write_text(json.dumps({'sourceSHA256': sha(source), 'binarySHA256': sha(binary),
     'objects': {str(x.relative_to(ROOT)): sha(x) for x in objects}}, indent=2))
 started = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+# A hand-packed app must work without SwiftPM's development resource fallback.
+# Keep the real bundle in Contents/Resources, while denying only the separate
+# build-tree copy. This catches runtime Bundle.module calls that otherwise pass
+# in Debug/CI and trap only after installation on another computer.
+assert not (app/'ReadingBook_ReadingBook.bundle').exists()
+blocked_bundle = bindir/'ReadingBook_ReadingBook.bundle'
+profile = '(version 1) (allow default) (deny file-read* (subpath ' + json.dumps(str(blocked_bundle)) + '))'
+(output/'resource-sandbox.sb').write_text(profile+'\n')
+assert pathlib.Path('/usr/bin/sandbox-exec').is_file(), 'macOS resource-isolation verifier unavailable'
+runtime_command = ['/usr/bin/sandbox-exec', '-p', profile, str(contents/'MacOS/PaperReadingHost'), str(output)]
 with (output/'runtime.log').open('x') as log:
-    child = subprocess.Popen([str(contents/'MacOS/PaperReadingHost'), str(output)], cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT)
+    child = subprocess.Popen(runtime_command, cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT)
     try: status = child.wait(timeout=45)
     except subprocess.TimeoutExpired:
         subprocess.run(['sample', str(child.pid), '3', '-file', str(output/'timeout.sample.txt')], capture_output=True, timeout=10)
@@ -49,5 +59,7 @@ record = json.loads((output/'result.json').read_text()) if (output/'result.json'
 passed = status == 0 and logs.returncode == 0 and not any(warnings.values()) and record.get('status') == 'passed'
 report = {'probe': 'paper-reading', 'status': 'passed' if passed else 'failed', 'passed': passed, 'exitCode': status,
     'unifiedLogReturncode': logs.returncode, 'runtimeWarnings': warnings, 'hostSourceSHA256': sha(source), 'record': record, 'realNetworkRequests': 0}
+report.update(buildResourceFallbackDenied=True, blockedBuildResourceBundle=str(blocked_bundle),
+    sandboxProfileSHA256=sha(output/'resource-sandbox.sb'), actualAppResourceBundle=str(bundle))
 (output/'report.json').write_text(json.dumps(report, indent=2)+'\n')
 print(json.dumps(report)); sys.exit(0 if passed else 1)

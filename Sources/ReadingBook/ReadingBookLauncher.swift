@@ -32,7 +32,7 @@ private enum PackagedResourceVerification {
         var errorDescription: String? { message }
     }
 
-    static func run() throws {
+    @MainActor static func run() throws {
         let app = Bundle.main.bundleURL.standardizedFileURL.resolvingSymlinksInPath()
         guard app.pathExtension.lowercased() == "app" else {
             throw Failure(message: "请运行已打包的 ReadingBook.app 内的二进制。")
@@ -83,6 +83,12 @@ private enum PackagedResourceVerification {
             guard let source = CGImageSourceCreateWithData(data as CFData, nil),
                   let image = CGImageSourceCreateImageAtIndex(source, 0, nil), image.width >= 1024, image.height >= 1024 else {
                 throw Failure(message: "阅读纸张无法解码或尺寸不足：\(name)。")
+            }
+            // Exercise the same resolver used when the user opens the picker;
+            // decoding the file directly cannot catch a runtime bundle lookup.
+            guard let style = ReadingPaperStyle(rawValue: name),
+                  let resolved = ReadingPaperAssets.image(style), resolved.isValid else {
+                throw Failure(message: "阅读纸张的运行时资源定位失败：\(name)。")
             }
         }
         guard let catalogURL = bundle.url(forResource: "provider-catalog", withExtension: "json") else {
