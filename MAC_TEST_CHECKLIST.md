@@ -1,8 +1,14 @@
-> 2026-11-01 当前接续：33/64“少量便签更大、更疏”已同步main、完整CI通过并发布，尚未安装。当前安装仍为已经完成原书验收的32/63。Mac再次锁屏，解锁问题已发出待答，不改锁屏设置，不强退原程序。先读[扇形精修状态](Design/2026-11-01-sparse-note-fan.md)和logs/fan-density-20261101/STATUS.md。勿重复跑CI、创建发布或重新安装32；不得修改或提交用户dirty进度文档。
+> 2026-11-01：0.23.33/build64已同步main、发布、替换安装并完成原书两次正常启动验收。少量便签更大、更疏，多张保持紧凑；七张/窄窗分页和收回均已检查。下方32及更旧为历史，不再当待办，旧回滚路径部分已退役。见[本批结果](Design/2026-11-01-sparse-note-fan.md)。用户dirty进度文档仍原样保留，禁止修改或提交。
 
-33产品源9f8611519d71f1d0ea700249bae7260ca3cac1c1，CI41274853292通过790 Core/133指定回归、两种滚动条各20动态布局及全部旧原生/Markdown门槛，零编译警告。Release430379391、artifact13070638275。canonical dist/ReadingBook-0.23.33-Mac.zip为27296298B，SHA253c63bfa2b50e0c7c8f10a1a4151982b57238dc56dd64c98b08efd4eb4a6701；两架构、签名、32资源及36文件均核验。三张宽松原生截图/收回已看过，147组数量/尺寸含悬停边界与48组密集几何逐值相同对照通过；本机32项为独立断言，不冒称XCTest运行时。当前source UI封存明确最终33安装验收=false。
+33产品源9f8611519d71f1d0ea700249bae7260ca3cac1c1，CI41274853292通过790 Core/133指定回归、两种滚动条各20动态布局及全部旧原生/Markdown门槛，零编译警告。Release430379391、artifact13070638275。实际About33/64，PID14677/14745；104页/适宽343%、102旧句译、原历史正文、组件目录、书库顶部书名重选及正常重启/空草稿通过。原27文件成员与非Workspace书/笔记/分析字节保持，全部偏好完全相同；只正常导航Workspace变化。未新发问题、生成解释或保存原书笔记，不推断生产网络请求次数。
 
-解锁后正常关闭仍运行的隔离helper，再复用本批build-ui-host.py --dense --run-tag native-dense看7张及窄窗分页（测试源有FAN_DENSE模式，当前跑的二进制仍是3张样本，不能覆盖运行中App）。随后正常退出32，直接用本批delivery/install-verified.py安装dist/0.23.33-ci-41274853292/unpacked/ReadingBook.app，保护到private-books/fan-density-20261101/install-before-0.23.33；核About33/64、104页/适宽343%、102旧句译、原历史和正常重启，再按已有严格工具收尾。待33安装通过后retire-31.py与cleanup-completed.py精确退役31，保留33/32及32回滚。新33检查程序/Debug重复产物已先清理182244KiB，待安装包、活动helper和增量对象/共享缓存仍在；旧helper路径先读本批RETIRED_GENERATED。之后继续文件夹完整投影和跨组件状态，准备见本批next-performance-preparation.md，不算成已采用收益。
+原生三张宽松效果与Esc已核对，147组尺寸/数量含悬停边界、48组密集几何与32逐值相同；实际七张密集扇形、窄窗1–3/4–6/7–7全部可达并保持顺序。窄窗Esc恢复收起入口，恢复宽窗显示原七张纸堆。首次把窄窗返回误按宽窗预期检查的记录已明确分类；没有产品错误或降低几何断言。原生多卡片与两次原安装PID的三类警告均零。本机32项是独立断言，790由CI真实XCTest执行，不混计。
+
+交付入口logs/fan-density-20261101/delivery/final-delivery.json、native-original-ui-passed-33.json、post-install-check-33、ui-native-logs-33、final-preservation-check.json及../native-density-followup.json。current-source-ui.json是发布前封存，明确当时最终33安装=false；安装后独立新证据补齐，不改旧回执假称当时已验。当前保护和32回滚App在private-books/fan-density-20261101/install-before-0.23.33，保留最新回收状态及句译，不用旧备份覆盖现库。用户dirty文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持。
+
+canonical dist/ReadingBook-0.23.33-Mac.zip为27296298B、SHA253c63bfa2b50e0c7c8f10a1a4151982b57238dc56dd64c98b08efd4eb4a6701。重复ZIP和展开readyappPath已退役，先读dist/0.23.33-ci-41274853292/RETIRED_PAYLOADS.md再恢复。两阶段清理758672KiB约0.72GiB；全批4380796→4160792KiB，净减少220004KiB约215MiB，当前约3.97GiB。远端仅main与33/32，31 Release/tag/程序产物及本地31 App/ZIP精确退役；源历史、失败诊断、所有非App私人保护保留。结束的helper和Debug程序已退役，先读本批RETIRED_GENERATED；增量对象、Modules及canonical swift/clang共享cache保留。
+
+下一批继续16类组件轮转，优先笔记/历史/伴读的文件夹完整投影和跨组件更新，先读logs/fan-density-20261101/next-performance-preparation.md。目前只是源码线索，尚无新性能收益或采用变更；保持kind/顺序/12级缩进、跨库/跨书owner及完整原文权限，确认真实完整入口收益再改。不恢复数学核查。
 
 > 2026-11-01：0.23.32/build63已同步main、发布、替换安装并完成原书两次启动验收。七项便签、折叠收纳与大封面需求已交付；用户实际悬停确认可平滑抬卡。当前新增反馈是“少量卡片更大、更疏，数量多才保持现密度”，先做这处精修，再继续16类组件性能优化。见[逐项结果](Design/2026-11-01-note-layout-and-library-results.md)。下方31及更旧都是历史，不再当待办。
 
