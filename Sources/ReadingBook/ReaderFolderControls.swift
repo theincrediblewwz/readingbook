@@ -17,6 +17,42 @@ struct ReaderInformationButton: View {
     }
 }
 
+/// A naming window keeps the identity chosen when it opened. A later selection
+/// or deletion must not redirect a rename or turn it into a new folder.
+enum ReaderFolderNamingIntent: Equatable {
+    case create(parentID: String?)
+    case rename(id: String)
+
+    var title: String {
+        switch self { case .create: return "新建文件夹"; case .rename: return "重命名文件夹" }
+    }
+
+    func command(title: String, kind: ReaderCollectionKind, folders: [ReaderCollectionFolder]) throws -> ReaderCollectionCommand {
+        switch self {
+        case .create(let parentID):
+            if let parentID, !folders.contains(where: { $0.id == parentID && $0.kind == kind }) {
+                throw ReadingError.invalid("上级文件夹已变化，请重新选择后再新建。")
+            }
+            return .createFolder(.init(kind: kind, title: title, parentID: parentID))
+        case .rename(let id):
+            guard folders.contains(where: { $0.id == id && $0.kind == kind }) else {
+                throw ReadingError.invalid("要重命名的文件夹已不存在，请重新打开文件夹列表。")
+            }
+            return .renameFolder(id, title)
+        }
+    }
+}
+
+struct ReaderFolderRemovalIntent: Equatable {
+    let folderID: String
+    func command(kind: ReaderCollectionKind, folders: [ReaderCollectionFolder]) throws -> ReaderCollectionCommand {
+        guard folders.contains(where: { $0.id == folderID && $0.kind == kind }) else {
+            throw ReadingError.invalid("要移除的文件夹已不存在，请重新打开文件夹列表。")
+        }
+        return .removeFolder(folderID)
+    }
+}
+
 struct ReaderFolderControl: View {
     @EnvironmentObject private var store: AppStore
     let kind: ReaderCollectionKind
@@ -25,8 +61,9 @@ struct ReaderFolderControl: View {
     @State private var owner: WorkspacePickerOwner?
     @State private var presented = false
     @State private var naming = false
-    @State private var renaming = false
+    @State private var namingIntent: ReaderFolderNamingIntent?
     @State private var removing = false
+    @State private var removalIntent: ReaderFolderRemovalIntent?
     @State private var name = ""
     @State private var showingTopicOrganizer = false
     private var folders: [ReaderCollectionFolder] { store.readerCollections.folders.filter { $0.kind == kind } }
@@ -42,25 +79,34 @@ struct ReaderFolderControl: View {
             .help("按文件夹查看、新建或管理\(kind.title)；收纳不会移动或改写原始文件。")
             .popover(isPresented: $presented) { folderPicker }
             .sheet(isPresented: $showingTopicOrganizer) { NoteTopicOrganizer(close: { showingTopicOrganizer = false }).environmentObject(store) }
-            .alert(renaming ? "重命名文件夹" : "新建文件夹", isPresented: $naming) {
+            .alert(namingIntent?.title ?? "新建文件夹", isPresented: $naming) {
                 TextField("文件夹名称", text: $name)
                 Button("取消", role: .cancel) { }
                 Button("保存") {
-                    guard let owner, owner.matches(store) else { return }
-                    let command: ReaderCollectionCommand
-                    if renaming, let folder = selected { command = .renameFolder(folder.id, name) }
-                    else { command = .createFolder(.init(kind: kind, title: name, parentID: selected?.id)) }
-                    Task { await store.organizeReaderCollections(command, owner: owner) }
+                    guard let owner, owner.matches(store), let namingIntent else { return }
+                    do {
+                        let command = try namingIntent.command(title: name, kind: kind, folders: folders)
+                        Task { await store.organizeReaderCollections(command, owner: owner) }
+                    } catch { store.errorMessage = error.localizedDescription }
                 }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.count > 80)
             }
             .confirmationDialog("移除这个文件夹？", isPresented: $removing, titleVisibility: .visible) {
                 Button("移除文件夹", role: .destructive) {
-                    guard let id = selected?.id, let owner else { return }; selection = nil
-                    Task { await store.organizeReaderCollections(.removeFolder(id), owner: owner) }
+                    guard let owner, owner.matches(store), let removalIntent else { return }
+                    do {
+                        let command = try removalIntent.command(kind: kind, folders: folders)
+                        if selection == removalIntent.folderID { selection = nil }
+                        Task { await store.organizeReaderCollections(command, owner: owner) }
+                    } catch { store.errorMessage = error.localizedDescription }
                 }
                 Button("取消", role: .cancel) { }
             } message: { Text("内容保留并回到未分类；子文件夹移到上一层。") }
-            .onChange(of: store.collectionOwnerKey) { _, _ in presented = false; naming = false; removing = false; owner = nil; selection = nil }
+            .onChange(of: store.collectionOwnerKey) { _, _ in presented = false; naming = false; removing = false; namingIntent = nil; removalIntent = nil; name = ""; owner = nil; selection = nil }
+            .onChange(of: folders) { _, current in
+                if let selection, selection != "@unfiled", !current.contains(where: { $0.id == selection }) {
+                    self.selection = nil
+                }
+            }
     }
     private var folderPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -70,20 +116,24 @@ struct ReaderFolderControl: View {
                 Button { presented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭文件夹")
             }
             ScrollView {
-                VStack(spacing: 3) {
-                    folderRow("全部" + kind.title, icon: "square.grid.2x2", id: nil)
-                    folderRow("未分类", icon: "tray", id: "@unfiled")
-                    ForEach(orderedFolders) { folder in
-                        folderRow(folder.title, icon: "folder", id: folder.id, depth: depth(folder))
-                    }
+                if folders.count > 12 {
+                    LazyVStack(spacing: 3) { folderRows }
+                } else {
+                    VStack(spacing: 3) { folderRows }
                 }
             }.frame(maxHeight: 280)
             Divider().opacity(0.4)
-            Button { renaming = false; name = ""; presented = false; naming = true } label: { Label(selected == nil ? "新建文件夹…" : "新建子文件夹…", systemImage: "folder.badge.plus").frame(maxWidth: .infinity, minHeight: 40, alignment: .leading) }
+            Button { namingIntent = .create(parentID: selected?.id); name = ""; presented = false; naming = true } label: { Label(selected == nil ? "新建文件夹…" : "新建子文件夹…", systemImage: "folder.badge.plus").frame(maxWidth: .infinity, minHeight: 40, alignment: .leading) }
                 .buttonStyle(ReadingQuietButtonStyle()).help("新建文件夹；原始内容保留在原位置。")
             if selected != nil {
-                Button { renaming = true; name = selected?.title ?? ""; presented = false; naming = true } label: { Label("重命名…", systemImage: "pencil").frame(maxWidth: .infinity, minHeight: 40, alignment: .leading) }.buttonStyle(ReadingQuietButtonStyle())
-                Button { presented = false; removing = true } label: { Label("移除文件夹…", systemImage: "folder.badge.minus").frame(maxWidth: .infinity, minHeight: 40, alignment: .leading) }.buttonStyle(ReadingQuietButtonStyle()).help("只移除文件夹，里面的内容保留。")
+                Button {
+                    guard let selected else { return }
+                    namingIntent = .rename(id: selected.id); name = selected.title; presented = false; naming = true
+                } label: { Label("重命名…", systemImage: "pencil").frame(maxWidth: .infinity, minHeight: 40, alignment: .leading) }.buttonStyle(ReadingQuietButtonStyle())
+                Button {
+                    guard let selected else { return }
+                    removalIntent = .init(folderID: selected.id); presented = false; removing = true
+                } label: { Label("移除文件夹…", systemImage: "folder.badge.minus").frame(maxWidth: .infinity, minHeight: 40, alignment: .leading) }.buttonStyle(ReadingQuietButtonStyle()).help("只移除文件夹，里面的内容保留。")
             }
             if organizeNotes {
                 Button { presented = false; showingTopicOrganizer = true } label: {
@@ -96,6 +146,13 @@ struct ReaderFolderControl: View {
                     .buttonStyle(ReadingQuietButtonStyle()).help("把未分类的笔记按保存月份放入文件夹；已有分类、正文和原文链接保持。")
             }
         }.padding(18).frame(width: 320).disabled(store.isOrganizingCollections)
+    }
+    @ViewBuilder private var folderRows: some View {
+        folderRow("全部" + kind.title, icon: "square.grid.2x2", id: nil)
+        folderRow("未分类", icon: "tray", id: "@unfiled")
+        ForEach(orderedFolders) { folder in
+            folderRow(folder.title, icon: "folder", id: folder.id, depth: depth(folder))
+        }
     }
     private func folderRow(_ title: String, icon: String, id: String?, depth: Int = 0) -> some View {
         Button {
@@ -133,6 +190,7 @@ struct ReaderMoveToFolderButton: View {
     @State private var owner: WorkspacePickerOwner?
     @State private var presented = false
     @State private var name = ""
+    private var folders: [ReaderCollectionFolder] { store.readerCollections.folders.filter { $0.kind == kind } }
     var body: some View {
         Button { owner = WorkspacePickerOwner(store: store); presented = true } label: {
             Image(systemName: "folder.badge.plus").frame(width: 36, height: 36)
@@ -141,9 +199,10 @@ struct ReaderMoveToFolderButton: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("移到文件夹").font(.system(size: 16, weight: .semibold))
                     ScrollView {
-                        VStack(spacing: 4) {
-                            moveRow("未分类", id: nil)
-                            ForEach(store.readerCollections.folders.filter { $0.kind == kind }) { folder in moveRow(folder.title, id: folder.id) }
+                        if folders.count > 12 {
+                            LazyVStack(spacing: 4) { folderRows }
+                        } else {
+                            VStack(spacing: 4) { folderRows }
                         }
                     }.frame(maxHeight: 260)
                     Divider().opacity(0.4)
@@ -161,6 +220,10 @@ struct ReaderMoveToFolderButton: View {
                 }.padding(20).frame(width: 370).disabled(store.isOrganizingCollections)
             }
             .onChange(of: store.collectionOwnerKey) { _, _ in presented = false; owner = nil; name = "" }
+    }
+    @ViewBuilder private var folderRows: some View {
+        moveRow("未分类", id: nil)
+        ForEach(folders) { folder in moveRow(folder.title, id: folder.id) }
     }
     private func moveRow(_ title: String, id: String?) -> some View {
         Button {

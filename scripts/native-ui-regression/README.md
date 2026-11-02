@@ -1,5 +1,13 @@
 # Native UI regression
 
+`run-folder-identity.py --bin-dir .build/tests/debug --tag ci-folder-identity`
+links the actual product folder intents and isolated repositories. Its 26 named
+checks keep rename/create/remove targets fixed across selection changes, reject
+deleted or wrong-type targets and foreign owners, and preserve note bodies,
+conversation messages and source bytes. It does not operate the installed library,
+call a model, or measure picker latency. Separate visible native evidence covers
+lazy-list first/last-row selection, moving items, cancellation and owner changes.
+
 `build.py` links the actual testable Debug product objects, excluding only the normal launcher. `run.py` creates a separate native application and workspace-local library copy. It never controls the installed app, reads a provider key, or starts an AI request. XCTest is not required.
 
 ```sh
