@@ -1,6 +1,6 @@
 # 阅读页便签、查找与划线 · 0.23.41
 
-本机实现与定向验证完成，GitHub 完整回归、正式包与安装状态将在交付后补记。用户已有的 `2026-10-29-performance-progress.md` 原样保护。原书库不用于测试写入，复现使用隔离副本与合成书。
+0.23.41/build72 已通过完整 CI、发布并替换安装，正式原书界面与重启验收待 Mac 解锁。用户已有的 `2026-10-29-performance-progress.md` 原样保护。原书库不用于测试写入，复现使用隔离副本与合成书。
 
 | 最近九项 | 处理与本机证据 |
 | --- | --- |
@@ -31,3 +31,7 @@ NoteLayout 原门槛仍检查完整的“原书内容”可见：新实现把留
 显示边界采用公开的 [PDFPage.setBounds](https://developer.apple.com/documentation/pdfkit/pdfpage/setbounds(_:for:))；[bounds 文档](https://developer.apple.com/documentation/pdfkit/pdfpage/bounds(for:)) 明确裁剪框受 media box 限制。仅界面文档临时加宽，原始 crop/media 单独保留，还原时清掉临时关联；定位、准备校验、批注与归一化坐标仍用原始框，不写回 PDF。
 
 证据根目录 `logs/reader-page-notes-20261103/`，副本与保护在 `private-books/reader-page-notes-20261103/`。最终交付后另给此前功能与 16 类组件的评价表，区分当前验收、历史收益和仍需推进的部分。
+
+完整 CI41518827599 通过 825 Core、168 指定回归及全部既有原生/WebKit/工具门槛与新增39项，零编译警告。artifact13178445915，Release431957481。产品源 `a250d2b5cdbc75a61cdc16d2f9b2c31ffb76374d`；ZIP 32537070B，SHA `05b8ee9dd44ed307c646d3afd14102a81dd362ab14d7deaf664ce8d5ef1b77cf`。双架构、35资源、39文件清单、严格签名与公开下载逐字节回验通过。
+
+安装前正常退出40并保护当前31文件与偏好，安装后全部字节相同；真实停机位置为93页，不使用旧103/104页备份覆盖。原书GUI验收尚未完成，入口 `delivery41/ready-awaiting-unlock.json` 如实记录，不把安装成功写成界面已验。此前功能和16类组件评价已保存到根目录[体验与性能评价表](../体验与性能评价表.md)。

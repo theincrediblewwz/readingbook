@@ -2,13 +2,19 @@
 
 以下保留原 README 的历史交付记录；旧版包可能已退役，旧功能说明不代表当前仍然提供。近期逐批验证记录见 [Design](Design/)，当前下载见 [Releases](https://github.com/theincrediblewwz/readingbook/releases/latest)。
 
-# ReadingBook
+## 0.23.41
+
+便签按所属书页预留右侧空间并随页移动、缩放，滚动到边缘时自然裁切；修复连续页面的纸张边缘跨页相连。查找改为输入后自动检索，修复结果悬停残影，补原生按钮和原文链接反馈。下划线移到文字下方，新增颜色、粗细、深浅、荧光、微光与波浪间距设置；悬停波浪线有呼吸反馈。书库标题居中，浮动工具的浅阴影更易辨认。
+
+README 精简为功能与使用介绍，开发资料与历史记录分开。逐项结果见[九项修复](Design/2026-11-03-page-notes-results.md)，历次功能与局部性能收益见[体验与性能评价表](体验与性能评价表.md)。
+
+## 0.23.40（历史交付）
 
 本地书籍阅读、笔记与便签，配合伴读、对话和智能阅读。原书与用户笔记保存在你选择的书库；新分析与界面收纳保留明确来源。
 
-[下载0.23.40](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.40) · [39回退版](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.39) · [数据存储说明](数据存储说明.md) · [组件优化计划](Design/2026-10-29-component-performance-plan.md)
+[下载最新版](https://github.com/theincrediblewwz/readingbook/releases/latest) · [数据存储说明](数据存储说明.md) · [组件优化计划](Design/2026-10-29-component-performance-plan.md)
 
-当前版 **0.23.40/build71**：阅读器收起常驻书名，伴读入口和底栏按需展开；句子支持永久直线与波浪下划线。修复千页 PDF 缩略图空白，提供小中大三档、拖宽与自动增列；查找支持高亮结果列表并修复关闭键。书库操作固定悬浮，支持显示书名重命名与封面移动、缩放取景，纸张采用选定的 01、06、09。已同步 main、发布双架构包并更新本机安装；817 项 Core、160 项指定回归、全部原生/WebKit 门槛和原书两次正常启动验收通过。原书、笔记、分析、封面和 AI 配置保留。本批不宣称新的 FPS 或整机内存收益。
+**0.23.40/build71**：阅读器收起常驻书名，伴读入口和底栏按需展开；句子支持永久直线与波浪下划线。修复千页 PDF 缩略图空白，提供小中大三档、拖宽与自动增列；查找支持高亮结果列表并修复关闭键。书库操作固定悬浮，支持显示书名重命名与封面移动、缩放取景，纸张采用选定的 01、06、09。已同步 main、发布双架构包并更新本机安装；817 项 Core、160 项指定回归、全部原生/WebKit 门槛和原书两次正常启动验收通过。原书、笔记、分析、封面和 AI 配置保留。本批不宣称新的 FPS 或整机内存收益。
 
 [本轮十四项改动与验证](Design/2026-11-03-reader-quiet.md) · [前批文件夹优化](Design/2026-11-02-folder-controls-results.md) · [纸书与便签](Design/2026-11-02-page-relative-note-layout.md)
 

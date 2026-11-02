@@ -1,3 +1,11 @@
+> 2026-11-03：0.23.41/build72 已同步 main、发布并替换本机安装，原书界面及重启验收待 Mac 解锁；不要重复发布或安装。九项阅读页/便签/查找/划线与 README 修复的产品源为 a250d2b5cdbc75a61cdc16d2f9b2c31ffb76374d，完整 CI41518827599、artifact13178445915、Release431957481。825 Core、168 指定回归及全部旧原生/WebKit 门槛、新增39项通过，零编译警告。首轮CI几何oracle错误及修正前失败原样保留，最终完整重跑成功。详见[本批结果](Design/2026-11-03-page-notes-results.md)与[体验及16类组件评价表](体验与性能评价表.md)。
+
+交付入口 `logs/reader-page-notes-20261103/delivery41/`，当前状态 `ready-awaiting-unlock.json` 明确 nativeUIAccepted=false。31个原库成员和全部偏好在安装后逐字节一致，已停机的真实基线是93/1484页、138%、整页缩放、上下连续、非纸书，禁止回灌开工或旧103/104页快照。最新保护及40回滚在 `private-books/reader-page-notes-20261103/install-before-0.23.41`；用户dirty进度文档SHA仍为9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，禁止编辑/提交。
+
+正式ZIP 32537070B，SHA05b8ee9dd44ed307c646d3afd14102a81dd362ab14d7deaf664ce8d5ef1b77cf；双架构、35资源、完整39程序文件、严格签名及公开下载回验通过。结束helper已精确退役，原始源码、输入和报告保留；大UI快照无损gzip，先读 `private-books/reader-page-notes-20261103/COMPRESSED_CAPTURES.md`。39载荷退役仍须等正式原书UI验收后执行，预检见delivery41/retire39-preflight.json。不要恢复数学核查，不改锁屏设置，CUA报锁先刷新核实。下方40及更早接续均历史。
+
+---
+
 > 2026-11-03：0.23.40/build71 已同步 main、发布并替换本机安装，原书两次启动验收完成。本批十四项清爽阅读、永久句子划线、纸张 01/06/09、固定书库控件、显示书名重命名、封面取景、右键坐标、查找关闭与结果列表、千页缩略图及小中大/拖宽增列全部交付。原书、笔记、分析、封面与 AI 配置保留。产品源 ac70f2a45ae103997245a0739a2189d9ba2d798b，CI41486897114，artifact13165366289，Release431785574。当前没有解锁、安装或发布待办。用户 dirty 进度文档禁止编辑或提交。详见[十四项结果](Design/2026-11-03-reader-quiet.md)。
 
 交付入口 `logs/reader-quiet-20261102/delivery40/`：完整 CI 817 Core、160 指定回归和全部既有原生/WebKit/工具门槛通过，零编译警告；两架构、35 资源和完整 39 个程序文件清单核验。规范 ZIP 32383785B，SHA d32d1b90af1d648d42a2264536a4ffe41c4ca7790b6bbfdc6490c808627ed929；公开 Release 下载回验一致。
