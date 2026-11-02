@@ -139,6 +139,13 @@ import ImageIO
             if let data = try await store.repository.bookCoverData(for: book) { try data.write(to: directory.appendingPathComponent(tag + "-cover.jpg")) }
         }
         if let root = window.contentView, let pdf = descendants(root, PDFView.self).first {
+            value["activeLayerAnimations"] = allViews(root).flatMap { view in
+                (view.layer?.sublayers ?? []).compactMap { layer -> [String: Any]? in
+                    guard let keys = layer.animationKeys(), !keys.isEmpty else { return nil }
+                    return ["view": String(describing: type(of: view)), "keys": keys,
+                        "opacity": layer.presentation()?.opacity ?? layer.opacity, "frame": NSStringFromRect(layer.frame)]
+                }
+            }
             value["pdfIdentity"] = String(describing: ObjectIdentifier(pdf)); value["scale"] = pdf.scaleFactor
             value["page"] = pdf.currentPage.flatMap { pdf.document?.index(for: $0) }.map { $0 + 1 }
             value["annotationCount"] = pdf.document?.page(at: 0)?.annotations.count ?? 0

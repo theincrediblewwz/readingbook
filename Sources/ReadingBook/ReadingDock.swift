@@ -105,6 +105,8 @@ struct FloatingReadingDock<Content: View>: View {
                         Capsule().fill(.white.opacity(0.72)).frame(width: width, height: 5)
                             .background(.ultraThinMaterial, in: Capsule())
                             .overlay { Capsule().strokeBorder(Palette.ink.opacity(0.08), lineWidth: 0.5) }
+                            .shadow(color: .black.opacity(0.14), radius: 2, y: 1)
+                            .shadow(color: .black.opacity(0.08), radius: 7, y: 3)
                             .frame(width: width, height: 22, alignment: .bottom).padding(.bottom, 3)
                             .contentShape(Rectangle())
                     }.buttonStyle(.plain)

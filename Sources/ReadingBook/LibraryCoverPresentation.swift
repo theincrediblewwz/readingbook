@@ -156,7 +156,7 @@ struct FrostBookCoverCard: View {
                         .shadow(color: .black.opacity(0.08), radius: 12, y: 7)
                 }.aspectRatio(0.78, contentMode: .fit)
                 Text(book.title).font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .center)
             }.padding(5).contentShape(Rectangle())
         }.buttonStyle(ReadingQuietButtonStyle(radius: 18)).disabled(store.isBusy)
             .help("打开《" + book.title + "》继续阅读；绿色进度条表示阅读位置。")

@@ -11,7 +11,7 @@ struct PDFSearchResultEntry {
 /// Native reusable rows keep a 5,000-hit search from creating 5,000 views.
 @MainActor final class PDFSearchResultsList: NSView, NSTableViewDataSource, NSTableViewDelegate {
     static let rowHeight: CGFloat = 34
-    let table = NSTableView()
+    let table = PDFSearchResultTable()
     let scroll = NSScrollView()
     private(set) var entries: [PDFSearchResultEntry] = []
     private var snippets: [Int: NativePDFSearchSnippet] = [:]
@@ -27,15 +27,20 @@ struct PDFSearchResultEntry {
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.dataSource = self; table.delegate = self; table.target = self; table.action = #selector(picked)
         table.setAccessibilityLabel("PDF 查找结果")
+        NotificationCenter.default.addObserver(self, selector: #selector(windowResigned(_:)), name: NSWindow.didResignKeyNotification, object: nil)
         scroll.documentView = table; scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true; scroll.drawsBackground = false
+        scroll.contentView.postsBoundsChangedNotifications = true
+        table.observeScrolling(in: scroll.contentView)
         scroll.translatesAutoresizingMaskIntoConstraints = false; addSubview(scroll)
         NSLayoutConstraint.activate([scroll.leadingAnchor.constraint(equalTo: leadingAnchor), scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.topAnchor.constraint(equalTo: topAnchor), scroll.bottomAnchor.constraint(equalTo: bottomAnchor)])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { NotificationCenter.default.removeObserver(self) }
+    @objc private func windowResigned(_ notification: Notification) { if notification.object as? NSWindow === window { table.clearHover() } }
     func reset() {
-        updating = true; entries = []; snippets = [:]; snippetOrder = []; table.reloadData(); updating = false
+        updating = true; entries = []; snippets = [:]; snippetOrder = []; table.clearHover(); table.reloadData(); updating = false
     }
     func append(_ additions: [PDFSearchResultEntry], selected: Int) {
         updating = true
@@ -66,7 +71,15 @@ struct PDFSearchResultEntry {
         if snippets[row] == nil { DispatchQueue.main.async { [weak self] in self?.onRequest?(row) } }
         return cell
     }
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { PDFSearchResultRow() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        let view = PDFSearchResultRow(); view.readingHovered = row == table.hoveredRow; return view
+    }
+    func tableView(_ tableView: NSTableView, didAdd rowView: NSTableRowView, forRow row: Int) {
+        (rowView as? PDFSearchResultRow)?.readingHovered = row == table.hoveredRow
+    }
+    func tableView(_ tableView: NSTableView, didRemove rowView: NSTableRowView, forRow row: Int) {
+        (rowView as? PDFSearchResultRow)?.readingHovered = false
+    }
     func tableViewSelectionDidChange(_ notification: Notification) {
         if !updating, NSApp.currentEvent?.type == .keyDown, entries.indices.contains(table.selectedRow) { onSelect?(table.selectedRow) }
     }
@@ -99,20 +112,58 @@ struct PDFSearchResultEntry {
     }
 }
 
-@MainActor private final class PDFSearchResultRow: NSTableRowView {
+/// A single owner resolves pointer position after both mouse moves and native
+/// scrolling. Per-row enter/exit flags become stale when rows are recycled.
+@MainActor final class PDFSearchResultTable: NSTableView {
     private var area: NSTrackingArea?
-    private var hovered = false
+    private var boundsObserver: NSObjectProtocol?
+    private(set) var hoveredRow = -1
+    func observeScrolling(in clip: NSClipView) {
+        if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
+        boundsObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshHover() }
+        }
+    }
+    deinit { if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) } }
     override func updateTrackingAreas() {
+        super.updateTrackingAreas()
         if let area { removeTrackingArea(area) }
-        let value = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited,.activeInActiveApp,.inVisibleRect], owner: self)
-        area = value; addTrackingArea(value); super.updateTrackingAreas()
+        let value = NSTrackingArea(rect: .zero, options: [.mouseMoved,.mouseEnteredAndExited,.activeInKeyWindow,.inVisibleRect], owner: self)
+        area = value; addTrackingArea(value); refreshHover()
     }
-    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
-    override func drawBackground(in dirtyRect: NSRect) {
-        if hovered && !isSelected { NSColor.controlAccentColor.withAlphaComponent(0.07).setFill(); NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 1), xRadius: 8, yRadius: 8).fill() }
+    override func mouseMoved(with event: NSEvent) { refreshHover(windowPoint: event.locationInWindow) }
+    override func mouseEntered(with event: NSEvent) { refreshHover(windowPoint: event.locationInWindow) }
+    override func mouseExited(with event: NSEvent) { clearHover() }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); clearHover() }
+    func clearHover() { setHoveredRow(-1) }
+    func refreshHover(windowPoint: CGPoint? = nil) {
+        guard let window, window.isKeyWindow, !isHiddenOrHasHiddenAncestor else { clearHover(); return }
+        let point = convert(windowPoint ?? window.mouseLocationOutsideOfEventStream, from: nil)
+        setHoveredRow(visibleRect.contains(point) ? row(at: point) : -1)
     }
-    override func drawSelection(in dirtyRect: NSRect) {
-        NSColor.controlAccentColor.withAlphaComponent(0.12).setFill(); NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 1), xRadius: 8, yRadius: 8).fill()
+    private func setHoveredRow(_ next: Int) {
+        let old = hoveredRow; hoveredRow = next
+        for index in Set([old, next]) where index >= 0 {
+            (rowView(atRow: index, makeIfNecessary: false) as? PDFSearchResultRow)?.readingHovered = index == next
+        }
     }
+}
+
+@MainActor private final class PDFSearchResultRow: NSTableRowView {
+    private let surface = CALayer()
+    var readingHovered = false { didSet { updateSurface() } }
+    override var isSelected: Bool { didSet { updateSurface() } }
+    override init(frame: NSRect) {
+        super.init(frame: frame); wantsLayer = true
+        surface.cornerRadius = 8; layer?.insertSublayer(surface, at: 0); updateSurface()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func layout() { super.layout(); surface.frame = bounds.insetBy(dx: 2, dy: 1) }
+    private func updateSurface() {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        surface.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(isSelected ? 0.12 : readingHovered ? 0.07 : 0).cgColor
+        CATransaction.commit()
+    }
+    override func drawBackground(in dirtyRect: NSRect) {}
+    override func drawSelection(in dirtyRect: NSRect) {}
 }

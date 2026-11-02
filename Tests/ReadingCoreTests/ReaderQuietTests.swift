@@ -197,7 +197,11 @@ final class ReaderQuietTests: XCTestCase {
         record.lineStyle = .wavy
         let wave = try XCTUnwrap(ReaderAnnotationAppearance.make(record, quad: record.quads[0], crop: crop)), path = try XCTUnwrap(wave.paths?.first)
         XCTAssertGreaterThan(path.elementCount, 100); XCTAssertLessThan(path.bounds.height, 3)
-        XCTAssertEqual(wave.bounds, CGRect(x: 20, y: 40, width: 100, height: 14))
+        // The ink box now includes clearance below the text. Requiring the old
+        // glyph-only bounds would force the stroke back inside the letters.
+        XCTAssertEqual(wave.bounds.maxY, 54); XCTAssertEqual(wave.bounds.minX, 20); XCTAssertEqual(wave.bounds.width, 100)
+        XCTAssertLessThan(wave.bounds.minY, 40)
+        XCTAssertLessThanOrEqual(wave.bounds.minY + path.bounds.maxY + (wave.border?.lineWidth ?? 0) / 2, 38.5)
         XCTAssertGreaterThanOrEqual(path.bounds.minY, 0); XCTAssertLessThanOrEqual(path.bounds.maxX, wave.bounds.width)
         record.lineStyle = nil
         XCTAssertEqual(ReaderAnnotationAppearance.make(record, quad: record.quads[0], crop: crop)?.type, "Highlight")

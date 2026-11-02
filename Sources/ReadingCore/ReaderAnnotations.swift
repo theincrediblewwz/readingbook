@@ -38,6 +38,7 @@ public struct ReaderAnnotation: Codable, Identifiable, Hashable, Sendable {
     public var trashedAt: Date?
     public var kind: ReaderAnnotationKind? = nil
     public var lineStyle: ReaderAnnotationLineStyle? = nil
+    public var lineAppearance: ReaderUnderlineAppearance? = nil
     public var effectiveKind: ReaderAnnotationKind { kind ?? .text }
     public init(id: String = UUID().uuidString, sourceHash: String, page: Int, text: String, rangeLocation: Int, rangeLength: Int, quads: [ReaderQuadRect], color: ReaderAnnotationColor = .yellow, comment: String = "", createdAt: Date = Date(), updatedAt: Date = Date(), trashedAt: Date? = nil, kind: ReaderAnnotationKind? = nil, lineStyle: ReaderAnnotationLineStyle? = nil) {
         self.id = id; self.sourceHash = sourceHash; self.page = page; self.text = text; self.rangeLocation = rangeLocation; self.rangeLength = rangeLength; self.quads = quads; self.color = color; self.comment = comment; self.createdAt = createdAt; self.updatedAt = updatedAt; self.trashedAt = trashedAt; self.kind = kind
@@ -60,6 +61,9 @@ public enum ReaderAnnotationValidator {
         guard validText || validRegion, annotation.text.count <= 32_768,
               annotation.comment.count <= 16_000, !annotation.quads.isEmpty, annotation.quads.count <= 512 else {
             throw ReadingError.invalid("PDF批注文字范围、正文、评论或行框数量超出限制。")
+        }
+        guard annotation.lineAppearance == nil || (annotation.lineStyle != nil && annotation.effectiveKind == .text && annotation.lineAppearance?.isValid == true) else {
+            throw ReadingError.invalid("下划线样式无效，原批注保留。")
         }
         guard annotation.quads.allSatisfy({ rect in
             [rect.x, rect.y, rect.width, rect.height].allSatisfy { $0.isFinite && abs($0) <= 10_000_000 } && rect.width > 0 && rect.height > 0
@@ -91,12 +95,24 @@ public enum ReaderAnnotationAppearance {
             let border = PDFBorder(); border.lineWidth = 1.5; annotation.border = border
             annotation.color = color.withAlphaComponent(0.9); annotation.interiorColor = color.withAlphaComponent(0.1)
         } else if let style = record.lineStyle {
-            annotation = PDFAnnotation(bounds: rect, forType: .ink, withProperties: nil)
-            let thickness = min(1, max(0.55, rect.height * 0.045))
+            let appearance = record.lineAppearance ?? ReaderUnderlineAppearance()
+            guard appearance.isValid else { return nil }
+            let thickness = CGFloat(appearance.thickness)
+            let amplitude = style == .wavy ? min(0.85, rect.height * 0.06) : 0
+            // Put the entire stroke, including its wave crest, below the line
+            // box. The durable quad remains the original text geometry.
+            let clearance: CGFloat = 1.5
+            let padding: CGFloat = appearance.glow ? 3 : 0.5
+            let bottom = max(crop.minY, rect.minY - clearance - thickness - 2 * amplitude - padding)
+            let bounds = CGRect(x: rect.minX, y: bottom, width: rect.width, height: rect.maxY - bottom)
+            let ink = ReaderUnderlinePDFAnnotation(bounds: bounds, forType: .ink, withProperties: nil)
+            ink.highlightRect = rect; ink.appearance = appearance
+            annotation = ink
             let border = PDFBorder(); border.lineWidth = thickness; annotation.border = border
-            annotation.color = color.withAlphaComponent(0.8)
+            annotation.color = record.lineAppearance == nil ? color.withAlphaComponent(0.8) : NSColor(srgbRed: appearance.red, green: appearance.green, blue: appearance.blue, alpha: appearance.opacity)
             let path = NSBezierPath(); path.lineWidth = thickness; path.lineCapStyle = .round
-            let amplitude = min(0.85, rect.height * 0.06), baseline = amplitude + thickness / 2
+            let baseline = max(amplitude + thickness / 2, rect.minY - bottom - clearance - thickness / 2 - amplitude)
+            guard baseline + amplitude + thickness / 2 <= rect.minY - bottom - clearance + 0.001 else { return nil }
             path.move(to: CGPoint(x: 0, y: baseline))
             if style == .straight { path.line(to: CGPoint(x: rect.width, y: baseline)) }
             else {
@@ -104,7 +120,7 @@ public enum ReaderAnnotationAppearance {
                 let steps = max(1, min(4096, Int(ceil(rect.width / 0.65))))
                 for i in 1...steps {
                     let x = rect.width * CGFloat(i) / CGFloat(steps)
-                    path.line(to: CGPoint(x: x, y: baseline + sin(x * .pi / 2.3) * amplitude))
+                    path.line(to: CGPoint(x: x, y: baseline + sin(x * 2 * .pi / appearance.waveLength) * amplitude))
                 }
             }
             annotation.add(path)
@@ -114,6 +130,23 @@ public enum ReaderAnnotationAppearance {
         }
         annotation.contents = record.comment.isEmpty ? record.text : record.comment
         return annotation
+    }
+}
+
+private final class ReaderUnderlinePDFAnnotation: PDFAnnotation {
+    var highlightRect = CGRect.zero
+    var appearance = ReaderUnderlineAppearance()
+    override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        context.saveGState(); defer { context.restoreGState() }
+        context.setBlendMode(.multiply)
+        if appearance.highlighter {
+            context.setFillColor(color.withAlphaComponent(appearance.opacity * 0.2).cgColor)
+            context.fill(highlightRect)
+        }
+        context.translateBy(x: bounds.minX, y: bounds.minY)
+        context.setStrokeColor(color.cgColor); context.setLineWidth(border?.lineWidth ?? 0.8); context.setLineCap(.round)
+        if appearance.glow { context.setShadow(offset: .zero, blur: 2, color: color.withAlphaComponent(0.45).cgColor) }
+        for path in paths ?? [] { context.addPath(path.cgPath); context.strokePath() }
     }
 }
 

@@ -70,11 +70,12 @@ struct PositionNoteMargin: View {
     var scale: CGFloat = 1
     var originY: CGFloat = 0
     var topInset: CGFloat = PositionNoteSurface.topInset
+    var noteIDs: Set<String>? = nil
     var onExpand: ([String], [String: String], CGPoint) -> Void
     @State private var snippets: [String: String] = [:]
     @State private var noteDates: [String: Date] = [:]
     private var positions: [ReadingNoteScreenPosition] {
-        if isPDF { return nativePositions.owner == store.collectionOwnerKey ? nativePositions.points.map { .init(id: $0.key, y: ($0.value.y - originY) / scale) } : [] }
+        if isPDF { return nativePositions.owner == store.collectionOwnerKey ? nativePositions.points.filter { noteIDs?.contains($0.key) ?? true }.map { .init(id: $0.key, y: ($0.value.y - originY) / scale) } : [] }
         return store.activeNotePlacements.filter { $0.value.unitID == store.selectedUnitID }.map { .init(id: $0.key, y: $0.value.y * height) }
     }
     private var stacks: [ReadingNoteStack] {
@@ -139,34 +140,43 @@ struct PositionNoteMarginLayer: View {
     let interactive: Bool
     var onExpand: ([String], [String: String], CGPoint) -> Void
     var onCollapse: () -> Void
-    var body: some View {
-        let scale = isPDF ? max(0.001, positions.marginScale) : 1
+    private var surfaces: [PDFNotePageSurface] {
+        if isPDF, !positions.surfaces.isEmpty { return positions.surfaces }
         let frame = isPDF ? positions.marginFrame : CGRect(x: viewport.width - 17 - PositionNoteSurface.marginWidth, y: 0, width: PositionNoteSurface.marginWidth, height: viewport.height)
+        return [.init(id: 0, frame: frame, scale: isPDF ? max(0.001, positions.marginScale) : 1, noteIDs: Set(positions.points.keys))]
+    }
+    var body: some View {
+        let frame = (surfaces.first(where: { $0.id == controller.page }) ?? surfaces.first)?.frame ?? .zero
+        let collapseX = frame.width > 0 && frame.maxX > 32 && frame.minX < viewport.width
+            ? max(8, min(viewport.width - 52, frame.maxX + 8)) : viewport.width - 52
         // Navigation floats above the original page. Keep the paper reserve
         // stable, while hiding slips/lines that would cover search or thumbnails.
         let notesVisible = visible && (!isPDF || !positions.navigationObscured)
         ZStack(alignment: .topLeading) {
             Color.clear
             if showsMargin || (isPDF && positions.marginWidth > 0.1) {
+                ForEach(surfaces) { surface in
+                let frame = surface.frame, scale = surface.scale
                 let margin = PositionNoteMargin(nativePositions: positions, height: max(1, frame.height / scale), isPDF: isPDF,
-                    scale: scale, originY: frame.minY, topInset: max(12, PositionNoteSurface.topInset - frame.minY) / scale) { ids, snippets, origin in
+                    scale: scale, originY: frame.minY, topInset: isPDF ? 16 : PositionNoteSurface.topInset, noteIDs: isPDF ? surface.noteIDs : nil, onExpand: { ids, snippets, origin in
                         onExpand(ids, snippets, CGPoint(x: frame.minX + origin.x * scale, y: frame.minY + origin.y * scale))
-                    }
+                    })
                 Group {
                     if isPDF { PositionNoteMarginHost(content: margin, controller: controller, scale: scale) }
                     else { margin }
                 }.frame(width: max(0, frame.width), height: max(0, frame.height)).clipped()
                     .offset(x: frame.minX, y: frame.minY)
                     .modifier(PositionNoteTurnVisibility(positions: positions, visible: notesVisible, interactive: interactive))
+                }
                 if isPDF { PositionNoteConnections(positions: positions, size: viewport).opacity(notesVisible ? 1 : 0) }
                 Button(action: onCollapse) { Image(systemName: "chevron.right").font(.system(size: 12, weight: .medium)).frame(width: 32, height: 32) }
                     .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.96), in: Circle())
                     .overlay { Circle().strokeBorder(Color.primary.opacity(0.07)) }.shadow(color: .black.opacity(0.05), radius: 6, y: 2)
-                    .offset(x: min(viewport.width - 52, frame.maxX + 8), y: 86)
+                    .offset(x: collapseX, y: 86)
                     .opacity(notesVisible ? 1 : 0).allowsHitTesting(notesVisible && interactive)
                     .help("收起便签与右侧留白，恢复原来的阅读模式").accessibilityLabel("收起页边便签")
             }
-        }.frame(width: viewport.width, height: viewport.height)
+        }.frame(width: viewport.width, height: viewport.height).clipped()
     }
 }
 
@@ -178,10 +188,13 @@ struct PositionNoteConnection {
     static func make(positions: PDFNotePositionState, size: CGSize, owner: String) -> [PositionNoteConnection] {
             guard positions.owner == owner else { return [] }
             var result: [PositionNoteConnection] = []
-            let scale = max(0.001, positions.marginScale)
-            let frame = positions.marginFrame.width > 0 ? positions.marginFrame : CGRect(x: size.width - positions.scrollerWidth - positions.marginWidth, y: 0, width: positions.marginWidth, height: size.height)
-            let points = positions.points.map { ReadingNoteScreenPosition(id: $0.key, y: ($0.value.y - frame.minY) / scale) }
-            let stacks = ReadingNoteLayout.stacks(points, height: frame.height / scale, topInset: max(12, PositionNoteSurface.topInset - frame.minY) / scale)
+            let surfaces = positions.surfaces.isEmpty ? [PDFNotePageSurface(id: 0,
+                frame: positions.marginFrame.width > 0 ? positions.marginFrame : CGRect(x: size.width - positions.scrollerWidth - positions.marginWidth, y: 0, width: positions.marginWidth, height: size.height),
+                scale: max(0.001, positions.marginScale), noteIDs: Set(positions.points.keys))] : positions.surfaces
+            for surface in surfaces {
+            let scale = surface.scale, frame = surface.frame
+            let points = positions.points.filter { surface.noteIDs.contains($0.key) }.map { ReadingNoteScreenPosition(id: $0.key, y: ($0.value.y - frame.minY) / scale) }
+            let stacks = ReadingNoteLayout.stacks(points, height: frame.height / scale, topInset: positions.surfaces.isEmpty ? max(12, PositionNoteSurface.topInset - frame.minY) / scale : 16)
             for stack in stacks {
                 for id in stack.ids {
                     guard let connector = positions.connectors[id] else { continue }
@@ -192,6 +205,7 @@ struct PositionNoteConnection {
                     line.addCurve(to: end, control1: CGPoint(x: exit.x + 14 * scale, y: exit.y), control2: CGPoint(x: end.x - 18 * scale, y: end.y))
                     result.append(.init(line: line, start: connector.start))
                 }
+            }
             }
             return result
     }

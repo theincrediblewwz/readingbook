@@ -7,10 +7,14 @@ from pathlib import Path
 import argparse, hashlib, json, os, re, subprocess
 R = Path(__file__).resolve().parents[2]
 p = argparse.ArgumentParser(); p.add_argument('--bin-dir', type=Path, required=True); p.add_argument('--output', type=Path, required=True)
+p.add_argument('--test-file', type=Path, default=Path('Tests/ReadingCoreTests/ReaderQuietTests.swift'))
+p.add_argument('--test-class', default='ReaderQuietTests')
 a = p.parse_args(); b, out = a.bin_dir.resolve(), a.output.resolve()
 assert b.is_relative_to(R) and out.is_relative_to(R) and not out.exists()
 out.mkdir(parents=True); (out / 'tmp').mkdir()
-source = R / 'Tests/ReadingCoreTests/ReaderQuietTests.swift'; text = source.read_text()
+source = (R / a.test_file).resolve()
+assert source.is_relative_to(R / 'Tests/ReadingCoreTests') and a.test_class.isidentifier()
+text = source.read_text()
 cases = re.findall(r'func (test\w+)\(\)([^\{]*)\{', text)
 shim = r'''
 struct LocalFailure: Error {}
@@ -19,6 +23,7 @@ var assertionCount = 0
 var failures: [String] = []
 func check(_ value: Bool, _ message: String, _ file: StaticString, _ line: UInt) { assertionCount += 1; if !value { failures.append("\(file):\(line) \(message)") } }
 func XCTAssertEqual<T: Equatable>(_ a: T, _ b: T, _ message: String = "", file: StaticString = #filePath, line: UInt = #line) { check(a == b, "equal: \(a) / \(b) " + message, file, line) }
+func XCTAssertNotEqual<T: Equatable>(_ a: T, _ b: T, _ message: String = "", file: StaticString = #filePath, line: UInt = #line) { check(a != b, "not equal " + message, file, line) }
 func XCTAssertEqual<T: BinaryFloatingPoint>(_ a: T, _ b: T, accuracy: T, _ message: String = "", file: StaticString = #filePath, line: UInt = #line) { check(abs(a-b) <= accuracy, "accuracy " + message, file, line) }
 func XCTAssertGreaterThan<T: Comparable>(_ a: T, _ b: T, _ message: String = "", file: StaticString = #filePath, line: UInt = #line) { check(a > b, "greater " + message, file, line) }
 func XCTAssertGreaterThanOrEqual<T: Comparable>(_ a: T, _ b: T, _ message: String = "", file: StaticString = #filePath, line: UInt = #line) { check(a >= b, "greater equal " + message, file, line) }
@@ -39,7 +44,7 @@ main = '''
 @main enum LocalQuietCoreMain {
     static func main() async {
         var executed: [String] = [], completed: [String] = []
-        let tests = ReaderQuietTests()
+        let tests = TEST_CLASS()
         %s
         let value: [String: Any] = ["runner": "standalone assertions, not XCTest", "status": failures.isEmpty ? "passed" : "failed", "declaredCases": %s, "executedCases": executed, "completedCases": completed, "assertions": assertionCount, "failures": failures]
         let output = URL(fileURLWithPath: CommandLine.arguments[1])
@@ -48,6 +53,7 @@ main = '''
     }
 }
 ''' % (calls, '[' + ','.join(json.dumps(name) for name in names) + ']')
+main = main.replace('TEST_CLASS', a.test_class)
 generated = out / 'StandaloneTests.swift'; generated.write_text(body + shim + main)
 work = R / '.build/quiet-core-probe'; work.mkdir(exist_ok=True)
 objects = sorted((b / 'ReadingCore.build').glob('*.swift.o'))

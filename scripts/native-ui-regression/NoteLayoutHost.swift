@@ -22,11 +22,14 @@ import SwiftUI
         guard let content = window.contentView, let pdf = descendants(content, PDFView.self).first,
               let container = descendants(content, PDFReaderContainerView.self).first,
               let page = pdf.currentPage, let scroll = descendants(pdf, NSScrollView.self).first else { return ["name": name, "missing": true] }
-        let pageFrame = pdf.convert(page.bounds(for: .cropBox), from: page)
+        // The native sheet may now include its real blank note gutter. This
+        // guard measures the original printed content, not the added paper.
+        let pageFrame = pdf.convert(page.readingSourceBounds(for: .cropBox), from: page)
         let pdfFrame = content.convert(pdf.bounds, from: pdf)
         let bar = scroll.verticalScroller.map { content.convert($0.bounds, from: $0) } ?? .zero
         return ["name": name, "pdfFrame": NSStringFromRect(pdfFrame), "container": NSStringFromRect(container.frame),
                 "pageFrame": NSStringFromRect(pageFrame), "pageMaxX": Double(pageFrame.maxX), "pdfWidth": Double(pdf.bounds.width),
+                "nativeSheetFrame": NSStringFromRect(pdf.convert(page.bounds(for: .cropBox), from: page)),
                 "scale": Double(pdf.scaleFactor), "fitMode": controller.fitMode, "windowWidth": Double(content.bounds.width),
                 "scrollbar": NSStringFromRect(bar), "scrollbarMaxX": Double(bar.maxX),
                 "scrollerStyle": scroll.scrollerStyle == .legacy ? "legacy" : "overlay",
@@ -81,7 +84,7 @@ import SwiftUI
             // distinct even though their paper slips share one side stack.
             window.setContentSize(.init(width: 1120, height: 780)); controller.command(.fitPage); await settle()
             let pdf = descendants(window.contentView!, PDFView.self).first!, page = pdf.document!.page(at: 0)!
-            let crop = page.bounds(for: .cropBox)
+            let crop = page.readingSourceBounds(for: .cropBox)
             let glyphs = (0..<min(page.numberOfCharacters, 100)).map { page.characterBounds(at: $0) }.filter { !$0.isEmpty && !$0.isNull }
             guard glyphs.count > 10 else { throw ReadingError.invalid("Fixture has no independently addressable glyphs") }
             for (index, glyph) in [glyphs[1], glyphs[9]].enumerated() {

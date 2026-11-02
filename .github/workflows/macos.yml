@@ -79,6 +79,8 @@ jobs:
           .build/ai-concurrency-probe/ai-concurrency-probe "$PWD" "$PWD/logs/ci-ai-concurrency"
       - name: Native folder action identity and preservation regression
         run: python3 scripts/native-ui-regression/run-folder-identity.py --bin-dir .build/tests/debug --tag ci-folder-identity
+      - name: Native per-page notes and incremental find regression
+        run: python3 scripts/native-ui-regression/run-page-notes.py --bin-dir .build/tests/debug --tag ci-page-notes
       - name: Native note editor preservation and input regression
         run: |
           python3 scripts/mac-note-editor/run-native-probe.py --build-dir .build/tests/debug --output logs/ci-note-editor/native-probe.json
@@ -134,6 +136,14 @@ jobs:
         with:
           name: failed-paper-reading-evidence
           path: logs/note-paper-20261101/ci-paper-reading
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Preserve failed per-page notes evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-page-notes-evidence
+          path: logs/reader-page-notes-20261103/ci-page-notes
           if-no-files-found: ignore
           retention-days: 3
       - name: Build universal app and package

@@ -6,6 +6,13 @@ struct PDFNoteConnector: Equatable {
     let pageExit: CGPoint
 }
 
+struct PDFNotePageSurface: Equatable, Identifiable {
+    let id: Int
+    let frame: CGRect
+    let scale: CGFloat
+    let noteIDs: Set<String>
+}
+
 enum PositionNoteSurface {
     static let marginWidth: CGFloat = 292
     static let topInset: CGFloat = 94
@@ -19,11 +26,12 @@ enum PositionNoteSurface {
     @Published private(set) var marginWidth: CGFloat = 0
     @Published private(set) var marginFrame = CGRect.zero
     @Published private(set) var marginScale: CGFloat = 1
+    @Published private(set) var surfaces: [PDFNotePageSurface] = []
     @Published private(set) var paperTurnActive = false
     @Published private(set) var navigationObscured = false
     func setPaperTurn(_ active: Bool) { if paperTurnActive != active { paperTurnActive = active } }
     func setNavigationObscured(_ value: Bool) { if navigationObscured != value { navigationObscured = value } }
-    func update(_ next: [String: CGPoint], owner: String = "", connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17, marginWidth: CGFloat = 0, marginFrame: CGRect = .zero, marginScale: CGFloat = 1) {
+    func update(_ next: [String: CGPoint], owner: String = "", connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17, marginWidth: CGFloat = 0, marginFrame: CGRect = .zero, marginScale: CGFloat = 1, surfaces: [PDFNotePageSurface] = []) {
         if self.owner != owner { self.owner = owner }
         if points != next { points = next }
         if self.connectors != connectors { self.connectors = connectors }
@@ -31,6 +39,7 @@ enum PositionNoteSurface {
         if abs(self.marginWidth - marginWidth) > 0.1 { self.marginWidth = marginWidth }
         if self.marginFrame != marginFrame { self.marginFrame = marginFrame }
         if abs(self.marginScale - marginScale) > 0.0001 { self.marginScale = marginScale }
+        if self.surfaces != surfaces { self.surfaces = surfaces }
     }
 }
 
@@ -77,15 +86,17 @@ enum PDFReaderCommand {
     func noteMarginSnapshot(in reader: NSView) -> (image: CGImage, frame: CGRect)? {
         guard let host = noteMarginHost, !host.isHidden, host.window === reader.window,
               noteMarginOwner == notePositions.owner, host.bounds.width > 0, host.bounds.height > 0 else { return nil }
-        let size = host.bounds.size
+        let visible = host.bounds.intersection(host.convert(reader.bounds, from: reader))
+        guard !visible.isNull, !visible.isEmpty else { return nil }
+        let size = visible.size
         let scale = host.window?.backingScaleFactor ?? 1
         guard size.width * size.height * scale * scale <= 4_000_000,
               max(size.width, size.height) * scale <= 4096 else { return nil }
         host.layoutSubtreeIfNeeded(); host.displayIfNeeded()
-        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
-        host.cacheDisplay(in: host.bounds, to: bitmap)
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: visible) else { return nil }
+        host.cacheDisplay(in: visible, to: bitmap)
         guard let image = bitmap.cgImage else { return nil }
-        return (image, reader.convert(host.bounds, from: host))
+        return (image, reader.convert(visible, from: host))
     }
     func reportPaperTurn(id: UUID, active: Bool) {
         guard bindingID == id else { return }
@@ -96,8 +107,8 @@ enum PDFReaderCommand {
     }
 
     func command(_ command: PDFReaderCommand) { handler?(command) }
-    func reportNotePositions(id: UUID, points: [String: CGPoint], owner: String, connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17, marginWidth: CGFloat = 0, marginFrame: CGRect = .zero, marginScale: CGFloat = 1) {
-        guard bindingID == id else { return }; notePositions.update(points, owner: owner, connectors: connectors, scrollerWidth: scrollerWidth, marginWidth: marginWidth, marginFrame: marginFrame, marginScale: marginScale)
+    func reportNotePositions(id: UUID, points: [String: CGPoint], owner: String, connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17, marginWidth: CGFloat = 0, marginFrame: CGRect = .zero, marginScale: CGFloat = 1, surfaces: [PDFNotePageSurface] = []) {
+        guard bindingID == id else { return }; notePositions.update(points, owner: owner, connectors: connectors, scrollerWidth: scrollerWidth, marginWidth: marginWidth, marginFrame: marginFrame, marginScale: marginScale, surfaces: surfaces)
     }
     func bind(id: UUID, handler: @escaping (PDFReaderCommand) -> Void) {
         let changed = bindingID != id
