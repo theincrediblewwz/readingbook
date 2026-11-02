@@ -2,11 +2,11 @@
 
 本地书籍阅读、笔记与便签，配合伴读、对话和智能阅读。原书与用户笔记保存在你选择的书库；新分析与界面收纳保留明确来源。
 
-[下载0.23.37](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.37) · [33稳定回退版](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.33) · [数据存储说明](数据存储说明.md) · [组件优化计划](Design/2026-10-29-component-performance-plan.md)
+[下载0.23.38](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.38) · [37回退版](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.37) · [数据存储说明](数据存储说明.md) · [组件优化计划](Design/2026-10-29-component-performance-plan.md)
 
-当前版 **0.23.37/build68**：更柔和的三款纸纹、连续的便签纸面、跟随实际页边的书脊、包含便签的真实翻页及完整的模式文字。前面的11项便签/编辑/回收与折叠预览改进继续保留。已同步main、发布通用安装包并更新本机程序；802项Core与全部原生门槛、原书两次正常启动验收通过。原书、笔记、分析及全部偏好保留。
+当前版 **0.23.38/build69**：纸书和便签区共用页面坐标，便签位置、大小、留白与连线随书页同比缩放；修复不同尺寸页面翻页落地时的位移。三款柔和纸纹、简洁便签编辑、扇形查看、收纳及此前功能继续保留。已同步main、发布通用安装包并更新本机程序；802项Core与全部原生门槛、原书两次正常启动验收通过。原书、笔记、分析和AI配置保留。
 
-[本轮逐项说明](Design/2026-11-01-reading-surface-refinement.md) · [纸书反馈与证据边界](Design/2026-11-01-paper-book-followup.md)
+[本轮改动与验证](Design/2026-11-02-page-relative-note-layout.md) · [前批界面精修](Design/2026-11-01-reading-surface-refinement.md)
 
 下方是各批历史记录，旧下载包已按保留策略退役；当前可用下载以上方稳定版入口为准。局部试验收益不等于整App提速。
 
