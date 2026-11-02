@@ -2,11 +2,11 @@
 
 本地书籍阅读、笔记与便签，配合伴读、对话和智能阅读。原书与用户笔记保存在你选择的书库；新分析与界面收纳保留明确来源。
 
-[下载0.23.39](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.39) · [38回退版](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.38) · [数据存储说明](数据存储说明.md) · [组件优化计划](Design/2026-10-29-component-performance-plan.md)
+[下载0.23.40](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.40) · [39回退版](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.39) · [数据存储说明](数据存储说明.md) · [组件优化计划](Design/2026-10-29-component-performance-plan.md)
 
-当前版 **0.23.39/build70**：笔记、历史对话和摘要的文件夹较多时按需创建可见行；重命名和删除确认固定原目标，修复期间选中项变化导致误操作。512项两入口局部CPU对照约降92%；小列表仍有约1–2ms成本或波动，不外推整App/FPS。已同步main、发布通用包并更新本机程序；802项Core、26项新增与全部原生门槛，以及原书两次正常启动验收通过。原书、笔记、分析、AI配置与此前纸书/便签功能保留。
+当前版 **0.23.40/build71**：阅读器收起常驻书名，伴读入口和底栏按需展开；句子支持永久直线与波浪下划线。修复千页 PDF 缩略图空白，提供小中大三档、拖宽与自动增列；查找支持高亮结果列表并修复关闭键。书库操作固定悬浮，支持显示书名重命名与封面移动、缩放取景，纸张采用选定的 01、06、09。已同步 main、发布双架构包并更新本机安装；817 项 Core、160 项指定回归、全部原生/WebKit 门槛和原书两次正常启动验收通过。原书、笔记、分析、封面和 AI 配置保留。本批不宣称新的 FPS 或整机内存收益。
 
-[本轮改动与验证](Design/2026-11-02-folder-controls-results.md) · [前批纸书与便签](Design/2026-11-02-page-relative-note-layout.md)
+[本轮十四项改动与验证](Design/2026-11-03-reader-quiet.md) · [前批文件夹优化](Design/2026-11-02-folder-controls-results.md) · [纸书与便签](Design/2026-11-02-page-relative-note-layout.md)
 
 下方是各批历史记录，旧下载包已按保留策略退役；当前可用下载以上方稳定版入口为准。局部试验收益不等于整App提速。
 
