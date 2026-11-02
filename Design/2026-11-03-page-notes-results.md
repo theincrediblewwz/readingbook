@@ -24,6 +24,8 @@
 
 NoteLayout 原门槛仍检查完整的“原书内容”可见：新实现把留白纳入原生 sheet 后，测试原先把加宽后的 sheet 当成文字框，因此改用保留的原始裁剪框；同时额外记录原生 sheet 框，不能把扩展留白算成原书被裁切。原有 28 项断言与容差保留。
 
+第一轮完整 CI 的 825 项 Core 和新增 39 项已通过，旧 ExperienceCompletion 的几何预期仍把显示留白乘进归一化位置，12 个坐标断言失败，未用于发布。测试现从未改动的 PDF 文件另外创建只读 oracle，取其原始 crop，并记录 UI 的 native sheet；保留原 0.5 点容差与全部 20 几何 +18 并发断言。本机修正后 38 项通过，原 PDF 字节相同，三类运行警告零；完整 CI 必须重新全跑，不能只补跑失败项当全过。
+
 最终本机新原生探针 39 项通过，覆盖逐页留白、滚动、旋转、缩放、源文档复用、跨页重绑、输入自动检索与取消，以及无伴读缓存的划线呼吸和离开/减少动态效果；四类产品运行警告为零。所有本机失败、编译诊断和修正前结果原样保留，未覆盖为通过。
 
 显示边界采用公开的 [PDFPage.setBounds](https://developer.apple.com/documentation/pdfkit/pdfpage/setbounds(_:for:))；[bounds 文档](https://developer.apple.com/documentation/pdfkit/pdfpage/bounds(for:)) 明确裁剪框受 media box 限制。仅界面文档临时加宽，原始 crop/media 单独保留，还原时清掉临时关联；定位、准备校验、批注与归一化坐标仍用原始框，不写回 PDF。

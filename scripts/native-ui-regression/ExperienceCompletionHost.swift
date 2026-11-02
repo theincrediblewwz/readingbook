@@ -112,6 +112,9 @@ import PDFKit
     private func checkGeometry() async {
         var checks: [String: Bool] = [:], samples: [[String: Any]] = []
         let sourceBefore = try? Data(contentsOf: store.sourceFileURL!)
+        // The UI sheet may include a temporary note gutter. Derive the oracle
+        // from the unchanged file, independently of the UI's box bookkeeping.
+        guard let sourceBefore, let originalDocument = PDFDocument(data: sourceBefore) else { return }
         for _ in 0..<100 { if controller.isReady { break }; try? await Task.sleep(nanoseconds: 30_000_000) }
         guard let content = window.contentView, let pdf = views(content, PDFView.self).first, let container = views(content, PDFReaderContainerView.self).first, let document = pdf.document else { return }
         for number in 1...3 {
@@ -122,7 +125,8 @@ import PDFKit
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 guard let page = document.page(at: number-1) else { continue }
                 for (id, placement) in store.activeNotePlacements where placement.page == number {
-                    let crop = page.bounds(for: .cropBox)
+                    guard let sourcePage = originalDocument.page(at: number-1) else { continue }
+                    let crop = sourcePage.bounds(for: .cropBox)
                     let original = CGPoint(x: crop.minX + crop.width * placement.x, y: crop.minY + crop.height * placement.y)
                     let point = container.convert(pdf.convert(original, from: page), from: pdf)
                     if !container.bounds.contains(point) { continue }
@@ -130,7 +134,7 @@ import PDFKit
                     let received = controller.noteAnchorPoints[id]
                     let valid = received.map { abs($0.x - expected.x) < 0.5 && abs($0.y - expected.y) < 0.5 } ?? false
                     checks["\(id)-scale\(scale)"] = valid
-                    samples.append(["id":id,"page":number,"rotation":page.rotation,"crop":NSStringFromRect(crop),"expected":NSStringFromPoint(expected),"received":received.map(NSStringFromPoint) ?? "missing"])
+                    samples.append(["id":id,"page":number,"rotation":page.rotation,"crop":NSStringFromRect(crop),"nativeSheet":NSStringFromRect(page.bounds(for: .cropBox)),"expected":NSStringFromPoint(expected),"received":received.map(NSStringFromPoint) ?? "missing"])
                 }
                 checks["owner-page\(number)-scale\(scale)"] = controller.notePositions.owner == store.collectionOwnerKey
             }
