@@ -1,6 +1,6 @@
 # 文件夹列表：按需显示与操作目标保护
 
-本批产品为 0.23.39/build70。修改 `ReaderFolderControls.swift` 的文件夹筛选和“移到文件夹”两条入口：当前类型超过 12 个文件夹时按需创建可见行，少量仍完整创建。不改变文件夹排序、层级、原文权限、数据格式或保存位置。
+本批产品 **0.23.39/build70 已同步 main、发布并替换本机安装，两次原书启动验收完成**。[下载](https://github.com/theincrediblewwz/readingbook/releases/tag/v0.23.39) · [完整 CI41418960892](https://github.com/theincrediblewwz/readingbook/actions/runs/41418960892)。修改 `ReaderFolderControls.swift` 的文件夹筛选和“移到文件夹”两条入口：当前类型超过 12 个文件夹时按需创建可见行，少量仍完整创建。不改变文件夹排序、层级、原文权限、数据格式或保存位置。
 
 ## 已确认并修复的问题
 
