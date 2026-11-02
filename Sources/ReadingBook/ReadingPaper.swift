@@ -20,9 +20,9 @@ enum ReadingPaperStyle: String, CaseIterable, Identifiable {
 }
 
 @MainActor enum ReadingPaperAssets {
-    /// The selected 01/06/09 stocks already contain restrained micrograin.
-    /// Preserve their approved tones; all surfaces and page turns share one cache.
-    static let grainStrength: CGFloat = 1
+    /// Keep the approved 01/06/09 tones and the existing smooth-paper treatment.
+    /// All surfaces and page turns share the same bounded material cache.
+    static let grainStrength: CGFloat = 0.14
     private static let images: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>(); cache.countLimit = 3; cache.totalCostLimit = 24 * 1024 * 1024; return cache
     }()
