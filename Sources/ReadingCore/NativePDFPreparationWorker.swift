@@ -75,6 +75,17 @@ public actor NativePDFPreparationWorker {
 
     public init() {}
 
+    /// Search rows need text only. Do not build page-wide line geometry or pass
+    /// a PDFKit object from the displayed document across this actor boundary.
+    public func prepareSearchText(session: Session, page number: Int) async throws -> NativePDFSearchTextIndex {
+        try Task.checkCancellation()
+        let token = try openSession(session), page = try ownedPage(number, session: session, token: token)
+        let text = page.string ?? ""
+        guard text.utf8.count <= 8_000_000 else { throw Failure.pageTextTooLarge }
+        try checkSession(session, token: token)
+        return NativePDFSearchTextIndex(text)
+    }
+
     public func preparePage(session: Session, page number: Int, onProgress: Progress? = nil) async throws -> PreparedPage {
         try Task.checkCancellation()
         onProgress?(.init(phase: .pageText, page: number))

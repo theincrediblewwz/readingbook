@@ -12,17 +12,17 @@ enum ReadingPaperStyle: String, CaseIterable, Identifiable {
     var color: NSColor {
         switch self {
         case .plain: return .white
-        case .warmCotton: return NSColor(srgbRed: 0.96, green: 0.94, blue: 0.90, alpha: 1)
-        case .mistWhite: return NSColor(srgbRed: 0.95, green: 0.95, blue: 0.93, alpha: 1)
-        case .sagePaper: return NSColor(srgbRed: 0.92, green: 0.94, blue: 0.90, alpha: 1)
+        case .warmCotton: return NSColor(srgbRed: 0.957, green: 0.941, blue: 0.906, alpha: 1)
+        case .mistWhite: return NSColor(srgbRed: 0.957, green: 0.961, blue: 0.957, alpha: 1)
+        case .sagePaper: return NSColor(srgbRed: 0.918, green: 0.941, blue: 0.910, alpha: 1)
         }
     }
 }
 
 @MainActor enum ReadingPaperAssets {
-    /// Keep the material's tint, with just a trace of grain. The original PNGs
-    /// stay intact; all live surfaces and page turns share this bounded cache.
-    static let grainStrength: CGFloat = 0.14
+    /// The selected 01/06/09 stocks already contain restrained micrograin.
+    /// Preserve their approved tones; all surfaces and page turns share one cache.
+    static let grainStrength: CGFloat = 1
     private static let images: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>(); cache.countLimit = 3; cache.totalCostLimit = 24 * 1024 * 1024; return cache
     }()

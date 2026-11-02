@@ -23,3 +23,6 @@ __pycache__/
 
 # Generated local preview runtime; editable concept fragments are tracked
 /Design/reader-interaction-concepts/*-preview.html
+
+# Unselected paper studies stay in the requested local workspace.
+/output/paper-samples-*/

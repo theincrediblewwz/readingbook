@@ -52,10 +52,10 @@ struct ReaderWorkspaceView: View {
                                 guard store.bookID == sourceBookID, store.pdfNavigationToken == requestToken, let sourceBookID else { return }
                                 store.rememberPDFPassword(password, bookID: sourceBookID)
                             }, onSaveAnnotations: { annotations in
-                                guard store.bookID == sourceBookID else { return false }
+                                guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash else { return false }
                                 return await store.saveReaderAnnotations(annotations)
                             }, onTrashAnnotation: { id, trashed in
-                                guard store.bookID == sourceBookID else { return false }
+                                guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash else { return false }
                                 return await store.setReaderAnnotationTrashed(id, trashed: trashed)
                             }, sourceDecorations: store.pdfSourceReadingDecorations,
                                sourceDecorationRevision: store.pdfSourceReadingDecorationRevision,

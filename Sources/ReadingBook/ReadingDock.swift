@@ -42,6 +42,8 @@ struct FloatingReadingDock<Content: View>: View {
     let viewport: CGSize
     var bottom: CGFloat = 18
     var allowsDragging = true
+    var autoHides = false
+    var keepsExpanded = false
     @ViewBuilder var content: () -> Content
     @State private var width: CGFloat = 360
     @State private var dock: FloatingPanelDock = .bottomCenter
@@ -49,6 +51,12 @@ struct FloatingReadingDock<Content: View>: View {
     @GestureState private var dragActive = false
     @State private var dragCancelled = false
     @State private var memoryScope: String?
+    @State private var revealed = false
+    @State private var manuallyExpanded = false
+    @State private var handleHovered = false
+    @State private var toolsHovered = false
+    @State private var collapseTask: Task<Void, Never>?
+    private var expanded: Bool { !autoHides || revealed || manuallyExpanded || keepsExpanded || dragActive }
     private var settledX: CGFloat {
         switch dock {
         case .bottomLeading: return 18 + width / 2
@@ -60,6 +68,12 @@ struct FloatingReadingDock<Content: View>: View {
     var body: some View {
         GeometryReader { geometry in
             let y = max(26, viewport.height - bottom - 26)
+            ZStack(alignment: .bottom) {
+                if autoHides && manuallyExpanded {
+                    Button { manuallyExpanded = false; scheduleCollapse() } label: { Color.clear }
+                        .keyboardShortcut(.escape, modifiers: [])
+                        .frame(width: 0, height: 0).opacity(0).accessibilityHidden(true)
+                }
             ReadingDockSurface(content: content)
                 .background { GeometryReader { measured in Color.clear.preference(key: ReadingDockWidthKey.self, value: measured.size.width) } }
                 .onPreferenceChange(ReadingDockWidthKey.self) { if $0 > 0 && abs(width - $0) > 0.5 { width = $0 } }
@@ -78,11 +92,40 @@ struct FloatingReadingDock<Content: View>: View {
                     Button("停靠中央") { settle(.bottomCenter) }
                     Button("停靠右侧") { settle(.bottomTrailing) }
                 }
-                .position(x: fittedX(settledX + (dragCancelled ? 0 : dragTranslation)), y: y)
+                .padding(.bottom, autoHides ? bottom : 0)
+                .padding(.top, autoHides ? 12 : 0)
+                .contentShape(Rectangle())
+                .onHover { toolsHovered = $0; updateReveal(inside: $0) }
+                .opacity(expanded ? 1 : 0)
+                .offset(y: expanded ? 0 : 72)
+                .allowsHitTesting(expanded)
+                .accessibilityHidden(!expanded)
+                if autoHides {
+                    Button { manuallyExpanded = true; reveal() } label: {
+                        Capsule().fill(.white.opacity(0.72)).frame(width: width, height: 5)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay { Capsule().strokeBorder(Palette.ink.opacity(0.08), lineWidth: 0.5) }
+                            .frame(width: width, height: 22, alignment: .bottom).padding(.bottom, 3)
+                            .contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                        .opacity(expanded ? 0 : 1)
+                        .onHover { handleHovered = $0; updateReveal(inside: $0) }
+                        .accessibilityHidden(expanded)
+                        .accessibilityLabel("展开阅读工具栏")
+                        .accessibilityIdentifier("reader-tools-reveal")
+                        .help("悬停展开阅读工具栏；点击保持展开，按 Esc 恢复自动收起。")
+                }
+            }
+                .frame(width: width, height: autoHides ? 90 : 52, alignment: .bottom)
+                .position(x: fittedX(settledX + (dragCancelled ? 0 : dragTranslation)), y: autoHides ? viewport.height - 45 : y)
+                .animation(ReadingMotion.animation(reduce: reduceMotion), value: expanded)
                 .background {
                     // Avoidance uses the settled frame, never each pointer tick.
                     let origin = geometry.frame(in: .global).origin
-                    Color.clear.preference(key: WorkspaceChromeBoundsPreference.self, value: [id: CGRect(x: origin.x + fittedX(settledX) - width / 2, y: origin.y + y - 26, width: width, height: 52)]).allowsHitTesting(false)
+                    let rect = autoHides && !expanded
+                        ? CGRect(x: origin.x + fittedX(settledX) - width / 2, y: origin.y + viewport.height - 25, width: width, height: 25)
+                        : CGRect(x: origin.x + fittedX(settledX) - width / 2, y: origin.y + y - 26, width: width, height: 52)
+                    Color.clear.preference(key: WorkspaceChromeBoundsPreference.self, value: [id: rect]).allowsHitTesting(false)
                 }
         }.onAppear(perform: restore)
             .onChange(of: store.workspaceMemoryRevision) { _, _ in restore() }
@@ -90,12 +133,29 @@ struct FloatingReadingDock<Content: View>: View {
             .onChange(of: dragActive) { _, active in if active { dragCancelled = false } }
             .onChange(of: viewport) { _, _ in dragCancelled = true }
             .onChange(of: allowsDragging) { _, _ in dragCancelled = true }
+            .onChange(of: keepsExpanded) { _, value in if value { collapseTask?.cancel() } else { scheduleCollapse() } }
             .onChange(of: scenePhase) { _, phase in if phase != .active { dragCancelled = true } }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in dragCancelled = true }
-            .onExitCommand { if dragActive { dragCancelled = true } }
+            .onExitCommand { if dragActive { dragCancelled = true }; manuallyExpanded = false; scheduleCollapse() }
+            .onDisappear { collapseTask?.cancel() }
+    }
+    private func reveal() {
+        collapseTask?.cancel()
+        withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { revealed = true }
+    }
+    private func updateReveal(inside: Bool) { if inside { reveal() } else { scheduleCollapse() } }
+    private func scheduleCollapse() {
+        collapseTask?.cancel()
+        guard autoHides, !handleHovered, !toolsHovered, !manuallyExpanded, !keepsExpanded, !dragActive else { return }
+        collapseTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, !handleHovered, !toolsHovered, !manuallyExpanded, !keepsExpanded, !dragActive else { return }
+            withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { revealed = false }
+        }
     }
     private func settle(_ value: FloatingPanelDock) { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { dock = value; dragCancelled = true }; save() }
     private func restore() {
+        if memoryScope != store.workspaceMemoryKey { collapseTask?.cancel(); revealed = false; manuallyExpanded = false }
         memoryScope = store.workspaceMemoryKey
         dock = store.workspaceMemory.panels["dock." + id]?.dock.flatMap(FloatingPanelDock.init(rawValue:)) ?? .bottomCenter
         dragCancelled = true

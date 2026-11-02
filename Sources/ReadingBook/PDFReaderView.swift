@@ -150,6 +150,7 @@ struct PDFReaderView: NSViewRepresentable {
     private struct SourceGeometry {
         let value: SourceReadingDecoration
         let page: Int
+        let range: NSRange?
         let lines: [CGRect]
         let cost: Int
     }
@@ -322,12 +323,28 @@ struct PDFReaderView: NSViewRepresentable {
     private let thumbnailScroll = NSScrollView()
     private let thumbnailPanel = PDFReaderFloatingPanel()
     private var thumbnailTop: NSLayoutConstraint?
+    private var thumbnailWidth: NSLayoutConstraint?
+    private let thumbnailResize = PDFThumbnailResizeHandle()
+    private var thumbnailDensity = PDFThumbnailDensity(rawValue: UserDefaults.standard.string(forKey: "reader.thumbnailDensity") ?? "") ?? .medium
+    private var thumbnailPreferredWidth: CGFloat = {
+        let saved = UserDefaults.standard.double(forKey: "reader.thumbnailPanelWidth")
+        return saved.isFinite && saved >= 244 ? min(900, saved) : 420
+    }()
+    private var thumbnailSizeButtons: [PDFThumbnailDensityButton] = []
     private let contentStack = NSStackView()
     private let header = PDFReaderFloatingPanel()
+    private var searchPanelHeight: NSLayoutConstraint?
     private let searchField = NSSearchField()
     private let resultLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private var searchRow = NSStackView()
+    private let searchResults = PDFSearchResultsList()
+    private var searchResultsHeight: NSLayoutConstraint?
+    private var searchSnippetTasks: [Int: Task<Void, Never>] = [:]
+    private var searchTextTasks: [Int: (id: UUID, task: Task<NativePDFSearchTextIndex, Error>)] = [:]
+    private var searchTextIndexes: [Int: NativePDFSearchTextIndex] = [:]
+    private var searchTextOrder: [Int] = []
+    private var searchTextBytes = 0
     private var previousMatchButton = NSButton()
     private var nextMatchButton = NSButton()
     private let overlay = NSVisualEffectView()
@@ -415,7 +432,8 @@ struct PDFReaderView: NSViewRepresentable {
     private func ownsResponder(_ responder: NSResponder) -> Bool {
         let searchEditor = searchField.currentEditor()
         let belongsToPDF = (responder as? NSView).map { $0 === pdfView || $0.isDescendant(of: pdfView) } ?? false
-        return belongsToPDF || responder === searchField || (searchEditor != nil && responder === searchEditor)
+        let belongsToSearch = (responder as? NSView).map { $0 === header || $0.isDescendant(of: header) } ?? false
+        return belongsToPDF || belongsToSearch || responder === searchField || (searchEditor != nil && responder === searchEditor)
     }
     override func hitTest(_ point: NSPoint) -> NSView? {
         interactionBlocked ? nil : super.hitTest(point)
@@ -452,14 +470,12 @@ struct PDFReaderView: NSViewRepresentable {
         NotificationCenter.default.addObserver(self, selector: #selector(pdfViewportScrolled(_:)), name: NSView.boundsDidChangeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(captureWorkspaceMemoryNow(_:)), name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
 
-        thumbnails.thumbnailSize = NSSize(width: 86, height: 112)
-        thumbnails.maximumNumberOfColumns = 1
         thumbnails.allowsDragging = false
         thumbnails.allowsMultipleSelection = false
-        thumbnails.labelFont = .systemFont(ofSize: 10)
+        thumbnails.labelFont = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         thumbnails.backgroundColor = .clear
         thumbnailScroll.documentView = thumbnails
-        thumbnailScroll.hasVerticalScroller = true
+        thumbnailScroll.hasVerticalScroller = false
         thumbnailScroll.hasHorizontalScroller = false
         thumbnailScroll.autohidesScrollers = true
         thumbnailScroll.drawsBackground = false
@@ -467,21 +483,41 @@ struct PDFReaderView: NSViewRepresentable {
         thumbnailPanel.isHidden = true
         let thumbnailTitle = NSTextField(labelWithString: "缩略图")
         thumbnailTitle.font = .systemFont(ofSize: 14, weight: .semibold)
-        let thumbnailHeader = row([thumbnailTitle, symbolButton("xmark", "关闭缩略图", #selector(hideThumbnails))])
+        thumbnailSizeButtons = PDFThumbnailDensity.allCases.map { PDFThumbnailDensityButton($0, target: self, action: #selector(changeThumbnailDensity(_:))) }
+        for button in thumbnailSizeButtons { button.selectedDensity = button.density == thumbnailDensity }
+        let sizes = NSStackView(views: thumbnailSizeButtons); sizes.orientation = .horizontal; sizes.spacing = 2
+        let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let thumbnailHeader = row([thumbnailTitle, spacer, sizes, symbolButton("xmark", "关闭缩略图", #selector(hideThumbnails))])
         let thumbnailBody = NSStackView(views: [thumbnailHeader, thumbnailScroll])
         thumbnailBody.orientation = .vertical; thumbnailBody.alignment = .leading; thumbnailBody.spacing = 4
         thumbnailHeader.setContentHuggingPriority(.required, for: .vertical)
         thumbnailScroll.setContentHuggingPriority(.defaultLow, for: .vertical)
         thumbnailBody.translatesAutoresizingMaskIntoConstraints = false
         thumbnailPanel.panelContent.addSubview(thumbnailBody)
+        thumbnailResize.translatesAutoresizingMaskIntoConstraints = false
+        thumbnailResize.toolTip = "左右拖动调整缩略图面板宽度"
+        thumbnailResize.onBegin = { [weak self] in self?.thumbnailPanel.bounds.width ?? 420 }
+        thumbnailResize.onResize = { [weak self] width in
+            guard let self else { return }
+            self.thumbnailPreferredWidth = min(900, max(244, width))
+            self.thumbnailWidth?.constant = min(self.thumbnailPreferredWidth, max(244, self.bounds.width - 36))
+            self.layoutSubtreeIfNeeded(); self.layoutThumbnails()
+        }
+        thumbnailResize.onFinish = { [weak self] in if let self { UserDefaults.standard.set(Double(self.thumbnailPreferredWidth), forKey: "reader.thumbnailPanelWidth") } }
+        thumbnailPanel.addSubview(thumbnailResize)
         NSLayoutConstraint.activate([
             thumbnailBody.leadingAnchor.constraint(equalTo: thumbnailPanel.panelContent.leadingAnchor, constant: 10),
             thumbnailBody.trailingAnchor.constraint(equalTo: thumbnailPanel.panelContent.trailingAnchor, constant: -10),
             thumbnailBody.topAnchor.constraint(equalTo: thumbnailPanel.panelContent.topAnchor, constant: 8),
             thumbnailBody.bottomAnchor.constraint(equalTo: thumbnailPanel.panelContent.bottomAnchor, constant: -10),
+            thumbnailBody.heightAnchor.constraint(equalTo: thumbnailPanel.heightAnchor, constant: -18),
+            thumbnailBody.widthAnchor.constraint(equalTo: thumbnailPanel.widthAnchor, constant: -20),
             thumbnailHeader.widthAnchor.constraint(equalTo: thumbnailBody.widthAnchor),
             thumbnailScroll.widthAnchor.constraint(equalTo: thumbnailBody.widthAnchor)
         ])
+        NSLayoutConstraint.activate([thumbnailResize.trailingAnchor.constraint(equalTo: thumbnailPanel.trailingAnchor),
+            thumbnailResize.widthAnchor.constraint(equalToConstant: 10), thumbnailResize.topAnchor.constraint(equalTo: thumbnailPanel.topAnchor, constant: 56),
+            thumbnailResize.bottomAnchor.constraint(equalTo: thumbnailPanel.bottomAnchor, constant: -12)])
 
         contentStack.orientation = .horizontal
         contentStack.alignment = .top
@@ -521,7 +557,13 @@ struct PDFReaderView: NSViewRepresentable {
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.isHidden = true
         // Navigation/zoom controls live in the window toolbar. Only explicitly opened search/status uses this row.
-        let toolbar = NSStackView(views: [searchRow, statusLabel])
+        searchResults.isHidden = true
+        searchResults.onRequest = { [weak self] index in self?.prepareSearchSnippet(index) }
+        searchResults.onSelect = { [weak self] index in
+            guard let self, !self.interactionBlocked, !self.searchRow.isHidden, self.matches.indices.contains(index) else { return }
+            self.allowsSearchAutoNavigation = true; self.matchIndex = index; self.showMatch()
+        }
+        let toolbar = NSStackView(views: [searchRow, searchResults, statusLabel])
         toolbar.orientation = .vertical
         toolbar.alignment = .leading
         toolbar.spacing = 6
@@ -529,12 +571,21 @@ struct PDFReaderView: NSViewRepresentable {
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         header.panelContent.addSubview(toolbar)
         searchRow.widthAnchor.constraint(equalTo: toolbar.widthAnchor).isActive = true
+        searchResults.widthAnchor.constraint(equalTo: toolbar.widthAnchor).isActive = true
+        let resultsHeight = searchResults.heightAnchor.constraint(equalToConstant: 0)
+        resultsHeight.isActive = true; searchResultsHeight = resultsHeight
         NSLayoutConstraint.activate([
             toolbar.leadingAnchor.constraint(equalTo: header.panelContent.leadingAnchor, constant: 12),
             toolbar.trailingAnchor.constraint(equalTo: header.panelContent.trailingAnchor, constant: -12),
             toolbar.topAnchor.constraint(equalTo: header.panelContent.topAnchor, constant: 10),
             toolbar.bottomAnchor.constraint(equalTo: header.panelContent.bottomAnchor, constant: -10)
         ])
+        // Keep the outer navigation frame equal to its live content. Otherwise
+        // NSGlassEffectView can retain the previous intrinsic height after rows
+        // shrink, leaving an invisible gap and pushing thumbnails offscreen.
+        let searchPanelHeight = header.heightAnchor.constraint(equalToConstant: 64)
+        searchPanelHeight.isActive = true; self.searchPanelHeight = searchPanelHeight
+        toolbar.widthAnchor.constraint(equalTo: header.widthAnchor, constant: -24).isActive = true
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         header.translatesAutoresizingMaskIntoConstraints = false; header.isHidden = true
         thumbnailPanel.translatesAutoresizingMaskIntoConstraints = false
@@ -548,13 +599,15 @@ struct PDFReaderView: NSViewRepresentable {
             header.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -18),
             header.centerXAnchor.constraint(equalTo: centerXAnchor),
             header.topAnchor.constraint(equalTo: topAnchor, constant: 76),
-            header.widthAnchor.constraint(lessThanOrEqualToConstant: 500),
+            header.widthAnchor.constraint(lessThanOrEqualToConstant: 680),
             thumbnailPanel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
             thumbnailTop,
             thumbnailPanel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -88),
-            thumbnailPanel.widthAnchor.constraint(equalToConstant: 156)
+            thumbnailPanel.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -36)
         ])
-        let preferredSearchWidth = header.widthAnchor.constraint(equalToConstant: 500)
+        let thumbnailWidth = thumbnailPanel.widthAnchor.constraint(equalToConstant: thumbnailPreferredWidth)
+        thumbnailWidth.priority = .defaultHigh; thumbnailWidth.isActive = true; self.thumbnailWidth = thumbnailWidth
+        let preferredSearchWidth = header.widthAnchor.constraint(equalToConstant: 680)
         preferredSearchWidth.priority = .defaultHigh; preferredSearchWidth.isActive = true
         header.setContentHuggingPriority(.required, for: .vertical)
         contentStack.setContentHuggingPriority(.defaultLow, for: .vertical)
@@ -622,6 +675,7 @@ struct PDFReaderView: NSViewRepresentable {
             if index != NSNotFound { input.onAddBookmark?(index + 1) }
         }
         pdfView.onNotePoint = { [weak self] page, point in self?.createPositionNote(page: page, point: point) }
+        pdfView.onSentenceActions = { [weak self] page, point in self?.sentenceMarkActions(page: page, point: point) ?? [] }
         scheduleVisiblePages()
         if controller !== input.controller {
             controller?.unbind(id: bindingID)
@@ -1258,8 +1312,20 @@ struct PDFReaderView: NSViewRepresentable {
         return true
     }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        // SwiftUI can make a final representable size assignment after AppKit's
+        // current layout pass. Reconcile row constraints at that final size.
+        updateSearchResultsHeight()
+        updateThumbnailTop()
+    }
+    private func updateThumbnailTop() {
+        let nextTop: CGFloat = header.isHidden ? 76 : 76 + (searchPanelHeight?.constant ?? 64) + 12
+        if let thumbnailTop, abs(thumbnailTop.constant - nextTop) > 0.5 { thumbnailTop.constant = nextTop; needsLayout = true }
+    }
     override func layout() {
         super.layout()
+        updateSearchResultsHeight()
         if let curl = pageCurl, curl.viewportSize != bounds.size {
             curl.cancel(); pageCurl = nil; sourceCanvas.isHidden = false
         }
@@ -1269,9 +1335,7 @@ struct PDFReaderView: NSViewRepresentable {
         let changedInsets = layoutNoteInsets()
         sourceCanvas.frame = bounds; sourceCanvas.needsDisplay = true
         scheduleVisiblePages()
-        let chrome = visibleChromeFrame(header)
-        let nextTop: CGFloat = chrome.isEmpty ? 76 : max(76, chrome.maxY + 12)
-        if let thumbnailTop, abs(thumbnailTop.constant - nextTop) > 0.5 { thumbnailTop.constant = nextTop }
+        updateThumbnailTop()
         let size = pdfView.bounds.size
         if changedInsets || abs(size.width - lastViewportSize.width) > 0.5 || abs(size.height - lastViewportSize.height) > 0.5 {
             invalidateSourcePress()
@@ -1400,8 +1464,25 @@ struct PDFReaderView: NSViewRepresentable {
 
     private func layoutThumbnails() {
         guard !thumbnailPanel.isHidden, thumbnails.pdfView != nil else { return }
-        let height = max(thumbnailScroll.contentSize.height, CGFloat(document?.pageCount ?? 0) * 146 + 20)
-        thumbnails.frame = NSRect(x: 0, y: 0, width: max(100, thumbnailScroll.contentSize.width), height: height)
+        // PDFThumbnailView already owns a scrolling collection. Giving it the
+        // entire book's height creates a second scroll range whose bottom can
+        // show empty collection space instead of the visible thumbnails.
+        thumbnailScroll.hasVerticalScroller = false
+        thumbnails.frame = NSRect(origin: .zero, size: NSSize(
+            width: max(100, thumbnailScroll.contentSize.width),
+            height: max(1, thumbnailScroll.contentSize.height)))
+        let page = pdfView.currentPage ?? document?.page(at: 0)
+        var pageSize = page?.bounds(for: .cropBox).size ?? .init(width: 600, height: 800)
+        if let page, abs(page.rotation) % 180 == 90 { pageSize = .init(width: pageSize.height, height: pageSize.width) }
+        let grid = PDFThumbnailGridGeometry(width: thumbnails.bounds.width, pageAspectRatio: pageSize.width / max(1, pageSize.height), density: thumbnailDensity)
+        if thumbnails.maximumNumberOfColumns != grid.columns { thumbnails.maximumNumberOfColumns = grid.columns }
+        if thumbnails.thumbnailSize != grid.thumbnailSize { thumbnails.thumbnailSize = grid.thumbnailSize }
+    }
+    @objc private func changeThumbnailDensity(_ sender: PDFThumbnailDensityButton) {
+        thumbnailDensity = sender.density
+        UserDefaults.standard.set(thumbnailDensity.rawValue, forKey: "reader.thumbnailDensity")
+        for button in thumbnailSizeButtons { button.selectedDensity = button.density == thumbnailDensity }
+        layoutThumbnails()
     }
 
     @objc private func pageChanged(_ notification: Notification) {
@@ -1656,6 +1737,10 @@ struct PDFReaderView: NSViewRepresentable {
 
     private func clearSearchState() {
         searchGeneration += 1
+        for task in searchSnippetTasks.values { task.cancel() }; searchSnippetTasks = [:]
+        for task in searchTextTasks.values { task.task.cancel() }; searchTextTasks = [:]
+        searchTextIndexes = [:]; searchTextOrder = []; searchTextBytes = 0
+        searchResults.reset(); searchResults.isHidden = true; searchResultsHeight?.constant = 0
         document?.delegate = nil; document?.cancelFindString(); searchDelegate = nil
         matches = []; matchIndex = -1; searching = false; searchLimited = false
         highlightUpdateScheduled = false; allowsSearchAutoNavigation = false
@@ -1696,7 +1781,74 @@ struct PDFReaderView: NSViewRepresentable {
         guard quoteFocusHighlight != nil else { return }
         quoteFocusHighlight = nil; updateSelectionHighlights()
     }
-    private func updateHighlights() { updateSelectionHighlights(); updateSearchDisplay(); refreshControls() }
+    private func updateHighlights() { updateSelectionHighlights(); updateSearchDisplay(); synchronizeSearchResults(); refreshControls() }
+    private func synchronizeSearchResults() {
+        guard !searchRow.isHidden, let document else { return }
+        let start = searchResults.entries.count
+        if matches.count > start {
+            let additions = (start..<matches.count).map { index -> PDFSearchResultEntry in
+                let selection = matches[index], page = selection.pages.first(where: { $0.document === document })
+                let number = page.map { document.index(for: $0) + 1 } ?? 1
+                let range = page.flatMap { selection.numberOfTextRanges(on: $0) > 0 ? selection.range(at: 0, on: $0) : nil } ?? NSRange(location: NSNotFound, length: 0)
+                return PDFSearchResultEntry(index: index, page: number, range: range, match: selection.string ?? searchField.stringValue)
+            }
+            searchResults.append(additions, selected: matchIndex)
+        }
+        searchResults.isHidden = searchResults.entries.isEmpty
+        updateSearchResultsHeight()
+        needsLayout = true
+    }
+    private func updateSearchResultsHeight() {
+        guard let height = searchResultsHeight else { return }
+        // On shorter windows, leave a usable thumbnail viewport if both
+        // navigation surfaces are open; show whole result rows only.
+        let available = max(34, bounds.height - (thumbnailPanel.isHidden ? 174 : 440))
+        let rows = searchRow.isHidden ? 0 : min(searchResults.entries.count, min(10, max(1, Int(available / PDFSearchResultsList.rowHeight))))
+        let value = CGFloat(rows) * PDFSearchResultsList.rowHeight
+        if abs(height.constant - value) > 0.5 { height.constant = value; needsLayout = true }
+        let searchHeight: CGFloat = searchRow.isHidden ? 0 : 44
+        let rowsHeight: CGFloat = rows > 0 ? value + 6 : 0
+        let statusHeight: CGFloat = statusLabel.isHidden ? 0 : ceil(statusLabel.intrinsicContentSize.height) + (searchHeight + rowsHeight > 0 ? 6 : 0)
+        let panelHeight = 20 + searchHeight + rowsHeight + statusHeight
+        if let panel = searchPanelHeight, abs(panel.constant - panelHeight) > 0.5 { panel.constant = panelHeight; needsLayout = true }
+    }
+    private func prepareSearchSnippet(_ index: Int) {
+        guard !searchRow.isHidden, searchResults.entries.indices.contains(index), searchSnippetTasks[index] == nil,
+              let session = nativePreparationSession() else { return }
+        let entry = searchResults.entries[index], generation = searchGeneration, documentID = documentGeneration
+        if let cached = searchTextIndexes[entry.page] {
+            searchResults.setSnippet(cached.snippet(range: entry.range, expectedMatch: entry.match), at: index); return
+        }
+        let worker = nativePreparation
+        let loading: (id: UUID, task: Task<NativePDFSearchTextIndex, Error>)
+        if let existing = searchTextTasks[entry.page] { loading = existing }
+        else {
+            loading = (UUID(), Task { try await worker.prepareSearchText(session: session, page: entry.page) })
+            searchTextTasks[entry.page] = loading
+        }
+        searchSnippetTasks[index] = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.searchGeneration == generation { self.searchSnippetTasks.removeValue(forKey: index) } }
+            do {
+                let text = try await loading.task.value
+                guard !Task.isCancelled, self.searchGeneration == generation, self.documentGeneration == documentID,
+                      !self.searchRow.isHidden, self.searchResults.entries.indices.contains(index) else { return }
+                if self.searchTextTasks[entry.page]?.id == loading.id { self.searchTextTasks.removeValue(forKey: entry.page) }
+                if self.searchTextIndexes[entry.page] == nil, text.byteCount <= 8_000_000 {
+                    self.searchTextIndexes[entry.page] = text; self.searchTextOrder.append(entry.page); self.searchTextBytes += text.byteCount
+                    while self.searchTextOrder.count > 8 || self.searchTextBytes > 8_000_000 {
+                        let old = self.searchTextOrder.removeFirst(); self.searchTextBytes -= self.searchTextIndexes.removeValue(forKey: old)?.byteCount ?? 0
+                    }
+                }
+                self.searchResults.setSnippet(text.snippet(range: entry.range, expectedMatch: entry.match), at: index)
+            } catch {
+                if self.searchGeneration == generation, !Task.isCancelled {
+                    if self.searchTextTasks[entry.page]?.id == loading.id { self.searchTextTasks.removeValue(forKey: entry.page) }
+                    self.searchResults.setSnippet(.unlocated(entry.match), at: index)
+                }
+            }
+        }
+    }
     private func updateSearchDisplay() {
         if matches.isEmpty { resultLabel.stringValue = searching ? "查找中…" : "无结果" }
         else { resultLabel.stringValue = "\(matchIndex + 1)/\(matches.count)\(searchLimited ? "+" : searching ? "…" : "")" }
@@ -1714,6 +1866,7 @@ struct PDFReaderView: NSViewRepresentable {
         let selection = matches[matchIndex]
         pdfView.go(to: selection); pdfView.setCurrentSelection(selection, animate: true)
         pdfView.scrollSelectionToVisible(nil); updateSearchDisplay()
+        searchResults.showSelection(matchIndex)
     }
 
     func controlTextDidChange(_ notification: Notification) {
@@ -1729,7 +1882,10 @@ struct PDFReaderView: NSViewRepresentable {
         closeSearch(); return true
     }
 
-    private func setStatus(_ text: String) { statusLabel.stringValue = text; statusLabel.toolTip = text; statusLabel.isHidden = text.isEmpty; header.isHidden = searchRow.isHidden && statusLabel.isHidden }
+    private func setStatus(_ text: String) {
+        statusLabel.stringValue = text; statusLabel.toolTip = text; statusLabel.isHidden = text.isEmpty
+        header.isHidden = searchRow.isHidden && statusLabel.isHidden; updateSearchResultsHeight()
+    }
     private func row(_ views: [NSView]) -> NSStackView {
         let stack = NSStackView(views: views); stack.orientation = .horizontal; stack.alignment = .centerY; stack.spacing = 8
         return stack
@@ -1755,7 +1911,7 @@ struct PDFReaderView: NSViewRepresentable {
         invalidateNavigation(); installingDocument = true
         removeSearchEscapeMonitor()
         removePageScrollMonitor(); removeSourcePointerMonitor(); resetPageGesture()
-        searchGeneration += 1; document?.delegate = nil; document?.cancelFindString(); searchDelegate = nil
+        clearSearchState()
         NotificationCenter.default.removeObserver(self)
         thumbnails.pdfView = nil; pdfView.document = nil; document = nil; callback = nil
         controller?.unbind(id: bindingID); controller = nil
@@ -2227,7 +2383,7 @@ struct PDFReaderView: NSViewRepresentable {
                                             guard let value = self.sourceDecorationValuesByID[request.id] else { continue }
                                             let lines = geometry[request.id] ?? []
                                             let cost = value.quote.utf8.count + (value.prefix?.utf8.count ?? 0) + (value.suffix?.utf8.count ?? 0) + lines.count * 64 + 256
-                                            let ready = SourceGeometry(value: value, page: number, lines: lines, cost: cost)
+                                            let ready = SourceGeometry(value: value, page: number, range: request.range, lines: lines, cost: cost)
                                             cache.remember(ready); self.sourceGeometries[request.id] = ready
                                         }
                                         self.sourceCanvas.needsDisplay = true; self.scheduleSourceHoverRefresh()
@@ -2246,7 +2402,7 @@ struct PDFReaderView: NSViewRepresentable {
                                     if passages { cache.rememberPassage(value, range: matched?.range) }
                                     else if cache.geometry[value.id]?.value != value {
                                         let cost = value.quote.utf8.count + (value.prefix?.utf8.count ?? 0) + (value.suffix?.utf8.count ?? 0) + 256
-                                        let geometry = SourceGeometry(value: value, page: number, lines: [], cost: cost)
+                                        let geometry = SourceGeometry(value: value, page: number, range: matched?.range, lines: [], cost: cost)
                                         cache.remember(geometry); self.sourceGeometries[value.id] = geometry
                                     }
                                     cache.rememberMatch(value.id, range: matched?.range, proofIdentity: matches.sourceTextIdentity)
@@ -2428,7 +2584,7 @@ struct PDFReaderView: NSViewRepresentable {
                               cache.passageValues[item.value.id] == item.value,
                               cache.passageRanges[item.value.id] == item.range else { continue }
                         let lines = values[item.value.id] ?? []
-                        let geometry = SourceGeometry(value: item.value, page: number, lines: lines, cost: lines.count * 64 + 128)
+                        let geometry = SourceGeometry(value: item.value, page: number, range: item.range, lines: lines, cost: lines.count * 64 + 128)
                         cache.remember(geometry); self.sourceGeometries[item.value.id] = geometry
                     }
                     self.inFlightSourceGeometryIDs = []
@@ -2576,18 +2732,60 @@ struct PDFReaderView: NSViewRepresentable {
         for record in savedAnnotations where record.trashedAt == nil && record.sourceHash == sourceHash {
             guard record.page >= 1, record.page <= document.pageCount, let page = document.page(at: record.page - 1) else { continue }
             for quad in record.quads {
-                guard [quad.x, quad.y, quad.width, quad.height].allSatisfy({ $0.isFinite }), quad.width > 0, quad.height > 0 else { continue }
-                let rect = NSRect(x: quad.x, y: quad.y, width: quad.width, height: quad.height).intersection(page.bounds(for: .cropBox))
-                guard !rect.isNull, !rect.isEmpty else { continue }
-                let annotation = PDFAnnotation(bounds: rect, forType: record.effectiveKind == .region ? .square : .highlight, withProperties: nil)
-                annotation.color = record.color.nativeColor.withAlphaComponent(record.effectiveKind == .region ? 0.9 : 0.42)
-                if record.effectiveKind == .region { let border = PDFBorder(); border.lineWidth = 1.5; annotation.border = border; annotation.interiorColor = record.color.nativeColor.withAlphaComponent(0.1) }
-                annotation.contents = record.comment.isEmpty ? record.text : record.comment
+                guard let annotation = ReaderAnnotationAppearance.make(record, quad: quad, crop: page.bounds(for: .cropBox)) else { continue }
                 page.addAnnotation(annotation); renderedAnnotations.append((page, annotation))
                 annotationIDs[ObjectIdentifier(annotation)] = record.id
             }
         }
         pdfView.needsDisplay = true
+    }
+
+    private func sentenceMarkActions(page: PDFPage, point: CGPoint) -> [ReadingContextAction] {
+        guard canEditAnnotations, !interactionBlocked, let document, !document.isLocked, document.allowsCopying,
+              page.document === document else { return [] }
+        let number = document.index(for: page) + 1
+        // Already prepared hover geometry is the fast path. The explicit menu
+        // command may prepare up to eight native ranges on this one hit line;
+        // ordinary mouse movement still does no synchronous native geometry.
+        let hit = (sourceGeometryIDsByPage[number] ?? []).compactMap { sourceGeometries[$0] }
+            .filter { $0.value.interaction == .passage && $0.value == sourceDecorationValuesByID[$0.value.id] && $0.lines.contains(where: { $0.contains(point) }) }
+            .min { ($0.range?.length ?? Int.max, $0.value.id) < ($1.range?.length ?? Int.max, $1.value.id) }
+        var candidates: [(id: String, range: NSRange)] = []
+        if let hit, let range = hit.range { candidates.append((hit.value.id, range)) }
+        if let cache = sourceGeometryPages[number], candidates.isEmpty {
+            var seen = Set<String>()
+            for line in cache.nativeLines.lines(at: point) { for nativeRange in line.ranges {
+                cache.passageIndex.forEachEntry(intersecting: nativeRange) { entry in
+                    guard seen.insert(entry.id).inserted, let value = cache.passageValues[entry.id],
+                          value == sourceDecorationValuesByID[entry.id] else { return }
+                    candidates.append((entry.id, entry.range))
+                    candidates.sort { ($0.range.length, $0.id) < ($1.range.length, $1.id) }
+                    if candidates.count > 8 { candidates.removeLast() }
+                }
+            } }
+        }
+        let hash = sourceHash
+        guard let target = candidates.lazy.compactMap({ try? ReaderAnnotationCapture.sentence(range: $0.range, page: page, document: document, sourceHash: hash, point: point) }).first else { return [] }
+        let range = NSRange(location: target.rangeLocation, length: target.rangeLength)
+        let generation = documentGeneration, navigation = navigationRequestID, source = sourceHash
+        let existing = savedAnnotations.first { $0.trashedAt == nil && $0.sourceHash == source && $0.page == number && $0.lineStyle != nil && $0.rangeLocation == range.location && $0.rangeLength == range.length }
+        return ReaderAnnotationLineStyle.allCases.map { style in
+            let removing = existing?.lineStyle == style
+            let name = style == .straight ? "直线下划线" : "波浪下划线"
+            return ReadingContextAction(title: (removing ? "移除" : "添加") + name, icon: style == .straight ? "underline" : "water.waves") { [weak self, weak page] in
+                guard let self, let page, self.canEditAnnotations, !self.interactionBlocked,
+                      self.documentGeneration == generation, self.navigationRequestID == navigation,
+                      self.sourceHash == source, page.document === self.document else { return }
+                Task { @MainActor in
+                    if removing, let existing { _ = await self.onTrashAnnotation?(existing.id, true) }
+                    else {
+                        var record = existing ?? target; record.lineStyle = style
+                        if existing == nil { record.color = .blue }
+                        _ = await self.onSaveAnnotations?([record])
+                    }
+                }
+            }
+        }
     }
 
     @objc private func annotationHit(_ notification: Notification) {
@@ -2735,12 +2933,18 @@ private extension ReaderAnnotationColor {
     private var noteArmed = false
     private let readingContext = ReadingContextPopover()
     var onBookmarkPoint: ((PDFPage) -> Void)?
+    var onSentenceActions: ((PDFPage, CGPoint) -> [ReadingContextAction])?
     var onNotePreview: ((PDFPage, CGPoint) -> Void)?
     func armNotePlacement() { cancelRegionSelection(); noteArmed = true }
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard !interactionBlocked else { return nil }
+        showReadingContext(for: event)
+        return nil
+    }
+    override func rightMouseDown(with event: NSEvent) { showReadingContext(for: event) }
+    private func showReadingContext(for event: NSEvent) {
+        guard !interactionBlocked, !paperTurnInProgress else { return }
         let point = convert(event.locationInWindow, from: nil)
-        guard let page = page(for: point, nearest: false) else { return nil }
+        guard bounds.contains(point), let page = page(for: point, nearest: false), let anchor = window?.contentView else { return }
         let original = convert(point, to: page)
         readingContext.show([
             .init(title: "在此写便签", icon: "square.and.pencil", action: { [weak self, weak page] in
@@ -2749,8 +2953,7 @@ private extension ReaderAnnotationColor {
             .init(title: "添加书签", icon: "bookmark", action: { [weak self, weak page] in
                 guard let self, let page, !self.interactionBlocked else { return }; self.onBookmarkPoint?(page)
             })
-        ], at: point, in: self)
-        return nil
+        ] + (onSentenceActions?(page, original) ?? []), at: anchor.convert(point, from: self), in: anchor)
     }
     override func mouseMoved(with event: NSEvent) {
         if noteArmed, !interactionBlocked {
@@ -2776,6 +2979,9 @@ private extension ReaderAnnotationColor {
         let local = convert(point, from: superview)
         if paperTurnInProgress { return bounds.contains(local) ? self : nil }
         if regionArmed || noteArmed { return bounds.contains(local) ? self : nil }
+        // Own the original window event rather than PDFKit page subviews'
+        // forwarded context events, whose coordinates can follow page layout.
+        if NSApp.currentEvent?.type == .rightMouseDown { return bounds.contains(local) ? self : nil }
         if NSApp.currentEvent?.modifierFlags.contains(.option) != true, managedAnnotation(at: local) != nil { return self }
         return super.hitTest(point)
     }

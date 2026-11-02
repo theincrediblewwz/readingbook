@@ -21,6 +21,7 @@ enum AIProjectMerge {
         }
         try protect("schemaVersion", \.schemaVersion); try protect("id", \.id)
         try protect("title", \.title); try protect("originalName", \.originalName)
+        try protect("userTitle", \.userTitle)
         try protect("sourceHash", \.sourceHash); try protect("importedAt", \.importedAt)
         try protect("documents", \.documents); try protect("disabledPluginIDs", \.disabledPluginIDs)
         try protect("bookmarks", \.bookmarks); try protect("ocrPages", \.ocrPages)

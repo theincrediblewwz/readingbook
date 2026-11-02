@@ -17,37 +17,60 @@ import ReadingCore
         panel.message = "支持常见图片格式，文件须小于 2 MB。原书、笔记和分析会保留。"
         panel.begin { [weak self] response in
             guard let self, response == .OK, let url = panel.url, owner.matches(self) else { return }
-            Task { await self.changeBookCover(project, url: url, owner: owner) }
+            Task { await self.prepareBookCoverCrop(project, url: url, owner: owner) }
         }
     }
     func restoreOriginalBookCover(_ id: String) {
         guard let project = books.first(where: { $0.id == id }), project.coverImage != nil else { return }
         let owner = WorkspacePickerOwner(store: self)
-        Task { await changeBookCover(project, url: nil, owner: owner) }
+        Task { _ = await changeBookCover(project, bytes: nil, owner: owner) }
     }
-    private func changeBookCover(_ project: BookProject, url: URL?, owner: WorkspacePickerOwner) async {
+    private func prepareBookCoverCrop(_ project: BookProject, url: URL, owner: WorkspacePickerOwner) async {
         let key = coverOperationKey(project.id), token = UUID()
         guard owner.matches(self), !storageState.working, bookCoverOperations[key] == nil else { return }
         bookCoverOperations[key] = token
         defer { if bookCoverOperations[key] == token { bookCoverOperations.removeValue(forKey: key) } }
-        let repository = repository
         do {
-            let bytes: Data?
-            if let url {
-                bytes = try await Task.detached(priority: .userInitiated) {
+            let image = try await Task.detached(priority: .userInitiated) {
                     let accessed = url.startAccessingSecurityScopedResource(); defer { if accessed { url.stopAccessingSecurityScopedResource() } }
                     let values = try url.resourceValues(forKeys: [.isRegularFileKey,.isSymbolicLinkKey,.fileSizeKey])
                     guard values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize,
                           size > 0, size < BookCoverImage.maximumBytes else { throw ReadingError.invalid("请选择小于 2 MB 的封面图片。") }
                     let data = try Data(contentsOf: url)
                     guard data.count == size else { throw ReadingError.invalid("图片读取时发生变化，请重新选择。") }
-                    _ = try BookCoverImage.inspect(data); return data
-                }.value
-            } else { bytes = nil }
+                    return try BookCoverCropImage(data: data)
+            }.value
             guard owner.matches(self), books.contains(where: { $0.id == project.id && $0.sourceHash == project.sourceHash }), !storageState.working else { return }
-            let saved = try await repository.setBookCover(bookID: project.id, expectedSourceHash: project.sourceHash, data: bytes)
+            bookCoverCropRequest = BookCoverCropRequest(project: project, owner: owner, image: image)
+        } catch { if owner.matches(self) { errorMessage = error.localizedDescription } }
+    }
+    func applyBookCoverCrop(_ request: BookCoverCropRequest, bytes: Data) async -> Bool {
+        guard bookCoverCropRequest?.id == request.id else { return false }
+        return await changeBookCover(request.project, bytes: bytes, owner: request.owner)
+    }
+    private func changeBookCover(_ project: BookProject, bytes: Data?, owner: WorkspacePickerOwner) async -> Bool {
+        let key = coverOperationKey(project.id), token = UUID()
+        guard owner.matches(self), !storageState.working, bookCoverOperations[key] == nil,
+              books.contains(where: { $0.id == project.id && $0.sourceHash == project.sourceHash }) else { return false }
+        bookCoverOperations[key] = token
+        defer { if bookCoverOperations[key] == token { bookCoverOperations.removeValue(forKey: key) } }
+        let repository = repository
+        do {
+            let saved = try await repository.setBookCover(bookID: project.id, expectedSourceHash: project.sourceHash, data: bytes,
+                expectedCoverRevision: project.coverImage?.sha256 ?? "original")
+            guard owner.matches(self) else { return false }
+            publish(saved); activity = bytes == nil ? "已恢复原书封面。" : "封面已更新；原书、笔记和分析保留。"
+            return true
+        } catch { if owner.matches(self) { errorMessage = error.localizedDescription }; return false }
+    }
+    func renameLibraryBook(_ project: BookProject, title: String, owner: WorkspacePickerOwner) async {
+        guard owner.matches(self), !storageState.working, !isBusy,
+              books.contains(where: { $0.id == project.id && $0.sourceHash == project.sourceHash }) else { return }
+        let repository = repository
+        do {
+            let updated = try await repository.renameBook(bookID: project.id, expectedSourceHash: project.sourceHash, expectedTitle: project.title, title: title)
             guard owner.matches(self) else { return }
-            publish(saved); activity = url == nil ? "已恢复原书封面。" : "封面已更新；原书、笔记和分析保留。"
+            publish(updated); activity = "书名已更新，原文件名、笔记和分析保留。"
         } catch { if owner.matches(self) { errorMessage = error.localizedDescription } }
     }
 }
@@ -122,7 +145,7 @@ struct FrostBookCoverCard: View {
                             }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
                         }
                         HStack { Spacer(); Text("\(Int(progress * 100))%").font(.system(size: 18, weight: .semibold)).monospacedDigit()
-                            .foregroundStyle(.white).shadow(color: .black.opacity(0.85), radius: 4, y: 1)
+                            .foregroundStyle(.white).modifier(CoverGlyphLegibility())
                         }.padding(.horizontal, 14).padding(.bottom, 15)
                         ZStack(alignment: .leading) {
                             green.opacity(0.18)

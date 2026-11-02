@@ -20,7 +20,9 @@ enum PositionNoteSurface {
     @Published private(set) var marginFrame = CGRect.zero
     @Published private(set) var marginScale: CGFloat = 1
     @Published private(set) var paperTurnActive = false
+    @Published private(set) var navigationObscured = false
     func setPaperTurn(_ active: Bool) { if paperTurnActive != active { paperTurnActive = active } }
+    func setNavigationObscured(_ value: Bool) { if navigationObscured != value { navigationObscured = value } }
     func update(_ next: [String: CGPoint], owner: String = "", connectors: [String: PDFNoteConnector] = [:], scrollerWidth: CGFloat = 17, marginWidth: CGFloat = 0, marginFrame: CGRect = .zero, marginScale: CGFloat = 1) {
         if self.owner != owner { self.owner = owner }
         if points != next { points = next }
@@ -69,7 +71,7 @@ enum PDFReaderCommand {
     private var paperTurnIsActive = false
 
     func attachNoteMargin(_ host: NSView, owner: String) {
-        noteMarginHost = host; noteMarginOwner = owner; host.isHidden = paperTurnIsActive
+        noteMarginHost = host; noteMarginOwner = owner; host.isHidden = paperTurnIsActive || notePositions.navigationObscured
     }
     func detachNoteMargin(_ host: NSView) { if noteMarginHost === host { noteMarginHost = nil; noteMarginOwner = "" } }
     func noteMarginSnapshot(in reader: NSView) -> (image: CGImage, frame: CGRect)? {
@@ -87,7 +89,7 @@ enum PDFReaderCommand {
     }
     func reportPaperTurn(id: UUID, active: Bool) {
         guard bindingID == id else { return }
-        paperTurnIsActive = active; noteMarginHost?.isHidden = active
+        paperTurnIsActive = active; noteMarginHost?.isHidden = active || notePositions.navigationObscured
         DispatchQueue.main.async { [weak self] in
             guard let self, self.bindingID == id else { return }; self.notePositions.setPaperTurn(self.paperTurnIsActive)
         }
@@ -119,6 +121,9 @@ enum PDFReaderCommand {
         if self.chromeFrame != chromeFrame { self.chromeFrame = chromeFrame }
         if self.thumbnailFrame != thumbnailFrame { self.thumbnailFrame = thumbnailFrame }
         if self.canEditAnnotations != canEditAnnotations { self.canEditAnnotations = canEditAnnotations }
+        let obscured = isSearchVisible || thumbnailsVisible
+        noteMarginHost?.isHidden = paperTurnIsActive || obscured
+        notePositions.setNavigationObscured(obscured)
     }
     func unbind(id: UUID) {
         guard bindingID == id else { return }; bindingID = nil; handler = nil
@@ -128,6 +133,7 @@ enum PDFReaderCommand {
             self.isReady = false; self.hasSelection = false; self.isSearchVisible = false; self.pageCount = 0
             self.notePositions.update([:])
             self.notePositions.setPaperTurn(false)
+            self.notePositions.setNavigationObscured(false)
             self.chromeFrame = .zero; self.thumbnailFrame = .zero; self.thumbnailsVisible = false
         }
     }

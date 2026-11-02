@@ -78,7 +78,8 @@ struct WorkspaceView: View {
                     .accessibilityHidden(hasWorkspaceOverlay)
                     .overlay {
                         if store.route == "reader", store.selectedUnit != nil, !hasWorkspaceOverlay, store.positionNoteRequest == nil {
-                            FloatingReadingDock(id: "reader-tools", viewport: geometry.size, allowsDragging: !editingPDFPage) { readerControls }
+                            FloatingReadingDock(id: "reader-tools", viewport: geometry.size, allowsDragging: !editingPDFPage,
+                                                autoHides: true, keepsExpanded: readerPopover != nil || editingPDFPage) { readerControls }
                         }
                     }
                     .clipped()
@@ -171,6 +172,8 @@ struct WorkspaceView: View {
             case .ocr: PDFOCRPanel().environmentObject(store).frame(width: 560, height: 460)
             case .plugins: PluginLibraryView(onClose: { closeSheet(.plugins) }, draftStore: pluginDefinitionDrafts).environmentObject(store).frame(width: min(900, max(300, detailWidth - 40)), height: min(680, max(300, workspaceHeight - 40)))
             case .password(let request): PDFPasswordSheet(request: request).environmentObject(store)
+            case .cover(let request): BookCoverCropView(request: request, close: { closeSheet(.cover(request)) },
+                previewWidth: min(320, max(180, min(detailWidth - 88, (workspaceHeight - 180) * 0.78)))).environmentObject(store)
             }
         }
         .onChange(of: modalSignature) { _, _ in reconcileSheet() }
@@ -549,7 +552,7 @@ struct WorkspaceView: View {
     }
     private func topIslands(width: CGFloat) -> some View {
         let limit: CGFloat = width < 900 ? 150 : 240
-        let measured = (String(workspaceTitle.prefix(500)) as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 14, weight: .medium)]).width.rounded(.up)
+        let measured = store.route == "reader" ? 0 : (String(workspaceTitle.prefix(500)) as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 14, weight: .medium)]).width.rounded(.up)
         return HStack(spacing: 10) {
             HStack(spacing: 2) {
                 DockIconButton(title: navigationExpanded ? "收起导航" : "展开导航", icon: "sidebar.left", isSelected: navigationExpanded) {
@@ -568,10 +571,12 @@ struct WorkspaceView: View {
                 Button { bookPopover.toggle(); servicePopover = false; navigationExpanded = false; readerPopover = nil } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "book.closed").foregroundStyle(Palette.accent)
-                        Text(workspaceTitle).font(.system(size: 14, weight: .medium)).lineLimit(1).truncationMode(.middle).frame(width: min(limit, max(36, measured)), alignment: .leading)
+                        if store.route != "reader" {
+                            Text(workspaceTitle).font(.system(size: 14, weight: .medium)).lineLimit(1).truncationMode(.middle).frame(width: min(limit, max(36, measured)), alignment: .leading)
+                        }
                         Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
                     }.padding(.horizontal, 10).frame(height: 44).contentShape(Capsule())
-                }.buttonStyle(ReadingQuietButtonStyle()).help("图书与工作区").accessibilityLabel("图书与工作区菜单")
+                }.buttonStyle(ReadingQuietButtonStyle()).help("图书与工作区 · " + workspaceTitle).accessibilityLabel("图书与工作区菜单").accessibilityValue(workspaceTitle)
                     .popover(isPresented: $bookPopover) {
                         if servicePopover {
                             ServiceSwitcherPanel(back: { servicePopover = false }, manage: { navigate("models") }, dismissForConfirmation: { servicePopover = false; bookPopover = false }).environmentObject(store)
@@ -586,9 +591,8 @@ struct WorkspaceView: View {
                     }
             }
             if store.book != nil && store.route != "library" {
-                Button(action: toggleReadingCompanion) { Label("伴读与对话", systemImage: "bubble.left.and.bubble.right").font(.system(size: 14, weight: .medium)).padding(.horizontal, 6).frame(minHeight: 34) }
-                    .buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).fixedSize().workspaceChromeBounds("primary")
-                    .accessibilityLabel("伴读与对话").help(store.route == "reader" && store.readingCompanionVisible ? "收起伴读与对话，保留当前内容" : "打开伴读与对话")
+                ReaderCompanionLauncher(active: store.route == "reader" && store.readingCompanionVisible, action: toggleReadingCompanion)
+                    .workspaceChromeBounds("primary")
             } else {
                 Button { store.chooseBook() } label: { Label("导入书籍", systemImage: "plus").frame(minHeight: 34) }.buttonStyle(.borderedProminent).controlSize(.large).clipShape(Capsule()).disabled(store.isBusy).fixedSize().workspaceChromeBounds("primary")
             }
@@ -844,7 +848,7 @@ struct WorkspaceView: View {
         store.navigateToUnit(units[index + offset].id)
     }
     private var modalSignature: String {
-        "\(store.showingSettings)|\(store.showingOCR)|\(store.showingTrash)|\(store.showingPlugins)|\(store.showingLibrarySearch)|\(store.pdfPasswordRequest?.id.uuidString ?? "")|\(store.pdfPasswordRequest?.message ?? "")"
+        "\(store.showingSettings)|\(store.showingOCR)|\(store.showingTrash)|\(store.showingPlugins)|\(store.showingLibrarySearch)|\(store.pdfPasswordRequest?.id.uuidString ?? "")|\(store.pdfPasswordRequest?.message ?? "")|\(store.bookCoverCropRequest?.id.uuidString ?? "")"
     }
     private var sheetBinding: Binding<WorkspaceSheet?> {
         Binding(get: { activeSheet }, set: { value in
@@ -868,10 +872,13 @@ struct WorkspaceView: View {
         case .plugins: store.showingPlugins = false
         case .password(let request):
             if store.pdfPasswordRequest?.id == request.id { store.cancelPDFPasswordRequest(request.id) }
+        case .cover(let request):
+            if store.bookCoverCropRequest?.id == request.id { store.bookCoverCropRequest = nil }
         }
     }
     private func reconcileSheet() {
         guard !sheetClosing else { return }
+        if let request = store.bookCoverCropRequest, !request.owner.matches(store) { store.bookCoverCropRequest = nil }
         if ["models", "plugins"].contains(managementRoute ?? "") && !store.showingSettings && !store.showingPlugins { managementRoute = nil }
         if let activeSheet {
             let supersededByPassword: Bool
@@ -886,6 +893,7 @@ struct WorkspaceView: View {
         }
         let next: WorkspaceSheet?
         if let request = store.pdfPasswordRequest { next = .password(request) }
+        else if let request = store.bookCoverCropRequest { next = .cover(request) }
         else if store.showingSettings { guard store.finishWorkspaceNotesEditing() else { store.showingSettings = false; return }; managementRoute = "models"; return }
         else if store.showingOCR { next = .ocr }
         else if store.showingTrash {
@@ -908,6 +916,8 @@ struct WorkspaceView: View {
             case .plugins: store.showingPlugins = false
             case .password(let request):
                 if store.pdfPasswordRequest?.id == request.id { store.cancelPDFPasswordRequest(request.id) }
+            case .cover(let request):
+                if store.bookCoverCropRequest?.id == request.id { store.bookCoverCropRequest = nil }
             }
         }
         lastSheet = nil; activeSheet = nil; sheetClosing = false
@@ -976,13 +986,14 @@ extension View {
 }
 
 private enum WorkspaceSheet: Identifiable {
-    case settings, ocr, plugins, password(PDFPasswordRequest)
+    case settings, ocr, plugins, password(PDFPasswordRequest), cover(BookCoverCropRequest)
     var id: String {
         switch self {
         case .settings: return "settings"
         case .ocr: return "ocr"
         case .plugins: return "plugins"
         case .password(let request): return "password-\(request.id)"
+        case .cover(let request): return "cover-\(request.id)"
         }
     }
     @MainActor func isRequested(in store: AppStore) -> Bool {
@@ -991,6 +1002,7 @@ private enum WorkspaceSheet: Identifiable {
         case .ocr: return store.showingOCR
         case .plugins: return store.showingPlugins
         case .password(let request): return store.pdfPasswordRequest?.id == request.id
+        case .cover(let request): return store.bookCoverCropRequest?.id == request.id && request.owner.matches(store)
         }
     }
 }

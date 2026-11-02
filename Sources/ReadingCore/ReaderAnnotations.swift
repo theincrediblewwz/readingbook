@@ -8,6 +8,9 @@ public enum ReaderAnnotationColor: String, Codable, CaseIterable, Hashable, Send
     public var title: String { switch self { case .yellow: return "黄色"; case .green: return "绿色"; case .blue: return "蓝色"; case .pink: return "粉色" } }
 }
 public enum ReaderAnnotationKind: String, Codable, Hashable, Sendable { case text, region }
+/// Missing means the existing translucent highlighter. Text marks keep their
+/// original range and line boxes; only their presentation changes.
+public enum ReaderAnnotationLineStyle: String, Codable, CaseIterable, Hashable, Sendable { case straight, wavy }
 
 /// PDF page-space coordinates (72 dpi, lower-left origin), one rectangle per selected line.
 public struct ReaderQuadRect: Codable, Hashable, Sendable {
@@ -34,9 +37,11 @@ public struct ReaderAnnotation: Codable, Identifiable, Hashable, Sendable {
     public var updatedAt: Date
     public var trashedAt: Date?
     public var kind: ReaderAnnotationKind? = nil
+    public var lineStyle: ReaderAnnotationLineStyle? = nil
     public var effectiveKind: ReaderAnnotationKind { kind ?? .text }
-    public init(id: String = UUID().uuidString, sourceHash: String, page: Int, text: String, rangeLocation: Int, rangeLength: Int, quads: [ReaderQuadRect], color: ReaderAnnotationColor = .yellow, comment: String = "", createdAt: Date = Date(), updatedAt: Date = Date(), trashedAt: Date? = nil, kind: ReaderAnnotationKind? = nil) {
+    public init(id: String = UUID().uuidString, sourceHash: String, page: Int, text: String, rangeLocation: Int, rangeLength: Int, quads: [ReaderQuadRect], color: ReaderAnnotationColor = .yellow, comment: String = "", createdAt: Date = Date(), updatedAt: Date = Date(), trashedAt: Date? = nil, kind: ReaderAnnotationKind? = nil, lineStyle: ReaderAnnotationLineStyle? = nil) {
         self.id = id; self.sourceHash = sourceHash; self.page = page; self.text = text; self.rangeLocation = rangeLocation; self.rangeLength = rangeLength; self.quads = quads; self.color = color; self.comment = comment; self.createdAt = createdAt; self.updatedAt = updatedAt; self.trashedAt = trashedAt; self.kind = kind
+        self.lineStyle = lineStyle
     }
 }
 
@@ -51,7 +56,7 @@ public enum ReaderAnnotationValidator {
             throw ReadingError.invalid("PDF批注标识、来源版本或页码无效。")
         }
         let validText = annotation.effectiveKind == .text && annotation.rangeLocation >= 0 && annotation.rangeLocation <= 100_000_000 && annotation.rangeLength > 0 && annotation.rangeLength <= 100_000_000 - annotation.rangeLocation && !annotation.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let validRegion = annotation.effectiveKind == .region && annotation.rangeLocation == 0 && annotation.rangeLength == 0 && annotation.text.isEmpty && annotation.quads.count == 1
+        let validRegion = annotation.effectiveKind == .region && annotation.lineStyle == nil && annotation.rangeLocation == 0 && annotation.rangeLength == 0 && annotation.text.isEmpty && annotation.quads.count == 1
         guard validText || validRegion, annotation.text.count <= 32_768,
               annotation.comment.count <= 16_000, !annotation.quads.isEmpty, annotation.quads.count <= 512 else {
             throw ReadingError.invalid("PDF批注文字范围、正文、评论或行框数量超出限制。")
@@ -71,7 +76,59 @@ public enum ReaderAnnotationValidator {
 }
 
 #if os(macOS)
+/// Render from durable page coordinates. These annotations live on the in-memory
+/// PDFDocument only, including page-turn snapshots, never on the original file.
+public enum ReaderAnnotationAppearance {
+    public static func make(_ record: ReaderAnnotation, quad: ReaderQuadRect, crop: CGRect) -> PDFAnnotation? {
+        guard [quad.x, quad.y, quad.width, quad.height].allSatisfy({ $0.isFinite }), quad.width > 0, quad.height > 0 else { return nil }
+        let rect = CGRect(x: quad.x, y: quad.y, width: quad.width, height: quad.height).intersection(crop)
+        guard !rect.isNull, !rect.isEmpty else { return nil }
+        let color: NSColor
+        switch record.color { case .yellow: color = .systemYellow; case .green: color = .systemGreen; case .blue: color = .systemBlue; case .pink: color = .systemPink }
+        let annotation: PDFAnnotation
+        if record.effectiveKind == .region {
+            annotation = PDFAnnotation(bounds: rect, forType: .square, withProperties: nil)
+            let border = PDFBorder(); border.lineWidth = 1.5; annotation.border = border
+            annotation.color = color.withAlphaComponent(0.9); annotation.interiorColor = color.withAlphaComponent(0.1)
+        } else if let style = record.lineStyle {
+            annotation = PDFAnnotation(bounds: rect, forType: .ink, withProperties: nil)
+            let thickness = min(1, max(0.55, rect.height * 0.045))
+            let border = PDFBorder(); border.lineWidth = thickness; annotation.border = border
+            annotation.color = color.withAlphaComponent(0.8)
+            let path = NSBezierPath(); path.lineWidth = thickness; path.lineCapStyle = .round
+            let amplitude = min(0.85, rect.height * 0.06), baseline = amplitude + thickness / 2
+            path.move(to: CGPoint(x: 0, y: baseline))
+            if style == .straight { path.line(to: CGPoint(x: rect.width, y: baseline)) }
+            else {
+                // Bounded sampling also handles unusually large PDF page units.
+                let steps = max(1, min(4096, Int(ceil(rect.width / 0.65))))
+                for i in 1...steps {
+                    let x = rect.width * CGFloat(i) / CGFloat(steps)
+                    path.line(to: CGPoint(x: x, y: baseline + sin(x * .pi / 2.3) * amplitude))
+                }
+            }
+            annotation.add(path)
+        } else {
+            annotation = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
+            annotation.color = color.withAlphaComponent(0.42)
+        }
+        annotation.contents = record.comment.isEmpty ? record.text : record.comment
+        return annotation
+    }
+}
+
 public enum ReaderAnnotationCapture {
+    /// A context command must physically hit this exact native text range.
+    /// In particular, a blank margin or a later equal sentence is not a match.
+    public static func sentence(range: NSRange, page: PDFPage, document: PDFDocument, sourceHash: String, point: CGPoint) throws -> ReaderAnnotation? {
+        guard page.document === document, range.location != NSNotFound, range.location >= 0, range.length > 0,
+              range.location <= 100_000_000, range.length <= 100_000_000 - range.location,
+              point.x.isFinite, point.y.isFinite, let selection = page.selection(for: range) else { return nil }
+        let records = try capture(selection: selection, document: document, sourceHash: sourceHash)
+        guard records.count == 1, let record = records.first, record.rangeLocation == range.location, record.rangeLength == range.length,
+              record.quads.contains(where: { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height).contains(point) }) else { return nil }
+        return record
+    }
     /// PDFKit ranges are page-local UTF-16 character ranges. Never apply a cross-page range to just the first page.
     public static func capture(selection: PDFSelection, document: PDFDocument, sourceHash: String) throws -> [ReaderAnnotation] {
         guard !document.isLocked, document.allowsCopying, !sourceHash.isEmpty else { throw ReadingError.invalid("PDF尚未解锁、禁止复制或缺少来源版本。") }

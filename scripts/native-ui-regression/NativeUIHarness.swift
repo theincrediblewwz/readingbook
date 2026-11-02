@@ -545,16 +545,16 @@ struct PanelHarnessRoot: View {
         collection.layoutSubtreeIfNeeded()
         try await Task.sleep(nanoseconds: 70_000_000)
         guard let attributes = collection.layoutAttributesForItem(at: path) else { throw ReadingError.invalid("Thumbnail item has no layout") }
-        // PDFThumbnailView is nonflipped while its collection is flipped on
-        // current macOS. Scroll its public outer clip using converted geometry.
-        let target = collection.convert(attributes.frame, to: thumbnail)
-        if let scroll = thumbnail.enclosingScrollView {
-            let clip = scroll.contentView
-            let y = min(max(0, target.midY - clip.bounds.height / 2), max(0, thumbnail.bounds.height - clip.bounds.height))
-            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y)); scroll.reflectScrolledClipView(clip)
-        } else { thumbnail.scrollToVisible(target) }
+        // The native collection now owns the only scrolling range. Its host
+        // stays viewport-sized even for a thousand-page document.
+        guard let nativeScroll = collection.enclosingScrollView,
+              nativeScroll !== thumbnail.enclosingScrollView else { throw ReadingError.invalid("Missing native thumbnail scroller") }
+        try pdfRequire(thumbnail.bounds.height <= (thumbnail.enclosingScrollView?.contentSize.height ?? 0) + 1,
+            "Thumbnail host must fit its viewport rather than the entire book")
         try await Task.sleep(nanoseconds: 70_000_000)
         let point = collection.convert(NSPoint(x: attributes.frame.midX, y: attributes.frame.midY), to: nil)
+        try pdfRequire(collection.visibleRect.contains(NSPoint(x: attributes.frame.midX, y: attributes.frame.midY)),
+            "Target thumbnail must be visible in the native collection before clicking")
         writeJSON("thumbnail-native-layout.json", ["page": page, "itemFrame": NSStringFromRect(attributes.frame),
             "collectionFrame": NSStringFromRect(collection.frame), "collectionVisibleRect": NSStringFromRect(collection.visibleRect),
             "thumbnailFrame": NSStringFromRect(thumbnail.frame), "thumbnailVisibleRect": NSStringFromRect(thumbnail.visibleRect),

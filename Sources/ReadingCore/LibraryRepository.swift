@@ -150,6 +150,8 @@ public actor LibraryRepository {
         updated.originalBookOutline = originalBookOutline ?? existing.originalBookOutline
         updated.readerCollections = readerCollections ?? existing.readerCollections
         updated.coverImage = existing.coverImage
+        updated.userTitle = existing.userTitle
+        if let title = existing.userTitle { updated.title = title }
         // Only the explicit trash/restore API changes this canonical status. A stale reader
         // or editor window cannot silently revive a document through a routine save.
         let documentIndices = Dictionary(updated.documents.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
@@ -217,6 +219,8 @@ public actor LibraryRepository {
         updated.originalBookOutline = existing.originalBookOutline
         updated.readerCollections = existing.readerCollections
         updated.coverImage = existing.coverImage
+        updated.userTitle = existing.userTitle
+        if let title = existing.userTitle { updated.title = title }
         // Retain references written by another window before this editor was opened.
         // Index positions only: leave the original array intact so validation
         // still rejects duplicate proposed IDs instead of silently deduplicating.
@@ -563,6 +567,9 @@ public actor LibraryRepository {
     func validate(_ project: BookProject) throws {
         try ReaderCollectionRuntime.validate(project.readerCollections)
         try project.coverImage?.validate()
+        if let title = project.userTitle {
+            guard title == project.title, Self.validUserTitle(title) else { throw ReadingError.invalid("自定书名无效，原数据保留。") }
+        }
         let requests = project.aiRequestHistory ?? []
         guard requests.count <= 1000, Set(requests.map(\.id)).count == requests.count,
               requests.allSatisfy({ UUID(uuidString: $0.id) != nil && $0.title.count <= 160 && $0.number > 0 &&
@@ -1374,11 +1381,27 @@ extension LibraryRepository {
 // User cover changes read the latest canonical project; AI/editor snapshots
 // cannot erase or replace this host-owned visual asset.
 extension LibraryRepository {
-    public func setBookCover(bookID: String, expectedSourceHash: String, data: Data?) throws -> BookProject {
+    private static func validUserTitle(_ title: String) -> Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && title.count <= 256 && title.utf8.count <= 2048 && !title.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+    }
+    public func renameBook(bookID: String, expectedSourceHash: String, expectedTitle: String, title: String) throws -> BookProject {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.validUserTitle(title) else { throw ReadingError.invalid("请输入 1–256 个字的书名，不包含换行或控制字符。") }
+        let directory = try bookDirectory(bookID, mustExist: true)
+        try recoverDocument(in: directory)
+        var updated = try readProject(in: directory)
+        guard updated.sourceHash == expectedSourceHash, updated.title == expectedTitle else { throw ReadingError.invalid("这本书或书名已变化，请重新打开重命名。原数据没有被覆盖。") }
+        updated.title = title; updated.userTitle = title
+        try validate(updated); try Task.checkCancellation()
+        try atomicWrite(encode(updated), to: child(directory, "project.json"))
+        return stampForPublication(updated)
+    }
+    public func setBookCover(bookID: String, expectedSourceHash: String, data: Data?, expectedCoverRevision: String? = nil) throws -> BookProject {
         let directory = try bookDirectory(bookID, mustExist: true)
         try recoverDocument(in: directory)
         let canonical = try readProject(in: directory)
         guard canonical.sourceHash == expectedSourceHash else { throw ReadingError.invalid("这本书的原文身份已变化，未更换封面。") }
+        if let expectedCoverRevision, expectedCoverRevision != (canonical.coverImage?.sha256 ?? "original") { throw ReadingError.invalid("封面已被更新，请重新选择。现有封面保留。") }
         try Task.checkCancellation()
         let record = try data.map(BookCoverImage.inspect)
         var updated = canonical; updated.coverImage = record

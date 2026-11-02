@@ -23,6 +23,12 @@ enum PositionNotePreview {
     var onScroll: ((NSEvent) -> Void)?
     var onDetach: (() -> Void)?
     override var intrinsicContentSize: NSSize { .init(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // SwiftUI can ask a representable to hit-test outside its clipped frame.
+        // A scaled, empty margin must not intercept the PDF's floating controls.
+        guard !isHiddenOrHasHiddenAncestor, bounds.contains(convert(point, from: superview)) else { return nil }
+        return super.hitTest(point)
+    }
     override func scrollWheel(with event: NSEvent) { if let onScroll { onScroll(event) } else { super.scrollWheel(with: event) } }
 }
 struct PositionNoteMarginHost: NSViewRepresentable {
@@ -136,6 +142,9 @@ struct PositionNoteMarginLayer: View {
     var body: some View {
         let scale = isPDF ? max(0.001, positions.marginScale) : 1
         let frame = isPDF ? positions.marginFrame : CGRect(x: viewport.width - 17 - PositionNoteSurface.marginWidth, y: 0, width: PositionNoteSurface.marginWidth, height: viewport.height)
+        // Navigation floats above the original page. Keep the paper reserve
+        // stable, while hiding slips/lines that would cover search or thumbnails.
+        let notesVisible = visible && (!isPDF || !positions.navigationObscured)
         ZStack(alignment: .topLeading) {
             Color.clear
             if showsMargin || (isPDF && positions.marginWidth > 0.1) {
@@ -148,13 +157,13 @@ struct PositionNoteMarginLayer: View {
                     else { margin }
                 }.frame(width: max(0, frame.width), height: max(0, frame.height)).clipped()
                     .offset(x: frame.minX, y: frame.minY)
-                    .modifier(PositionNoteTurnVisibility(positions: positions, visible: visible, interactive: interactive))
-                if isPDF { PositionNoteConnections(positions: positions, size: viewport).opacity(visible ? 1 : 0) }
+                    .modifier(PositionNoteTurnVisibility(positions: positions, visible: notesVisible, interactive: interactive))
+                if isPDF { PositionNoteConnections(positions: positions, size: viewport).opacity(notesVisible ? 1 : 0) }
                 Button(action: onCollapse) { Image(systemName: "chevron.right").font(.system(size: 12, weight: .medium)).frame(width: 32, height: 32) }
                     .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.96), in: Circle())
                     .overlay { Circle().strokeBorder(Color.primary.opacity(0.07)) }.shadow(color: .black.opacity(0.05), radius: 6, y: 2)
                     .offset(x: min(viewport.width - 52, frame.maxX + 8), y: 86)
-                    .opacity(visible ? 1 : 0).allowsHitTesting(visible && interactive)
+                    .opacity(notesVisible ? 1 : 0).allowsHitTesting(notesVisible && interactive)
                     .help("收起便签与右侧留白，恢复原来的阅读模式").accessibilityLabel("收起页边便签")
             }
         }.frame(width: viewport.width, height: viewport.height)
