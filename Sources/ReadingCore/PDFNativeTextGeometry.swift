@@ -9,30 +9,46 @@ public enum PDFNativeTextGeometry {
         public let range: NSRange
         public let bounds: CGRect
     }
-    public static func character(at point: CGPoint, on page: PDFPage) -> CharacterHit? {
-        guard point.x.isFinite, point.y.isFinite, let native = page.string as NSString?, native.length <= 1_000_000 else { return nil }
-        return autoreleasepool {
-            // Word hits require ink, while selection boxes include the whole
-            // character cell. Probe only a small neighbourhood, and still
-            // require the ORIGINAL pointer to lie inside a verified text box.
-            let probes = [point, .init(x: point.x-3, y: point.y), .init(x: point.x+3, y: point.y),
-                          .init(x: point.x, y: point.y-4), .init(x: point.x, y: point.y+4),
-                          .init(x: point.x-7, y: point.y), .init(x: point.x+7, y: point.y)]
-            for probe in probes {
-                guard let word = page.selectionForWord(at: probe) ?? page.selectionForLine(at: probe),
-                      word.bounds(for: page).insetBy(dx: -1.5, dy: -1.5).contains(point), word.numberOfTextRanges(on: page) <= 16 else { continue }
-                var hits: [CharacterHit] = []
-                for i in 0..<word.numberOfTextRanges(on: page) {
-                    let range = word.range(at: i, on: page)
-                    guard valid(range, in: native), range.length <= 512 else { continue }
-                    var offset = range.location
-                    while offset < NSMaxRange(range) {
-                        let character = native.rangeOfComposedCharacterSequence(at: offset)
-                        if let hit = hit(character, native: native, page: page), hit.bounds.insetBy(dx: -1.5, dy: -1.5).contains(point) { hits.append(hit) }
-                        offset = NSMaxRange(character)
+    /// A short-lived map for one native page. Line rectangles cover complete
+    /// text cells, including the empty spaces inside Chinese characters.
+    /// Character boxes are prepared only for lines reached by the pointer.
+    public final class PageMap {
+        private let page: PDFPage
+        private let native: NSString
+        private let lines: [(bounds: CGRect, ranges: [NSRange])]
+        private var prepared: [Int: [CharacterHit]] = [:]
+        public init?(page: PDFPage) {
+            guard let native = page.string as NSString?, native.length > 0, native.length <= 1_000_000,
+                  let selection = page.selection(for: .init(location: 0, length: native.length)) else { return nil }
+            let selections = selection.selectionsByLine()
+            guard selections.count <= 20_000 else { return nil }
+            self.page = page; self.native = native
+            lines = selections.compactMap { line in
+                let bounds = line.bounds(for: page), count = line.numberOfTextRanges(on: page)
+                guard !bounds.isEmpty, !bounds.isNull, count > 0, count <= 16 else { return nil }
+                let ranges = (0..<count).map { line.range(at: $0, on: page) }.filter { PDFNativeTextGeometry.valid($0, in: native) }
+                return ranges.isEmpty ? nil : (bounds, ranges)
+            }
+        }
+        public func character(at point: CGPoint) -> CharacterHit? {
+            guard point.x.isFinite, point.y.isFinite else { return nil }
+            let candidates = lines.indices.filter { lines[$0].bounds.insetBy(dx: -1.5, dy: -1.5).contains(point) }
+            for index in candidates {
+                if prepared[index] == nil {
+                    prepared[index] = autoreleasepool {
+                        var result: [CharacterHit] = []
+                        for range in lines[index].ranges where range.length <= 2048 {
+                            var offset = range.location
+                            while offset < NSMaxRange(range) {
+                                let character = native.rangeOfComposedCharacterSequence(at: offset)
+                                if let value = PDFNativeTextGeometry.hit(character, native: native, page: page, allowsSpacing: true) { result.append(value) }
+                                offset = NSMaxRange(character)
+                            }
+                        }
+                        return result
                     }
                 }
-                if let result = hits.min(by: { a, b in
+                if let result = prepared[index]?.filter({ $0.bounds.insetBy(dx: -1.5, dy: -1.5).contains(point) }).min(by: { a, b in
                     let ad = hypot(a.bounds.midX - point.x, a.bounds.midY - point.y)
                     let bd = hypot(b.bounds.midX - point.x, b.bounds.midY - point.y)
                     return ad == bd ? a.range.location < b.range.location : ad < bd
@@ -40,6 +56,9 @@ public enum PDFNativeTextGeometry {
             }
             return nil
         }
+    }
+    public static func character(at point: CGPoint, on page: PDFPage) -> CharacterHit? {
+        PageMap(page: page)?.character(at: point)
     }
     /// The middle source character's real rectangle, within this exact quote.
     /// A separator at the midpoint is skipped, never treated as the prior glyph.
@@ -60,10 +79,11 @@ public enum PDFNativeTextGeometry {
     private static func valid(_ range: NSRange, in native: NSString) -> Bool {
         range.location != NSNotFound && range.location >= 0 && range.length > 0 && range.location < native.length && range.length <= native.length - range.location
     }
-    private static func hit(_ range: NSRange, native: NSString, page: PDFPage) -> CharacterHit? {
+    private static func hit(_ range: NSRange, native: NSString, page: PDFPage, allowsSpacing: Bool = false) -> CharacterHit? {
         guard valid(range, in: native) else { return nil }
         let text = native.substring(with: range)
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard text.rangeOfCharacter(from: .newlines) == nil,
+              allowsSpacing || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let selection = page.selection(for: range), selection.string?.utf8.elementsEqual(text.utf8) == true else { return nil }
         let rect = selection.bounds(for: page)
         guard !rect.isEmpty, !rect.isNull, [rect.minX,rect.minY,rect.width,rect.height].allSatisfy(\.isFinite) else { return nil }

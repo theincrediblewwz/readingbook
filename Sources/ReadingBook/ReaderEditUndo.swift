@@ -85,6 +85,7 @@ struct ReaderEditUndoBridge: NSViewRepresentable {
         let router = Router()
         weak var installedRoot: NSView?
         private var menuObserver: NSObjectProtocol?
+        private var undoKeyMonitor: Any?
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); install() }
         func install() {
@@ -95,12 +96,22 @@ struct ReaderEditUndoBridge: NSViewRepresentable {
                 menuObserver = NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { [weak self] _ in
                     DispatchQueue.main.async { self?.router.bindMenus() }
                 }
+                // PDFKit and SwiftUI can consume the stock key equivalent
+                // before the bound menu target is called. Claim only an
+                // applicable reading edit in this window; native text editing
+                // and every other shortcut keep their normal dispatch.
+                undoKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                    guard let self, event.window === self.window,
+                          self.router.consumeReadingUndoKey(event) else { return event }
+                    return nil
+                }
             }
             router.bindMenus()
         }
         func uninstall() {
             if let root = installedRoot, root.nextResponder === router { root.nextResponder = router.nextResponder }
             if let menuObserver { NotificationCenter.default.removeObserver(menuObserver); self.menuObserver = nil }
+            if let undoKeyMonitor { NSEvent.removeMonitor(undoKeyMonitor); self.undoKeyMonitor = nil }
             router.unbindMenus(); installedRoot = nil; router.nextResponder = nil
         }
     }
@@ -108,6 +119,15 @@ struct ReaderEditUndoBridge: NSViewRepresentable {
         weak var store: AppStore?
         weak var window: NSWindow?
         private var textEditor: NSTextView? { NSApp.keyWindow?.firstResponder as? NSTextView }
+        func consumeReadingUndoKey(_ event: NSEvent) -> Bool {
+            let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+            guard event.charactersIgnoringModifiers?.lowercased() == "z",
+                  flags == .command || flags == [.command, .shift],
+                  window?.isKeyWindow == true, textEditor == nil, let store,
+                  store.readerEditUndo.canApply(store: store, redo: flags.contains(.shift)) else { return false }
+            if flags.contains(.shift) { redo(nil) } else { undo(nil) }
+            return true
+        }
         // A window can itself be the first responder after a context popover.
         // Its stock undo: stops the responder search even with no window undo
         // history. Bind just these native menu items explicitly, while keeping

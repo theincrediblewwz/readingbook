@@ -42,23 +42,23 @@ struct ReaderUnderlineStyleView: View {
     @State private var drafts: [ReaderAnnotationLineStyle: ReaderUnderlineAppearance]
     private let originals: [ReaderAnnotationLineStyle: ReaderUnderlineAppearance]
     private let existingStyles: Set<ReaderAnnotationLineStyle>
-    var onApply: ([ReaderAnnotationLineStyle: ReaderUnderlineAppearance]) async -> Bool
+    private let originalHighlight: ReaderHighlightAppearance
+    var onApply: ([ReaderAnnotationLineStyle: ReaderUnderlineAppearance], ReaderHighlightAppearance?) async -> Bool
     var onCancel: () -> Void
     @State private var highlight: ReaderHighlightAppearance
-    var onApplyHighlight: ((ReaderHighlightAppearance) async -> Bool)? = nil
     @State private var showsHighlight = false
     @State private var saving = false
     private let colors: [(Double, Double, Double)] = [(0.16,0.42,0.75),(0.1,0.57,0.48),(0.72,0.31,0.27),(0.65,0.42,0.12),(0.52,0.36,0.72),(0.25,0.28,0.31)]
     private var color: Color { Color(.sRGB, red: value.red, green: value.green, blue: value.blue, opacity: 1) }
     private var editsExisting: Bool { existingStyles.contains(lineStyle) }
     init(appearances: [ReaderAnnotationLineStyle: ReaderUnderlineAppearance], existingStyles: Set<ReaderAnnotationLineStyle>, initialStyle: ReaderAnnotationLineStyle,
-         onApply: @escaping ([ReaderAnnotationLineStyle: ReaderUnderlineAppearance]) async -> Bool, onCancel: @escaping () -> Void,
-         highlight: ReaderHighlightAppearance, onApplyHighlight: ((ReaderHighlightAppearance) async -> Bool)? = nil) {
+         onApply: @escaping ([ReaderAnnotationLineStyle: ReaderUnderlineAppearance], ReaderHighlightAppearance?) async -> Bool, onCancel: @escaping () -> Void,
+         highlight: ReaderHighlightAppearance) {
         originals = appearances; self.existingStyles = existingStyles
         _drafts = State(initialValue: appearances); _lineStyle = State(initialValue: initialStyle)
         _value = State(initialValue: appearances[initialStyle] ?? .init())
         _highlight = State(initialValue: highlight)
-        self.onApply = onApply; self.onCancel = onCancel; self.onApplyHighlight = onApplyHighlight
+        originalHighlight = highlight; self.onApply = onApply; self.onCancel = onCancel
     }
     private func select(_ style: ReaderAnnotationLineStyle) {
         drafts[lineStyle] = value
@@ -66,7 +66,7 @@ struct ReaderUnderlineStyleView: View {
     }
     private var changes: [ReaderAnnotationLineStyle: ReaderUnderlineAppearance] {
         var values = drafts; values[lineStyle] = value
-        return values.filter { $0.key == lineStyle || $0.value != originals[$0.key] }.mapValues { value in
+        return values.filter { (!showsHighlight && $0.key == lineStyle) || $0.value != originals[$0.key] }.mapValues { value in
             var line = value; line.highlighter = false; return line
         }
     }
@@ -75,7 +75,7 @@ struct ReaderUnderlineStyleView: View {
             HStack {
                 Text("标记样式").font(.title3.weight(.semibold)); Spacer()
                 Image(systemName: "info.circle").foregroundStyle(.secondary)
-                    .help("直线、波浪线与荧光分别设置。切换不会丢失未应用的划线调整；应用时保存本次调整，对应的当前划线也会更新，其他原有标记保持原样。")
+                    .help("直线、波浪线与荧光分别设置。切换会保留调整；点击应用时一并保存本次调整，对应的当前标记也会更新，其他原有标记保持原样。")
             }
             HStack(spacing: 8) {
                 ForEach(ReaderAnnotationLineStyle.allCases, id: \.self) { style in
@@ -126,10 +126,10 @@ struct ReaderUnderlineStyleView: View {
             }.toggleStyle(.switch).controlSize(.small)
             }
             HStack {
-                Text(showsHighlight ? "独立荧光标记" : editsExisting ? "当前划线与同类新划线" : "同类新划线的默认样式").font(.caption).foregroundStyle(.secondary)
+                Text("本次调整一起保存").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("取消", action: onCancel).buttonStyle(.bordered).keyboardShortcut(.cancelAction)
-                Button("应用") { saving = true; Task { if showsHighlight { _ = await onApplyHighlight?(highlight) } else { _ = await onApply(changes) }; saving = false } }
+                Button("应用") { saving = true; Task { _ = await onApply(changes, showsHighlight || highlight != originalHighlight ? highlight : nil); saving = false } }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             }
         }.padding(24).frame(width: 476).background(Palette.surface).disabled(saving)

@@ -3034,8 +3034,8 @@ struct PDFReaderView: NSViewRepresentable {
             return (style, appearance)
         })
         let view = ReaderUnderlineStyleView(appearances: initial, existingStyles: Set(existing.keys), initialStyle: existing[.straight] != nil || existing[.wavy] == nil ? .straight : .wavy,
-            onApply: { [weak self] appearances in
-                guard let self, !appearances.isEmpty, appearances.values.allSatisfy(\.isValid),
+            onApply: { [weak self] appearances, highlighter in
+                guard let self, !appearances.isEmpty || highlighter != nil, appearances.values.allSatisfy(\.isValid), highlighter?.isValid != false,
                       self.contextIsCurrent(generation, navigation, source) else { return false }
                 var updates: [ReaderAnnotation] = []
                 for style in ReaderAnnotationLineStyle.allCases {
@@ -3043,20 +3043,16 @@ struct PDFReaderView: NSViewRepresentable {
                     guard self.savedAnnotations.contains(record) else { self.setStatus("这条划线已在别处变化，请关闭后重新打开样式。"); return false }
                     var updated = record; updated.lineAppearance = appearance; updates.append(updated)
                 }
+                if let appearance = highlighter, var record = highlight {
+                    guard self.savedAnnotations.contains(record) else { return false }
+                    record.highlightAppearance = appearance; updates.append(record)
+                }
                 if !updates.isEmpty { guard await self.onSaveAnnotations?(updates) == true else { return false } }
                 for (style, appearance) in appearances { ReaderUnderlineDefaults.save(appearance, for: style) }
+                if let highlighter { ReaderHighlightDefaults.save(highlighter) }
                 self.closeAnnotationPanel(); return true
             }, onCancel: { [weak self] in self?.closeAnnotationPanel() },
-            highlight: highlight?.highlightAppearance ?? ReaderHighlightDefaults.value,
-            onApplyHighlight: { [weak self] appearance in
-                guard let self, appearance.isValid, self.contextIsCurrent(generation, navigation, source) else { return false }
-                if var highlight {
-                    guard self.savedAnnotations.contains(highlight) else { return false }
-                    highlight.highlightAppearance = appearance
-                    guard await self.onSaveAnnotations?([highlight]) == true else { return false }
-                }
-                ReaderHighlightDefaults.save(appearance); self.closeAnnotationPanel(); return true
-            })
+            highlight: highlight?.highlightAppearance ?? ReaderHighlightDefaults.value)
         presentAnnotationPanel(view, title: "标记样式", asSheet: true)
     }
 
@@ -3243,22 +3239,29 @@ private extension ReaderAnnotationColor {
     let startLength: Int
     var pointer: NSEvent
     var menuPresented = false
+    private var pageMaps: [ObjectIdentifier: PDFNativeTextGeometry.PageMap]
     init?(in view: PDFView, event: NSEvent) {
         let point = view.convert(event.locationInWindow, from: nil)
         guard let document = view.document, !document.isLocked, document.allowsCopying,
               let page = view.page(for: point, nearest: false), page.document === document else { return nil }
         let local = view.convert(point, to: page)
-        guard let hit = PDFNativeTextGeometry.character(at: local, on: page) else { return nil }
+        guard let map = PDFNativeTextGeometry.PageMap(page: page), let hit = map.character(at: local) else { return nil }
         self.document = document; self.page = page; startIndex = hit.range.location; startLength = hit.range.length; pointer = event
+        pageMaps = [ObjectIdentifier(page): map]
     }
-    func selection(in view: PDFView) -> PDFSelection? {
+    mutating func selection(in view: PDFView) -> PDFSelection? {
         guard view.document === document else { return nil }
         let point = view.convert(pointer.locationInWindow, from: nil)
         guard let endPage = view.page(for: point, nearest: true), endPage.document === document else { return nil }
         let local = view.convert(point, to: endPage), crop = endPage.readingSourceBounds(for: .cropBox)
         let end = CGPoint(x: min(crop.maxX - 0.01, max(crop.minX + 0.01, local.x)), y: min(crop.maxY - 0.01, max(crop.minY + 0.01, local.y)))
         let first = document.index(for: page), last = document.index(for: endPage)
-        guard let hit = PDFNativeTextGeometry.character(at: end, on: endPage), first != NSNotFound, last != NSNotFound else { return nil }
+        let key = ObjectIdentifier(endPage)
+        if pageMaps[key] == nil {
+            if pageMaps.count >= 3 { pageMaps = pageMaps.filter { $0.key == ObjectIdentifier(page) } }
+            pageMaps[key] = PDFNativeTextGeometry.PageMap(page: endPage)
+        }
+        guard let hit = pageMaps[key]?.character(at: end), first != NSNotFound, last != NSNotFound else { return nil }
         let endIndex = hit.range.location
         // PDFKit's point-based overload can choose a nearby line boundary.
         // Character indices keep the exact same endpoints in both directions.
@@ -3305,8 +3308,9 @@ private extension ReaderAnnotationColor {
                 guard selection.document === self.document else { self.cancelTrackpadSelection(); return nil }
                 if selection.menuPresented { self.readingContext.close() }
                 selection.pointer = event; selection.menuPresented = false
-                self.trackpadSelection = selection; self.trackpadSelectionRevision &+= 1
+                self.trackpadSelectionRevision &+= 1
                 if let value = selection.selection(in: self) { self.setCurrentSelection(value, animate: false) }
+                self.trackpadSelection = selection
                 _ = self.autoscroll(with: event)
                 return nil
             }

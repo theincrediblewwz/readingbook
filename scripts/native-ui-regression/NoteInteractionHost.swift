@@ -42,6 +42,12 @@ import PDFKit
                     let fields = Mirror(reflecting: pdf).children
                     value["indirectFingerCount"] = fields.first { $0.label == "indirectFingerCount" }?.value as? Int
                     if let active = fields.first(where: { $0.label == "trackpadSelection" })?.value { value["ownsTrackpadSelection"] = !Mirror(reflecting: active).children.isEmpty }
+                    if [.leftMouseDown,.leftMouseDragged,.leftMouseUp].contains(event.type) {
+                        value["windowPoint"] = NSStringFromPoint(event.locationInWindow)
+                        let point = pdf.convert(event.locationInWindow, from: nil)
+                        if let page = pdf.page(for: point, nearest: false) { value["sourcePoint"] = NSStringFromPoint(pdf.convert(point, to: page)) }
+                        value["currentSelection"] = String((pdf.currentSelection?.string ?? "").prefix(256))
+                    }
                 }
                 if [.leftMouseDown,.leftMouseDragged,.leftMouseUp].contains(event.type) { value["mouseSubtype"] = event.subtype.rawValue }
                 if event.type == .gesture {
@@ -171,6 +177,13 @@ import PDFKit
             // Independent physical glyph positions from the fixed Songti fixture.
             // Native characterBounds indices themselves skip inserted newlines.
             let startPointer = try pointerEvent(page, .init(x: 45, y: 685)), endPointer = try pointerEvent(page, .init(x: 265, y: 685), type: .leftMouseDragged)
+            let cells = try XCT(PDFNativeTextGeometry.PageMap(page: page))
+            checks["EveryPhysicalChineseCellTracksItsOwnNativeCharacter"] = (0..<range.length).allSatisfy {
+                cells.character(at: .init(x: 45 + Double($0)*20, y: 685))?.range.location == range.location + $0
+            }
+            checks["ChineseCellEmptyAreasDoNotFreezeTextSelection"] = [672.0,696.0].allSatisfy { y in
+                (0..<range.length).allSatisfy { cells.character(at: .init(x: 45 + Double($0)*20, y: y))?.range.location == range.location + $0 }
+            }
             var forward = try XCT(PDFTrackpadTextSelection(in: pdf, event: startPointer)); forward.pointer = endPointer
             var reverse = try XCT(PDFTrackpadTextSelection(in: pdf, event: endPointer)); reverse.pointer = startPointer
             checks["TrackpadSelectionForwardKeepsExactNativeQuote"] = forward.selection(in: pdf)?.string?.trimmingCharacters(in: .whitespacesAndNewlines) == nativeQuote
@@ -212,6 +225,19 @@ import PDFKit
             checks["NativeResponderFindsReadingRedo"] = NSApp.sendAction(NSSelectorFromString("redo:"), to: nil, from: nil)
             checks["NativeRedoRestoresMark"] = await wait { self.store.book?.readerAnnotations?.contains { $0.trashedAt == nil && $0.lineStyle == .wavy } == true }
             _ = await wait { !self.store.readerEditUndo.applying && !self.store.isBusy }
+            // Feed the application event queue, rather than invoking a router
+            // method. This covers the native key-equivalent path that a full
+            // SwiftUI app can consume before its menu target is called.
+            window.makeFirstResponder(window)
+            for (redo, name) in [(false, "ApplicationKeyQueueCmdZUndoesReadingEdit"), (true, "ApplicationKeyQueueShiftCmdZRedoesReadingEdit")] {
+                let event = try XCT(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                    modifierFlags: redo ? [.command, .shift] : .command, timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, characters: redo ? "Z" : "z",
+                    charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6))
+                NSApp.postEvent(event, atStart: false)
+                checks[name] = await wait { self.store.book?.readerAnnotations?.contains { $0.lineStyle == .wavy && ($0.trashedAt == nil) == redo } == true }
+                _ = await wait { !self.store.readerEditUndo.applying && !self.store.isBusy }
+            }
             let refreshed = reader.sentenceMarkActions(page: page, point: point)
             try XCT(refreshed.first { $0.title == "添加荧光标记" }).action()
             checks["HighlightActionMakesSeparateDurableRecord"] = await wait { (self.store.book?.readerAnnotations?.filter { $0.trashedAt == nil }.count ?? 0) == 2 }
