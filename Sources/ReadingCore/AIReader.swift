@@ -132,6 +132,25 @@ public actor AIReader {
         }
     }
 
+    /// One frozen, user-authorized part of a whole-book search. No writing or
+    /// retrieval tools, saved analysis, conversation history or notes are sent.
+    public func prepareWholeBookSearchIntent(query: String, languageProfile: LibrarySearchLanguageProfile,
+                                            settings: ProviderSettings, apiKey: String) async throws -> WholeBookSearchIntent {
+        try beginOperation(settings: settings); defer { operationActive = false }
+        let result = try await LibrarySearchAIEngine.generateWithUsage(query: query, languageProfile: languageProfile, settings: settings) { [self] messages, bounded, budget in
+            try await self.request(messages: messages, tools: [], settings: bounded, apiKey: apiKey, remainingTokens: budget)
+        }
+        return .init(keywords: result.plan.keywords, tokenCost: result.tokenCost)
+    }
+
+    public func searchWholeBookBatch(_ batch: WholeBookSearchBatch, keywords: [String] = [], settings: ProviderSettings,
+                                     apiKey: String) async throws -> WholeBookSearchBatchResult {
+        try beginOperation(settings: settings); defer { operationActive = false }
+        return try await WholeBookSearchEngine.execute(batch, keywords: keywords, settings: settings) { [self] messages, bounded, budget in
+            try await self.request(messages: messages, tools: [], settings: bounded, apiKey: apiKey, remainingTokens: budget)
+        }
+    }
+
     /// User-started navigation only. The model selects frozen candidate IDs;
     /// it receives no writing tools and cannot invent a page or source quote.
     public func generateBookOutline(request: BookOutlineBatch, settings: ProviderSettings, apiKey: String) async throws -> [BookOutlineEntry] {

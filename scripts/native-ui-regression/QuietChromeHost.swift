@@ -5,6 +5,32 @@ import ImageIO
 @testable import ReadingCore
 @testable import ReadingBook
 
+actor QuietSearchFixtureTransport {
+    var steps: [String] = []
+    let output: URL
+    init(_ output: URL) { self.output = output }
+    func handle(_ request: ProviderClient.Prepared) async throws -> ProviderClient.Result {
+        let body = try JSONSerialization.jsonObject(with: request.request.httpBody!) as! [String: Any]
+        let messages = body["messages"] as! [[String: Any]]
+        let payload = try JSONSerialization.jsonObject(with: Data((messages[1]["content"] as! String).utf8)) as! [String: Any]
+        var result: [String: Any]
+        if let parts = payload["parts"] as? [[String: Any]] {
+            steps.append("read")
+            result = ["matches": parts.compactMap { part -> [String: String]? in
+                guard (part["text"] as! String).contains("寒舍商议") else { return nil }
+                return ["partID": part["id"] as! String, "quote": "寒舍商议", "reason": "邀请对方到家中讨论事情"]
+            }]
+        } else {
+            steps.append("intent")
+            let query = payload["query"] as? String ?? ""
+            result = ["keywords": query.contains("貂") ? ["貂蝉", "貂蟬"] : ["寒舍", "商议"]]
+        }
+        try JSONSerialization.data(withJSONObject: ["requestKinds": steps, "realNetworkRequests": 0], options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("fixture-requests.json"), options: .atomic)
+        try await Task.sleep(for: .milliseconds(180))
+        return .init(message: .init(role: "assistant", content: String(decoding: try JSONSerialization.data(withJSONObject: result), as: UTF8.self), refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 100)
+    }
+}
+
 @MainActor final class QuietChromeRunner: NSObject, NSApplicationDelegate, ObservableObject {
     let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["QUIET_CHROME_DIR"]!)
     var store: AppStore!, window: NSWindow!, tools: NSWindow!
@@ -18,7 +44,13 @@ import ImageIO
             UserDefaults.standard.setVolatileDomain(["library.root.path.v1": directory.appendingPathComponent("library").path,
                 "service-profiles": Data("[]".utf8), "reader.hoverAutoTranslation": false,
                 "appearance.reduceMotion": false, "NSQuitAlwaysKeepsWindows": false], forName: UserDefaults.argumentDomain)
-            store = AppStore()
+            let searchFixture = ProcessInfo.processInfo.environment["QUIET_SEARCH_FIXTURE"] == "1"
+            if searchFixture {
+                let transport = QuietSearchFixtureTransport(directory)
+                store = AppStore(sharedAIRequests: AIRequestCoordinator(transport: { try await transport.handle($0) }))
+                store.settings = ProviderSettings(model: "隔离模拟服务", maxRequestsPerRun: 100, maxOutputTokens: 512, contextWindowTokens: 16_000)
+                store.apiKey = ""
+            } else { store = AppStore() }
             if ProcessInfo.processInfo.environment["QUIET_USE_LIBRARY"] != "1" {
             let source = directory.appendingPathComponent("fixture.pdf")
             var box = CGRect(x: 0, y: 0, width: 600, height: 800)
@@ -27,14 +59,14 @@ import ImageIO
                 graphics.beginPDFPage(nil); NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = NSGraphicsContext(cgContext: graphics, flipped: false)
                 for line in 0..<14 {
-                    let text = line == 2 || line == 5 ? "Same sentence. This is the second part." : "Page \(page), line \(line). Reading should stay calm and clear."
+                    let text = searchFixture && line == 3 ? "貂蟬在此。请到寒舍商议。" : line == 2 || line == 5 ? "Same sentence. This is the second part." : "Page \(page), line \(line). Reading should stay calm and clear."
                     NSString(string: text).draw(at: CGPoint(x: 35, y: 720 - line * 40), withAttributes: [.font: NSFont.systemFont(ofSize: 16), .foregroundColor: NSColor.black])
                 }
                 NSGraphicsContext.restoreGraphicsState(); graphics.endPDFPage()
             }
             graphics.closePDF()
             let imported = try await BookImporter.importFile(at: source)
-            for index in 1...20 {
+            for index in 1...(searchFixture ? 1 : 20) {
                 var project = BookProject(title: "隔离书 \(String(format: "%02d", index)) · 这是一个需要完整显示的长书名", originalName: "fixture.pdf", sourceHash: imported.sourceHash, units: imported.units)
                 PluginEngine.seed(&project); project = try await store.repository.create(project, sourceURL: source)
                 store.books.append(project)
@@ -73,10 +105,11 @@ import ImageIO
         for (title, action, key) in [("剪切", #selector(NSText.cut(_:)), "x"), ("复制", #selector(NSText.copy(_:)), "c"), ("粘贴", #selector(NSText.paste(_:)), "v"), ("全选", #selector(NSText.selectAll(_:)), "a")] { editMenu.addItem(withTitle: title, action: action, keyEquivalent: key) }
         for (title, action, key) in [("阅读", #selector(goReader), "1"), ("书库", #selector(goLibrary), "2"),
             ("合成封面", #selector(crop), "3"), ("记录现场", #selector(capture), "4"), ("添加合成便签", #selector(seedNote), "5"),
-            ("窄窗", #selector(narrow), "7"), ("宽窗", #selector(wide), "8")] {
+            ("打开检索", #selector(search), "6"), ("窄窗", #selector(narrow), "7"), ("宽窗", #selector(wide), "8")] {
             let item = testMenu.addItem(withTitle: title, action: action, keyEquivalent: key); item.target = self
         }
     }
+    @objc func search() { store.showingLibrarySearch = true; window.makeKeyAndOrderFront(nil) }
     @objc func goReader() { route("reader") }
     @objc func goLibrary() { route("library") }
     @objc func narrow() { window.setContentSize(.init(width: 800, height: 640)) }

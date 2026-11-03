@@ -7,6 +7,11 @@ enum LibrarySearchAIEngine {
 
     static func generate(query: String, languageProfile: LibrarySearchLanguageProfile, settings: ProviderSettings,
                          requestProvider: Request) async throws -> LibrarySearchExpansionPlan {
+        try await generateWithUsage(query: query, languageProfile: languageProfile, settings: settings, requestProvider: requestProvider).plan
+    }
+
+    static func generateWithUsage(query: String, languageProfile: LibrarySearchLanguageProfile, settings: ProviderSettings,
+                                  requestProvider: Request) async throws -> (plan: LibrarySearchExpansionPlan, tokenCost: Int) {
         try Task.checkCancellation()
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, query.count <= 400, !query.utf8.contains(0) else {
@@ -41,6 +46,6 @@ enum LibrarySearchAIEngine {
         try ReadingTokenBudget.charge(result.tokenCost, to: &consumed, limit: budget)
         let plan = try LibrarySearchExpansionPlan.parse(result.message.content ?? "")
         try Task.checkCancellation()
-        return plan
+        return (plan, consumed)
     }
 }

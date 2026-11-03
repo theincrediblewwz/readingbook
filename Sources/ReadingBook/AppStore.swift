@@ -141,6 +141,7 @@ import ReadingCore
     var workspaceAIResponses: [UUID: Data] = [:]
     @Published var readingExperienceError: String?
     @Published var showingLibrarySearch = false
+    @Published var libraryAISearchQuery: String?
     @Published var readingContextDocumentID: String?
     @Published var queryHistoryMessageID: String?
     var readingContextCacheKey: ReadingContext?

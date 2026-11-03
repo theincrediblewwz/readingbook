@@ -83,6 +83,8 @@ jobs:
         run: python3 scripts/native-ui-regression/run-page-notes.py --bin-dir .build/tests/debug --tag ci-page-notes
       - name: Native Chinese search and scoped record browser regression
         run: python3 scripts/native-ui-regression/run-ux-refinement.py --bin-dir .build/tests/debug --tag ci-ux-refinement
+      - name: Native AI search intent and full-book flow regression
+        run: python3 scripts/native-ui-regression/run-ai-search-flow.py --bin-dir .build/tests/debug --tag ci-ai-search-flow
       - name: Rendered note mode transition regression
         run: |
           python3 scripts/native-ui-regression/run-note-mode-transitions.py --bin-dir .build/tests/debug --tag ci-mode-transitions-legacy --scroller-style legacy
@@ -166,6 +168,14 @@ jobs:
         with:
           name: failed-ux-refinement-evidence
           path: logs/ux-search-performance-20261103/ci-ux-refinement
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Preserve failed AI search flow evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-ai-search-flow-evidence
+          path: logs/ai-search-20261103/ci-ai-search-flow
           if-no-files-found: ignore
           retention-days: 3
       - name: Build universal app and package

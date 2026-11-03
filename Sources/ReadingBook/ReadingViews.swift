@@ -100,7 +100,16 @@ struct ReaderWorkspaceView: View {
                                          let unit = store.book?.units.first(where: { $0.page == page }),
                                          store.book?.bookmarks.contains(unit.id) == false else { return }
                                    Task { await store.toggleBookmark(unit.id) }
-                               }, noteBindingDocumentID: store.positionNoteBinding?.documentID)
+                               }, noteBindingDocumentID: store.positionNoteBinding?.documentID, onAISearch: { query in
+                                   guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
+                                         store.book?.sourceHash == preparationSourceHash else { return }
+                                   store.libraryAISearchQuery = query; store.showingLibrarySearch = true
+                               }, onSearchKeywords: store.settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : { query in
+                                   let owner = WorkspacePickerOwner(store: store)
+                                   guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
+                                         store.book?.sourceHash == preparationSourceHash else { throw CancellationError() }
+                                   return try await store.inferNativeSearchKeywords(query, owner: owner)
+                               }, searchAIIdentity: store.readingSearchAIIdentity)
                             .id(store.pdfDisplayReloadID)
                             .environment(\.workspaceCanvasBlocked, interactionBlocked || noteFan != nil || store.positionNoteRequest != nil)
                         } else if isPDF, showPDF {

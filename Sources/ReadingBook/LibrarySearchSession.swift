@@ -11,7 +11,7 @@ import ReadingCore
     @Published private(set) var expanding = false
     @Published var errorMessage = ""
 
-    private struct Input: Sendable {
+    private struct Input: Equatable, Sendable {
         let query: String
         let snapshots: [LibrarySourceSnapshot]
         let bookID: String?
@@ -23,10 +23,11 @@ import ReadingCore
     private var expansionTask: Task<Void, Never>?
 
     func schedule(query: String, snapshots: [LibrarySourceSnapshot], bookID: String?, root: String, debounce: Bool = true) {
-        cancel()
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let next = Input(query: text, snapshots: snapshots, bookID: bookID, root: root)
-        input = next; response = nil; languageProfile = nil; expandedKeywords = []; errorMessage = ""
+        let retainedKeywords = input == next ? expandedKeywords : []
+        cancel()
+        input = next; response = nil; languageProfile = nil; expandedKeywords = retainedKeywords; errorMessage = ""
         guard !text.isEmpty else { return }
         let owner = generation
         searching = true
@@ -35,7 +36,7 @@ import ReadingCore
                 if debounce { try await Task.sleep(nanoseconds: 240_000_000) }
                 try Task.checkCancellation()
                 let worker = Task.detached(priority: .userInitiated) {
-                    let result = try LibraryTextSearch.search(query: text, snapshots: snapshots, bookID: bookID)
+                    let result = try LibraryTextSearch.search(query: text, snapshots: snapshots, bookID: bookID, additionalQueries: retainedKeywords)
                     let language = try LibrarySearchLanguageProfile.identify(in: snapshots, bookID: bookID)
                     return (result, language)
                 }
@@ -50,7 +51,7 @@ import ReadingCore
         }
     }
 
-    /// Explicitly user-started. Existing local results remain usable while the
+    /// Called after stable ordinary input or an explicit search. Local results remain usable while the
     /// model suggests words; only real matches from the frozen scope are shown.
     func expand(using operation: @escaping @Sendable (String, LibrarySearchLanguageProfile) async throws -> LibrarySearchExpansionPlan) {
         guard let input, !input.query.isEmpty, !expanding else { return }

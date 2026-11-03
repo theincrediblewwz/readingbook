@@ -706,7 +706,7 @@ struct WorkspaceView: View {
     @ViewBuilder private func auxiliaryOverlay(_ owner: WorkspaceAuxiliaryPresentation, viewport: CGSize) -> some View {
         WorkspaceAuxiliaryShell(kind: owner.kind, viewport: viewport, dismiss: { requestNavigation(.dismissAuxiliary(owner.id)) }) {
             if owner.kind == .search {
-                LibrarySearchView(embedded: true,
+                LibrarySearchView(embedded: true, initialQuery: store.libraryAISearchQuery ?? "", initialAIRead: store.libraryAISearchQuery != nil,
                     onClose: { requestNavigation(.dismissAuxiliary(owner.id)) },
                     onPrepareResultNavigation: { action in prepareSearchResult(owner: owner, action: action) },
                     onNavigateToResult: { requestNavigation(.searchResult(owner.id)) })
