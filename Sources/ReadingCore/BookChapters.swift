@@ -399,7 +399,8 @@ extension BookChapterRuntime {
                 let lead = row.prefix(while: \.isWhitespace), first = rowOffset + String(lead).utf16.count
                 defer { rowOffset += row.utf16.count + 1 }
                 guard let nativeOffset = proof.nativeIndex(first), !row.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
-                let bounds = page.characterBounds(at: nativeOffset)
+                guard let native = page.string as NSString?, nativeOffset < native.length,
+                      let bounds = PDFNativeTextGeometry.midpoint(in: native.rangeOfComposedCharacterSequence(at: nativeOffset), on: page) else { continue }
                 if !bounds.isEmpty, bounds.minX.isFinite, bounds.minY.isFinite {
                     proof.lines.append(PageLine(start: rowOffset, bounds: bounds))
                 }

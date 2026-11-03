@@ -1,3 +1,5 @@
+> 2026-11-04：0.23.45/build76 正在验收，尚未发布或替换安装，本机仍44/75。原书库未覆盖，dirty进度文档SHA仍9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，禁止编辑提交。45首候选源acefc89已推main；用户实测发现三指选区错位后，取消了仍排队的CI41668136132，不能称该轮通过。当前坐标修正已有14 Core/52本机断言与60原生通过，真实三指窗口visible-ui-12正等待复查。交付草稿在logs/note-interaction-20261103/delivery45，尚无最终回执。下方44及旧版本均是历史，不代表45已交付。
+
 > 2026-11-03：0.23.44/build75 已完成发布、替换本机安装和原书两次正常启动验收；当前无解锁/发布/安装待办。产品源ee7ddf776b189c96431ba7c2d8045935665c2726，CI41619128356通过863 Core、206指定、新49原生及全部旧门槛；artifact13224593440，Release432586068。最终回执 logs/ai-search-20261103/delivery44/final-delivery.json；ready-awaiting-unlock.json为历史。用户dirty进度文档禁止编辑提交，SHA仍9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4。
 
 普通搜索自动AI纠错、翻译和相关词；新AI按钮只有理解意图→阅读全文。原书Native输入“貂”不按回车61处，AI入口显示繁体中文、41次请求估算，未点击原书开始。About44/75、104页277%和“你好”便签、正常退出后第二次启动保持；31成员、25非Workspace字节及全部偏好保留，没有用测试副本覆盖原库。保护和最新43回滚在private-books/ai-search-20261103/install-before-0.23.44。

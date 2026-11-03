@@ -163,10 +163,8 @@ public enum ReaderAnnotationCapture {
     public static func sentence(at point: CGPoint, page: PDFPage, document: PDFDocument, sourceHash: String) throws -> ReaderAnnotation? {
         guard page.document === document, let text = page.string, text.utf8.count <= 2_000_000,
               point.x.isFinite, point.y.isFinite else { return nil }
-        let index = page.characterIndex(at: point)
-        guard index >= 0, index < page.numberOfCharacters,
-              page.characterBounds(at: index).insetBy(dx: -1.5, dy: -1.5).contains(point),
-              let range = ReadingSentenceAnchors.ranges(in: text).first(where: { NSLocationInRange(index, $0) }) else { return nil }
+        guard let hit = PDFNativeTextGeometry.character(at: point, on: page),
+              let range = ReadingSentenceAnchors.ranges(in: text).first(where: { NSLocationInRange(hit.range.location, $0) }) else { return nil }
         return try sentence(range: range, page: page, document: document, sourceHash: sourceHash, point: point)
     }
     /// A context command must physically hit this exact native text range.

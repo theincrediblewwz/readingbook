@@ -164,16 +164,18 @@ import PDFKit
             observations["nativePDFText"] = nativeText as String
             guard range.location != NSNotFound, !nativeQuote.isEmpty else { throw ReadingError.invalid("Chinese fixture text missing") }
             let glyph = page.characterBounds(at: range.location + 3), point = CGPoint(x: glyph.midX, y: glyph.midY)
-            func pointerEvent(_ page: PDFPage, _ index: Int, type: NSEvent.EventType = .leftMouseDown) throws -> NSEvent {
-                let glyph = page.characterBounds(at: index), point = pdf.convert(CGPoint(x: glyph.midX, y: glyph.midY), from: page)
+            func pointerEvent(_ page: PDFPage, _ sourcePoint: CGPoint, type: NSEvent.EventType = .leftMouseDown) throws -> NSEvent {
+                let point = pdf.convert(sourcePoint, from: page)
                 return try XCT(NSEvent.mouseEvent(with: type, location: pdf.convert(point, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
             }
-            let startPointer = try pointerEvent(page, range.location), endPointer = try pointerEvent(page, range.location + range.length - 1, type: .leftMouseDragged)
+            // Independent physical glyph positions from the fixed Songti fixture.
+            // Native characterBounds indices themselves skip inserted newlines.
+            let startPointer = try pointerEvent(page, .init(x: 45, y: 685)), endPointer = try pointerEvent(page, .init(x: 265, y: 685), type: .leftMouseDragged)
             var forward = try XCT(PDFTrackpadTextSelection(in: pdf, event: startPointer)); forward.pointer = endPointer
             var reverse = try XCT(PDFTrackpadTextSelection(in: pdf, event: endPointer)); reverse.pointer = startPointer
             checks["TrackpadSelectionForwardKeepsExactNativeQuote"] = forward.selection(in: pdf)?.string?.trimmingCharacters(in: .whitespacesAndNewlines) == nativeQuote
             checks["TrackpadSelectionReverseKeepsExactNativeQuote"] = reverse.selection(in: pdf)?.string?.trimmingCharacters(in: .whitespacesAndNewlines) == nativeQuote
-            let nextPage = try XCT(document.page(at: 1)); forward.pointer = try pointerEvent(nextPage, range.location + range.length - 1, type: .leftMouseDragged)
+            let nextPage = try XCT(document.page(at: 1)); forward.pointer = try pointerEvent(nextPage, .init(x: 265, y: 685), type: .leftMouseDragged)
             checks["TrackpadSelectionRetainsNativeCrossPageRanges"] = forward.selection(in: pdf)?.pages.count == 2 && forward.selection(in: pdf)?.string?.contains(nativeQuote) == true
             checks["TrackpadSelectionCannotLeakIntoAnotherDocument"] = forward.selection(in: PDFView()) == nil
             let actions = reader.sentenceMarkActions(page: page, point: point)
@@ -230,8 +232,8 @@ import PDFKit
             store.readingCompanionVisible = false
             try XCT(reader.sentenceMarkActions(page: page, point: point).first { $0.title == "为所选文字写便签" }).action()
             checks["SentenceNoteBindsQuoteAndExactNativeRange"] = store.positionNoteRequest?.placement?.quote?.text == nativeQuote && store.positionNoteRequest?.placement?.quote?.ranges.first?.location == range.location
-            let midpoint = page.characterBounds(at: range.location + range.length / 2), crop = page.readingSourceBounds(for: .cropBox)
-            checks["SentenceNoteStartsAtMiddleCharacter"] = abs((store.positionNoteRequest?.placement?.x ?? -1) - (midpoint.midX-crop.minX)/crop.width) < 0.0001 && abs((store.positionNoteRequest?.placement?.y ?? -1) - (midpoint.midY-crop.minY)/crop.height) < 0.0001
+            let midpoint = try XCT(PDFNativeTextGeometry.midpoint(in: range, on: page)), crop = page.readingSourceBounds(for: .cropBox)
+            checks["SentenceNoteStartsAtMiddleCharacter"] = abs(midpoint.midX - 165) < 1 && abs((store.positionNoteRequest?.placement?.x ?? -1) - (midpoint.midX-crop.minX)/crop.width) < 0.0001 && abs((store.positionNoteRequest?.placement?.y ?? -1) - (midpoint.midY-crop.minY)/crop.height) < 0.0001
             if let request = store.positionNoteRequest { store.discardPositionNoteDraft(request) }; store.positionNoteRequest = nil; await settle()
             let selection = try XCT(page.selection(for: range))
             let selectedActions = reader.sentenceMarkActions(page: page, point: point, selection: selection)

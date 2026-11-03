@@ -80,6 +80,29 @@ final class ReadingInteractionTests: XCTestCase {
         let rotated = try XCTUnwrap(ReaderAnnotationCapture.sentence(at: point, page: page, document: pdf, sourceHash: "hash"))
         XCTAssertEqual(rotated.rangeLocation, range.location)
     }
+    func testPhysicalSecondLineHitUsesNativeRangeInsteadOfGlyphIndex() throws {
+        let pdf = try XCTUnwrap(PDFDocument(data: pdfData())), page = try XCTUnwrap(pdf.page(at: 0))
+        let source = try XCTUnwrap(page.string) as NSString, expected = source.range(of: "A third sentence to discuss.")
+        // Independent oracle: the fixture draws this line at (30,400), in
+        // 16-point Helvetica. Do not derive the point from characterBounds.
+        let point = CGPoint(x: 34, y: 405), hit = try XCTUnwrap(PDFNativeTextGeometry.character(at: point, on: page))
+        XCTAssertEqual(hit.range.location, expected.location)
+        XCTAssertTrue(hit.bounds.contains(point))
+        let mark = try XCTUnwrap(ReaderAnnotationCapture.sentence(at: point, page: page, document: pdf, sourceHash: "hash"))
+        XCTAssertEqual(mark.text, "A third sentence to discuss.")
+        XCTAssertEqual(mark.rangeLocation, expected.location)
+        XCTAssertNil(PDFNativeTextGeometry.character(at: .init(x: 410, y: 20), on: page))
+    }
+    func testQuotedMidpointUsesItsOwnPhysicalLineAfterNewlines() throws {
+        let pdf = try XCTUnwrap(PDFDocument(data: pdfData())), page = try XCTUnwrap(pdf.page(at: 0))
+        let source = try XCTUnwrap(page.string) as NSString, range = source.range(of: "A third sentence to discuss.")
+        let rect = try XCTUnwrap(PDFNativeTextGeometry.midpoint(in: range, on: page))
+        XCTAssertTrue(rect.midY > 395 && rect.midY < 420)
+        let hit = try XCTUnwrap(PDFNativeTextGeometry.character(at: .init(x: rect.midX, y: rect.midY), on: page))
+        XCTAssertTrue(NSLocationInRange(hit.range.location, range))
+        XCTAssertEqual(page.selection(for: hit.range)?.string, source.substring(with: hit.range))
+        XCTAssertNil(PDFNativeTextGeometry.midpoint(in: .init(location: source.length + 1, length: 1), on: page))
+    }
     func testMarkUndoRedoRetainsConcurrentAnalysisAndOriginalPDF() async throws {
         let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
         let (repository, book, data) = try await fixture(root)

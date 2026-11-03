@@ -2989,8 +2989,7 @@ struct PDFReaderView: NSViewRepresentable {
                   let first = targets.first, let targetPage = document.page(at: first.page - 1) else { return }
             // The middle source character, rather than a union of wrapped line
             // rectangles, is the physical anchor of the selected sentence.
-            let index = first.rangeLocation + first.rangeLength / 2
-            let rect = targetPage.characterBounds(at: min(targetPage.numberOfCharacters - 1, index))
+            guard let rect = PDFNativeTextGeometry.midpoint(in: .init(location: first.rangeLocation, length: first.rangeLength), on: targetPage) else { return }
             let crop = targetPage.readingSourceBounds(for: .cropBox)
             guard !rect.isEmpty, crop.contains(.init(x: rect.midX, y: rect.midY)), crop.width > 0, crop.height > 0 else { return }
             let quote = ReadingNoteSourceQuote(text: targets.map(\.text).joined(separator: "\n"), ranges: targets.map { .init(page: $0.page, location: $0.rangeLocation, length: $0.rangeLength) })
@@ -3241,16 +3240,16 @@ private extension ReaderAnnotationColor {
     let document: PDFDocument
     let page: PDFPage
     let startIndex: Int
+    let startLength: Int
     var pointer: NSEvent
     var menuPresented = false
     init?(in view: PDFView, event: NSEvent) {
         let point = view.convert(event.locationInWindow, from: nil)
         guard let document = view.document, !document.isLocked, document.allowsCopying,
               let page = view.page(for: point, nearest: false), page.document === document else { return nil }
-        let local = view.convert(point, to: page), index = page.characterIndex(at: local)
-        guard index >= 0, index < page.numberOfCharacters,
-              page.characterBounds(at: index).insetBy(dx: -5, dy: -5).contains(local) else { return nil }
-        self.document = document; self.page = page; startIndex = index; pointer = event
+        let local = view.convert(point, to: page)
+        guard let hit = PDFNativeTextGeometry.character(at: local, on: page) else { return nil }
+        self.document = document; self.page = page; startIndex = hit.range.location; startLength = hit.range.length; pointer = event
     }
     func selection(in view: PDFView) -> PDFSelection? {
         guard view.document === document else { return nil }
@@ -3258,14 +3257,15 @@ private extension ReaderAnnotationColor {
         guard let endPage = view.page(for: point, nearest: true), endPage.document === document else { return nil }
         let local = view.convert(point, to: endPage), crop = endPage.readingSourceBounds(for: .cropBox)
         let end = CGPoint(x: min(crop.maxX - 0.01, max(crop.minX + 0.01, local.x)), y: min(crop.maxY - 0.01, max(crop.minY + 0.01, local.y)))
-        let endIndex = endPage.characterIndex(at: end), first = document.index(for: page), last = document.index(for: endPage)
-        guard endIndex >= 0, endIndex < endPage.numberOfCharacters, first != NSNotFound, last != NSNotFound else { return nil }
+        let first = document.index(for: page), last = document.index(for: endPage)
+        guard let hit = PDFNativeTextGeometry.character(at: end, on: endPage), first != NSNotFound, last != NSNotFound else { return nil }
+        let endIndex = hit.range.location
         // PDFKit's point-based overload can choose a nearby line boundary.
         // Character indices keep the exact same endpoints in both directions.
         if first > last || first == last && startIndex > endIndex {
-            return document.selection(from: endPage, atCharacterIndex: endIndex, to: page, atCharacterIndex: startIndex)
+            return document.selection(from: endPage, atCharacterIndex: endIndex, to: page, atCharacterIndex: startIndex + startLength - 1)
         }
-        return document.selection(from: page, atCharacterIndex: startIndex, to: endPage, atCharacterIndex: endIndex)
+        return document.selection(from: page, atCharacterIndex: startIndex, to: endPage, atCharacterIndex: NSMaxRange(hit.range) - 1)
     }
 }
 
