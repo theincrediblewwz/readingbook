@@ -4,6 +4,13 @@ public enum ReadingRecordGrouping: String, Codable, CaseIterable, Sendable {
     case date, chapter, none
     public var title: String { switch self { case .date: return "日期"; case .chapter: return "章节"; case .none: return "不分组" } }
 }
+/// Transient input for a visible row's bounded hint. Never persisted and never
+/// admitted to AI context through this display projection.
+public struct ReadingRecordPreviewInput: Hashable, Sendable {
+    public let markdown: String
+    public let title: String
+    public func make() -> String { FoldedReadingPreview.make(markdown, title: title) }
+}
 public struct ReadingRecordDescriptor: Identifiable, Hashable, Sendable {
     public let id: String
     public let title: String
@@ -12,6 +19,7 @@ public struct ReadingRecordDescriptor: Identifiable, Hashable, Sendable {
     public let chapterTitle: String
     public let chapterOrder: Int
     public var preview: String = ""
+    public var deferredPreview: ReadingRecordPreviewInput? = nil
 }
 public struct ReadingRecordGroup: Identifiable, Hashable, Sendable {
     public let id: String
@@ -21,6 +29,13 @@ public struct ReadingRecordGroup: Identifiable, Hashable, Sendable {
 public struct ReadingRecordCatalog: Sendable {
     public let records: [String: ReadingRecordDescriptor]
     public static func prepare(in project: BookProject) throws -> Self {
+        try prepare(in: project, recordIDs: nil)
+    }
+    /// A browser asks only for its offered records. Unrequested identities are
+    /// still checked for duplicates; their bodies need no display projection.
+    /// This does not change saved records, automatic context or authorization.
+    public static func prepare(in project: BookProject, recordIDs: Set<String>?, deferredPreviews: Bool = false) throws -> Self {
+        try Task.checkCancellation()
         let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var chapterByUnit: [String: (key: String, title: String, order: Int)] = [:]
         if let index = try? BookChapterRuntime.index(in: project) {
@@ -46,11 +61,20 @@ public struct ReadingRecordCatalog: Sendable {
             return first
         }
         var result: [String: ReadingRecordDescriptor] = [:]
+        var encountered = Set<String>()
         func add(_ id: String, _ title: String, _ date: Date?, _ sourceIDs: [String], body: String = "") throws {
-            guard result[id] == nil else { throw ReadingError.invalid("记录身份重复，未合并或丢弃原内容。") }
+            try Task.checkCancellation()
+            if let recordIDs {
+                guard encountered.insert(id).inserted else { throw ReadingError.invalid("记录身份重复，未合并或丢弃原内容。") }
+                guard recordIDs.contains(id) else { return }
+            } else {
+                guard result[id] == nil else { throw ReadingError.invalid("记录身份重复，未合并或丢弃原内容。") }
+            }
             let scope = chapter(sourceIDs)
             result[id] = .init(id: id, title: title.isEmpty ? "未命名记录" : title, date: date,
-                               chapterKey: scope.0, chapterTitle: scope.1, chapterOrder: scope.2, preview: FoldedReadingPreview.make(body, title: title))
+                               chapterKey: scope.0, chapterTitle: scope.1, chapterOrder: scope.2,
+                               preview: deferredPreviews ? "" : FoldedReadingPreview.make(body, title: title),
+                               deferredPreview: deferredPreviews && !body.isEmpty ? .init(markdown: body, title: title) : nil)
         }
         for document in project.activeDocuments {
             try Task.checkCancellation()

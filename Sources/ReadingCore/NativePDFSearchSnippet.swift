@@ -1,5 +1,25 @@
 import Foundation
 
+/// A bounded, offline spelling plan for PDFKit's asynchronous multi-string
+/// search. It changes queries only; selections and snippets keep source text.
+/// Script conversion is not typo correction or cross-language translation.
+public enum NativePDFSearchQuery {
+    public static func terms(for input: String) -> [String] {
+        let query = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, query.count <= 500 else { return [] }
+        var values = [query]
+        if LibrarySearchCanonicalizer.containsHan(query) {
+            values.append(query.applyingTransform(StringTransform(rawValue: "Traditional-Simplified"), reverse: false) ?? query)
+            values.append(query.applyingTransform(StringTransform(rawValue: "Simplified-Traditional"), reverse: false) ?? query)
+        }
+        var seen = Set<String>()
+        return values.filter { value in
+            let identity = value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            return seen.insert(identity).inserted
+        }
+    }
+}
+
 public struct NativePDFSearchSnippet: Equatable, Sendable {
     public let before: String
     public let match: String

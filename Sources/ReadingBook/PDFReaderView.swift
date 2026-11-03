@@ -356,6 +356,7 @@ struct PDFReaderView: NSViewRepresentable {
     private var searchTextIndexes: [Int: NativePDFSearchTextIndex] = [:]
     private var searchTextOrder: [Int] = []
     private var searchTextBytes = 0
+    private var searchMatchKeys = Set<[Int]>()
     private var previousMatchButton = NSButton()
     private var nextMatchButton = NSButton()
     private let overlay = NSVisualEffectView()
@@ -548,6 +549,7 @@ struct PDFReaderView: NSViewRepresentable {
         searchField.controlSize = .regular
         searchField.font = .systemFont(ofSize: 15)
         searchField.setAccessibilityLabel("搜索 PDF 文字")
+        searchField.toolTip = "自动匹配简繁体，结果仍显示原文；更多关键词与AI扩展可用书库检索。"
         searchField.heightAnchor.constraint(equalToConstant: 44).isActive = true
         // One visible close affordance closes the entire find panel. Keeping the
         // search field's native clear cross beside it gave two identical crosses
@@ -1788,7 +1790,10 @@ struct PDFReaderView: NSViewRepresentable {
         }
         let delegate = PDFReaderSearchDelegate(owner: self, generation: generation)
         searchDelegate = delegate; document.delegate = delegate
-        document.beginFindString(query, withOptions: [.caseInsensitive, .diacriticInsensitive])
+        let terms = NativePDFSearchQuery.terms(for: query)
+        guard !terms.isEmpty else { searching = false; updateSearchDisplay(); return }
+        if terms.count == 1 { document.beginFindString(terms[0], withOptions: [.caseInsensitive, .diacriticInsensitive]) }
+        else { document.beginFindStrings(terms, withOptions: [.caseInsensitive, .diacriticInsensitive]) }
     }
 
     private func clearSearchState() {
@@ -1797,6 +1802,7 @@ struct PDFReaderView: NSViewRepresentable {
         for task in searchSnippetTasks.values { task.cancel() }; searchSnippetTasks = [:]
         for task in searchTextTasks.values { task.task.cancel() }; searchTextTasks = [:]
         searchTextIndexes = [:]; searchTextOrder = []; searchTextBytes = 0
+        searchMatchKeys = []
         searchResults.reset(); searchResults.isHidden = true; searchResultsHeight?.constant = 0
         document?.delegate = nil; document?.cancelFindString(); searchDelegate = nil
         matches = []; matchIndex = -1; searching = false; searchLimited = false
@@ -1808,6 +1814,20 @@ struct PDFReaderView: NSViewRepresentable {
     func acceptMatch(_ selection: PDFSelection, generation: Int) {
         guard generation == searchGeneration, searching,
               selection.pages.contains(where: { $0.document === document }) else { return }
+        // Equivalent query spellings can report the same native range. Keep
+        // every distinct original location, including repeated words on a page.
+        var identity: [Int] = []
+        for page in selection.pages {
+            guard page.document === document, let document else { return }
+            let count = selection.numberOfTextRanges(on: page)
+            guard count > 0 else { identity = []; break }
+            identity.append(document.index(for: page)); identity.append(count)
+            for index in 0..<count {
+                let range = selection.range(at: index, on: page)
+                identity.append(range.location); identity.append(range.length)
+            }
+        }
+        if !identity.isEmpty, !searchMatchKeys.insert(identity).inserted { return }
         guard matches.count < matchLimit else {
             searchLimited = true; searching = false; document?.cancelFindString()
             setStatus("结果超过 5000 处，已停止搜索；请缩小关键词。")

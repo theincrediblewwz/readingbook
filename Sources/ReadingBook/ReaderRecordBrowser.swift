@@ -98,7 +98,7 @@ struct ReaderRecordSections<Content: View>: View {
             guard let project else { groups = []; return }
             preparationError = nil
             let offered = ids
-            let worker = Task.detached(priority: .utility) { try ReadingRecordCatalog.prepare(in: project).groups(ids: offered, by: mode) }
+            let worker = Task.detached(priority: .utility) { try ReadingRecordCatalog.prepare(in: project, recordIDs: Set(offered), deferredPreviews: true).groups(ids: offered, by: mode) }
             do {
                 let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
                 guard !Task.isCancelled, key == preparationKey else { return }
@@ -147,6 +147,7 @@ struct ReaderRecordFoldCard<Content: View>: View {
                 if let selection {
                     Button { selection.wrappedValue.toggle() } label: { Image(systemName: selection.wrappedValue ? "checkmark.circle.fill" : "circle").font(.system(size: 18)).frame(width: 40, height: 44) }
                         .buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(selection.wrappedValue ? Palette.accent : .secondary)
+                        .help(selection.wrappedValue ? "取消本次引用；原记录保留。" : "将这条记录加入本次引用；不会恢复到自动上下文。")
                         .accessibilityLabel("引用：" + record.title).accessibilityValue(selection.wrappedValue ? "已引用" : "未引用")
                 }
                 Button { if let open { open() } else { expanded.toggle() } } label: {
@@ -195,18 +196,30 @@ private struct ReaderFoldedRecordPreview: View {
     @EnvironmentObject private var store: AppStore
     let record: ReadingRecordDescriptor
     @State private var notePreview = ""
+    @State private var recordPreview = ""
     var body: some View {
-        Text(record.id.hasPrefix("note:") ? notePreview : record.preview)
+        Text(record.id.hasPrefix("note:") ? notePreview : record.deferredPreview == nil ? record.preview : recordPreview)
             .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
             .frame(maxWidth: .infinity, alignment: .leading)
             .task(id: store.collectionOwnerKey + "|" + record.id + "|" + String(store.projectRevision)) {
-                notePreview = ""
-                guard record.id.hasPrefix("note:"), let book = store.book,
-                      let document = book.activeDocuments.first(where: { "note:" + $0.id == record.id }) else { return }
+                notePreview = ""; recordPreview = ""
                 let owner = WorkspacePickerOwner(store: store)
-                let preview = try? await store.repository.readFoldedNotePreview(bookID: book.id, sourceHash: book.sourceHash, document: document)
-                guard !Task.isCancelled, owner.matches(store) else { return }
-                notePreview = preview ?? "暂时无法预览，展开查看正文"
+                if record.id.hasPrefix("note:") {
+                    guard let book = store.book, let document = book.activeDocuments.first(where: { "note:" + $0.id == record.id }) else { return }
+                    let preview = try? await store.repository.readFoldedNotePreview(bookID: book.id, sourceHash: book.sourceHash, document: document)
+                    guard !Task.isCancelled, owner.matches(store) else { return }
+                    notePreview = preview ?? "暂时无法预览，展开查看正文"
+                } else if let input = record.deferredPreview {
+                    let worker = Task.detached(priority: .utility) { () throws -> String in
+                        try Task.checkCancellation()
+                        let hint = input.make()
+                        try Task.checkCancellation()
+                        return hint
+                    }
+                    let hint = try? await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                    guard !Task.isCancelled, owner.matches(store) else { return }
+                    recordPreview = hint ?? ""
+                }
             }
     }
 }

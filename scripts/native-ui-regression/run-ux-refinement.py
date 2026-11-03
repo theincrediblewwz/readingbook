@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Run Chinese script search and scoped record browser against the current linked product."""
+import argparse, datetime, hashlib, json, os, pathlib, plistlib, re, shutil, subprocess, sys
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+p = argparse.ArgumentParser()
+p.add_argument('--bin-dir', type=pathlib.Path, required=True)
+p.add_argument('--tag', required=True)
+a = p.parse_args()
+assert a.tag.replace('-', '').isalnum()
+bindir = a.bin_dir.resolve(); assert bindir.is_relative_to(ROOT)
+output = ROOT/'logs/ux-search-performance-20261103'/a.tag
+assert not output.exists(), 'Use a fresh tag and preserve prior receipts'
+output.mkdir(parents=True); (output/'home').mkdir(); (output/'tmp').mkdir()
+work = ROOT/'.build/ux-refinement-host'; work.mkdir(exist_ok=True)
+source = pathlib.Path(__file__).with_name('UXRefinementHost.swift')
+objects = [pathlib.Path(x) for x in (bindir/'ReadingBook.product/Objects.LinkFileList').read_text().splitlines() if not x.endswith('/ReadingBookLauncher.swift.o')]
+sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+swift_cache = ROOT/'.build/shared-module-cache/swift'; clang_cache = ROOT/'.build/shared-module-cache/clang'
+environment = dict(os.environ, TMPDIR=str(output/'tmp'), CFFIXED_USER_HOME=str(output/'home'),
+                   SWIFT_MODULECACHE_PATH=str(swift_cache), CLANG_MODULE_CACHE_PATH=str(clang_cache))
+binary = work/'UXRefinementHost'
+command = ['swiftc', '-parse-as-library', '-enable-testing', '-I', str(bindir/'Modules'), '-module-cache-path', str(swift_cache),
+           '-Xcc', '-fmodules-cache-path='+str(clang_cache), str(source), *map(str, objects), '-o', str(binary)]
+with (output/'compile.log').open('x') as log:
+    built = subprocess.run(command, cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT)
+assert built.returncode == 0, 'UX-refinement host compilation failed'
+app = work/'ReadingBook UX Refinement Regression.app'; contents = app/'Contents'
+(contents/'MacOS').mkdir(parents=True, exist_ok=True); (contents/'Resources').mkdir(exist_ok=True)
+shutil.copy2(binary, contents/'MacOS/UXRefinementHost')
+bundle = contents/'Resources/ReadingBook_ReadingBook.bundle'
+if bundle.exists(): shutil.rmtree(bundle)
+shutil.copytree(bindir/'ReadingBook_ReadingBook.bundle', bundle)
+(contents/'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'org.readingbook.ux-refinement-regression', 'CFBundleExecutable': 'UXRefinementHost',
+    'CFBundleName': 'ReadingBook UX Refinement Regression', 'CFBundlePackageType': 'APPL', 'NSHighResolutionCapable': True, 'LSEnvironment': {'UX_REFINEMENT_OUTPUT': str(output), 'TMPDIR': str(output/'tmp'), 'CFFIXED_USER_HOME': str(output/'home')}}))
+subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none', str(app)], check=True, capture_output=True)
+(output/'build-manifest.json').write_text(json.dumps({'sourceSHA256': sha(source), 'binarySHA256': sha(binary),
+    'objects': {str(x.relative_to(ROOT)): sha(x) for x in objects}}, indent=2))
+started = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+# A hand-packed app must work without SwiftPM's development resource fallback.
+# Keep the real bundle in Contents/Resources, while denying only the separate
+# build-tree copy. This catches runtime Bundle.module calls that otherwise pass
+# in Debug/CI and trap only after installation on another computer.
+assert not (app/'ReadingBook_ReadingBook.bundle').exists()
+blocked_bundle = bindir/'ReadingBook_ReadingBook.bundle'
+profile = '(version 1) (allow default) (deny file-read* (subpath ' + json.dumps(str(blocked_bundle)) + '))'
+(output/'resource-sandbox.sb').write_text(profile+'\n')
+assert pathlib.Path('/usr/bin/sandbox-exec').is_file(), 'macOS resource-isolation verifier unavailable'
+runtime_command = ['/usr/bin/sandbox-exec', '-p', profile, str(contents/'MacOS/UXRefinementHost'), str(output)]
+with (output/'runtime.log').open('x') as log:
+    child = subprocess.Popen(runtime_command, cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT)
+    try: status = child.wait(timeout=100)
+    except subprocess.TimeoutExpired:
+        subprocess.run(['sample', str(child.pid), '3', '-file', str(output/'timeout.sample.txt')], capture_output=True, timeout=10)
+        child.kill(); status = child.wait()
+logs = subprocess.run(['/usr/bin/log', 'show', '--style', 'compact', '--start', started, '--predicate', 'processIdentifier == '+str(child.pid)], capture_output=True, text=True, timeout=30)
+runtime = logs.stdout + logs.stderr; (output/'unified.log').write_text(runtime)
+warnings = {key: runtime.count(pattern) for key, pattern in [('layout300', '300 iterations'), ('publishingDuringViewUpdates', 'Publishing changes from within view updates'), ('attributeGraphCycles', 'AttributeGraph: cycle detected')]}
+warnings['invalidViewGeometry'] = len(re.findall(r'invalid (?:frame|view) (?:dimension|geometry)', runtime, re.I))
+record = json.loads((output/'result.json').read_text()) if (output/'result.json').exists() else {}
+passed = status == 0 and logs.returncode == 0 and not any(warnings.values()) and record.get('status') == 'passed'
+report = {'probe': 'ux-refinement', 'status': 'passed' if passed else 'failed', 'passed': passed, 'exitCode': status,
+    'unifiedLogReturncode': logs.returncode, 'runtimeWarnings': warnings, 'hostSourceSHA256': sha(source), 'record': record, 'realNetworkRequests': 0}
+report.update(buildResourceFallbackDenied=True, blockedBuildResourceBundle=str(blocked_bundle),
+    sandboxProfileSHA256=sha(output/'resource-sandbox.sb'), actualAppResourceBundle=str(bundle))
+(output/'report.json').write_text(json.dumps(report, indent=2)+'\n')
+print(json.dumps(report)); sys.exit(0 if passed else 1)

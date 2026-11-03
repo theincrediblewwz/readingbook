@@ -124,6 +124,9 @@ struct QueryMemoryInspector: View {
     @State private var clearing = false
     @State private var clearOwner: WorkspacePickerOwner?
     private var current: QueryMemoryDisplay { preparedKey == store.queryMemoryPreparationKey ? prepared : .init() }
+    private var isPreparing: Bool { preparedKey != store.queryMemoryPreparationKey }
+    private var needsModel: Bool { store.settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var emptyFolder: Bool { folderID != nil && (!catalog.isEmpty || current.memory != nil) }
     private var records: [ConversationMemory] {
         var values = catalog
         if let memory = current.memory, !values.contains(where: { $0.id == memory.id }) { values.insert(memory, at: 0) }
@@ -146,8 +149,8 @@ struct QueryMemoryInspector: View {
                     Button("停止") { store.queryMemoryTask?.cancel() }.buttonStyle(ReadingToolbarButtonStyle()).help("停止本次整理；已有摘要、完整问答和笔记保留。")
                 } else {
                     Button(current.memory == nil ? "立即整理" : summaryComplete ? "已整理" : "继续整理") { store.summarizeCurrentConversation() }
-                        .buttonStyle(ReadingToolbarButtonStyle(selected: true)).disabled(summaryComplete || store.storageState.working || current.historyCount == 0)
-                        .help("用当前模型整理本范围的已有问答，会消耗一次模型请求。长对话分批处理，不删除原消息。")
+                        .buttonStyle(ReadingToolbarButtonStyle(selected: true)).disabled(isPreparing || needsModel || summaryComplete || store.storageState.working || current.historyCount == 0)
+                        .help(needsModel ? "先在模型设置中连接一个模型，再整理已有问答。" : current.historyCount == 0 ? "当前范围还没有问答；先回到对话聊几句。" : "用当前模型整理本范围的已有问答，会消耗一次模型请求。长对话分批处理，不删除原消息。")
                 }
                 ReaderInformationButton(title: "摘要状态与使用说明", text: statusText + "\n\n历史保存完整问答；摘要只提炼要点，帮助AI接着聊。自动整理在后续提问且对话较长、预算足够时进行。手动整理也可处理短对话。清除摘要不删除问答或笔记；旧范围的摘要可查阅和分类，只有当前范围与原消息核对通过的摘要才会自动使用。")
                 Button(action: onClose) { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).keyboardShortcut(.cancelAction).help("关闭对话摘要")
@@ -158,10 +161,21 @@ struct QueryMemoryInspector: View {
             Divider().opacity(0.4)
             if records.isEmpty {
                 VStack(spacing: 14) {
-                    Image(systemName: "text.badge.star").font(.system(size: 30)).foregroundStyle(Palette.accent)
-                    Text("还没有对话摘要").font(.system(size: 19, weight: .semibold))
-                    Text("点上方“立即整理”，就能在这里看到要点和来源。\n自动整理只在后续提问且对话较长、预算足够时进行。")
+                    if isPreparing { ProgressView().controlSize(.large) }
+                    else { Image(systemName: "text.badge.star").font(.system(size: 30)).foregroundStyle(Palette.accent) }
+                    Text(emptyTitle).font(.system(size: 19, weight: .semibold))
+                    Text(emptyDetail)
                         .font(.system(size: 15)).foregroundStyle(.secondary).multilineTextAlignment(.center).lineSpacing(5)
+                    if !isPreparing {
+                        if emptyFolder {
+                            Button("查看全部摘要") { folderID = nil }.buttonStyle(ReadingToolbarButtonStyle())
+                        } else if current.historyCount == 0 {
+                            Button("回到对话") { store.readingCompanionTab = "chat"; store.readingCompanionVisible = true; onClose() }
+                                .buttonStyle(ReadingToolbarButtonStyle()).help("回到当前阅读范围的对话；不会自动发送问题。")
+                        } else if needsModel {
+                            Button("设置模型") { onClose(); store.showingSettings = true }.buttonStyle(ReadingToolbarButtonStyle())
+                        }
+                    }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 HStack(spacing: 0) {
@@ -230,10 +244,25 @@ struct QueryMemoryInspector: View {
             return store.summaryProgressState.value.title + "，完成后保存在原来的范围。"
         }
         if store.queryMemoryStatusKey == store.queryMemoryPreparationKey, !store.queryMemoryStatus.isEmpty { return store.queryMemoryStatus }
-        guard preparedKey != nil else { return "正在核对当前阅读范围…" }
+        guard !isPreparing else { return "正在核对当前阅读范围…" }
         if current.historyCount == 0 { return "当前范围没有可整理的问答；可切回对应的范围和讲解方式查看。" }
         if let memory = current.memory { return "当前范围有\(current.historyCount)条消息，已整理\(memory.cursor.index)条。摘要是要点，完整回答在历史对话中。" }
+        if needsModel { return "当前范围有\(current.historyCount)条消息。先设置模型，再整理要点；完整问答会保留。" }
         return "当前范围有\(current.historyCount)条消息，尚未整理；可立即整理，不必等到长对话自动触发。"
+    }
+    private var emptyTitle: String {
+        if isPreparing { return "正在读取摘要…" }
+        if emptyFolder { return "这个文件夹还没有摘要" }
+        if current.historyCount == 0 { return "先聊几句，再留一份回顾" }
+        if needsModel { return "连接模型后，就能整理要点" }
+        return "把这段对话，留成简短回顾"
+    }
+    private var emptyDetail: String {
+        if isPreparing { return "正在核对当前范围和已保存的要点。" }
+        if emptyFolder { return "可以切换文件夹，或查看全部已保存的摘要。" }
+        if current.historyCount == 0 { return "当前范围还没有可整理的问答。先在对话中提问，再到这里整理要点。" }
+        if needsModel { return "已有问答会保留。先设置模型，再点上方“立即整理”。" }
+        return "点上方“立即整理”，提炼已有问答的要点和出处；完整回答仍保留在历史中。"
     }
     private var summaryComplete: Bool { current.memory.map { $0.cursor.index >= current.historyCount && $0.cursor.offset == 0 } ?? false }
     private func memoryGroup(_ title: String, items: [ConversationMemoryItem]) -> some View {

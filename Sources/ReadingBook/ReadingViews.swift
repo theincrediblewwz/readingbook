@@ -665,7 +665,8 @@ struct DocumentEditorView: View {
                     }
                 }
             } else {
-                EmptyState(title: "写下你的理解", detail: "选择一篇笔记，或新建一篇真实的 Markdown 文档。", icon: "square.and.pencil", actionTitle: "新建笔记", action: { store.newDocument(); preview = false })
+                EmptyState(title: "写下你的理解", detail: showingDocuments && !listCollapsed ? "从笔记列表中选择一篇，或新建笔记记录想法。" : "新建一篇笔记，记录你的想法。", icon: "square.and.pencil",
+                    actionTitle: showingDocuments && !listCollapsed ? nil : "新建笔记", action: { store.newDocument(); preview = false })
             }
         }.frame(maxWidth: 1050, maxHeight: .infinity).background(Palette.surface.opacity(0.94), in: RoundedRectangle(cornerRadius: 20))
             .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line.opacity(0.85), lineWidth: 0.8))
