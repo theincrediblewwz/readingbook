@@ -261,12 +261,18 @@ extension LibraryRepository {
     /// so unrelated analysis written during a model request is retained.
     public func saveLatestNote(bookID: String, sourceHash: String, document: DocumentRecord, markdown: String,
                                expectedDocument: DocumentRecord? = nil, expectedContentHash: String? = nil,
-                               notePlacement: ReadingNotePlacement? = nil, readingSnapshot: ReadingQuerySnapshot? = nil) throws -> BookProject {
+                               notePlacement: ReadingNotePlacement? = nil, readingSnapshot: ReadingQuerySnapshot? = nil,
+                               expectedPlacement: ReadingNotePlacementExpectation? = nil) throws -> BookProject {
         try Task.checkCancellation()
         let directory = try bookDirectory(bookID, mustExist: true)
         try recoverDocument(in: directory)
         let project = try readProject(in: directory)
         guard project.sourceHash == sourceHash else { throw ReadingError.invalid("原书版本已经变化，未覆盖笔记。") }
+        if case .unchanged(let expected) = expectedPlacement {
+            guard project.readerCollections?.notePlacements?[document.id] == expected else {
+                throw ReadingError.invalid("这张便签的位置或外观已在别处修改，未覆盖。请重新打开对照，或另存为新笔记。")
+            }
+        }
         if let expectedDocument {
             guard project.activeDocuments.first(where: { $0.id == expectedDocument.id }) == expectedDocument else {
                 throw ReadingError.invalid("笔记记录已经修改或回收，未覆盖已有内容。")
@@ -277,11 +283,17 @@ extension LibraryRepository {
     }
     /// Resolve from the actor's latest canonical project, so an AI result or
     /// another window cannot overwrite a concurrent manual archive/folder edit.
-    public func organizeReaderCollections(bookID: String, sourceHash: String, command: ReaderCollectionCommand) throws -> BookProject {
+    public func organizeReaderCollections(bookID: String, sourceHash: String, command: ReaderCollectionCommand,
+                                         expectedPlacement: ReadingNotePlacementExpectation? = nil) throws -> BookProject {
         let directory = try bookDirectory(bookID, mustExist: true)
         try recoverDocument(in: directory)
         let project = try readProject(in: directory)
         guard project.sourceHash == sourceHash else { throw ReadingError.invalid("原书版本已变化，请重新打开收纳界面。") }
+        if case .unchanged(let expected) = expectedPlacement {
+            guard case .setNotePlacement(let id, _) = command, project.readerCollections?.notePlacements?[id] == expected else {
+                throw ReadingError.invalid("便签位置后来又被修改，未覆盖。请重新选择。")
+            }
+        }
         let state = try ReaderCollectionRuntime.apply(command, in: project)
         return try saveCanonicalProject(project, readerCollections: state)
     }

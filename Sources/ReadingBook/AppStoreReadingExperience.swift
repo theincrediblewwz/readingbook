@@ -531,8 +531,8 @@ private struct CompanionScopePreparation: Sendable {
         // source context, while native selections retain their start/end pages.
         let sourcePage = sourceReadingSelection?.page ?? sourceUnit?.page
         return ReadingContext(sourceHash: book?.sourceHash, unitID: document == nil ? sourceUnitID : nil,
-                              selectedAnchorID: document == nil ? persistentAnchor : nil, selectedText: document == nil ? (selection?.quote ?? anchor?.quote) : nil,
-                              selectedPrefix: document == nil ? (selection?.prefix ?? anchor?.prefix) : nil, selectedSuffix: document == nil ? (selection?.suffix ?? anchor?.suffix) : nil,
+                              selectedAnchorID: document == nil ? persistentAnchor : nil, selectedText: document == nil ? (selection?.quote ?? sourceReadingSelection?.text ?? anchor?.quote) : nil,
+                              selectedPrefix: document == nil ? (selection?.prefix ?? sourceReadingSelection?.sourcePrefix ?? anchor?.prefix) : nil, selectedSuffix: document == nil ? (selection?.suffix ?? sourceReadingSelection?.sourceSuffix ?? anchor?.suffix) : nil,
                               objectID: object, documentID: document?.id,
                               page: document == nil ? sourcePage : nil, timeFrom: timeFrom, timeTo: timeTo,
                               selectionEndPage: document == nil ? sourceReadingSelection?.endPage : nil)
@@ -574,7 +574,8 @@ private struct CompanionScopePreparation: Sendable {
                 let suffix = String(unit.text[range.upperBound...].prefix(240))
                 return try? ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: unit.id, quote: selection.text, prefix: prefix, suffix: suffix, in: book)
             }
-            if let anchor = try? ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: unit.id, quote: selection.text, in: book) { matches.append(anchor) }
+            if let anchor = try? ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: unit.id, quote: selection.text,
+                prefix: selection.sourcePrefix ?? "", suffix: selection.sourceSuffix ?? "", in: book) { matches.append(anchor) }
             offset += length
         }
         return matches.count == 1 ? matches[0] : nil

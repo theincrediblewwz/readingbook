@@ -69,11 +69,13 @@ struct WorkspaceView: View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
                 Palette.canvas.ignoresSafeArea()
+                ReaderEditUndoBridge().frame(width: 0, height: 0).accessibilityHidden(true)
                 content
                     .allowsHitTesting(!hasWorkspaceOverlay)
                     .environment(\.workspaceCanvasBlocked, canvasInteractionBlocked)
                     .environment(\.workspaceCanvasExclusionRects, canvasExclusionRects)
                     .environment(\.workspaceProgressBounds, chromeBounds["smart-progress"] ?? .zero)
+                    .environment(\.workspaceCompanionBounds, chromeBounds["primary"] ?? .zero)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityHidden(hasWorkspaceOverlay)
                     .overlay {

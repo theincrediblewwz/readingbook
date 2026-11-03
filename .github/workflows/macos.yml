@@ -85,6 +85,8 @@ jobs:
         run: python3 scripts/native-ui-regression/run-ux-refinement.py --bin-dir .build/tests/debug --tag ci-ux-refinement
       - name: Native AI search intent and full-book flow regression
         run: python3 scripts/native-ui-regression/run-ai-search-flow.py --bin-dir .build/tests/debug --tag ci-ai-search-flow
+      - name: Native note color, expansion and reading undo regression
+        run: python3 scripts/native-ui-regression/run-note-interaction.py --bin-dir .build/tests/debug --tag ci-note-interaction
       - name: Rendered note mode transition regression
         run: |
           python3 scripts/native-ui-regression/run-note-mode-transitions.py --bin-dir .build/tests/debug --tag ci-mode-transitions-legacy --scroller-style legacy
@@ -136,6 +138,14 @@ jobs:
         with:
           name: failed-folder-identity-evidence
           path: logs/folder-control-20261102/ci-folder-identity
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Preserve failed note interaction evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-note-interaction-evidence
+          path: logs/note-interaction-20261103/ci-note-interaction
           if-no-files-found: ignore
           retention-days: 3
       - name: Preserve failed paper reading evidence

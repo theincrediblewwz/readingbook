@@ -14,12 +14,18 @@ import ReadingCore
         return currentQueryHistory.filter { !hidden.contains($0.id) }
     }
     func organizeReaderCollections(_ command: ReaderCollectionCommand, owner: WorkspacePickerOwner? = nil) async {
-        guard !isOrganizingCollections, !storageState.working, owner?.matches(self) ?? true, let project = book else { return }
+        guard !isOrganizingCollections, !readerEditUndo.applying, !storageState.working, owner?.matches(self) ?? true, let project = book else { return }
         let root = libraryRootURL, repository = repository
         isOrganizingCollections = true; defer { isOrganizingCollections = false }
         do {
-            let result = try await repository.organizeReaderCollections(bookID: project.id, sourceHash: project.sourceHash, command: command)
+            let expected: ReadingNotePlacementExpectation?
+            if case .setNotePlacement(let id, _) = command { expected = .unchanged(project.readerCollections?.notePlacements?[id]) } else { expected = nil }
+            let result = try await repository.organizeReaderCollections(bookID: project.id, sourceHash: project.sourceHash, command: command, expectedPlacement: expected)
             guard libraryRootURL == root, bookID == project.id, book?.sourceHash == project.sourceHash else { return }
+            if case .setNotePlacement(let id, _) = command,
+               result.readerCollections?.notePlacements?[id] != project.readerCollections?.notePlacements?[id] {
+                readerEditUndo.record(.placement(documentID: id, expected: result.readerCollections?.notePlacements?[id], desired: project.readerCollections?.notePlacements?[id]), title: "便签位置", owner: WorkspacePickerOwner(store: self))
+            }
             publish(result); queryMemoryRevision += 1
         } catch { if libraryRootURL == root && bookID == project.id { errorMessage = error.localizedDescription } }
     }

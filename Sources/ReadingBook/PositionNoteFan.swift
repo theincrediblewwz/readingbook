@@ -24,15 +24,16 @@ struct PositionNoteFan: View {
     @State private var page = 0
     @State private var hoveredID: String?
     @State private var contents: [String: String] = [:]
-    private var ids: [String] { presentation.ids.filter { store.activeNotePlacements[$0] != nil } }
-    private var pageSize: Int { ReadingNoteFanLayout.pageSize(width: size.width) }
-    private var pageCount: Int { max(1, (ids.count + pageSize - 1) / pageSize) }
-    private var visibleIDs: [String] { Array(ids.dropFirst(min(page, pageCount - 1) * pageSize).prefix(pageSize)) }
-    private var preparationKey: String {
-        store.collectionOwnerKey + "|" + String(store.projectRevision) + "|" + visibleIDs.joined(separator: ",")
+    private var ids: [String] {
+        let active = store.activeNotePlacements
+        return presentation.ids.filter { active[$0] != nil }
     }
-    private var cards: [ReadingNoteFanCard] { ReadingNoteFanLayout.cards(count: visibleIDs.count, width: size.width, height: size.height) }
     var body: some View {
+        let ids = self.ids, pageSize = ReadingNoteFanLayout.pageSize(width: size.width)
+        let pageCount = max(1, (ids.count + pageSize - 1) / pageSize)
+        let visibleIDs = Array(ids.dropFirst(min(page, pageCount - 1) * pageSize).prefix(pageSize))
+        let cards = ReadingNoteFanLayout.cards(count: visibleIDs.count, width: size.width, height: size.height)
+        let preparationKey = store.collectionOwnerKey + "|" + String(store.projectRevision) + "|" + visibleIDs.joined(separator: ",")
         ZStack {
             Color.clear.contentShape(Rectangle()).onTapGesture { dismiss() }
             ForEach(Array(visibleIDs.enumerated()), id: \.element) { index, id in
@@ -40,8 +41,8 @@ struct PositionNoteFan: View {
                     let card = cards[index], raised = hoveredID == id
                     PositionNotePaper(id: id, text: contents[id] ?? presentation.snippets[id] ?? "",
                         height: opened ? card.height : 170, width: opened ? card.width : 230, clickCount: 1,
-                        onCommand: { note, command in dismiss(note: note, command: command) })
-                        .matchedGeometryEffect(id: id, in: paperNamespace)
+                        degrees: opened ? (raised ? 0 : card.degrees) : Double(min(index, 2)),
+                        onCommand: { note, command, origin in dismiss(note: note, command: command, origin: origin) })
                         .rotationEffect(.degrees(opened ? (raised ? 0 : card.degrees) : Double(min(index, 2))))
                         .scaleEffect(opened && raised ? 1.035 : 1)
                         .onHover { inside in
@@ -66,11 +67,11 @@ struct PositionNoteFan: View {
                 Spacer()
                 if pageCount > 1 {
                     HStack(spacing: 18) {
-                        Button { changePage(-1) } label: { Image(systemName: "chevron.left").frame(width: 36, height: 36) }
+                        Button { changePage(-1, pageCount: pageCount) } label: { Image(systemName: "chevron.left").frame(width: 36, height: 36) }
                             .buttonStyle(ReadingQuietButtonStyle()).disabled(page == 0).help("上一叠便签")
                         Text("\(min(page, pageCount - 1) * pageSize + 1)–\(min(ids.count, (min(page, pageCount - 1) + 1) * pageSize)) / \(ids.count)")
                             .font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
-                        Button { changePage(1) } label: { Image(systemName: "chevron.right").frame(width: 36, height: 36) }
+                        Button { changePage(1, pageCount: pageCount) } label: { Image(systemName: "chevron.right").frame(width: 36, height: 36) }
                             .buttonStyle(ReadingQuietButtonStyle()).disabled(page >= pageCount - 1).help("下一叠便签")
                     }.padding(.horizontal, 10).padding(.vertical, 4).background(Palette.paper.opacity(0.94), in: Capsule()).padding(.bottom, 94)
                 }
@@ -94,15 +95,15 @@ struct PositionNoteFan: View {
             .onChange(of: ids.isEmpty) { _, empty in if empty { close() } }
             .onChange(of: pageSize) { _, _ in page = 0; hoveredID = nil }
     }
-    private func changePage(_ offset: Int) {
+    private func changePage(_ offset: Int, pageCount: Int) {
         withAnimation(reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.05)) {
             hoveredID = nil; page = min(max(0, page + offset), pageCount - 1)
         }
     }
-    private func dismiss(note: String? = nil, command: PositionNoteCommand? = nil) {
+    private func dismiss(note: String? = nil, command: PositionNoteCommand? = nil, origin: PositionNoteEditorOrigin? = nil) {
         guard !closing else { return }
         if let note, let command, case .edit = command {
-            store.performPositionNoteCommand(command, id: note, owner: presentation.owner)
+            store.performPositionNoteCommand(command, id: note, owner: presentation.owner, origin: origin)
             return
         }
         closing = true

@@ -7,6 +7,7 @@ struct ReaderWorkspaceView: View {
     @Environment(\.readingReduceMotion) private var reduceMotion
     @Environment(\.workspaceCanvasBlocked) private var interactionBlocked
     @Environment(\.workspaceProgressBounds) private var progressBounds
+    @Environment(\.workspaceCompanionBounds) private var companionBounds
     @Binding var showPDF: Bool
     @Binding var showOutline: Bool
     @Binding var bookmarksOnly: Bool
@@ -109,7 +110,14 @@ struct ReaderWorkspaceView: View {
                                    guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
                                          store.book?.sourceHash == preparationSourceHash else { throw CancellationError() }
                                    return try await store.inferNativeSearchKeywords(query, owner: owner)
-                               }, searchAIIdentity: store.readingSearchAIIdentity)
+                               }, searchAIIdentity: store.readingSearchAIIdentity, onQuotePositionNote: { page, x, y, quote in
+                                   guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash else { return }
+                                   store.beginPositionNote(page: page, x: x, y: y, quote: quote)
+                               }, onReadingConversation: { selection in
+                                   guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash else { return }
+                                   store.sourceReadingSelection = selection; store.focusedReadingAnchorID = nil
+                                   store.askAboutReadingContext()
+                               })
                             .id(store.pdfDisplayReloadID)
                             .environment(\.workspaceCanvasBlocked, interactionBlocked || noteFan != nil || store.positionNoteRequest != nil)
                         } else if isPDF, showPDF {
@@ -129,17 +137,24 @@ struct ReaderWorkspaceView: View {
                         onExpand: { ids, snippets, origin in
                             store.readingCompanionVisible = false; showOutline = false
                             noteFan = .init(ids: ids, snippets: snippets, origin: origin, owner: WorkspacePickerOwner(store: store))
-                        }, onCollapse: { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { notesCollapsed = true } })
+                        })
                 }
-                if hasPositionNotes && (notesCollapsed || geometry.size.width < 680) {
+                if hasPositionNotes && noteFan == nil && store.positionNoteRequest == nil {
+                    let origin = geometry.frame(in: .global).origin
+                    let x = companionBounds.isEmpty ? geometry.size.width - 106 : companionBounds.midX - origin.x
+                    let y = companionBounds.isEmpty ? 88 : companionBounds.maxY - origin.y + 30
                     Button {
                         if geometry.size.width < 680 {
                             store.readingCompanionVisible = false; showOutline = false
                             noteFan = .init(ids: store.activeNotePlacements.filter { $0.value.unitID == store.selectedUnitID }.map(\.key).sorted(), snippets: [:], origin: .init(x: geometry.size.width - 36, y: 102), owner: WorkspacePickerOwner(store: store))
-                        } else { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { notesCollapsed = false } }
-                    } label: { Image(systemName: "note.text").font(.system(size: 13)).frame(width: 32, height: 32) }
-                        .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.95), in: Circle())
-                        .padding(.top, 86).padding(.trailing, 20).frame(maxWidth: .infinity, alignment: .trailing).help("展开页边便签").accessibilityLabel("展开页边便签")
+                        } else { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { notesCollapsed.toggle() } }
+                    } label: { Image(systemName: showsMargin ? "chevron.right" : "note.text").font(.system(size: 13)).frame(width: 36, height: 36) }
+                        .buttonStyle(ReadingQuietButtonStyle(radius: 18)).readingGlass(radius: 18, interactive: true)
+                        .position(x: max(28, min(geometry.size.width - 28, x)), y: max(80, y))
+                        .allowsHitTesting(!interactionBlocked)
+                        .help(showsMargin ? "收起所有页边便签与留白，恢复原来的阅读模式" : "展开页边便签")
+                        .accessibilityLabel(showsMargin ? "收起页边便签" : "展开页边便签")
+                        .accessibilityIdentifier("reader-position-notes-toggle")
                 }
                 ReaderFloatingPanel(title: "目录与书签", icon: "list.bullet", width: 302, height: 560, trailing: false, isPresented: $showOutline, viewport: geometry.size, bottomReserve: 88, avoidRects: pdfChrome,
                     showsRestoreButton: false, unifiedDismiss: true,
@@ -181,14 +196,10 @@ struct ReaderWorkspaceView: View {
                     if let request = store.positionNoteRequest, request.owner.matches(store) {
                         ZStack {
                             Color.black.opacity(0.08).ignoresSafeArea().contentShape(Rectangle())
-                            PositionNoteEditor(request: request).environmentObject(store)
-                                .frame(width: max(280, min(720, geometry.size.width - 56)), height: max(240, min(600, geometry.size.height - 100)))
-                                .matchedGeometryEffect(id: request.document?.id ?? request.id.uuidString, in: notePaperNamespace)
-                                .id(request.id)
+                            PositionNoteEditorStage(request: request).environmentObject(store).id(request.id)
                         }.zIndex(300)
                     }
                 }
-                .animation(reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.04), value: store.positionNoteRequest?.id)
                 .onChange(of: store.collectionOwnerKey) { _, _ in noteFan = nil }
                 .onChange(of: store.selectedUnitID) { _, _ in inlineReading.clear() }
                 .onChange(of: store.readingSourceMode) { _, _ in inlineReading.clear() }

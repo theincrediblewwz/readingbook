@@ -112,3 +112,14 @@ struct ReadingPaperBackground: View {
         Color(nsColor: style.color)
     }
 }
+
+/// All three note presentations resolve the same explicit color, with the
+/// legacy nil value inheriting the book's material without rewriting old data.
+struct PositionNoteBackground: View {
+    let paperStyle: String?
+    @AppStorage("reading.paperStyle") private var inherited = ReadingPaperStyle.plain.rawValue
+    var body: some View { Color(nsColor: Self.style(paperStyle, inherited: inherited).color) }
+    static func style(_ value: String?, inherited: String) -> ReadingPaperStyle {
+        value.flatMap(ReadingPaperStyle.init(rawValue:)) ?? ReadingPaperStyle(rawValue: inherited) ?? .plain
+    }
+}

@@ -31,6 +31,7 @@ import ReadingCore
     }
     private var pendingEdit: PendingEdit?
     private var appliedFont: NSFont?
+    private var appliedForeground: NSColor?
 
     override init() {
         let storage = NSTextStorage()
@@ -77,7 +78,7 @@ import ReadingCore
     }
 
     func update(markdown: String, libraryRoot: URL, bookID nextBookID: String?, documentID nextDocumentID: String?,
-        font: NSFont, expanded: Bool, editable: Bool, visible: Bool, onChange: @escaping (String) -> Void) {
+        font: NSFont, expanded: Bool, editable: Bool, visible: Bool, foregroundColor: NSColor = .labelColor, onChange: @escaping (String) -> Void) {
         self.onChange = onChange
         self.expanded = expanded
         let nextLibraryKey = ReadingNoteEditorContinuity.libraryKey(libraryRoot)
@@ -109,17 +110,19 @@ import ReadingCore
                 scheduleParse()
             }
         }
-        if !textView.hasMarkedText(), appliedFont != font {
+        if !textView.hasMarkedText(), appliedFont != font || appliedForeground != foregroundColor {
             reconciling = true
             appliedFont = font
+            appliedForeground = foregroundColor
             let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = 6
             textView.font = font
             textView.defaultParagraphStyle = paragraph
-            textView.typingAttributes = [.font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph]
+            textView.textColor = foregroundColor
+            textView.typingAttributes = [.font: font, .foregroundColor: foregroundColor, .paragraphStyle: paragraph]
             if let storage = textView.textStorage, storage.length > 0 {
                 // Appearance attributes only. These never enter the native
                 // text undo stack or the document's Markdown Binding.
-                storage.addAttributes([.font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph],
+                storage.addAttributes([.font: font, .foregroundColor: foregroundColor, .paragraphStyle: paragraph],
                     range: NSRange(location: 0, length: storage.length))
             }
             reconciling = false
@@ -372,11 +375,12 @@ struct NoteMarkdownEditor: NSViewRepresentable {
     var expanded: Bool
     var editable: Bool
     var visible: Bool
+    var foregroundColor: NSColor = .labelColor
 
     func makeNSView(context: Context) -> NSScrollView { session.scrollView }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         session.update(markdown: markdown, libraryRoot: libraryRoot, bookID: bookID, documentID: documentID,
-            font: font, expanded: expanded, editable: editable, visible: visible) { markdown = $0 }
+            font: font, expanded: expanded, editable: editable, visible: visible, foregroundColor: foregroundColor) { markdown = $0 }
     }
 }

@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 
 struct ReadingBookApp: App {
+    @NSApplicationDelegateAdaptor(ReadingBookApplicationDelegate.self) private var appDelegate
     @StateObject private var store = AppStore()
     @StateObject private var typography = ReadingTypographySettings()
     var body: some Scene {
@@ -16,24 +17,47 @@ struct ReadingBookApp: App {
         .defaultSize(width: 1480, height: 940)
         .commands {
             ReaderKeyboardCommands()
-            CommandGroup(after: .newItem) {
-                Button("导入书籍…") { store.chooseBook() }.keyboardShortcut("o")
-                Button("新建笔记") { store.newDocument() }.keyboardShortcut("n", modifiers: [.command, .shift])
-                Button("保存文档") { Task { await store.saveCurrentDocument() } }.keyboardShortcut("s")
-            }
-            CommandMenu("阅读") {
-                Button("预读并制定计划") { store.makePlan() }.disabled(store.book == nil || !store.canStartReading)
-                Button("设置范围并继续分析") { store.requestedWorkspaceRoute = "workflow" }.disabled(store.book == nil || !store.canStartReading)
-                Button("暂停任务") { store.pause() }.keyboardShortcut(".").disabled(!store.isBusy || store.storageState.working)
-            }
-            CommandMenu("工作台") {
-                Button("原文阅读") { store.requestedWorkspaceRoute = "reader" }.keyboardShortcut("1")
-                Button("智能阅读") { store.requestedWorkspaceRoute = "workflow" }.keyboardShortcut("2")
-                Button("与书对话") { store.requestedWorkspaceRoute = "query" }.keyboardShortcut("3")
-                Button("我的笔记") { store.requestedWorkspaceRoute = "editor" }.keyboardShortcut("4")
+            CommandGroup(before: .windowArrangement) {
+                Button("关闭窗口") { NSApp.keyWindow?.performClose(nil) }.keyboardShortcut("w")
             }
         }
         Settings { AppSettingsView().environmentObject(store).environmentObject(typography).modifier(ReadingPreferencesEnvironment()).frame(minWidth: 760, idealWidth: 960, minHeight: 600, idealHeight: 720) }
+    }
+}
+
+/// Leave About/settings/quit, native editing (including IME and undo), and
+/// window controls. Feature navigation lives in the workspace's own menus.
+@MainActor enum ReadingMenuPolicy {
+    static func apply(to menu: NSMenu) {
+        for (index, item) in menu.items.enumerated().reversed() {
+            guard index != 0 else { continue }
+            let actions = Set((item.submenu?.items ?? []).compactMap { $0.action.map(NSStringFromSelector) })
+            let editing = !actions.isDisjoint(with: ["cut:", "copy:", "paste:", "undo:"])
+            let windows = !actions.isDisjoint(with: ["performMiniaturize:", "miniaturize:", "arrangeInFront:", "toggleFullScreen:"])
+            let localizedFallback = ["Edit", "编辑", "Window", "窗口"].contains(item.title)
+            if !editing && !windows && !localizedFallback { menu.removeItem(item) }
+        }
+    }
+}
+@MainActor final class ReadingBookApplicationDelegate: NSObject, NSApplicationDelegate {
+    private var menuObserver: NSObjectProtocol?
+    private var scheduled = false
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        menuObserver = NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard note.object as? NSMenu === NSApp.mainMenu else { return }
+                self?.scheduleMenuUpdate()
+            }
+        }
+        scheduleMenuUpdate()
+    }
+    func applicationDidBecomeActive(_ notification: Notification) { scheduleMenuUpdate() }
+    private func scheduleMenuUpdate() {
+        guard !scheduled else { return }; scheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.scheduled = false
+            if let menu = NSApp.mainMenu { ReadingMenuPolicy.apply(to: menu) }
+        }
     }
 }
 

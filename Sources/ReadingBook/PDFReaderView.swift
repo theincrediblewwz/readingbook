@@ -42,6 +42,8 @@ struct PDFReaderView: NSViewRepresentable {
     var interactionResetID: UUID?
     var notePlacements: [String: ReadingNotePlacement]
     var onCreatePositionNote: ((Int, Double, Double) -> Void)?
+    var onQuotePositionNote: ((Int, Double, Double, ReadingNoteSourceQuote) -> Void)?
+    var onReadingConversation: ((SourceReadingSelection) -> Void)?
     var noteMarginVisible: Bool
     var notePlacementOwner: String
     var onCancelPositionNote: (() -> Void)?
@@ -51,7 +53,7 @@ struct PDFReaderView: NSViewRepresentable {
     var onAddBookmark: ((Int) -> Void)?
     var noteBindingDocumentID: String?
 
-    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((PDFWorkspaceMemoryReceipt) -> Void)? = nil, interactionResetID: UUID? = nil, notePlacements: [String: ReadingNotePlacement] = [:], onCreatePositionNote: ((Int, Double, Double) -> Void)? = nil, noteMarginVisible: Bool = false, notePlacementOwner: String = "", onCancelPositionNote: (() -> Void)? = nil, onAddBookmark: ((Int) -> Void)? = nil, noteBindingDocumentID: String? = nil, onAISearch: ((String) -> Void)? = nil, onSearchKeywords: ((String) async throws -> [String])? = nil, searchAIIdentity: Int = 0) {
+    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((PDFWorkspaceMemoryReceipt) -> Void)? = nil, interactionResetID: UUID? = nil, notePlacements: [String: ReadingNotePlacement] = [:], onCreatePositionNote: ((Int, Double, Double) -> Void)? = nil, noteMarginVisible: Bool = false, notePlacementOwner: String = "", onCancelPositionNote: (() -> Void)? = nil, onAddBookmark: ((Int) -> Void)? = nil, noteBindingDocumentID: String? = nil, onAISearch: ((String) -> Void)? = nil, onSearchKeywords: ((String) async throws -> [String])? = nil, searchAIIdentity: Int = 0, onQuotePositionNote: ((Int, Double, Double, ReadingNoteSourceQuote) -> Void)? = nil, onReadingConversation: ((SourceReadingSelection) -> Void)? = nil) {
         self.controller = controller; self.url = url; self.sourceHash = sourceHash; self.password = password; self.annotations = annotations
         self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
         self.onUnlock = onUnlock; self.onSaveAnnotations = onSaveAnnotations; self.onTrashAnnotation = onTrashAnnotation
@@ -69,6 +71,7 @@ struct PDFReaderView: NSViewRepresentable {
         self.onCancelPositionNote = onCancelPositionNote
         self.notePlacementOwner = notePlacementOwner
         self.noteMarginVisible = noteMarginVisible
+        self.onQuotePositionNote = onQuotePositionNote; self.onReadingConversation = onReadingConversation
         self.notePlacements = notePlacements; self.onCreatePositionNote = onCreatePositionNote
     }
 
@@ -132,6 +135,8 @@ struct PDFReaderView: NSViewRepresentable {
     private var appliedNoteReservedWidth: CGFloat = 0
     private var notePlacements: [String: ReadingNotePlacement] = [:]
     private var notePlacementsByPage: [Int: [(String, ReadingNotePlacement)]] = [:]
+    private var onQuotePositionNote: ((Int, Double, Double, ReadingNoteSourceQuote) -> Void)?
+    private var onReadingConversation: ((SourceReadingSelection) -> Void)?
     private var onCreatePositionNote: ((Int, Double, Double) -> Void)?
     private let bindingID = UUID()
     private weak var controller: PDFReaderController?
@@ -701,6 +706,7 @@ struct PDFReaderView: NSViewRepresentable {
             noteInsetsNeedLayout = true; needsLayout = true
         }
         notePlacementOwner = input.notePlacementOwner
+        onQuotePositionNote = input.onQuotePositionNote; onReadingConversation = input.onReadingConversation
         onCreatePositionNote = input.onCreatePositionNote
         if noteBindingDocumentID != input.noteBindingDocumentID { noteBindingPreview = nil; noteInsetsNeedLayout = true; needsLayout = true }
         noteBindingDocumentID = input.noteBindingDocumentID
@@ -720,6 +726,7 @@ struct PDFReaderView: NSViewRepresentable {
         }
         pdfView.onNotePoint = { [weak self] page, point in self?.createPositionNote(page: page, point: point) }
         pdfView.onSentenceActions = { [weak self] page, point in self?.sentenceMarkActions(page: page, point: point) ?? [] }
+        pdfView.onSelectionActions = { [weak self] page, point, selection in self?.sentenceMarkActions(page: page, point: point, selection: selection) ?? [] }
         scheduleVisiblePages()
         if controller !== input.controller {
             controller?.unbind(id: bindingID)
@@ -2920,87 +2927,146 @@ struct PDFReaderView: NSViewRepresentable {
         pdfView.needsDisplay = true
     }
 
-    private func sentenceMarkActions(page: PDFPage, point: CGPoint) -> [ReadingContextAction] {
-        guard canEditAnnotations, !interactionBlocked, let document, !document.isLocked, document.allowsCopying,
-              page.document === document else { return [] }
-        let number = document.index(for: page) + 1
-        // Already prepared hover geometry is the fast path. The explicit menu
-        // command may prepare up to eight native ranges on this one hit line;
-        // ordinary mouse movement still does no synchronous native geometry.
-        let hit = (sourceGeometryIDsByPage[number] ?? []).compactMap { sourceGeometries[$0] }
-            .filter { $0.value.interaction == .passage && $0.value == sourceDecorationValuesByID[$0.value.id] && $0.lines.contains(where: { $0.contains(point) }) }
-            .min { ($0.range?.length ?? Int.max, $0.value.id) < ($1.range?.length ?? Int.max, $1.value.id) }
-        var candidates: [(id: String, range: NSRange)] = []
-        if let hit, let range = hit.range { candidates.append((hit.value.id, range)) }
-        if let cache = sourceGeometryPages[number], candidates.isEmpty {
-            var seen = Set<String>()
-            for line in cache.nativeLines.lines(at: point) { for nativeRange in line.ranges {
-                cache.passageIndex.forEachEntry(intersecting: nativeRange) { entry in
-                    guard seen.insert(entry.id).inserted, let value = cache.passageValues[entry.id],
-                          value == sourceDecorationValuesByID[entry.id] else { return }
-                    candidates.append((entry.id, entry.range))
-                    candidates.sort { ($0.range.length, $0.id) < ($1.range.length, $1.id) }
-                    if candidates.count > 8 { candidates.removeLast() }
-                }
-            } }
+    /// A single explicit command path for both a hovered sentence and a native
+    /// text selection. Captured ranges, not asynchronous hover state, own it.
+    func sentenceMarkActions(page: PDFPage, point: CGPoint, selection: PDFSelection? = nil) -> [ReadingContextAction] {
+        guard canEditAnnotations, !interactionBlocked, let document, !document.isLocked,
+              document.allowsCopying, page.document === document else { return [] }
+        let targets: [ReaderAnnotation]
+        if let selection {
+            guard let captured = try? ReaderAnnotationCapture.capture(selection: selection, document: document, sourceHash: sourceHash) else { return [] }
+            targets = captured
+        } else {
+            let number = document.index(for: page) + 1
+            let prepared = (sourceGeometryIDsByPage[number] ?? []).compactMap { sourceGeometries[$0] }
+                .filter { $0.value.interaction == .passage && $0.value == sourceDecorationValuesByID[$0.value.id] && $0.lines.contains(where: { $0.contains(point) }) }
+                .sorted { ($0.range?.length ?? Int.max) < ($1.range?.length ?? Int.max) }
+                .lazy.compactMap { hit in hit.range.flatMap { try? ReaderAnnotationCapture.sentence(range: $0, page: page, document: document, sourceHash: self.sourceHash, point: point) } }.first
+            guard let target = prepared ?? (try? ReaderAnnotationCapture.sentence(at: point, page: page, document: document, sourceHash: sourceHash)) else { return [] }
+            targets = [target]
         }
-        let hash = sourceHash
-        guard let target = candidates.lazy.compactMap({ try? ReaderAnnotationCapture.sentence(range: $0.range, page: page, document: document, sourceHash: hash, point: point) }).first
-            ?? savedAnnotations.first(where: { record in record.trashedAt == nil && record.sourceHash == hash && record.page == number && record.lineStyle != nil && record.quads.contains(where: { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height).contains(point) }) }) else { return [] }
-        let range = NSRange(location: target.rangeLocation, length: target.rangeLength)
+        guard !targets.isEmpty else { return [] }
         let generation = documentGeneration, navigation = navigationRequestID, source = sourceHash
-        let existing = savedAnnotations.first { $0.trashedAt == nil && $0.sourceHash == source && $0.page == number && $0.lineStyle != nil && $0.rangeLocation == range.location && $0.rangeLength == range.length }
-        var actions = ReaderAnnotationLineStyle.allCases.map { style in
-            let removing = existing?.lineStyle == style
-            let name = style == .straight ? "直线下划线" : "波浪下划线"
-            return ReadingContextAction(title: (removing ? "移除" : "添加") + name, icon: style == .straight ? "underline" : "water.waves") { [weak self, weak page] in
-                guard let self, let page, self.canEditAnnotations, !self.interactionBlocked,
-                      self.documentGeneration == generation, self.navigationRequestID == navigation,
-                      self.sourceHash == source, page.document === self.document else { return }
-                Task { @MainActor in
-                    if removing, let existing { _ = await self.onTrashAnnotation?(existing.id, true) }
-                    else {
-                        var record = existing ?? target; record.lineStyle = style
-                        if existing == nil { record.color = .blue; record.lineAppearance = ReaderUnderlineDefaults.value }
-                        _ = await self.onSaveAnnotations?([record])
-                    }
-                }
-            }
+        func existing(_ target: ReaderAnnotation, style: ReaderAnnotationLineStyle?) -> ReaderAnnotation? {
+            savedAnnotations.first { $0.trashedAt == nil && $0.sourceHash == source && $0.page == target.page && $0.lineStyle == style && $0.effectiveKind == .text && $0.rangeLocation == target.rangeLocation && $0.rangeLength == target.rangeLength }
         }
-        actions.append(.init(title: "下划线样式…", icon: "slider.horizontal.3") { [weak self] in
-            self?.showUnderlineStyle(existing: existing, generation: generation, navigation: navigation, source: source)
+        var actions: [ReadingContextAction] = []
+        for style in ReaderAnnotationLineStyle.allCases {
+            let old = targets.map { existing($0, style: style) }, removing = old.allSatisfy { $0 != nil }
+            let name = style == .straight ? "直线下划线" : "波浪下划线"
+            actions.append(.init(title: (removing ? "移除" : "添加") + name, icon: style == .straight ? "underline" : "water.waves") { [weak self] in
+                guard let self, self.contextIsCurrent(generation, navigation, source) else { return }
+                Task { @MainActor in
+                    var records: [ReaderAnnotation] = []
+                    for (target, previous) in zip(targets, old) {
+                        if var previous { if removing { previous.trashedAt = .now; records.append(previous) }; continue }
+                        var record = target; record.lineStyle = style; record.color = .blue
+                        var appearance = ReaderUnderlineDefaults.value(for: style); appearance.highlighter = false
+                        record.lineAppearance = appearance; records.append(record)
+                    }
+                    _ = await self.onSaveAnnotations?(records)
+                }
+            })
+        }
+        let oldHighlights = targets.map { existing($0, style: nil) }, removingHighlight = oldHighlights.allSatisfy { $0 != nil }
+        actions.append(.init(title: removingHighlight ? "移除荧光标记" : "添加荧光标记", icon: "highlighter") { [weak self] in
+            guard let self, self.contextIsCurrent(generation, navigation, source) else { return }
+            Task { @MainActor in
+                let records = zip(targets, oldHighlights).compactMap { target, old -> ReaderAnnotation? in
+                    if var old { guard removingHighlight else { return nil }; old.trashedAt = .now; return old }
+                    var record = target; record.highlightAppearance = ReaderHighlightDefaults.value; return record
+                }
+                _ = await self.onSaveAnnotations?(records)
+            }
+        })
+        actions.append(.init(title: "围绕所选文字对话", icon: "bubble.left.and.bubble.right") { [weak self] in
+            guard let self, self.contextIsCurrent(generation, navigation, source) else { return }
+            self.sourceSelectionObservation &+= 1
+            self.onReadingConversation?(self.readingSelection(targets, document: document))
+        })
+        actions.append(.init(title: "为所选文字写便签", icon: "square.and.pencil") { [weak self, weak document] in
+            guard let self, let document, self.contextIsCurrent(generation, navigation, source),
+                  let first = targets.first, let targetPage = document.page(at: first.page - 1) else { return }
+            // The middle source character, rather than a union of wrapped line
+            // rectangles, is the physical anchor of the selected sentence.
+            let index = first.rangeLocation + first.rangeLength / 2
+            let rect = targetPage.characterBounds(at: min(targetPage.numberOfCharacters - 1, index))
+            let crop = targetPage.readingSourceBounds(for: .cropBox)
+            guard !rect.isEmpty, crop.contains(.init(x: rect.midX, y: rect.midY)), crop.width > 0, crop.height > 0 else { return }
+            let quote = ReadingNoteSourceQuote(text: targets.map(\.text).joined(separator: "\n"), ranges: targets.map { .init(page: $0.page, location: $0.rangeLocation, length: $0.rangeLength) })
+            self.onQuotePositionNote?(first.page, (rect.midX - crop.minX) / crop.width, (rect.midY - crop.minY) / crop.height, quote)
+        })
+        let existingLines = Dictionary(uniqueKeysWithValues: ReaderAnnotationLineStyle.allCases.compactMap { style in
+            targets.lazy.compactMap { existing($0, style: style) }.first.map { (style, $0) }
+        })
+        let firstHighlight = oldHighlights.compactMap { $0 }.first
+        actions.append(.init(title: "标记样式…", icon: "slider.horizontal.3") { [weak self] in
+            self?.showUnderlineStyle(existing: existingLines, generation: generation, navigation: navigation, source: source, highlight: firstHighlight)
         })
         return actions
     }
+    private func readingSelection(_ records: [ReaderAnnotation], document: PDFDocument) -> SourceReadingSelection {
+        var prefix = "", suffix = ""
+        if let first = records.first, let native = document.page(at: first.page - 1)?.string as NSString?, first.rangeLocation <= native.length {
+            prefix = String(native.substring(to: first.rangeLocation).suffix(240))
+            while prefix.utf8.count > 1024 { prefix.removeFirst() }
+        }
+        if let last = records.last, let native = document.page(at: last.page - 1)?.string as NSString?, last.rangeLocation + last.rangeLength <= native.length {
+            suffix = String(native.substring(from: last.rangeLocation + last.rangeLength).prefix(240))
+            while suffix.utf8.count > 1024 { suffix.removeLast() }
+        }
+        return .init(text: records.map(\.text).joined(separator: "\n"), isExact: false, page: records.first?.page,
+            endPage: records.last?.page, sourcePrefix: prefix, sourceSuffix: suffix)
+    }
+    private func contextIsCurrent(_ generation: Int, _ navigation: Int, _ source: String) -> Bool {
+        canEditAnnotations && !interactionBlocked && documentGeneration == generation && navigationRequestID == navigation && sourceHash == source
+    }
 
-    private func showUnderlineStyle(existing: ReaderAnnotation?, generation: Int, navigation: Int, source: String) {
+    private func showUnderlineStyle(existing: [ReaderAnnotationLineStyle: ReaderAnnotation], generation: Int, navigation: Int, source: String, highlight: ReaderAnnotation? = nil) {
         guard canEditAnnotations, !interactionBlocked, documentGeneration == generation, navigationRequestID == navigation,
               sourceHash == source, window?.attachedSheet == nil else { return }
-        let initial = existing.map { record -> ReaderUnderlineAppearance in
-            if let appearance = record.lineAppearance { return appearance }
+        let initial = Dictionary(uniqueKeysWithValues: ReaderAnnotationLineStyle.allCases.map { style -> (ReaderAnnotationLineStyle, ReaderUnderlineAppearance) in
+            guard let record = existing[style] else { return (style, ReaderUnderlineDefaults.value(for: style)) }
+            if let appearance = record.lineAppearance { return (style, appearance) }
             var appearance = ReaderUnderlineAppearance()
             if let color = record.color.nativeColor.usingColorSpace(.sRGB) {
                 appearance.red = color.redComponent; appearance.green = color.greenComponent; appearance.blue = color.blueComponent
             }
-            return appearance
-        } ?? ReaderUnderlineDefaults.value
-        let view = ReaderUnderlineStyleView(value: initial, editsExisting: existing != nil,
-            onApply: { [weak self] appearance in
-                guard let self, appearance.isValid, self.documentGeneration == generation,
-                      self.navigationRequestID == navigation, self.sourceHash == source, self.canEditAnnotations else { return false }
-                if let existing {
-                    guard self.savedAnnotations.contains(existing) else { self.setStatus("这条划线已在别处变化，请关闭后重新打开样式。"); return false }
-                    var updated = existing; updated.lineAppearance = appearance
-                    guard await self.onSaveAnnotations?([updated]) == true else { return false }
+            return (style, appearance)
+        })
+        let view = ReaderUnderlineStyleView(appearances: initial, existingStyles: Set(existing.keys), initialStyle: existing[.straight] != nil || existing[.wavy] == nil ? .straight : .wavy,
+            onApply: { [weak self] appearances in
+                guard let self, !appearances.isEmpty, appearances.values.allSatisfy(\.isValid),
+                      self.contextIsCurrent(generation, navigation, source) else { return false }
+                var updates: [ReaderAnnotation] = []
+                for style in ReaderAnnotationLineStyle.allCases {
+                    guard let appearance = appearances[style], let record = existing[style] else { continue }
+                    guard self.savedAnnotations.contains(record) else { self.setStatus("这条划线已在别处变化，请关闭后重新打开样式。"); return false }
+                    var updated = record; updated.lineAppearance = appearance; updates.append(updated)
                 }
-                ReaderUnderlineDefaults.save(appearance); self.closeAnnotationPanel(); return true
-            }, onCancel: { [weak self] in self?.closeAnnotationPanel() })
-        presentAnnotationPanel(view, title: "下划线样式", asSheet: true)
+                if !updates.isEmpty { guard await self.onSaveAnnotations?(updates) == true else { return false } }
+                for (style, appearance) in appearances { ReaderUnderlineDefaults.save(appearance, for: style) }
+                self.closeAnnotationPanel(); return true
+            }, onCancel: { [weak self] in self?.closeAnnotationPanel() },
+            highlight: highlight?.highlightAppearance ?? ReaderHighlightDefaults.value,
+            onApplyHighlight: { [weak self] appearance in
+                guard let self, appearance.isValid, self.contextIsCurrent(generation, navigation, source) else { return false }
+                if var highlight {
+                    guard self.savedAnnotations.contains(highlight) else { return false }
+                    highlight.highlightAppearance = appearance
+                    guard await self.onSaveAnnotations?([highlight]) == true else { return false }
+                }
+                ReaderHighlightDefaults.save(appearance); self.closeAnnotationPanel(); return true
+            })
+        presentAnnotationPanel(view, title: "标记样式", asSheet: true)
     }
 
     @objc private func annotationHit(_ notification: Notification) {
         guard let annotation = notification.userInfo?["PDFAnnotationHit"] as? PDFAnnotation else { return }
-        // Source mentions are admitted by the click/drag distinction below.
+        // PDFKit posts this on mouse-down, before a click can be distinguished
+        // from a drag. Pointer editing is owned by AnnotationPDFView at mouse-up;
+        // retain the notification path for non-pointer accessibility activation.
+        if let type = NSApp.currentEvent?.type, [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(type) { return }
         openAnnotation(annotation)
     }
     private func openAnnotation(_ annotation: PDFAnnotation) {
@@ -3168,13 +3234,142 @@ private extension ReaderAnnotationColor {
     var nativeColor: NSColor { switch self { case .yellow: return .systemYellow; case .green: return .systemGreen; case .blue: return .systemBlue; case .pink: return .systemPink } }
 }
 
+/// Retain PDFKit's own selection geometry without its blocking mouse tracking
+/// loop. That loop queues indirect touch-end events until the delayed mouse-up.
+/// Only a confirmed three-finger text drag uses this small event-driven path.
+@MainActor struct PDFTrackpadTextSelection {
+    let document: PDFDocument
+    let page: PDFPage
+    let startIndex: Int
+    var pointer: NSEvent
+    var menuPresented = false
+    init?(in view: PDFView, event: NSEvent) {
+        let point = view.convert(event.locationInWindow, from: nil)
+        guard let document = view.document, !document.isLocked, document.allowsCopying,
+              let page = view.page(for: point, nearest: false), page.document === document else { return nil }
+        let local = view.convert(point, to: page), index = page.characterIndex(at: local)
+        guard index >= 0, index < page.numberOfCharacters,
+              page.characterBounds(at: index).insetBy(dx: -5, dy: -5).contains(local) else { return nil }
+        self.document = document; self.page = page; startIndex = index; pointer = event
+    }
+    func selection(in view: PDFView) -> PDFSelection? {
+        guard view.document === document else { return nil }
+        let point = view.convert(pointer.locationInWindow, from: nil)
+        guard let endPage = view.page(for: point, nearest: true), endPage.document === document else { return nil }
+        let local = view.convert(point, to: endPage), crop = endPage.readingSourceBounds(for: .cropBox)
+        let end = CGPoint(x: min(crop.maxX - 0.01, max(crop.minX + 0.01, local.x)), y: min(crop.maxY - 0.01, max(crop.minY + 0.01, local.y)))
+        let endIndex = endPage.characterIndex(at: end), first = document.index(for: page), last = document.index(for: endPage)
+        guard endIndex >= 0, endIndex < endPage.numberOfCharacters, first != NSNotFound, last != NSNotFound else { return nil }
+        // PDFKit's point-based overload can choose a nearby line boundary.
+        // Character indices keep the exact same endpoints in both directions.
+        if first > last || first == last && startIndex > endIndex {
+            return document.selection(from: endPage, atCharacterIndex: endIndex, to: page, atCharacterIndex: startIndex)
+        }
+        return document.selection(from: page, atCharacterIndex: startIndex, to: endPage, atCharacterIndex: endIndex)
+    }
+}
+
 /// Region mode intercepts PDFKit's text selection only while explicitly armed.
 /// Both endpoints must belong to the same page; coordinates are converted by PDFView, including rotation/crop.
 @MainActor private final class AnnotationPDFView: PDFView {
     var paperTurnInProgress = false
     var onSourcePointerLeft: (() -> Void)?
     private var sourceTrackingArea: NSTrackingArea?
-    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); window?.acceptsMouseMovedEvents = true }
+    private var contextEventMonitor: Any?
+    private var selectionDragStart: (point: CGPoint, text: String?)?
+    private var pendingManagedTap: PDFAnnotation?
+    private var indirectFingerCount = 0
+    private var trackpadSelection: PDFTrackpadTextSelection?
+    private var trackpadSelectionRevision = 0
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow(); window?.acceptsMouseMovedEvents = true
+        if let contextEventMonitor { NSEvent.removeMonitor(contextEventMonitor); self.contextEventMonitor = nil }
+        trackpadSelection = nil; selectionDragStart = nil; pendingManagedTap = nil
+        indirectFingerCount = 0; trackpadSelectionRevision &+= 1
+        guard window != nil else { return }
+        allowedTouchTypes = [.indirect]; wantsRestingTouches = true
+        contextEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .gesture]) { [weak self] event in
+            guard let self, event.window === self.window else { return event }
+            guard !self.interactionBlocked, !self.paperTurnInProgress else { self.cancelTrackpadSelection(); return event }
+            if event.type == .gesture {
+                let touches = event.touches(matching: .any, in: self)
+                guard !touches.isEmpty else { return event }
+                self.indirectFingerCount = touches.filter { !$0.isResting && !$0.phase.intersection(.touching).isEmpty }.count
+                if touches.contains(where: { $0.phase == .cancelled }) { self.cancelTrackpadSelection() }
+                else if self.indirectFingerCount == 0, touches.contains(where: { $0.phase == .ended }) {
+                    self.presentTrackpadSelection()
+                }
+                return event
+            }
+            if event.type == .leftMouseDragged, var selection = self.trackpadSelection {
+                guard selection.document === self.document else { self.cancelTrackpadSelection(); return nil }
+                if selection.menuPresented { self.readingContext.close() }
+                selection.pointer = event; selection.menuPresented = false
+                self.trackpadSelection = selection; self.trackpadSelectionRevision &+= 1
+                if let value = selection.selection(in: self) { self.setCurrentSelection(value, animate: false) }
+                _ = self.autoscroll(with: event)
+                return nil
+            }
+            if event.type == .leftMouseUp, self.trackpadSelection != nil {
+                self.presentTrackpadSelection()
+                self.trackpadSelection = nil; self.selectionDragStart = nil; self.pendingManagedTap = nil
+                return nil
+            }
+            if event.type == .leftMouseUp, let start = self.selectionDragStart {
+                self.selectionDragStart = nil
+                let point = self.convert(event.locationInWindow, from: nil)
+                let distance = hypot(point.x - start.point.x, point.y - start.point.y)
+                let tapped = self.pendingManagedTap; self.pendingManagedTap = nil
+                if distance <= 3, let tapped {
+                    DispatchQueue.main.async { [weak self] in self?.onAnnotationTap?(tapped) }
+                    return event
+                }
+                guard distance > 3,
+                      let selection = self.currentSelection?.copy() as? PDFSelection,
+                      selection.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return event }
+                DispatchQueue.main.async { [weak self] in self?.showReadingContext(for: event, selected: selection) }
+                return event
+            }
+            guard let root = self.window?.contentView else { return event }
+            let at = root.convert(event.locationInWindow, from: nil)
+            guard let hit = root.hitTest(at), hit === self || hit.isDescendant(of: self) else { return event }
+            if event.type == .rightMouseDown {
+                self.showReadingContext(for: event)
+                return nil // Consume the original event before PDFKit forwards it.
+            }
+            if event.type == .leftMouseDown, !self.regionArmed, !self.noteArmed {
+                self.cancelTrackpadSelection(); self.readingContext.close()
+                let point = self.convert(event.locationInWindow, from: nil)
+                self.selectionDragStart = (point, self.currentSelection?.string)
+                self.pendingManagedTap = event.modifierFlags.contains(.option) ? nil : self.managedAnnotation(at: point)
+                if self.indirectFingerCount >= 3, event.clickCount == 1,
+                   event.modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty,
+                   let selection = PDFTrackpadTextSelection(in: self, event: event) {
+                    self.trackpadSelection = selection; self.window?.makeFirstResponder(self)
+                    self.clearSelection(); return nil
+                }
+            }
+            return event
+        }
+    }
+    private func presentTrackpadSelection() {
+        guard var drag = trackpadSelection, !drag.menuPresented,
+              drag.document === document, window?.isKeyWindow == true,
+              let start = selectionDragStart, hypot(convert(drag.pointer.locationInWindow, from: nil).x - start.point.x, convert(drag.pointer.locationInWindow, from: nil).y - start.point.y) > 3,
+              let selection = currentSelection?.copy() as? PDFSelection,
+              selection.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return }
+        drag.menuPresented = true; trackpadSelection = drag
+        let revision = trackpadSelectionRevision, pointer = drag.pointer
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.trackpadSelectionRevision == revision, self.document === drag.document,
+                  self.window?.isKeyWindow == true else { return }
+            self.showReadingContext(for: pointer, selected: selection)
+        }
+    }
+    private func cancelTrackpadSelection() {
+        trackpadSelection = nil; trackpadSelectionRevision &+= 1
+    }
+    deinit { if let contextEventMonitor { NSEvent.removeMonitor(contextEventMonitor) } }
     override func updateTrackingAreas() {
         if let sourceTrackingArea { removeTrackingArea(sourceTrackingArea) }
         let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
@@ -3190,6 +3385,7 @@ private extension ReaderAnnotationColor {
     private let readingContext = ReadingContextPopover()
     var onBookmarkPoint: ((PDFPage) -> Void)?
     var onSentenceActions: ((PDFPage, CGPoint) -> [ReadingContextAction])?
+    var onSelectionActions: ((PDFPage, CGPoint, PDFSelection) -> [ReadingContextAction])?
     var onNotePreview: ((PDFPage, CGPoint) -> Void)?
     func armNotePlacement() { cancelRegionSelection(); noteArmed = true }
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -3197,20 +3393,29 @@ private extension ReaderAnnotationColor {
         return nil
     }
     override func rightMouseDown(with event: NSEvent) { showReadingContext(for: event) }
-    private func showReadingContext(for event: NSEvent) {
+    private func showReadingContext(for event: NSEvent, selected: PDFSelection? = nil) {
         guard !interactionBlocked, !paperTurnInProgress else { return }
         let point = convert(event.locationInWindow, from: nil)
         guard bounds.contains(point), let page = page(for: point, nearest: false), let anchor = window?.contentView else { return }
         let original = convert(point, to: page)
         guard page.readingSourceBounds(for: .cropBox).contains(original) else { return }
-        readingContext.show([
-            .init(title: "在此写便签", icon: "square.and.pencil", action: { [weak self, weak page] in
+        // Capture the untouched window event directly. PDFKit's page views can
+        // forward a context event with a different page-local coordinate space.
+        let popupPoint = anchor.convert(event.locationInWindow, from: nil)
+        let selection = selected ?? currentSelection.flatMap { selection in
+            selection.pages.contains(page) && selection.bounds(for: page).contains(original) ? selection : nil
+        }
+        var actions = selection.map { onSelectionActions?(page, original, $0) ?? [] } ?? onSentenceActions?(page, original) ?? []
+        if actions.isEmpty {
+            guard selected == nil else { return }
+            actions.append(.init(title: "在此写便签", icon: "square.and.pencil") { [weak self, weak page] in
                 guard let self, let page, !self.interactionBlocked else { return }; self.onNotePoint?(page, original)
-            }),
-            .init(title: "添加书签", icon: "bookmark", action: { [weak self, weak page] in
-                guard let self, let page, !self.interactionBlocked else { return }; self.onBookmarkPoint?(page)
             })
-        ] + (onSentenceActions?(page, original) ?? []), at: anchor.convert(point, from: self), in: anchor)
+        }
+        actions.append(.init(title: "添加书签", icon: "bookmark") { [weak self, weak page] in
+            guard let self, let page, !self.interactionBlocked else { return }; self.onBookmarkPoint?(page)
+        })
+        readingContext.show(actions, at: popupPoint, in: anchor)
     }
     override func mouseMoved(with event: NSEvent) {
         if noteArmed, !interactionBlocked {
@@ -3226,12 +3431,11 @@ private extension ReaderAnnotationColor {
     var onAnnotationTap: ((PDFAnnotation) -> Void)?
     private var regionArmed = false
     var isRegionSelectionArmed: Bool { regionArmed }
-    private var handlingManagedClick = false
     private var regionStart: (page: PDFPage, pagePoint: CGPoint, viewPoint: CGPoint)?
     private var regionPreview: NSView?
 
     func armRegionSelection() { cancelRegionSelection(); regionArmed = true }
-    func cancelRegionSelection() { noteArmed = false; regionArmed = false; handlingManagedClick = false; regionStart = nil; regionPreview?.removeFromSuperview(); regionPreview = nil }
+    func cancelRegionSelection() { cancelTrackpadSelection(); noteArmed = false; regionArmed = false; pendingManagedTap = nil; regionStart = nil; regionPreview?.removeFromSuperview(); regionPreview = nil }
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
         if paperTurnInProgress { return bounds.contains(local) ? self : nil }
@@ -3255,9 +3459,8 @@ private extension ReaderAnnotationColor {
             if let page = page(for: point, nearest: false) { onNotePoint?(page, convert(point, to: page)) }; return
         }
         if !regionArmed {
-            if !event.modifierFlags.contains(.option), let annotation = managedAnnotation(at: point) {
-                handlingManagedClick = true; onAnnotationTap?(annotation); return
-            }
+            // Wait for mouse-up to distinguish opening an existing annotation
+            // from starting a normal text selection through the same glyphs.
             super.mouseDown(with: event); return
         }
         guard let page = page(for: point, nearest: false) else { cancelRegionSelection(); onRegionError?("请从PDF页面内开始框选。"); return }
@@ -3268,13 +3471,11 @@ private extension ReaderAnnotationColor {
         addSubview(preview); regionPreview = preview
     }
     override func mouseDragged(with event: NSEvent) {
-        guard !handlingManagedClick else { return }
         guard let start = regionStart else { if !regionArmed { super.mouseDragged(with: event) }; return }
         let point = convert(event.locationInWindow, from: nil)
         regionPreview?.frame = NSRect(x: min(point.x, start.viewPoint.x), y: min(point.y, start.viewPoint.y), width: abs(point.x - start.viewPoint.x), height: abs(point.y - start.viewPoint.y))
     }
     override func mouseUp(with event: NSEvent) {
-        if handlingManagedClick { handlingManagedClick = false; return }
         guard let start = regionStart else { if !regionArmed { super.mouseUp(with: event) }; return }
         let point = convert(event.locationInWindow, from: nil)
         defer { cancelRegionSelection() }
@@ -3286,6 +3487,7 @@ private extension ReaderAnnotationColor {
     }
     override func keyDown(with event: NSEvent) {
         guard !interactionBlocked, !paperTurnInProgress else { return }
+        if event.keyCode == 53, trackpadSelection != nil { cancelTrackpadSelection(); selectionDragStart = nil; pendingManagedTap = nil; readingContext.close(); return }
         if (regionArmed || noteArmed) && event.keyCode == 53 { let note = noteArmed; cancelRegionSelection(); if note { onNotePlacementCancelled?() }; onRegionError?(""); return }
         // Every plain arrow pans along its own axis. Only the selected reading
         // axis turns pages, and only after the current magnified page boundary.

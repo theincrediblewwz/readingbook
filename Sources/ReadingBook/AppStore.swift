@@ -10,6 +10,7 @@ import ReadingCore
     @Published var bookID: String? {
         didSet {
             if oldValue != bookID {
+                cancelPositionNoteForSourceChange()
                 clearWorkspaceAuxiliaryForNewSource()
                 queryTask?.cancel(); companionTask?.cancel()
                 pendingPlanRegeneration = nil
@@ -18,6 +19,8 @@ import ReadingCore
                 teacherBackground.cancelAll(); sentenceTranslation.cancelAll()
                 queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []; queryReferencedAnswerIDs = []; queryComposerDraft.text = ""
                 companionReferencedAnswerIDs = []; positionNoteBinding = nil
+                positionNoteOpenID = nil
+                readerEditUndo.clear()
                 questionSuggestions.reset()
                 queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false
                 queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil
@@ -89,6 +92,9 @@ import ReadingCore
     @Published var queryReferencedAnswerIDs: Set<String> = []
     @Published var companionReferencedAnswerIDs: Set<String> = []
     @Published var positionNoteRequest: PositionNoteRequest?
+    var positionNoteOpenID: UUID?
+    var positionNoteDraftBuffer: PositionNoteDraftBuffer?
+    let readerEditUndo = ReaderEditUndoState()
     @Published var positionNoteBinding: PositionNoteBindingRequest?
     @Published var isOrganizingCollections = false
     @Published var queryMemoryEnabled = UserDefaults.standard.object(forKey: "query-memory-enabled") as? Bool ?? true {
@@ -224,7 +230,7 @@ import ReadingCore
     }
     @Published var catalogOperations = 0
     @Published var libraryRootURL: URL {
-        didSet { if oldValue != libraryRootURL { auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); questionSuggestions.reset(); queryReferencedAnswerIDs = []; companionReferencedAnswerIDs = []; positionNoteBinding = nil; queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false; queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
+        didSet { if oldValue != libraryRootURL { cancelPositionNoteForSourceChange(); readerEditUndo.clear(); positionNoteOpenID = nil; auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); questionSuggestions.reset(); queryReferencedAnswerIDs = []; companionReferencedAnswerIDs = []; positionNoteBinding = nil; queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false; queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
     }
     @Published var lastTrashedProjectURL: URL?
     let storageState = StorageSettingsState()
@@ -814,9 +820,15 @@ import ReadingCore
     }
     func toggleBookmark(_ unitID: String) async {
         guard var current = book, !isBusy else { return }
+        let owner = WorkspacePickerOwner(store: self), wasBookmarked = current.bookmarks.contains(unitID)
         isBusy = true; defer { isBusy = false }
         if current.bookmarks.contains(unitID) { current.bookmarks.removeAll { $0 == unitID } } else { current.bookmarks.append(unitID) }
-        do { publish(try await repository.save(current)) } catch { errorMessage = error.localizedDescription }
+        do {
+            let saved = try await repository.save(current)
+            guard owner.matches(self) else { return }
+            readerEditUndo.record(.bookmark(unitID: unitID, expected: !wasBookmarked, desired: wasBookmarked), title: "书签", owner: owner)
+            publish(saved)
+        } catch { if owner.matches(self) { errorMessage = error.localizedDescription } }
     }
     @discardableResult
     func moveNode(id: String, x: Double, y: Double, onError: ((String) -> Void)? = nil) async -> Bool {

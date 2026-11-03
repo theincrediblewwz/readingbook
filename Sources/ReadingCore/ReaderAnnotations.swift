@@ -39,6 +39,7 @@ public struct ReaderAnnotation: Codable, Identifiable, Hashable, Sendable {
     public var kind: ReaderAnnotationKind? = nil
     public var lineStyle: ReaderAnnotationLineStyle? = nil
     public var lineAppearance: ReaderUnderlineAppearance? = nil
+    public var highlightAppearance: ReaderHighlightAppearance? = nil
     public var effectiveKind: ReaderAnnotationKind { kind ?? .text }
     public init(id: String = UUID().uuidString, sourceHash: String, page: Int, text: String, rangeLocation: Int, rangeLength: Int, quads: [ReaderQuadRect], color: ReaderAnnotationColor = .yellow, comment: String = "", createdAt: Date = Date(), updatedAt: Date = Date(), trashedAt: Date? = nil, kind: ReaderAnnotationKind? = nil, lineStyle: ReaderAnnotationLineStyle? = nil) {
         self.id = id; self.sourceHash = sourceHash; self.page = page; self.text = text; self.rangeLocation = rangeLocation; self.rangeLength = rangeLength; self.quads = quads; self.color = color; self.comment = comment; self.createdAt = createdAt; self.updatedAt = updatedAt; self.trashedAt = trashedAt; self.kind = kind
@@ -64,6 +65,9 @@ public enum ReaderAnnotationValidator {
         }
         guard annotation.lineAppearance == nil || (annotation.lineStyle != nil && annotation.effectiveKind == .text && annotation.lineAppearance?.isValid == true) else {
             throw ReadingError.invalid("下划线样式无效，原批注保留。")
+        }
+        guard annotation.highlightAppearance == nil || (annotation.effectiveKind == .text && annotation.lineStyle == nil && annotation.highlightAppearance?.isValid == true) else {
+            throw ReadingError.invalid("荧光标记样式无效，原批注保留。")
         }
         guard annotation.quads.allSatisfy({ rect in
             [rect.x, rect.y, rect.width, rect.height].allSatisfy { $0.isFinite && abs($0) <= 10_000_000 } && rect.width > 0 && rect.height > 0
@@ -126,7 +130,10 @@ public enum ReaderAnnotationAppearance {
             annotation.add(path)
         } else {
             annotation = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
-            annotation.color = color.withAlphaComponent(0.42)
+            if let appearance = record.highlightAppearance {
+                guard appearance.isValid else { return nil }
+                annotation.color = appearance.nativeColor
+            } else { annotation.color = color.withAlphaComponent(0.42) }
         }
         annotation.contents = record.comment.isEmpty ? record.text : record.comment
         return annotation
@@ -151,6 +158,17 @@ private final class ReaderUnderlinePDFAnnotation: PDFAnnotation {
 }
 
 public enum ReaderAnnotationCapture {
+    /// Resolve an explicit click without depending on prepared hover geometry.
+    /// This still requires a physical glyph hit; margins are never guessed.
+    public static func sentence(at point: CGPoint, page: PDFPage, document: PDFDocument, sourceHash: String) throws -> ReaderAnnotation? {
+        guard page.document === document, let text = page.string, text.utf8.count <= 2_000_000,
+              point.x.isFinite, point.y.isFinite else { return nil }
+        let index = page.characterIndex(at: point)
+        guard index >= 0, index < page.numberOfCharacters,
+              page.characterBounds(at: index).insetBy(dx: -1.5, dy: -1.5).contains(point),
+              let range = ReadingSentenceAnchors.ranges(in: text).first(where: { NSLocationInRange(index, $0) }) else { return nil }
+        return try sentence(range: range, page: page, document: document, sourceHash: sourceHash, point: point)
+    }
     /// A context command must physically hit this exact native text range.
     /// In particular, a blank margin or a later equal sentence is not a match.
     public static func sentence(range: NSRange, page: PDFPage, document: PDFDocument, sourceHash: String, point: CGPoint) throws -> ReaderAnnotation? {
@@ -158,8 +176,20 @@ public enum ReaderAnnotationCapture {
               range.location <= 100_000_000, range.length <= 100_000_000 - range.location,
               point.x.isFinite, point.y.isFinite, let selection = page.selection(for: range) else { return nil }
         let records = try capture(selection: selection, document: document, sourceHash: sourceHash)
-        guard records.count == 1, let record = records.first, record.rangeLocation == range.location, record.rangeLength == range.length,
+        guard records.count == 1, var record = records.first, let native = page.string as NSString?,
+              range.location <= native.length, range.length <= native.length - range.location,
+              record.rangeLocation <= range.location, record.rangeLocation + record.rangeLength >= NSMaxRange(range),
+              record.rangeLocation + record.rangeLength <= native.length,
               record.quads.contains(where: { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height).contains(point) }) else { return nil }
+        // PDFKit sometimes includes the following line break in its reported
+        // selection range, even though the requested native range and string
+        // end at the punctuation. Admit only verified whitespace expansion;
+        // retain the precise requested sentence instead of losing its menu.
+        let before = native.substring(with: NSRange(location: record.rangeLocation, length: range.location - record.rangeLocation))
+        let after = native.substring(with: NSRange(location: NSMaxRange(range), length: record.rangeLocation + record.rangeLength - NSMaxRange(range)))
+        guard (before + after).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        record.rangeLocation = range.location; record.rangeLength = range.length
+        record.text = native.substring(with: range)
         return record
     }
     /// PDFKit ranges are page-local UTF-16 character ranges. Never apply a cross-page range to just the first page.
@@ -170,10 +200,18 @@ public enum ReaderAnnotationCapture {
             let pageIndex = document.index(for: page)
             guard pageIndex != NSNotFound, page.document === document else { throw ReadingError.invalid("选中文字不属于当前PDF。") }
             for index in 0..<selection.numberOfTextRanges(on: page) {
-                let range = selection.range(at: index, on: page)
+                var range = selection.range(at: index, on: page)
                 guard range.location != NSNotFound, range.location >= 0, range.length > 0,
-                      let textSelection = page.selection(for: range), let text = textSelection.string,
+                      let textSelection = page.selection(for: range), var text = textSelection.string,
                       !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                if let native = page.string as NSString?, range.location <= native.length, range.length <= native.length - range.location {
+                    let slice = native.substring(with: range), trimmed = slice.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.utf8.elementsEqual(text.trimmingCharacters(in: .whitespacesAndNewlines).utf8),
+                       let exact = slice.range(of: trimmed, options: .literal) {
+                        let local = NSRange(exact, in: slice)
+                        range = NSRange(location: range.location + local.location, length: local.length); text = trimmed
+                    }
+                }
                 let rects = textSelection.selectionsByLine().map { $0.bounds(for: page).intersection(page.bounds(for: .cropBox)) }.filter { !$0.isNull && !$0.isEmpty }
                 guard !rects.isEmpty, rects.count <= 512, text.count <= 32_768, records.count < 512,
                       range.location <= 100_000_000, range.length <= 100_000_000 - range.location else { throw ReadingError.invalid("选中文字过多或位置无法核对，请缩小选择。") }

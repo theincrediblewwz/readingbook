@@ -139,16 +139,12 @@ struct PositionNoteMarginLayer: View {
     let visible: Bool
     let interactive: Bool
     var onExpand: ([String], [String: String], CGPoint) -> Void
-    var onCollapse: () -> Void
     private var surfaces: [PDFNotePageSurface] {
         if isPDF, !positions.surfaces.isEmpty { return positions.surfaces }
         let frame = isPDF ? positions.marginFrame : CGRect(x: viewport.width - 17 - PositionNoteSurface.marginWidth, y: 0, width: PositionNoteSurface.marginWidth, height: viewport.height)
         return [.init(id: 0, frame: frame, scale: isPDF ? max(0.001, positions.marginScale) : 1, noteIDs: Set(positions.points.keys))]
     }
     var body: some View {
-        let frame = (surfaces.first(where: { $0.id == controller.page }) ?? surfaces.first)?.frame ?? .zero
-        let collapseX = frame.width > 0 && frame.maxX > 32 && frame.minX < viewport.width
-            ? max(8, min(viewport.width - 52, frame.maxX + 8)) : viewport.width - 52
         // Navigation floats above the original page. Keep the paper reserve
         // stable, while hiding slips/lines that would cover search or thumbnails.
         let notesVisible = visible && (!isPDF || !positions.navigationObscured)
@@ -169,12 +165,6 @@ struct PositionNoteMarginLayer: View {
                     .modifier(PositionNoteTurnVisibility(positions: positions, visible: notesVisible, interactive: interactive))
                 }
                 if isPDF { PositionNoteConnections(positions: positions, size: viewport).opacity(notesVisible ? 1 : 0) }
-                Button(action: onCollapse) { Image(systemName: "chevron.right").font(.system(size: 12, weight: .medium)).frame(width: 32, height: 32) }
-                    .buttonStyle(ReadingQuietButtonStyle()).background(Palette.paper.opacity(0.96), in: Circle())
-                    .overlay { Circle().strokeBorder(Color.primary.opacity(0.07)) }.shadow(color: .black.opacity(0.05), radius: 6, y: 2)
-                    .offset(x: collapseX, y: 86)
-                    .opacity(notesVisible ? 1 : 0).allowsHitTesting(notesVisible && interactive)
-                    .help("收起便签与右侧留白，恢复原来的阅读模式").accessibilityLabel("收起页边便签")
             }
         // A full-page host is deliberately taller than the viewport at fit
         // width. Pin that oversized stack to the viewport origin; the default
@@ -236,7 +226,8 @@ struct PositionNotePaper: View {
     var height: CGFloat? = 170
     var width: CGFloat = 230
     var clickCount = 2
-    var onCommand: ((String, PositionNoteCommand) -> Void)?
+    var degrees: Double = 0
+    var onCommand: ((String, PositionNoteCommand, PositionNoteEditorOrigin?) -> Void)?
     @State private var hovered = false
     @Environment(\.readingReduceMotion) private var reduceMotion
     private var placement: ReadingNotePlacement? { store.readerCollections.notePlacements?[id] }
@@ -255,25 +246,29 @@ struct PositionNotePaper: View {
             .lineLimit(max(1, Int((resolvedHeight - 36) / ((placement?.fontSize ?? 15) + 5))))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(18)
             .frame(width: width, height: resolvedHeight, alignment: .topLeading).clipped()
-            .background { ReadingPaperBackground().clipShape(RoundedRectangle(cornerRadius: 6)) }
+            .background { PositionNoteBackground(paperStyle: placement?.paperStyle).clipShape(RoundedRectangle(cornerRadius: 6)) }
             .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(hovered ? 0.14 : 0.065)) }
             .shadow(color: .black.opacity(hovered ? 0.055 : 0.035), radius: 8, y: 5)
             .contentShape(Rectangle()).onTapGesture(count: clickCount, perform: edit)
             .onHover { hovered = $0 }.animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: hovered)
             .overlay {
-                ReadingPaperContextAnchor(actions: [
-                    .init(title: "编辑便签", icon: "pencil", action: edit),
-                    .init(title: "在我的笔记中打开", icon: "note.text", action: { perform(.openNotebook) }),
-                    .init(title: "重新选择原文位置", icon: "mappin.and.ellipse", action: { perform(.relocate) }),
-                    .init(title: "取消位置绑定", icon: "mappin.slash", action: { perform(.unbind) }),
-                    .init(title: "移入回收站", icon: "trash", destructive: true, action: { perform(.trash) })
-                ], primary: edit, clickCount: clickCount)
+                ReadingPaperContextAnchor(actions: actions(origin: nil), primary: edit, clickCount: clickCount,
+                    primaryAtFrame: { frame in perform(.edit, origin: .init(screenFrame: frame, degrees: degrees)) },
+                    actionsAtFrame: { actions(origin: .init(screenFrame: $0, degrees: degrees)) })
             }.accessibilityAction { edit() }.help("右键管理便签；双击编辑正文，字体在编辑纸张右下角的 AA 中调整。")
             .accessibilityLabel("位置笔记").accessibilityValue(text).accessibilityHint("右键或双击编辑；纸条正文保存在普通笔记中。")
+            .opacity(store.positionNoteRequest?.document?.id == id ? 0 : 1)
+    }
+    private func actions(origin: PositionNoteEditorOrigin?) -> [ReadingContextAction] {
+        [.init(title: "编辑便签", icon: "pencil", action: { perform(.edit, origin: origin) }),
+         .init(title: "在我的笔记中打开", icon: "note.text", action: { perform(.openNotebook) }),
+         .init(title: "重新选择原文位置", icon: "mappin.and.ellipse", action: { perform(.relocate) }),
+         .init(title: "取消位置绑定", icon: "mappin.slash", action: { perform(.unbind) }),
+         .init(title: "移入回收站", icon: "trash", destructive: true, action: { perform(.trash) })]
     }
     private func edit() { perform(.edit) }
-    private func perform(_ command: PositionNoteCommand) {
-        if let onCommand { onCommand(id, command) }
-        else { store.performPositionNoteCommand(command, id: id, owner: WorkspacePickerOwner(store: store)) }
+    private func perform(_ command: PositionNoteCommand, origin: PositionNoteEditorOrigin? = nil) {
+        if let onCommand { onCommand(id, command, origin) }
+        else { store.performPositionNoteCommand(command, id: id, owner: WorkspacePickerOwner(store: store), origin: origin) }
     }
 }

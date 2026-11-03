@@ -203,7 +203,7 @@ public actor LibraryRepository {
         return DocumentContentSnapshot(markdown: markdown, contentHash: try BookImporter.sha256(data))
     }
 
-    public func saveDocument(project: BookProject, document: DocumentRecord, markdown: String, expectedContentHash: String? = nil, notePlacement: ReadingNotePlacement? = nil) throws -> BookProject {
+    public func saveDocument(project: BookProject, document: DocumentRecord, markdown: String, expectedContentHash: String? = nil, notePlacement: ReadingNotePlacement? = nil, placementWrite: ReadingNotePlacementWrite? = nil) throws -> BookProject {
         let directory = try bookDirectory(project.id, mustExist: true)
         try recoverDocument(in: directory)
         let existing = try readProject(in: directory)
@@ -251,7 +251,9 @@ public actor LibraryRepository {
         record.updatedAt = Date()
         if let index = documentIndices[record.id] { updated.documents[index] = record }
         else { updated.documents.append(record) }
-        if let notePlacement {
+        if case .set(let value) = placementWrite {
+            updated.readerCollections = try ReaderCollectionRuntime.apply(.setNotePlacement(record.id, value), in: updated)
+        } else if let notePlacement {
             updated.readerCollections = try ReaderCollectionRuntime.apply(.setNotePlacement(record.id, notePlacement), in: updated)
         }
         try ReadingKnowledgeRuntime.captureVersions(before: existing, in: &updated)
@@ -273,7 +275,8 @@ public actor LibraryRepository {
         return stampForPublication(updated)
     }
 
-    public func setDocumentTrashed(project: BookProject, documentID: String, trashed: Bool) throws -> BookProject {
+    public func setDocumentTrashed(project: BookProject, documentID: String, trashed: Bool,
+                                  expectedDocument: DocumentRecord? = nil, expectedContentHash: String? = nil) throws -> BookProject {
         guard Self.isSafeID(documentID) else { throw ReadingError.invalid("文档 ID 不合法。") }
         let directory = try bookDirectory(project.id, mustExist: true)
         try recoverDocument(in: directory)
@@ -281,6 +284,12 @@ public actor LibraryRepository {
         guard updated.id == project.id, updated.sourceHash == project.sourceHash,
               updated.originalName == project.originalName else { throw ReadingError.invalid("回收操作中的书籍身份与磁盘记录不符。") }
         guard let index = updated.documents.firstIndex(where: { $0.id == documentID }) else { throw ReadingError.invalid("文档不属于此书籍。") }
+        if let expectedDocument {
+            guard updated.documents[index] == expectedDocument, let expectedContentHash,
+                  try BookImporter.sha256(readLimited(documentURL(expectedDocument, in: directory), limit: Self.documentLimit)) == expectedContentHash else {
+                throw ReadingError.invalid("这篇笔记后来又被修改，未移入回收站。请重新核对。")
+            }
+        }
         guard (updated.documents[index].trashedAt != nil) != trashed else { return stampForPublication(updated) }
         updated.documents[index].trashedAt = trashed ? Date() : nil
         updated.documents[index].updatedAt = Date()
@@ -289,6 +298,57 @@ public actor LibraryRepository {
         try validatePackageFiles(updated, in: directory, strictContents: false, verifySourceHash: false)
         try atomicWrite(encode(updated), to: try child(directory, "project.json"))
         return stampForPublication(updated)
+    }
+
+    /// Compare-and-apply one reversible reading edit under the repository
+    /// actor. Concurrent AI work and unrelated notes/marks remain canonical.
+    public func applyReadingEditUndo(bookID: String, sourceHash: String, change: ReadingEditUndoChange) throws -> BookProject {
+        let directory = try bookDirectory(bookID, mustExist: true)
+        try recoverDocument(in: directory)
+        var project = try readProject(in: directory)
+        guard project.sourceHash == sourceHash else { throw ReadingError.invalid("原书版本已变化，未撤销其他书籍的操作。") }
+        let conflict = ReadingError.invalid("这项内容在之后又有修改，未覆盖。请保留当前内容后重新核对。")
+        switch change {
+        case let .annotations(expected, desired):
+            guard !expected.isEmpty, expected.count <= 512, expected.count == desired.count,
+                  Set(expected.map(\.id)).count == expected.count, Set(expected.map(\.id)) == Set(desired.map(\.id)) else { throw conflict }
+            var records = project.readerAnnotations ?? []
+            for target in desired {
+                guard let old = expected.first(where: { $0.id == target.id }), let index = records.firstIndex(where: { $0.id == target.id }), records[index] == old,
+                      old.sourceHash == target.sourceHash, old.page == target.page, old.text.utf8.elementsEqual(target.text.utf8),
+                      old.rangeLocation == target.rangeLocation, old.rangeLength == target.rangeLength, old.quads == target.quads, old.effectiveKind == target.effectiveKind else { throw conflict }
+                try ReaderAnnotationValidator.validate(target, in: project); records[index] = target
+            }
+            project.readerAnnotations = records
+        case let .note(expected, desired):
+            let id = expected.document.id
+            guard id == desired.document.id, expected.document.relativePath == desired.document.relativePath,
+                  let index = project.documents.firstIndex(where: { $0.id == id }), project.documents[index] == expected.document,
+                  project.readerCollections?.notePlacements?[id] == expected.placement else { throw conflict }
+            let body = try readDocument(bookID: bookID, document: project.documents[index])
+            guard body.utf8.elementsEqual(expected.markdown.utf8) else { throw conflict }
+            if !desired.markdown.utf8.elementsEqual(body.utf8) {
+                guard expected.document.trashedAt == nil, desired.document.trashedAt == nil else { throw conflict }
+                return try saveDocument(project: project, document: desired.document, markdown: desired.markdown,
+                    expectedContentHash: BookImporter.sha256(Data(body.utf8)), placementWrite: .set(desired.placement))
+            }
+            project.documents[index] = desired.document
+            var state = project.readerCollections ?? .init()
+            if let placement = desired.placement {
+                try placement.validate(); guard placement.matches(project) else { throw conflict }
+                if state.notePlacements == nil { state.notePlacements = [:] }; state.notePlacements?[id] = placement
+            } else { state.notePlacements?.removeValue(forKey: id) }
+            project.readerCollections = state
+        case let .placement(id, expected, desired):
+            guard project.readerCollections?.notePlacements?[id] == expected else { throw conflict }
+            project.readerCollections = try ReaderCollectionRuntime.apply(.setNotePlacement(id, desired), in: project)
+        case let .bookmark(id, expected, desired):
+            guard project.units.contains(where: { $0.id == id }), project.bookmarks.contains(id) == expected else { throw conflict }
+            project.bookmarks.removeAll { $0 == id }; if desired { project.bookmarks.append(id) }
+        }
+        try validate(project)
+        try atomicWrite(encode(project), to: try child(directory, "project.json"))
+        return stampForPublication(project)
     }
 
     /// Manual deletion and its complete recovery record share one atomic metadata
@@ -332,13 +392,18 @@ public actor LibraryRepository {
     }
 
     /// Annotation edits use the canonical disk project so a reader window cannot overwrite newer knowledge or notes.
-    public func saveAnnotations(project: BookProject, annotations: [ReaderAnnotation]) throws -> BookProject {
+    public func saveAnnotations(project: BookProject, annotations: [ReaderAnnotation], expectedAnnotations: [ReaderAnnotation]? = nil) throws -> BookProject {
         let directory = try bookDirectory(project.id, mustExist: true)
         try recoverDocument(in: directory)
         var updated = try readProject(in: directory)
         guard updated.sourceHash == project.sourceHash, updated.originalName == project.originalName,
               !annotations.isEmpty, annotations.count <= 512, Set(annotations.map(\.id)).count == annotations.count else { throw ReadingError.invalid("批注保存来源已变化或批次无效。") }
         var records = updated.readerAnnotations ?? []
+        if let expectedAnnotations {
+            for annotation in annotations {
+                guard records.first(where: { $0.id == annotation.id }) == expectedAnnotations.first(where: { $0.id == annotation.id }) else { throw ReadingError.invalid("这条标记已在别处改变，未覆盖。") }
+            }
+        }
         for var annotation in annotations {
             try ReaderAnnotationValidator.validate(annotation, in: updated)
             if let index = records.firstIndex(where: { $0.id == annotation.id }) {
@@ -346,7 +411,7 @@ public actor LibraryRepository {
                 guard old.trashedAt == nil, old.sourceHash == annotation.sourceHash, old.page == annotation.page,
                       old.text == annotation.text, old.rangeLocation == annotation.rangeLocation, old.rangeLength == annotation.rangeLength,
                       old.quads == annotation.quads, old.effectiveKind == annotation.effectiveKind else { throw ReadingError.invalid("批注来源位置不能改写，已删除批注须先恢复。") }
-                annotation.createdAt = old.createdAt; annotation.trashedAt = nil
+                annotation.createdAt = old.createdAt; annotation.trashedAt = annotation.trashedAt == nil ? nil : .now
                 annotation.updatedAt = Date(); records[index] = annotation
             } else {
                 guard annotation.trashedAt == nil else { throw ReadingError.invalid("新增批注不能直接置入回收站。") }

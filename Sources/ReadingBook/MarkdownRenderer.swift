@@ -41,6 +41,8 @@ struct SourceReadingSelection: Equatable, Sendable {
     var isExact: Bool = false
     var page: Int? = nil
     var endPage: Int? = nil
+    var sourcePrefix: String? = nil
+    var sourceSuffix: String? = nil
 }
 
 struct SourceReadingHover: Equatable, Sendable {

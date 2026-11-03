@@ -74,11 +74,23 @@ extension AppStore {
                     activity = request.kind == .book ? "已移出书库，文件保留。" : "本机项目已移到系统废纸篓；导入前原文件未动。"
                 } else if let project = books.first(where: { $0.id == request.bookID }) {
                     let updated: BookProject
+                    var oldNote: ReadingNoteUndoSnapshot?
+                    var oldNoteHash: String?
                     switch request.kind {
-                    case .document: updated = try await repository.setDocumentTrashed(project: project, documentID: request.id, trashed: true)
+                    case .document:
+                        if let document = project.activeDocuments.first(where: { $0.id == request.id }) {
+                            let content = try await repository.readDocumentSnapshot(bookID: project.id, document: document)
+                            oldNoteHash = content.contentHash
+                            oldNote = .init(document: document, markdown: content.markdown, placement: project.readerCollections?.notePlacements?[document.id])
+                        }
+                        updated = try await repository.setDocumentTrashed(project: project, documentID: request.id, trashed: true,
+                            expectedDocument: oldNote?.document, expectedContentHash: oldNoteHash)
                     case .entity: updated = try await repository.trashManualItem(project: project, kind: .entity, id: request.id)
                     case .event: updated = try await repository.trashManualItem(project: project, kind: .event, id: request.id)
                     case .book, .bookLocal: return
+                    }
+                    if let oldNote, let document = updated.documents.first(where: { $0.id == request.id }), bookID == project.id {
+                        readerEditUndo.recordNote(before: oldNote, after: .init(document: document, markdown: oldNote.markdown, placement: updated.readerCollections?.notePlacements?[document.id]), owner: WorkspacePickerOwner(store: self))
                     }
                     publish(updated)
                     reconcileSelectionAfterTrash(in: updated)
@@ -193,7 +205,7 @@ extension AppStore {
         publish(refreshed); reconcileSelectionAfterTrash(in: refreshed)
         if wasCurrentView, !refreshed.views.contains(where: { $0.id == route }) { route = "reader" }
     }
-    private func reconcileSelectionAfterTrash(in project: BookProject) {
+    func reconcileSelectionAfterTrash(in project: BookProject) {
         guard bookID == project.id else { return }
         let objects = Set(project.entities.map(\.id) + project.events.map(\.id) + project.activeDocuments.map(\.id) + project.units.map(\.id))
         if let id = selectedObjectID, !objects.contains(id) { selectedObjectID = nil }
