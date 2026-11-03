@@ -29,6 +29,11 @@ import PDFKit
         let action = NSSelectorFromString(redo ? "redo:" : "undo:")
         guard let item = (NSApp.mainMenu?.items ?? []).flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == action }),
               let target = item.target as? ReaderEditUndoBridge.Router, target.validateMenuItem(item), let menu = item.menu else { return false }
+        // A real menu opening runs validation before dispatch. Without update,
+        // performActionForItem can retain its disabled, pre-edit launch state.
+        observations[redo ? "redoItemEnabledBeforeUpdate" : "undoItemEnabledBeforeUpdate"] = item.isEnabled
+        menu.update()
+        observations[redo ? "redoItemEnabledAfterUpdate" : "undoItemEnabledAfterUpdate"] = item.isEnabled
         menu.performActionForItem(at: menu.index(of: item)); return true
     }
     func watchVisibleMenus() {
@@ -215,11 +220,11 @@ import PDFKit
             checks["WindowFocusFindsReadingUndo"] = windowMenuCommand(redo: false)
             checks["WindowFocusedUndoSoftRemovesMark"] = await wait { self.store.book?.readerAnnotations?.allSatisfy { $0.trashedAt != nil } == true }
             _ = await wait { !self.store.readerEditUndo.applying && !self.store.isBusy }
-            if store.book?.readerAnnotations?.allSatisfy({ $0.trashedAt != nil }) == true {
-                checks["WindowFocusFindsReadingRedo"] = windowMenuCommand(redo: true)
-                checks["WindowFocusedRedoRestoresMark"] = await wait { self.store.book?.readerAnnotations?.contains { $0.trashedAt == nil && $0.lineStyle == .wavy } == true }
-                _ = await wait { !self.store.readerEditUndo.applying && !self.store.isBusy }
-            }
+            observations["windowUndoState"] = ["busy": store.isBusy, "applying": store.readerEditUndo.applying,
+                "error": store.errorMessage ?? "", "undoCount": store.readerEditUndo.undoEntries.count, "redoCount": store.readerEditUndo.redoEntries.count]
+            checks["WindowFocusFindsReadingRedo"] = windowMenuCommand(redo: true)
+            checks["WindowFocusedRedoRestoresMark"] = await wait { self.store.book?.readerAnnotations?.contains { $0.trashedAt == nil && $0.lineStyle == .wavy } == true }
+            _ = await wait { !self.store.readerEditUndo.applying && !self.store.isBusy }
             window.makeFirstResponder(pdf)
             checks["NativeResponderFindsReadingUndo"] = NSApp.sendAction(NSSelectorFromString("undo:"), to: nil, from: nil)
             checks["NativeUndoSoftRemovesLastMark"] = await wait { self.store.book?.readerAnnotations?.allSatisfy { $0.trashedAt != nil } == true }
@@ -260,11 +265,23 @@ import PDFKit
             try XCT(reader.sentenceMarkActions(page: page, point: point).first { $0.title == "添加直线下划线" }).action()
             checks["StraightActionUsesStraightPreset"] = await wait { self.store.book?.readerAnnotations?.contains { $0.lineStyle == .straight && $0.trashedAt == nil && $0.lineAppearance == straightPreset } == true }
             checks["NewPresetKeepsExistingOtherStyle"] = previousWavy != nil && store.book?.readerAnnotations?.first { $0.id == previousWavy?.id } == previousWavy
-            try XCT(refreshed.first { $0.title == "围绕所选文字对话" }).action(); await settle()
+            checks["SavedMarkPublishesCurrentReaderBeforeNextAction"] = await wait {
+                !self.store.isBusy && Mirror(reflecting: reader).children.first { $0.label == "canEditAnnotations" }?.value as? Bool == true
+            }
+            // Capture the menu at the current reader revision, just as the
+            // user's new right-click does after the preceding saved edits.
+            observations["beforeConversation"] = ["busy": store.isBusy, "scope": store.queryScope.rawValue,
+                "selection": store.sourceReadingSelection?.text ?? "", "note": store.readingContextDocumentID ?? ""]
+            try XCT(reader.sentenceMarkActions(page: page, point: point).first { $0.title == "围绕所选文字对话" }).action(); await settle()
+            observations["afterConversation"] = ["scope": store.queryScope.rawValue, "selection": store.sourceReadingSelection?.text ?? "",
+                "note": store.readingContextDocumentID ?? "", "visible": store.readingCompanionVisible]
             checks["SentenceConversationKeepsQuoteAndSelectionScope"] = store.queryScope == .selection && store.sourceReadingSelection?.text == nativeQuote && store.readingCompanionTab == "chat" && store.readingCompanionVisible
             let currentSnapshot = try store.currentQueryTaskSnapshot()
             let quoteRanges = try currentSnapshot.sourceRanges(in: store.book!)
             checks["ConversationActuallyFreezesSelectedQuoteOnly"] = quoteRanges.count == 1 && (try quoteRanges[0].text(in: store.book!.units.first { $0.id == quoteRanges[0].unitID }!)) == nativeQuote
+            store.readingContextDocumentID = "n0"; store.selectedObjectID = "n0"
+            try XCT(reader.sentenceMarkActions(page: page, point: point).first { $0.title == "围绕所选文字对话" }).action(); await settle()
+            checks["SourceConversationReplacesPreviouslyOpenedNoteContext"] = store.readingContextDocumentID == nil && store.selectedObjectID == nil && store.queryScope == .selection && store.sourceReadingSelection?.text == nativeQuote
             let repeated = nativeText.range(of: "Same sentence.", options: .backwards)
             let repeatBox = page.characterBounds(at: repeated.location + 3)
             try XCT(reader.sentenceMarkActions(page: page, point: .init(x: repeatBox.midX, y: repeatBox.midY)).first { $0.title == "围绕所选文字对话" }).action()

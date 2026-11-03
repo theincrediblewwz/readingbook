@@ -116,6 +116,9 @@ struct ReaderWorkspaceView: View {
                                }, onReadingConversation: { selection in
                                    guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash else { return }
                                    store.sourceReadingSelection = selection; store.focusedReadingAnchorID = nil
+                                   // This explicit source action replaces a previously
+                                   // opened note as the focus of the next question.
+                                   store.readingContextDocumentID = nil; store.selectedObjectID = nil
                                    store.askAboutReadingContext()
                                })
                             .id(store.pdfDisplayReloadID)
