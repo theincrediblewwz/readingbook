@@ -72,10 +72,6 @@ struct PositionNoteEditorStage: NSViewRepresentable {
         let source = origin.map { convert(window.convertFromScreen($0.screenFrame), from: nil) } ?? target
         transitionStart = Self.valid(source) ? source : target
         guard !reduceMotion, let layer = paper.layer, transitionStart != target else { return }
-        // A cold SwiftUI/TextKit layout can outlast the entire transition.
-        // Prepare its fixed-size contents before starting the layer clock.
-        paper.layoutSubtreeIfNeeded()
-        paper.displayIfNeeded()
         // Keep the model layer at the final position. The presentation layer
         // alone interpolates; unrelated AppStore publications cannot restart it.
         var transform = CATransform3DMakeRotation(CGFloat((origin?.degrees ?? 0) * .pi / 180), 0, 0, 1)
@@ -86,7 +82,6 @@ struct PositionNoteEditorStage: NSViewRepresentable {
                                     y: finalPosition.y + transitionStart.minY - target.minY + anchor.y * (transitionStart.height - target.height))
         let move = CABasicAnimation(keyPath: "position"); move.fromValue = NSValue(point: startPosition); move.toValue = NSValue(point: finalPosition)
         let group = CAAnimationGroup(); group.animations = [scale, move]; group.duration = Self.duration
-        group.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil)
         group.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         layer.add(group, forKey: "position-note-expand")
     }

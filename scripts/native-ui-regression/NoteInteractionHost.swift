@@ -143,7 +143,12 @@ import PDFKit
                 item.keyEquivalentModifierMask = .command
             }
             main.addItem(appItem); main.addItem(editItem); NSApp.mainMenu = main
-            window.contentView = NSHostingView(rootView: WorkspaceView().environmentObject(store).environmentObject(ReadingTypographySettings()).modifier(ReadingPreferencesEnvironment()))
+            // Exercise normal motion independently of the CI runner's system
+            // accessibility policy. No OS preference is changed.
+            observations["systemReduceMotion"] = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            observations["fixtureReadingReduceMotion"] = false
+            window.contentView = NSHostingView(rootView: WorkspaceView().environmentObject(store).environmentObject(ReadingTypographySettings())
+                .environment(\.readingReduceMotion, false).modifier(ReadingPreferencesEnvironment()))
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             checks["ActualWorkspaceCreatesNativePDF"] = await wait { !self.descendants(self.window.contentView!, PDFReaderContainerView.self).isEmpty }
             let reader = try XCT(descendants(window.contentView!, PDFReaderContainerView.self).first)
@@ -310,6 +315,9 @@ import PDFKit
             let sourceRect = window.convertToScreen(.init(x: 720, y: 460, width: 230, height: 170))
             await store.editPositionNote("n0", origin: .init(screenFrame: sourceRect)); await settle(25)
             let stage = try XCT(descendants(window.contentView!, PositionNoteEditorStageView.self).first)
+            let actualReducedMotion = Mirror(reflecting: stage).children.first { $0.label == "reduceMotion" }?.value as? Bool
+            observations["editorStageReduceMotion"] = actualReducedMotion
+            checks["EditorNormalMotionFixtureAllowsAnimation"] = actualReducedMotion == false
             let start = stage.convert(window.convertFromScreen(sourceRect), from: nil)
             checks["EditorStartsFromCapturedPaperFrame"] = stage.transitionStart == start
             checks["EditorHasFiniteCenteredTarget"] = PositionNoteEditorStageView.valid(stage.transitionTarget) && abs(stage.transitionTarget.midX-stage.bounds.midX)<0.01
@@ -333,6 +341,14 @@ import PDFKit
                 checks["EditorTextGetsRedoBeforeReadingHistory"] = NSApp.sendAction(NSSelectorFromString("redo:"), to: nil, from: nil)
                     && text.string == savedText + "刚输入的文字" && store.readerEditUndo.undoEntries.count == historyCount
             }
+            let reducedStage = PositionNoteEditorStageView(frame: window.contentView!.bounds)
+            window.contentView!.addSubview(reducedStage)
+            reducedStage.update(id: UUID(), origin: .init(screenFrame: sourceRect), reduceMotion: true, root: AnyView(Color.clear))
+            reducedStage.layoutSubtreeIfNeeded()
+            checks["ReducedMotionEditorKeepsFinalFrameWithoutAnimation"] = reducedStage.transitionStart != reducedStage.transitionTarget
+                && PositionNoteEditorStageView.valid(reducedStage.transitionTarget) && reducedStage.paper?.frame == reducedStage.transitionTarget
+                && reducedStage.paper?.layer?.animation(forKey: "position-note-expand") == nil
+            reducedStage.removeFromSuperview()
             for (index, style) in ["plain", "warm-cotton", "mist-white", "sage-paper"].enumerated() {
                 if let request = store.positionNoteRequest { store.discardPositionNoteDraft(request) }; store.positionNoteRequest = nil; await settle()
                 await store.editPositionNote("n\(index)"); await settle(80)
