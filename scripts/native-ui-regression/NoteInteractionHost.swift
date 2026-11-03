@@ -175,6 +175,15 @@ import PDFKit
             observations["nativePDFText"] = nativeText as String
             guard range.location != NSNotFound, !nativeQuote.isEmpty else { throw ReadingError.invalid("Chinese fixture text missing") }
             let glyph = page.characterBounds(at: range.location + 3), point = CGPoint(x: glyph.midX, y: glyph.midY)
+            func sourceActions(_ targetPage: PDFPage, _ targetPoint: CGPoint, selection: PDFSelection? = nil) async throws -> [ReadingContextAction] {
+                var current: [ReadingContextAction] = []
+                guard await wait({
+                    guard !self.store.isBusy else { return false }
+                    current = reader.sentenceMarkActions(page: targetPage, point: targetPoint, selection: selection)
+                    return !current.isEmpty
+                }) else { throw ReadingError.invalid("Reader did not become interactive after saved edit") }
+                return current
+            }
             func pointerEvent(_ page: PDFPage, _ sourcePoint: CGPoint, type: NSEvent.EventType = .leftMouseDown) throws -> NSEvent {
                 let point = pdf.convert(sourcePoint, from: page)
                 return try XCT(NSEvent.mouseEvent(with: type, location: pdf.convert(point, to: nil), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
@@ -244,7 +253,6 @@ import PDFKit
                 checks[name] = await wait { self.store.book?.readerAnnotations?.contains { $0.lineStyle == .wavy && ($0.trashedAt == nil) == redo } == true }
                 _ = await wait { !self.store.readerEditUndo.applying && !self.store.isBusy }
             }
-            let refreshed = reader.sentenceMarkActions(page: page, point: point)
             await settle(200) // Finish the preceding saved-mark publication before isolating menu notifications.
             if let undoItem = (NSApp.mainMenu?.items ?? []).flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == NSSelectorFromString("undo:") }), let edit = undoItem.menu {
                 let externalTarget = NSResponder()
@@ -258,11 +266,12 @@ import PDFKit
                 checks["EditingMenuChangesStillBindReadingUndo"] = undoItem.target is ReaderEditUndoBridge.Router
                 edit.removeItem(row)
             } else { checks["UndoMenuPreconditionAvailable"] = false }
+            let refreshed = try await sourceActions(page, point)
             try XCT(refreshed.first { $0.title == "添加荧光标记" }).action()
             checks["HighlightActionMakesSeparateDurableRecord"] = await wait { (self.store.book?.readerAnnotations?.filter { $0.trashedAt == nil }.count ?? 0) == 2 }
             checks["HighlightHasItsOwnAppearance"] = store.book?.readerAnnotations?.contains { $0.lineStyle == nil && $0.highlightAppearance != nil } == true
             let previousWavy = store.book?.readerAnnotations?.first { $0.lineStyle == .wavy && $0.trashedAt == nil }
-            try XCT(reader.sentenceMarkActions(page: page, point: point).first { $0.title == "添加直线下划线" }).action()
+            try XCT((try await sourceActions(page, point)).first { $0.title == "添加直线下划线" }).action()
             checks["StraightActionUsesStraightPreset"] = await wait { self.store.book?.readerAnnotations?.contains { $0.lineStyle == .straight && $0.trashedAt == nil && $0.lineAppearance == straightPreset } == true }
             checks["NewPresetKeepsExistingOtherStyle"] = previousWavy != nil && store.book?.readerAnnotations?.first { $0.id == previousWavy?.id } == previousWavy
             checks["SavedMarkPublishesCurrentReaderBeforeNextAction"] = await wait {
@@ -272,7 +281,7 @@ import PDFKit
             // user's new right-click does after the preceding saved edits.
             observations["beforeConversation"] = ["busy": store.isBusy, "scope": store.queryScope.rawValue,
                 "selection": store.sourceReadingSelection?.text ?? "", "note": store.readingContextDocumentID ?? ""]
-            try XCT(reader.sentenceMarkActions(page: page, point: point).first { $0.title == "围绕所选文字对话" }).action(); await settle()
+            try XCT((try await sourceActions(page, point)).first { $0.title == "围绕所选文字对话" }).action(); await settle()
             observations["afterConversation"] = ["scope": store.queryScope.rawValue, "selection": store.sourceReadingSelection?.text ?? "",
                 "note": store.readingContextDocumentID ?? "", "visible": store.readingCompanionVisible]
             checks["SentenceConversationKeepsQuoteAndSelectionScope"] = store.queryScope == .selection && store.sourceReadingSelection?.text == nativeQuote && store.readingCompanionTab == "chat" && store.readingCompanionVisible
@@ -280,21 +289,21 @@ import PDFKit
             let quoteRanges = try currentSnapshot.sourceRanges(in: store.book!)
             checks["ConversationActuallyFreezesSelectedQuoteOnly"] = quoteRanges.count == 1 && (try quoteRanges[0].text(in: store.book!.units.first { $0.id == quoteRanges[0].unitID }!)) == nativeQuote
             store.readingContextDocumentID = "n0"; store.selectedObjectID = "n0"
-            try XCT(reader.sentenceMarkActions(page: page, point: point).first { $0.title == "围绕所选文字对话" }).action(); await settle()
+            try XCT((try await sourceActions(page, point)).first { $0.title == "围绕所选文字对话" }).action(); await settle()
             checks["SourceConversationReplacesPreviouslyOpenedNoteContext"] = store.readingContextDocumentID == nil && store.selectedObjectID == nil && store.queryScope == .selection && store.sourceReadingSelection?.text == nativeQuote
             let repeated = nativeText.range(of: "Same sentence.", options: .backwards)
             let repeatBox = page.characterBounds(at: repeated.location + 3)
-            try XCT(reader.sentenceMarkActions(page: page, point: .init(x: repeatBox.midX, y: repeatBox.midY)).first { $0.title == "围绕所选文字对话" }).action()
+            try XCT((try await sourceActions(page, .init(x: repeatBox.midX, y: repeatBox.midY))).first { $0.title == "围绕所选文字对话" }).action()
             checks["RepeatedEqualSentenceHasUnambiguousConversation"] = (try? store.currentQueryTaskSnapshot()) != nil && store.selectedSourceAnchor?.utf16Location == repeated.location
             store.readingCompanionVisible = false
-            try XCT(reader.sentenceMarkActions(page: page, point: point).first { $0.title == "为所选文字写便签" }).action()
+            try XCT((try await sourceActions(page, point)).first { $0.title == "为所选文字写便签" }).action()
             checks["SentenceNoteBindsQuoteAndExactNativeRange"] = store.positionNoteRequest?.placement?.quote?.text == nativeQuote && store.positionNoteRequest?.placement?.quote?.ranges.first?.location == range.location
             let midpoint = try XCT(PDFNativeTextGeometry.midpoint(in: range, on: page)), crop = page.readingSourceBounds(for: .cropBox)
             checks["SentenceNoteStartsAtMiddleCharacter"] = abs(midpoint.midX - 165) < 1 && abs((store.positionNoteRequest?.placement?.x ?? -1) - (midpoint.midX-crop.minX)/crop.width) < 0.0001 && abs((store.positionNoteRequest?.placement?.y ?? -1) - (midpoint.midY-crop.minY)/crop.height) < 0.0001
             if let request = store.positionNoteRequest { store.discardPositionNoteDraft(request) }; store.positionNoteRequest = nil; await settle()
             let selection = try XCT(page.selection(for: range))
-            let selectedActions = reader.sentenceMarkActions(page: page, point: point, selection: selection)
-            checks["SelectedTextUsesSameCompleteActionSet"] = Set(selectedActions.map(\.title)) == Set(reader.sentenceMarkActions(page: page, point: point).map(\.title))
+            let selectedActions = try await sourceActions(page, point, selection: selection)
+            checks["SelectedTextUsesSameCompleteActionSet"] = Set(selectedActions.map(\.title)) == Set((try await sourceActions(page, point)).map(\.title))
             saveBitmap(window.contentView!, "workspace-marks")
             // Exact source card geometry is passed through the actual separate
             // hosting tree. The editor stage animates a layer, not TextKit width.
@@ -381,7 +390,9 @@ import PDFKit
         try? JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted,.sortedKeys]).write(to: output.appendingPathComponent("result.json"))
         window?.orderOut(nil); NSApp.terminate(nil)
     }
-    func XCT<T>(_ value: T?) throws -> T { guard let value else { throw ReadingError.invalid("Required native fixture value missing") }; return value }
+    func XCT<T>(_ value: T?, file: StaticString = #fileID, line: UInt = #line) throws -> T {
+        guard let value else { throw ReadingError.invalid("Required native fixture value missing at \(file):\(line)") }; return value
+    }
 }
 @main enum NoteInteractionMain {
     @MainActor static func main() {

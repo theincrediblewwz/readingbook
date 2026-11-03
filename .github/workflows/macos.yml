@@ -86,6 +86,7 @@ jobs:
       - name: Native AI search intent and full-book flow regression
         run: python3 scripts/native-ui-regression/run-ai-search-flow.py --bin-dir .build/tests/debug --tag ci-ai-search-flow
       - name: Native note color, expansion and reading undo regression
+        id: note_interaction
         run: python3 scripts/native-ui-regression/run-note-interaction.py --bin-dir .build/tests/debug --tag ci-note-interaction
       - name: Rendered note mode transition regression
         run: |
@@ -139,6 +140,13 @@ jobs:
           path: logs/native-ui-harness-*
           if-no-files-found: ignore
           retention-days: 3
+      - name: Diagnose note interaction skipped by an earlier failure
+        if: failure() && steps.note_interaction.outcome == 'skipped'
+        continue-on-error: true
+        run: |
+          if [[ -d .build/tests/debug/Modules ]]; then
+            python3 scripts/native-ui-regression/run-note-interaction.py --bin-dir .build/tests/debug --tag ci-note-interaction-diagnostic
+          fi
       - name: Preserve failed experience regression evidence
         if: failure()
         uses: actions/upload-artifact@v7
@@ -160,7 +168,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: failed-note-interaction-evidence
-          path: logs/note-interaction-20261103/ci-note-interaction
+          path: logs/note-interaction-20261103/ci-note-interaction*
           if-no-files-found: ignore
           retention-days: 3
       - name: Preserve failed paper reading evidence
