@@ -17,6 +17,10 @@ struct ReadingBookApp: App {
         .defaultSize(width: 1480, height: 940)
         .commands {
             ReaderKeyboardCommands()
+            CommandGroup(after: .textEditing) {
+                Button("保存笔记") { Task { await store.saveCurrentDocument() } }.keyboardShortcut("s")
+                    .disabled(store.positionNoteRequest != nil || store.isSavingDocument)
+            }
             CommandGroup(before: .windowArrangement) {
                 Button("关闭窗口") { NSApp.keyWindow?.performClose(nil) }.keyboardShortcut("w")
             }
