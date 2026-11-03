@@ -211,6 +211,7 @@ import PDFKit
             checks["WavyActionUsesWavyPreset"] = store.book?.readerAnnotations?.first { $0.lineStyle == .wavy }?.lineAppearance == wavyPreset
             checks["AnnotationActionRegistersUndo"] = !store.readerEditUndo.undoEntries.isEmpty
             window.makeFirstResponder(window)
+            observations["keyWindowBeforeReadingUndo"] = window.isKeyWindow
             checks["WindowFocusFindsReadingUndo"] = windowMenuCommand(redo: false)
             checks["WindowFocusedUndoSoftRemovesMark"] = await wait { self.store.book?.readerAnnotations?.allSatisfy { $0.trashedAt != nil } == true }
             _ = await wait { !self.store.readerEditUndo.applying && !self.store.isBusy }
@@ -239,6 +240,19 @@ import PDFKit
                 _ = await wait { !self.store.readerEditUndo.applying && !self.store.isBusy }
             }
             let refreshed = reader.sentenceMarkActions(page: page, point: point)
+            await settle(200) // Finish the preceding saved-mark publication before isolating menu notifications.
+            if let undoItem = (NSApp.mainMenu?.items ?? []).flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == NSSelectorFromString("undo:") }), let edit = undoItem.menu {
+                let externalTarget = NSResponder()
+                undoItem.target = externalTarget
+                let unrelated = NSMenu(title: "Unrelated component")
+                for index in 0..<100 { unrelated.addItem(withTitle: "Item \(index)", action: nil, keyEquivalent: "") }
+                await settle(100)
+                checks["UnrelatedMenuChangesDoNotRebindUndoTargets"] = undoItem.target === externalTarget
+                let row = NSMenuItem(title: "New edit entry", action: nil, keyEquivalent: "")
+                edit.addItem(row); await settle(100)
+                checks["EditingMenuChangesStillBindReadingUndo"] = undoItem.target is ReaderEditUndoBridge.Router
+                edit.removeItem(row)
+            } else { checks["UndoMenuPreconditionAvailable"] = false }
             try XCT(refreshed.first { $0.title == "添加荧光标记" }).action()
             checks["HighlightActionMakesSeparateDurableRecord"] = await wait { (self.store.book?.readerAnnotations?.filter { $0.trashedAt == nil }.count ?? 0) == 2 }
             checks["HighlightHasItsOwnAppearance"] = store.book?.readerAnnotations?.contains { $0.lineStyle == nil && $0.highlightAppearance != nil } == true

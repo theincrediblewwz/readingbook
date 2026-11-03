@@ -124,6 +124,21 @@ jobs:
           path: logs/ci-markdown-bridge
           if-no-files-found: ignore
           retention-days: 3
+      - name: Diagnose failed workspace cold startup
+        if: failure()
+        continue-on-error: true
+        run: |
+          if [[ -f .build/native-ui-harness/native-ui-harness ]]; then
+            HARNESS_PROFILE_STARTUP=1 python3 scripts/native-ui-regression/run.py --mode workspace --cycles 1 --tag ci-startup-profile
+          fi
+      - name: Preserve failed native workspace evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-native-workspace-evidence
+          path: logs/native-ui-harness-*
+          if-no-files-found: ignore
+          retention-days: 3
       - name: Preserve failed experience regression evidence
         if: failure()
         uses: actions/upload-artifact@v7

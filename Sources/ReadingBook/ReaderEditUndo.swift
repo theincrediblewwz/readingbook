@@ -86,6 +86,8 @@ struct ReaderEditUndoBridge: NSViewRepresentable {
         weak var installedRoot: NSView?
         private var menuObserver: NSObjectProtocol?
         private var undoKeyMonitor: Any?
+        private var menuBindingScheduled = false
+        private var menuBindingGeneration = 0
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); install() }
         func install() {
@@ -93,8 +95,11 @@ struct ReaderEditUndoBridge: NSViewRepresentable {
             router.window = window
             if root !== installedRoot {
                 uninstall(); router.nextResponder = root.nextResponder; root.nextResponder = router; installedRoot = root
-                menuObserver = NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { [weak self] _ in
-                    DispatchQueue.main.async { self?.router.bindMenus() }
+                menuObserver = NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { [weak self] note in
+                    guard let self, let changed = note.object as? NSMenu, let main = NSApp.mainMenu,
+                          changed === main || (main.items.contains { $0.submenu === changed }
+                            && changed.items.contains { $0.action == NSSelectorFromString("undo:") || $0.action == NSSelectorFromString("redo:") }) else { return }
+                    self.scheduleMenuBinding()
                 }
                 // PDFKit and SwiftUI can consume the stock key equivalent
                 // before the bound menu target is called. Claim only an
@@ -108,7 +113,17 @@ struct ReaderEditUndoBridge: NSViewRepresentable {
             }
             router.bindMenus()
         }
+        private func scheduleMenuBinding() {
+            guard !menuBindingScheduled else { return }; menuBindingScheduled = true
+            let generation = menuBindingGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.menuBindingGeneration == generation else { return }
+                self.menuBindingScheduled = false
+                guard self.installedRoot != nil else { return }; self.router.bindMenus()
+            }
+        }
         func uninstall() {
+            menuBindingGeneration &+= 1; menuBindingScheduled = false
             if let root = installedRoot, root.nextResponder === router { root.nextResponder = router.nextResponder }
             if let menuObserver { NotificationCenter.default.removeObserver(menuObserver); self.menuObserver = nil }
             if let undoKeyMonitor { NSEvent.removeMonitor(undoKeyMonitor); self.undoKeyMonitor = nil }

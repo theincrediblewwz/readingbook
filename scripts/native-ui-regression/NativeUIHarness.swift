@@ -128,6 +128,7 @@ final class Metrics: @unchecked Sendable {
     var lastAction = "initialization"
     var phase = "starting"
     var watchdogFired = false
+    var startupSampled = false
     func scenario() {
         lock.lock(); defer { lock.unlock() }
         if interactiveStartedAt == nil { interactiveStartedAt = ProcessInfo.processInfo.systemUptime }
@@ -236,11 +237,26 @@ struct PanelHarnessRoot: View {
     }
     func startHeartbeat() {
         let localOutput = output
+        let profileStartup = ProcessInfo.processInfo.environment["HARNESS_PROFILE_STARTUP"] == "1"
         let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
         t.schedule(deadline: .now(), repeating: .milliseconds(50))
         t.setEventHandler {
             let pulse = metrics.pulse()
             let state = metrics.snapshot()
+            // This opt-in diagnostic runs only after a failed CI gate. It
+            // leaves the ordinary cold-start and first-open budgets unchanged.
+            if profileStartup, state["phase"] as? String == "starting", (state["secondsSinceHeartbeat"] as? Double ?? 0) > 1 {
+                metrics.lock.lock(); let first = !metrics.startupSampled; metrics.startupSampled = true; metrics.lock.unlock()
+                if first {
+                    if let data = try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys]) {
+                        try? data.write(to: localOutput.appendingPathComponent("startup-profile.json"), options: .atomic)
+                    }
+                    let sampler = Process(); sampler.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+                    sampler.arguments = [String(getpid()), "1", "10", "-file", localOutput.appendingPathComponent("startup.sample.txt").path]
+                    sampler.standardOutput = FileHandle.nullDevice; sampler.standardError = FileHandle.nullDevice
+                    do { try sampler.run(); sampler.waitUntilExit() } catch { }
+                }
+            }
             if (state["secondsSinceHeartbeat"] as? Double ?? 0) > 5 {
                 metrics.lock.lock()
                 let first = !metrics.watchdogFired
