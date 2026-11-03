@@ -1,8 +1,16 @@
-> 2026-11-03：0.23.41/build72 已同步 main、发布并替换本机安装，原书界面及重启验收待 Mac 解锁；不要重复发布或安装。九项阅读页/便签/查找/划线与 README 修复的产品源为 a250d2b5cdbc75a61cdc16d2f9b2c31ffb76374d，完整 CI41518827599、artifact13178445915、Release431957481。825 Core、168 指定回归及全部旧原生/WebKit 门槛、新增39项通过，零编译警告。首轮CI几何oracle错误及修正前失败原样保留，最终完整重跑成功。详见[本批结果](Design/2026-11-03-page-notes-results.md)与[体验及16类组件评价表](体验与性能评价表.md)。
+> 2026-11-03：0.23.41/build72 已同步 main、发布、替换本机安装并完成正式原书两次正常启动验收。九项阅读页/便签/查找/划线与 README 修复及此前体验、16类组件评价表已交付。产品源 a250d2b5cdbc75a61cdc16d2f9b2c31ffb76374d，CI41518827599，artifact13178445915，Release431957481。825 Core、168指定回归、全部既有原生/WebKit/工具门槛与新增39项通过，零编译警告。当前没有解锁、安装或发布待办；不要重复安装/发布。用户dirty进度文档禁止编辑或提交。详见[九项结果](Design/2026-11-03-page-notes-results.md)及[体验与性能评价表](体验与性能评价表.md)。
 
-交付入口 `logs/reader-page-notes-20261103/delivery41/`，当前状态 `ready-awaiting-unlock.json` 明确 nativeUIAccepted=false。31个原库成员和全部偏好在安装后逐字节一致，已停机的真实基线是93/1484页、138%、整页缩放、上下连续、非纸书，禁止回灌开工或旧103/104页快照。最新保护及40回滚在 `private-books/reader-page-notes-20261103/install-before-0.23.41`；用户dirty进度文档SHA仍为9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，禁止编辑/提交。
+交付入口 `logs/reader-page-notes-20261103/delivery41/final-delivery.json`；正式UI13项见 `native-original-ui-passed-41.json`，数据见 `preservation-final.json`。About实际41/72，PID17923/18664：原书93/1484、138%、整页缩放、上下连续、非纸书恢复；104“你好”便签、102旧译文、中文粘贴不回车61项、物理点击关闭与大缩略图、正常退出/重启通过。显式跳页不冒称保留测试前页内像素偏移。两PID三类产品运行警告零，原始OS/AX日志保留，不称所有系统日志零。CUA菜单项跨调用会失效，现读现点可打开About；typeText未插入中文的空画面保留，正式结果来自提交粘贴、不按回车。
 
-正式ZIP 32537070B，SHA05b8ee9dd44ed307c646d3afd14102a81dd362ab14d7deaf664ce8d5ef1b77cf；双架构、35资源、完整39程序文件、严格签名及公开下载回验通过。结束helper已精确退役，原始源码、输入和报告保留；大UI快照无损gzip，先读 `private-books/reader-page-notes-20261103/COMPRESSED_CAPTURES.md`。39载荷退役仍须等正式原书UI验收后执行，预检见delivery41/retire39-preflight.json。不要恢复数学核查，不改锁屏设置，CUA报锁先刷新核实。下方40及更早接续均历史。
+31原库成员全保留，23个非Workspace内容文件字节一致，涵盖原书、笔记、分析、封面与项目；生成的书库目录仅将旧文件名标签同步为既存userTitle“三国演义”，路径不变，生成清单只更新相应hash，已逐字验证精确替换。仅正常Workspace导航与主窗口几何另变；AI配置及其余偏好保持。新保护及40回滚为 `private-books/reader-page-notes-20261103/install-before-0.23.41`，禁止用开工或旧103/104快照覆盖现库。dirty文档SHA仍9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4。
+
+规范ZIP32537070B，SHA05b8ee9dd44ed307c646d3afd14102a81dd362ab14d7deaf664ce8d5ef1b77cf。双架构、35资源、完整39程序文件、严格签名与公开下载回验通过。展开readyappPath已退役，先读 `dist/0.23.41-ci-41518827599/RETIRED_PAYLOADS.md`，从canonical41重解并匹配完整文件清单后才可复用。GitHub仅main及41/40 Release/tag；39 Release/tag/Actions程序产物、39ZIP与原39回滚App精确退役，源历史及所有非App私人保护保留，最新40回滚及41/40规范包仍在。
+
+结束helper、重复ZIP、本机已结束测试可执行文件/dSYM已退役，产品对象/Modules/LinkFileList与共享编译缓存保留。大UI快照无损gzip；五份隔离库157文件去重为45块、16.27MB单一可恢复ZIP，源码/编译日志/manifest/偏好/原始数据均可恢复；先读各fixture目录ARCHIVED说明或运行 `python3 logs/reader-page-notes-20261103/pack-fixtures.py restore`，不要盲用旧展开路径。原库与最新停机保护不在归档范围。2397份非App私人保护在39退役前后全相同。
+
+本批累计实测清理约1.24GiB；工作区开工4911612KiB，末次载荷清理后4802796KiB（约4.68→4.58GiB，净减约106MiB）；最终少量文档/回执以final-delivery.json为准。删除量不当作整批净下降。首轮CI旧几何oracle把显示留白当原书的12次失败、修正前布局和编译结果原样保留；独立原始PDF oracle及最终完整CI均通过，原容差未降低。ready-awaiting-unlock.json的nativeUIAccepted=false是发布时历史，由最终回执补齐，不改写旧观察。
+
+后续按评价表继续：两个搜索入口简繁能力统一、长历史/引用完整投影、关系图谱/轨迹/大组合更新及当前整App进程组内存/空闲能耗/FPS。确认真实入口收益再改；本批不宣称新FPS或整机内存收益。不要恢复数学核查，不改锁屏设置；CUA报锁先刷新核实。下方40及更早接续均历史。
 
 ---
 
