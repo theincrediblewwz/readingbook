@@ -1,6 +1,12 @@
-> 2026-11-03：44已同步main并发布，尚未替换本机43。最终源ee7ddf776b189c96431ba7c2d8045935665c2726，CI41619128356通过863 Core、206指定、新49原生和全部旧门槛；artifact13224593440，Release432586068。界面工具连续刷新仍报告锁屏，已请求解锁。不得强退43或用旧快照覆盖书库。ready App仍在dist/0.23.44-ci-41619128356/unpacked/ReadingBook.app，规范44 ZIP已公开回验；重复ZIP已退役。下一步先正常退出43，再运行logs/ai-search-20261103/delivery44/install-verified.py做fresh保护及替换，之后原书两次启动/资料保留和收尾。接续回执ready-awaiting-unlock.json，当前不能写已安装/正式验收完成。
+> 2026-11-03：0.23.44/build75 已完成发布、替换本机安装和原书两次正常启动验收；当前无解锁/发布/安装待办。产品源ee7ddf776b189c96431ba7c2d8045935665c2726，CI41619128356通过863 Core、206指定、新49原生及全部旧门槛；artifact13224593440，Release432586068。最终回执 logs/ai-search-20261103/delivery44/final-delivery.json；ready-awaiting-unlock.json为历史。用户dirty进度文档禁止编辑提交，SHA仍9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4。
 
-普通搜索自动AI纠错/相关词；新按钮只有理解意图→阅读全文。六进程对照证明分批序列化临时对象释放使准备峰值约309→37MiB，40批内容一致；最终产品对象24/841独立断言、49原生及三进程内存复验通过。不是整App/FPS收益。第一轮5269403的CI41614599368回归过后主动取消打包纳入此优化，原日志保留，最终采集器collect-final.py用ci-final。临时源码worktree已合并清理。累计精确清理1470264KiB，当前约4.75GiB；GitHub仅44/43与main。暂保留ready44 App与本地42回滚，44正式验收后退役，留下fresh43回滚；所有非App私人保护保留。用户dirty文档SHA仍9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，禁止编辑提交。
+普通搜索自动AI纠错、翻译和相关词；新AI按钮只有理解意图→阅读全文。原书Native输入“貂”不按回车61处，AI入口显示繁体中文、41次请求估算，未点击原书开始。About44/75、104页277%和“你好”便签、正常退出后第二次启动保持；31成员、25非Workspace字节及全部偏好保留，没有用测试副本覆盖原库。保护和最新43回滚在private-books/ai-search-20261103/install-before-0.23.44。
+
+全文准备六进程峰值RSS约309→37MiB，40批消息完全一致，最终产品三进程复验通过；不是整App常驻内存/FPS。CI首轮41614599368回归过后主动取消打包纳入该优化，原始日志保留。规范44 ZIP SHA7ba92a4ab29fabbfd2da5c817ba48ca3d169c16441840c29b7d261eaf78fae67，双架构、35资源、39程序文件、签名及公开下载回验通过。展开App和重复ZIP已退役，读dist/0.23.44-ci-41619128356/RETIRED_PAYLOADS.md，从canonical44重解并匹配完整manifest后才可复用；原readyappPath不能盲用。
+
+累计精确清理1705008KiB，当前约4.65GiB；保留共享编译缓存、对象和43/44规范包。所有非App私人保护、原件、源、关键失败/验证证据保留。GitHub仅44/43和main，41/42 Release/tag/程序产物精确退役。完整Workspace三类循环/发布警告零，但AppKit负尺寸诊断102条仍待定位，自动化原生门槛四类零不等于全App日志零。
+
+下一轮按16类轮转，优先整App辅助进程内存/空闲能耗、启动与手势FPS，以及跨组件状态更新。准备线索logs/ai-search-20261103/next-performance-preparation.json，没有新采用结论；不恢复数学核查，不改锁屏设置。下方43及更旧均历史。
 
 > 2026-11-03：0.23.43/build74 已发布并安装，完整CI41604372472通过839 Core、182指定回归、新20原生及全部旧门槛；正式原书简繁各57处、104页277%适宽与原便签/已保存伴读、正常退出重启通过。31成员/25非Workspace字节与全部偏好保留。交付入口 logs/ux-search-performance-20261103/delivery43/final-delivery.json。用户dirty文档禁止编辑/提交。当前44/build75仅在 .build/ai-search-source 的 codex/ai-search 本地工作树开发：普通搜索自动AI纠错/相关词；新按钮单一流程先理解再阅读全文，先估算后主动开始。不要再做两个选项。44尚未发布安装，共用对象已是44，不可拿来证明43。清理在44交付后一并完成，禁止覆盖原书库。
 
