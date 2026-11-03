@@ -94,9 +94,13 @@ public struct WholeBookSearchPlan: Sendable {
                   sourceHash: snapshot.sourceHash, query: query, parts: values, capacity: capacity, outputLimit: outputLimit)
         }
         func fits(_ values: [WholeBookSearchBatch.Part]) -> Int? {
-            guard let prepared = try? ProviderClient.prepare(messages: WholeBookSearchEngine.messages(candidate(values)), tools: [], settings: bounded, apiKey: "", remainingTokens: capacity),
-                  prepared.estimatedInputTokens + outputLimit + 8192 + 64 <= capacity else { return nil }
-            return prepared.estimatedInputTokens
+            // JSON bridging creates autoreleased objects. Drain per candidate,
+            // rather than retaining every trial payload until the worker ends.
+            return autoreleasepool {
+                guard let prepared = try? ProviderClient.prepare(messages: WholeBookSearchEngine.messages(candidate(values)), tools: [], settings: bounded, apiKey: "", remainingTokens: capacity),
+                      prepared.estimatedInputTokens + outputLimit + 8192 + 64 <= capacity else { return nil }
+                return prepared.estimatedInputTokens
+            }
         }
         func appendBatch() {
             let item = candidate(pending)
