@@ -176,7 +176,11 @@ struct PositionNoteMarginLayer: View {
                     .opacity(notesVisible ? 1 : 0).allowsHitTesting(notesVisible && interactive)
                     .help("收起便签与右侧留白，恢复原来的阅读模式").accessibilityLabel("收起页边便签")
             }
-        }.frame(width: viewport.width, height: viewport.height).clipped()
+        // A full-page host is deliberately taller than the viewport at fit
+        // width. Pin that oversized stack to the viewport origin; the default
+        // centered frame otherwise shifts both cards and connections upward
+        // by half of the overflow, despite correct PDF anchor coordinates.
+        }.frame(width: viewport.width, height: viewport.height, alignment: .topLeading).clipped()
     }
 }
 

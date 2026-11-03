@@ -139,6 +139,22 @@ import ImageIO
             if let data = try await store.repository.bookCoverData(for: book) { try data.write(to: directory.appendingPathComponent(tag + "-cover.jpg")) }
         }
         if let root = window.contentView, let pdf = descendants(root, PDFView.self).first {
+            if let reader = descendants(root, PDFReaderContainerView.self).first {
+                func unwrap(_ value: Any) -> Any { Mirror(reflecting: value).displayStyle == .optional ? Mirror(reflecting: value).children.first.map { unwrap($0.value) } ?? value : value }
+                if let controller = Mirror(reflecting: reader).children.first(where: { $0.label == "controller" }).map({ unwrap($0.value) }) as? PDFReaderController {
+                    let positions = controller.notePositions
+                    value["noteGeometry"] = ["owner": positions.owner, "points": positions.points.mapValues(NSStringFromPoint),
+                        "surfaces": positions.surfaces.map { ["page": $0.id, "frame": NSStringFromRect($0.frame), "scale": $0.scale, "notes": $0.noteIDs.sorted()] },
+                        "obscured": positions.navigationObscured, "turnActive": positions.paperTurnActive,
+                        "readerBounds": NSStringFromRect(reader.bounds), "readerRootFrame": NSStringFromRect(root.convert(reader.bounds, from: reader))]
+                }
+                value["pageGeometry"] = pdf.visiblePages.map { page -> [String: Any] in
+                    ["page": (pdf.document?.index(for: page) ?? -1) + 1,
+                     "sourceBox": NSStringFromRect(page.readingSourceBounds(for: .cropBox)), "sheetBox": NSStringFromRect(page.bounds(for: .cropBox)),
+                     "sourceFrame": NSStringFromRect(reader.convert(pdf.convert(page.readingSourceBounds(for: .cropBox), from: page), from: pdf)),
+                     "sheetFrame": NSStringFromRect(reader.convert(pdf.convert(page.bounds(for: .cropBox), from: page), from: pdf))]
+                }
+            }
             value["activeLayerAnimations"] = allViews(root).flatMap { view in
                 (view.layer?.sublayers ?? []).compactMap { layer -> [String: Any]? in
                     guard let keys = layer.animationKeys(), !keys.isEmpty else { return nil }
