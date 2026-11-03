@@ -4,6 +4,22 @@ import PDFKit
 @testable import ReadingCore
 @testable import ReadingBook
 
+@MainActor private struct ActualRecordCardHost: NSViewRepresentable {
+    let record: ReadingRecordDescriptor
+    let store: AppStore
+    let ready: (NSView) -> Void
+    func makeNSView(context: Context) -> NSHostingView<AnyView> {
+        let view = NSHostingView(rootView: content)
+        view.sizingOptions = []
+        ready(view)
+        return view
+    }
+    func updateNSView(_ view: NSHostingView<AnyView>, context: Context) { view.rootView = content }
+    private var content: AnyView {
+        AnyView(ReaderRecordFoldCard(record: record, expanded: .constant(false)) { Text("完整回答") }.environmentObject(store))
+    }
+}
+
 @MainActor final class UXRefinementRunner: NSObject, NSApplicationDelegate {
     let output: URL
     let reader = PDFReaderContainerView(), controller = PDFReaderController()
@@ -35,6 +51,43 @@ import PDFKit
         }
         walk(view, depth: 0)
         return strings.joined(separator: "\n")
+    }
+    func glyphs(_ view: NSView, capture: String? = nil) -> Set<Int> {
+        view.layoutSubtreeIfNeeded(); view.displayIfNeeded()
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return [] }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        guard let image = bitmap.cgImage else { return [] }
+        if let capture, let data = bitmap.representation(using: .png, properties: [:]) {
+            try? data.write(to: output.appendingPathComponent(capture + ".png"))
+        }
+        let width = image.width, height = image.height
+        var bytes = [UInt8](repeating: 255, count: width * height * 4)
+        bytes.withUnsafeMutableBytes { memory in
+            let context = CGContext(data: memory.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            context.setFillColor(NSColor.white.cgColor); context.fill(.init(x: 0, y: 0, width: width, height: height))
+            context.draw(image, in: .init(x: 0, y: 0, width: width, height: height))
+        }
+        var mask = Set<Int>()
+        for pixel in 0..<(width * height) {
+            let i = pixel * 4
+            let sum = Int(bytes[i]) + Int(bytes[i + 1]) + Int(bytes[i + 2])
+            if sum < 450 && bytes[i + 3] > 200 { mask.insert(pixel) }
+        }
+        return mask
+    }
+    func overlap(_ first: Set<Int>, _ second: Set<Int>) -> Double {
+        let union = first.union(second).count
+        return union == 0 ? 0 : Double(first.intersection(second).count) / Double(union)
+    }
+    func oracle(_ record: ReadingRecordDescriptor, preview: String, size: NSSize, store: AppStore) -> Set<Int> {
+        var expected = record; expected.preview = preview; expected.deferredPreview = nil
+        let host = NSHostingView(rootView: ReaderRecordFoldCard(record: expected, expanded: .constant(false)) { Text("完整回答") }.environmentObject(store))
+        host.frame = .init(origin: .zero, size: size)
+        let reference = NSWindow(contentRect: .init(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        reference.contentView = host
+        defer { reference.contentView = nil; reference.orderOut(nil) }
+        return glyphs(host, capture: (preview.isEmpty ? "empty-" : "expected-") + record.id.replacingOccurrences(of: ":", with: "-"))
     }
     func run() async {
         do {
@@ -100,22 +153,37 @@ import PDFKit
             let before = try encoder.encode(book)
             store.books = [book]; store.bookID = book.id
             let state = ReaderRecordBrowserState()
-            var prepared = false, shown: [String: ReadingRecordDescriptor] = [:]
+            var prepared = false, shown: [String: ReadingRecordDescriptor] = [:], actualCards: [String: NSView] = [:]
             let offered = ["chat:a119", "chat:a0"]
-            let host = NSHostingView(rootView: ReaderRecordSections(state: state, ids: offered, focusedID: offered[0], onFocusReady: { _ in prepared = true }) { record, _ in
+            let host = NSHostingView(rootView: ScrollView { ReaderRecordSections(state: state, ids: offered, focusedID: offered[0], onFocusReady: { _ in prepared = true }) { record, _ in
                 let _ = shown.updateValue(record, forKey: record.id)
-                ReaderRecordFoldCard(record: record, expanded: .constant(false)) { Text("完整回答") }
-            }.environmentObject(store))
+                ActualRecordCardHost(record: record, store: store, ready: { actualCards[record.id] = $0 }).frame(width: 1000, height: 130)
+            }}.environmentObject(store))
             window.contentView = host; host.frame = .init(x: 0, y: 0, width: 1050, height: 740)
             checks["ActualRecordBrowserCompletesScopedPreparation"] = await wait { prepared }
             host.layoutSubtreeIfNeeded(); await settle()
             checks["ActualRecordBrowserShowsOnlyOfferedRecords"] = Set(shown.keys) == Set(offered)
             checks["ActualRecordBrowserKeepsEarlierQuestionTitle"] = shown["chat:a119"]?.title == "回答：问题119"
             checks["ActualRecordBrowserDefersBodyHintsUntilRowsAppear"] = shown.count == offered.count && shown.values.allSatisfy { $0.preview.isEmpty && $0.deferredPreview != nil }
+            var pixelMatches: [String: Double] = [:], emptyMatches: [String: Double] = [:]
             checks["ActualRecordBrowserShowsCleanBodyHint"] = await wait {
-                let text = self.visibleText(host)
-                return text.contains("答案119 原文") && text.contains("答案0 原文") && !text.contains("unit:") && !text.contains("**")
+                host.layoutSubtreeIfNeeded()
+                for (id, answer) in [(offered[0], "119"), (offered[1], "0")] {
+                    guard let actual = actualCards[id], let record = shown[id], actual.bounds.width > 0 else { return false }
+                    let mask = self.glyphs(actual, capture: "actual-" + answer)
+                    // Expected text is an independent literal, never obtained
+                    // from the deferred parser or its output under test.
+                    let expected = self.oracle(record, preview: "答案\(answer) 原文，保留原文来源。", size: actual.bounds.size, store: store)
+                    let empty = self.oracle(record, preview: "", size: actual.bounds.size, store: store)
+                    pixelMatches[id] = self.overlap(mask, expected)
+                    emptyMatches[id] = self.overlap(expected, empty)
+                }
+                return pixelMatches.count == 2 && pixelMatches.values.allSatisfy { $0 > 0.97 }
             }
+            checks["IndependentPixelOracleRejectsMissingBodyHint"] = emptyMatches.count == 2 && emptyMatches.values.allSatisfy { $0 < 0.85 }
+            checks["BothActualNativeCardRastersMatchLiteralPreview"] = pixelMatches.count == 2 && pixelMatches.values.allSatisfy { $0 > 0.97 }
+            observations["actualCardGlyphOverlap"] = pixelMatches
+            observations["emptyHintNegativeControlOverlap"] = emptyMatches
             observations["displayedRecordText"] = visibleText(host)
             checks["ActualRecordBrowserDoesNotArchiveOrRewriteMessages"] = try encoder.encode(store.books[0]) == before
             observations["realNetworkRequests"] = 0
