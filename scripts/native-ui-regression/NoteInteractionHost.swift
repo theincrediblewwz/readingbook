@@ -152,6 +152,7 @@ import PDFKit
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             checks["ActualWorkspaceCreatesNativePDF"] = await wait { !self.descendants(self.window.contentView!, PDFReaderContainerView.self).isEmpty }
             let reader = try XCT(descendants(window.contentView!, PDFReaderContainerView.self).first)
+            let pdfController = try XCT(Mirror(reflecting: reader).children.first { $0.label == "controller" }?.value as? PDFReaderController)
             checks["ActualPDFHasSource"] = await wait { self.descendants(reader, PDFView.self).first?.document != nil }
             let pdf = try XCT(descendants(reader, PDFView.self).first), document = try XCT(pdf.document), page = try XCT(document.page(at: 0))
             await settle(300)
@@ -282,6 +283,85 @@ import PDFKit
             checks["SavedMarkPublishesCurrentReaderBeforeNextAction"] = await wait {
                 !self.store.isBusy && Mirror(reflecting: reader).children.first { $0.label == "canEditAnnotations" }?.value as? Bool == true
             }
+            // Saved decorations are not input surfaces: their hit paths must
+            // still reach PDFKit's scroll view in every supported reading mode.
+            for (name, direction, continuous, paper, width) in [
+                ("VerticalContinuousWidth", PDFReadingDirection.vertical, true, false, true),
+                ("HorizontalContinuousPage", .horizontal, true, false, false),
+                ("VerticalSingleWidth", .vertical, false, false, true),
+                ("HorizontalSingleWidth", .horizontal, false, false, true),
+                ("HorizontalSinglePage", .horizontal, false, false, false),
+                ("PaperBook", .horizontal, false, true, false)
+            ] {
+                pdfController.command(.setPaperBook(false)); pdfController.command(.setDirection(direction))
+                pdfController.command(.setContinuous(continuous)); pdfController.command(width ? .fitWidth : .fitPage)
+                if paper { pdfController.command(.setPaperBook(true)) }
+                pdfController.command(.jump(1)); await settle(160)
+                for record in store.book?.readerAnnotations?.filter({ $0.trashedAt == nil }) ?? [] {
+                    guard let quad = record.quads.first, let root = window.contentView else { continue }
+                    let local = pdf.convert(CGPoint(x: quad.x+quad.width/2, y: quad.y+quad.height/2), from: page)
+                    let rootPoint = root.convert(local, from: pdf)
+                    let hit = root.hitTest(rootPoint)
+                    let kind = record.lineStyle?.rawValue ?? "highlight"
+                    checks["SavedMarkPassesToNativeScroll-\(name)-\(kind)"] = hit !== pdf && hit?.isDescendant(of: pdf) == true && hit?.enclosingScrollView != nil
+                }
+            }
+            pdfController.command(.setPaperBook(false)); pdfController.command(.setDirection(.vertical))
+            pdfController.command(.setContinuous(true)); pdfController.command(.fitWidth); pdfController.command(.jump(1)); await settle(160)
+            let markRect = try XCT(store.book?.readerAnnotations?.first { $0.trashedAt == nil }?.quads.first)
+            let markPoint = pdf.convert(CGPoint(x: markRect.x+markRect.width/2, y: markRect.y+markRect.height/2), from: page)
+            let nativePoint = pdf.convert(markPoint, to: nil), eventTime = ProcessInfo.processInfo.systemUptime
+            for (type, pressure) in [(NSEvent.EventType.leftMouseDown, Float(1)), (.leftMouseUp, Float(0))] {
+                NSApp.postEvent(try XCT(NSEvent.mouseEvent(with: type, location: nativePoint, modifierFlags: [], timestamp: eventTime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: pressure)), atStart: false)
+            }
+            await settle(180)
+            checks["ClickingSavedMarkDoesNotOpenLegacyEditor"] = window.attachedSheet == nil
+            var markedSelection = try XCT(PDFTrackpadTextSelection(in: pdf, event: try pointerEvent(page, .init(x: 45, y: 685))))
+            markedSelection.pointer = try pointerEvent(page, .init(x: 265, y: 685), type: .leftMouseDragged)
+            checks["SelectionStillCrossesSavedMarks"] = markedSelection.selection(in: pdf)?.string?.trimmingCharacters(in: .whitespacesAndNewlines) == nativeQuote
+            var oldComment = try XCT(store.book?.readerAnnotations?.first { $0.lineStyle == nil && $0.trashedAt == nil })
+            oldComment.comment = String(repeating: "过去填写的批注完整保留，不能因新界面被删掉。", count: 20)
+            checks["HistoricalCommentCanStillBeSavedByRepository"] = await store.saveReaderAnnotations([oldComment])
+            _ = try await sourceActions(page, point)
+            pdfController.command(.showAnnotations); await settle(120)
+            let recordsPanel = try XCT(Mirror(reflecting: reader).children.first { $0.label == "annotationPanel" }?.value as? NSPanel)
+            let recordsHost = try XCT(recordsPanel.contentView as? NSHostingView<ReaderMarkRecordsView>)
+            checks["MarkRecordsAreNonmodal"] = window.attachedSheet == nil && recordsPanel.parent === window
+            checks["MarkRecordsRetainCompleteHistoricalComment"] = recordsHost.rootView.model.records.contains { $0.id == oldComment.id && $0.comment == oldComment.comment }
+            checks["RecordBrowserHasNoLegacyCommentEditor"] = descendants(recordsHost, NSTextView.self).allSatisfy { !$0.isEditable }
+            let storedComment = try XCT(recordsHost.rootView.model.records.first { $0.id == oldComment.id })
+            recordsHost.rootView.onStyle(storedComment); await settle(100)
+            let stylePanel = try XCT(window.attachedSheet)
+            checks["ExplicitRecordStyleUsesUnifiedMarkEditor"] = stylePanel.title == "标记样式"
+            let styleHost = try XCT(stylePanel.contentView as? NSHostingView<ReaderUnderlineStyleView>)
+            styleHost.rootView.onCancel(); await settle(80)
+            _ = try await sourceActions(page, point)
+            pdfController.command(.showAnnotations); await settle(100)
+            let updatedPanel = try XCT(Mirror(reflecting: reader).children.first { $0.label == "annotationPanel" }?.value as? NSPanel)
+            let stableHost = try XCT(updatedPanel.contentView as? NSHostingView<ReaderMarkRecordsView>)
+            checks["RecordsSoftRemoveKeepsComment"] = await stableHost.rootView.onTrash(storedComment, true)
+            _ = await wait { stableHost.rootView.model.records.contains { $0.id == oldComment.id && $0.trashedAt != nil && $0.comment == oldComment.comment } }
+            checks["RecordUpdateKeepsSameHostingTree"] = updatedPanel.contentView === stableHost
+            let removed = try XCT(stableHost.rootView.model.records.first { $0.id == oldComment.id })
+            checks["RecordsRestoreKeepsCommentAndIdentity"] = await stableHost.rootView.onTrash(removed, false)
+            _ = await wait { stableHost.rootView.model.records.contains { $0.id == oldComment.id && $0.trashedAt == nil && $0.comment == oldComment.comment } }
+            checks["RecordModelUpdatesInPlaceAfterRestore"] = updatedPanel.contentView === stableHost && stableHost.rootView.model.records.contains { $0.id == oldComment.id && $0.trashedAt == nil && $0.comment == oldComment.comment }
+            saveBitmap(stableHost, "mark-records")
+            stableHost.rootView.onClose(); await settle(100)
+            checks["MarkBrowserCloseRestoresReadingWindow"] = window.attachedSheet == nil && !updatedPanel.isVisible
+            let beforeToolbar = store.book?.readerAnnotations ?? []
+            pdf.setCurrentSelection(page.selection(for: range), animate: false)
+            pdfController.command(.createHighlight); await settle(120)
+            checks["ToolbarHighlightDoesNotDuplicateExistingRecord"] = store.book?.readerAnnotations == beforeToolbar && window.attachedSheet == nil
+            let otherRange = nativeText.range(of: "The selected source remains on its own page.")
+            pdf.setCurrentSelection(page.selection(for: otherRange), animate: false)
+            pdfController.command(.createHighlight)
+            checks["ToolbarHighlightSavesDirectlyWithoutForm"] = await wait { (self.store.book?.readerAnnotations?.count ?? 0) == beforeToolbar.count+1 && self.window.attachedSheet == nil }
+            let toolbarRecord = try XCT(store.book?.readerAnnotations?.first { candidate in !beforeToolbar.contains { $0.id == candidate.id } })
+            checks["ToolbarHighlightUsesIndependentAppearance"] = toolbarRecord.lineStyle == nil && toolbarRecord.highlightAppearance != nil && toolbarRecord.comment.isEmpty
+            checks["ToolbarHighlightCanBeRecoveredAfterRemoval"] = await store.setReaderAnnotationTrashed(toolbarRecord.id, trashed: true)
+            pdf.clearSelection(); await settle(120)
             // Capture the menu at the current reader revision, just as the
             // user's new right-click does after the preceding saved edits.
             observations["beforeConversation"] = ["busy": store.isBusy, "scope": store.queryScope.rawValue,

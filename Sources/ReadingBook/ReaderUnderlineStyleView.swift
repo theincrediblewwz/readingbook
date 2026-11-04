@@ -53,11 +53,11 @@ struct ReaderUnderlineStyleView: View {
     private var editsExisting: Bool { existingStyles.contains(lineStyle) }
     init(appearances: [ReaderAnnotationLineStyle: ReaderUnderlineAppearance], existingStyles: Set<ReaderAnnotationLineStyle>, initialStyle: ReaderAnnotationLineStyle,
          onApply: @escaping ([ReaderAnnotationLineStyle: ReaderUnderlineAppearance], ReaderHighlightAppearance?) async -> Bool, onCancel: @escaping () -> Void,
-         highlight: ReaderHighlightAppearance) {
+         highlight: ReaderHighlightAppearance, initiallyShowsHighlight: Bool = false) {
         originals = appearances; self.existingStyles = existingStyles
         _drafts = State(initialValue: appearances); _lineStyle = State(initialValue: initialStyle)
         _value = State(initialValue: appearances[initialStyle] ?? .init())
-        _highlight = State(initialValue: highlight)
+        _highlight = State(initialValue: highlight); _showsHighlight = State(initialValue: initiallyShowsHighlight)
         originalHighlight = highlight; self.onApply = onApply; self.onCancel = onCancel
     }
     private func select(_ style: ReaderAnnotationLineStyle) {

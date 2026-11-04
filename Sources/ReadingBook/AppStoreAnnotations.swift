@@ -4,7 +4,7 @@ import ReadingCore
 extension AppStore {
     func saveReaderAnnotations(_ annotations: [ReaderAnnotation]) async -> Bool {
         guard let current = book, !annotations.isEmpty else { return false }
-        guard !isBusy else { errorMessage = "当前任务尚未结束，请稍后保存批注；已填写内容保留在批注窗口。"; return false }
+        guard !isBusy else { errorMessage = "当前任务尚未结束，请稍后保存标记。"; return false }
         isBusy = true; isCommittingLocalWrite = true
         let owner = WorkspacePickerOwner(store: self), repository = repository
         defer { isBusy = false; isCommittingLocalWrite = false }
@@ -21,7 +21,7 @@ extension AppStore {
 
     func setReaderAnnotationTrashed(_ id: String, trashed: Bool) async -> Bool {
         guard let current = book else { return false }
-        guard !isBusy else { errorMessage = "当前任务尚未结束，请稍后删除或恢复批注。"; return false }
+        guard !isBusy else { errorMessage = "当前任务尚未结束，请稍后移走或恢复标记。"; return false }
         isBusy = true; isCommittingLocalWrite = true
         let owner = WorkspacePickerOwner(store: self), repository = repository
         defer { isBusy = false; isCommittingLocalWrite = false }
@@ -29,7 +29,7 @@ extension AppStore {
             let saved = try await repository.setAnnotationTrashed(project: current, annotationID: id, trashed: trashed)
             guard owner.matches(self) else { return false }
             readerEditUndo.recordAnnotations(before: current, after: saved, ids: [id], owner: owner)
-            publish(saved); activity = trashed ? "批注已移入回收列表，可恢复。" : "批注已恢复。"
+            publish(saved); activity = trashed ? "标记已移入回收，可恢复。" : "标记已恢复。"
             return true
         } catch { if owner.matches(self) { errorMessage = error.localizedDescription }; return false }
     }

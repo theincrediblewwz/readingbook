@@ -45,7 +45,7 @@ enum PositionNoteSurface {
 
 enum PDFReaderCommand {
     case prev, next, jump(Int), zoomIn, zoomOut, fitPage, fitWidth, actualSize
-    case showSearch, toggleSearch, toggleThumbnails, toggleContinuous, createHighlight, createRegion, showAnnotations, placeNote
+    case showSearch, toggleSearch, toggleThumbnails, toggleContinuous, createHighlight, showAnnotations, placeNote
     case hideSearch, setThumbnails(Bool), setContinuous(Bool)
     case setDirection(PDFReadingDirection)
     case setPaperBook(Bool)

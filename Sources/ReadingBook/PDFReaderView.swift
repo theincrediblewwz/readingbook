@@ -97,7 +97,7 @@ struct PDFReaderView: NSViewRepresentable {
 }
 
 /// The PDF fills the reader; navigation is controlled by the window toolbar.
-/// Search and annotation editing appear only when requested.
+/// Search and mark controls appear only when explicitly requested.
 @MainActor final class PDFReaderContainerView: NSView, NSSearchFieldDelegate {
     private let paperSurface = ReadingPaperNativeVeil(frame: .zero)
     private let bookEdges = PDFBookEdges(frame: .zero)
@@ -335,7 +335,8 @@ struct PDFReaderView: NSViewRepresentable {
     private var sourceSelectionObservation = 0
     private var annotationPanel: NSPanel?
     private var editingAnnotationSheet = false
-    private var showingAnnotationList = false
+    private let markRecordsState = ReaderMarkRecordsState()
+    private var markRecordsRevision = 0
     private enum FitMode: Int { case page, width, actual, custom }
     private let pdfView = AnnotationPDFView()
     private let notePageGutters = PDFNotePageGutters()
@@ -472,12 +473,9 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     private func configure() {
-        pdfView.onRegion = { [weak self] page, rect in self?.createRegion(page: page, rect: rect) }
         pdfView.onReadingNavigation = { [weak self] offset, direction, pageStep, repeatKey in
             self?.handlePageNavigationKey(offset: offset, direction: direction, pageStep: pageStep, repeatKey: repeatKey) ?? false
         }
-        pdfView.onRegionError = { [weak self] message in self?.setStatus(message) }
-        pdfView.isManagedAnnotation = { [weak self] annotation in self?.annotationIDs[ObjectIdentifier(annotation)] != nil }
         pdfView.onSourcePointerLeft = { [weak self] in self?.cancelSourceHoverRefresh(); self?.reportSourceHover(nil) }
         sourceCanvas.wantsLayer = true
         sourceCanvas.layer?.backgroundColor = NSColor.clear.cgColor
@@ -485,7 +483,6 @@ struct PDFReaderView: NSViewRepresentable {
         underlineHoverLayer.name = "reading-saved-underline-hover"
         sourceCanvas.layer?.addSublayer(underlineHoverLayer)
         sourceCanvas.paint = { [weak self] dirty in self?.drawSourceDecorations(in: dirty) }
-        pdfView.onAnnotationTap = { [weak self] annotation in self?.openAnnotation(annotation) }
         pdfView.autoScales = false
         readingDirection = defaultReadingDirection
         pdfView.displayMode = defaultContinuous ? .singlePageContinuous : .singlePage
@@ -501,7 +498,6 @@ struct PDFReaderView: NSViewRepresentable {
         NotificationCenter.default.addObserver(self, selector: #selector(visiblePagesChanged(_:)), name: .PDFViewVisiblePagesChanged, object: pdfView)
         NotificationCenter.default.addObserver(self, selector: #selector(scaleChanged(_:)), name: .PDFViewScaleChanged, object: pdfView)
         NotificationCenter.default.addObserver(self, selector: #selector(selectionChanged(_:)), name: .PDFViewSelectionChanged, object: pdfView)
-        NotificationCenter.default.addObserver(self, selector: #selector(annotationHit(_:)), name: .PDFViewAnnotationHit, object: pdfView)
         NotificationCenter.default.addObserver(self, selector: #selector(pdfViewportScrolled(_:)), name: NSView.boundsDidChangeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(captureWorkspaceMemoryNow(_:)), name: Notification.Name("ReadingBookCaptureWorkspaceMemory"), object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(readingWindowResigned(_:)), name: NSWindow.didResignKeyNotification, object: nil)
@@ -744,7 +740,7 @@ struct PDFReaderView: NSViewRepresentable {
             appliedInteractionResetID = input.interactionResetID
             // Same-book selection resets transient interaction state just as
             // a reload did, while keeping the verified document and its caches.
-            resetPageGesture(); pdfView.cancelRegionSelection()
+            resetPageGesture(); pdfView.cancelNotePlacement()
             clearSearchState()
             let resetID = appliedInteractionResetID, generation = searchGeneration
             // Hiding an active NSSearchField asks AppKit to find its next key
@@ -835,7 +831,17 @@ struct PDFReaderView: NSViewRepresentable {
         }
         if document?.isLocked == true, let password = input.password, !password.isEmpty,
            document?.unlock(withPassword: password) == true { showDocument() }
-        if annotationsChanged { renderSavedAnnotations(); if showingAnnotationList { showAnnotations() } }
+        if annotationsChanged {
+            renderSavedAnnotations()
+            markRecordsRevision &+= 1
+            let revision = markRecordsRevision, records = savedAnnotations
+            // This update can originate inside updateNSView. Deliver outside
+            // that transaction, retaining the record browser's filter/expansion.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.markRecordsRevision == revision else { return }
+                self.markRecordsState.update(records)
+            }
+        }
         if sourceDecorationsChanged || newProofMetadata || requestedPageChanged { renderSourceDecorations() }
         if sourceDecorationFocusID != input.focusedDecorationID {
             cancelSourceQuotePreparation()
@@ -851,7 +857,7 @@ struct PDFReaderView: NSViewRepresentable {
     private func load(_ url: URL) {
         resetPageGesture(); observedClip = nil
         if !editingAnnotationSheet { closeAnnotationPanel() }
-        pdfView.cancelRegionSelection()
+        pdfView.cancelNotePlacement()
         clearSourceDecorations(); resetQuoteCache(); sourceDecorationFocusID = nil; appliedSourceDecorationFocusID = nil; appliedSourceDecorationProofIdentity = nil; pendingQuote = nil
         invalidateNavigation(); installingDocument = true
         defer { installingDocument = false }
@@ -1314,7 +1320,7 @@ struct PDFReaderView: NSViewRepresentable {
         // its one-turn latch and swallow the tail until that navigation settles.
         if pendingNavigation != nil || pageCurl != nil { return true }
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
-              !pdfView.isRegionSelectionArmed, let edges = pageBoundaries() else { return false }
+              let edges = pageBoundaries() else { return false }
         let wheelAlongReadingAxis = readingDirection == .horizontal && event.scrollingDeltaX == 0
             && (!event.hasPreciseScrollingDeltas || event.modifierFlags.contains(.shift))
         let primary = readingDirection == .vertical || wheelAlongReadingAxis ? event.scrollingDeltaY : event.scrollingDeltaX
@@ -2105,11 +2111,6 @@ struct PDFReaderView: NSViewRepresentable {
         case .setDirection(let direction): setPaperBookMode(false); changePDFDirection(direction)
         case .setPaperBook(let enabled): setPaperBookMode(enabled)
         case .createHighlight: createHighlight()
-        case .createRegion:
-            guard canEditAnnotations else { setStatus("当前任务运行中，请稍后添加区域批注。"); return }
-            guard document != nil, document?.isLocked == false else { return }
-            pdfView.armRegionSelection(); window?.makeFirstResponder(pdfView)
-            setStatus("拖动框选同一页内的区域，松开后填写批注；按Esc取消。")
         case .placeNote:
             guard canEditAnnotations, document != nil, document?.isLocked == false else { return }
             pdfView.armNotePlacement(); window?.makeFirstResponder(pdfView)
@@ -2827,7 +2828,7 @@ struct PDFReaderView: NSViewRepresentable {
             guard let owner = self.window, NSApp.isActive, owner.isKeyWindow,
                   NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == owner.windowNumber,
                   !self.interactionBlocked, !self.isHiddenOrHasHiddenAncestor, !self.installingDocument,
-                  owner.attachedSheet == nil, NSApp.modalWindow == nil, !self.pdfView.isRegionSelectionArmed,
+                  owner.attachedSheet == nil, NSApp.modalWindow == nil,
                   NSEvent.pressedMouseButtons == 0,
                   NSEvent.modifierFlags.intersection([.option, .command, .control]).isEmpty,
                   self.pdfView.currentSelection?.pages.isEmpty != false else {
@@ -2867,7 +2868,7 @@ struct PDFReaderView: NSViewRepresentable {
         }
         guard let owner = window, event.window === owner, !interactionBlocked, !isHiddenOrHasHiddenAncestor,
               !installingDocument, owner.attachedSheet == nil, NSApp.modalWindow == nil,
-              !pdfView.isRegionSelectionArmed, ownsPDFHit(event, in: owner),
+              ownsPDFHit(event, in: owner),
               event.modifierFlags.intersection([.option, .command, .control]).isEmpty else {
             invalidateSourcePress(); if event.type == .mouseMoved { reportSourceHover(nil) }; return
         }
@@ -2890,7 +2891,6 @@ struct PDFReaderView: NSViewRepresentable {
                       self.sourceInputGeneration == input, self.sourceInteractionGeneration == press.generation,
                       self.window === owner, !self.interactionBlocked, !self.isHiddenOrHasHiddenAncestor,
                       !self.installingDocument, owner.attachedSheet == nil, NSApp.modalWindow == nil,
-                      !self.pdfView.isRegionSelectionArmed,
                       self.sourceGeometries[press.hit.id]?.value == geometry.value,
                       self.sourceGeometries[press.hit.id]?.page == geometry.page,
                       self.pdfView.currentSelection?.string?.isEmpty != false else { return }
@@ -3052,21 +3052,8 @@ struct PDFReaderView: NSViewRepresentable {
                 if let highlighter { ReaderHighlightDefaults.save(highlighter) }
                 self.closeAnnotationPanel(); return true
             }, onCancel: { [weak self] in self?.closeAnnotationPanel() },
-            highlight: highlight?.highlightAppearance ?? ReaderHighlightDefaults.value)
+            highlight: highlight?.highlightAppearance ?? ReaderHighlightDefaults.value, initiallyShowsHighlight: highlight != nil && existing.isEmpty)
         presentAnnotationPanel(view, title: "标记样式", asSheet: true)
-    }
-
-    @objc private func annotationHit(_ notification: Notification) {
-        guard let annotation = notification.userInfo?["PDFAnnotationHit"] as? PDFAnnotation else { return }
-        // PDFKit posts this on mouse-down, before a click can be distinguished
-        // from a drag. Pointer editing is owned by AnnotationPDFView at mouse-up;
-        // retain the notification path for non-pointer accessibility activation.
-        if let type = NSApp.currentEvent?.type, [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(type) { return }
-        openAnnotation(annotation)
-    }
-    private func openAnnotation(_ annotation: PDFAnnotation) {
-        guard let id = annotationIDs[ObjectIdentifier(annotation)], let record = savedAnnotations.first(where: { $0.id == id && $0.trashedAt == nil }) else { return }
-        editAnnotations([record])
     }
 
     private func reportSourceHover(_ hit: PDFSourceDecorationHit?, activated: Bool = false) {
@@ -3152,33 +3139,32 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     private func createHighlight() {
-        guard canEditAnnotations else { setStatus("当前任务运行中，请稍后添加高亮。"); return }
-        guard let document, let selection = pdfView.currentSelection, onSaveAnnotations != nil else { setStatus("请先选择PDF文字；扫描页或无文字选择时，可用阅读菜单的“框选区域批注”。"); return }
-        do { editAnnotations(try ReaderAnnotationCapture.capture(selection: selection, document: document, sourceHash: sourceHash)) }
-        catch { setStatus(error.localizedDescription) }
-    }
-
-    private func createRegion(page: PDFPage, rect: CGRect) {
-        guard let document, page.document === document, !sourceHash.isEmpty, onSaveAnnotations != nil else { return }
-        let index = document.index(for: page)
-        guard index != NSNotFound else { return }
-        setStatus("")
-        let annotation = ReaderAnnotation(sourceHash: sourceHash, page: index + 1, text: "", rangeLocation: 0, rangeLength: 0, quads: [ReaderQuadRect(x: rect.origin.x, y: rect.origin.y, width: rect.width, height: rect.height)], kind: .region)
-        editAnnotations([annotation])
+        guard canEditAnnotations, let document, let selection = pdfView.currentSelection,
+              let save = onSaveAnnotations else { setStatus("请先选择要标记的原文。"); return }
+        do {
+            let captured = try ReaderAnnotationCapture.capture(selection: selection, document: document, sourceHash: sourceHash)
+            let fresh = captured.filter { target in
+                !savedAnnotations.contains { $0.trashedAt == nil && $0.sourceHash == target.sourceHash && $0.page == target.page
+                    && $0.effectiveKind == .text && $0.lineStyle == nil
+                    && $0.rangeLocation == target.rangeLocation && $0.rangeLength == target.rangeLength }
+            }.map { target in var copy = target; copy.highlightAppearance = ReaderHighlightDefaults.value; return copy }
+            guard !fresh.isEmpty else { return }
+            Task { _ = await save(fresh) }
+        } catch { setStatus(error.localizedDescription) }
     }
 
     private func presentAnnotationPanel<V: View>(_ view: V, title: String, asSheet: Bool = false) {
-        guard let owner = window else { setStatus("阅读窗口尚未就绪，请稍后打开批注。"); return }
+        guard let owner = window else { setStatus("阅读窗口尚未就绪，请稍后打开标记。"); return }
         if asSheet {
-            guard owner.attachedSheet == nil else { setStatus("请先完成或关闭当前窗口的弹出表单，再编辑批注。"); return }
+            guard owner.attachedSheet == nil else { setStatus("请先关闭当前编辑窗口，再调整标记样式。"); return }
             closeAnnotationPanel()
         } else if editingAnnotationSheet { annotationPanel?.makeKeyAndOrderFront(nil); return }
         if annotationPanel == nil {
             // Editor sheets have no native close button: only successful save or
             // the explicit cancel action can dismiss a draft, including during I/O.
             let style: NSWindow.StyleMask = asSheet ? [.titled, .resizable] : [.titled, .closable, .resizable]
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 480), styleMask: style, backing: .buffered, defer: false)
-            panel.isReleasedWhenClosed = false; panel.minSize = NSSize(width: 330, height: 300)
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: asSheet ? 420 : 520, height: 480), styleMask: style, backing: .buffered, defer: false)
+            panel.isReleasedWhenClosed = false; panel.minSize = NSSize(width: asSheet ? 330 : 430, height: 340)
             annotationPanel = panel
         }
         guard let panel = annotationPanel else { return }
@@ -3193,36 +3179,32 @@ struct PDFReaderView: NSViewRepresentable {
             else { panel.parent?.removeChildWindow(panel) }
             panel.orderOut(nil); panel.close(); panel.contentView = nil
         }
-        annotationPanel = nil; showingAnnotationList = false; editingAnnotationSheet = false
-    }
-
-    private func editAnnotations(_ records: [ReaderAnnotation]) {
-        guard let controller else { return }
-        guard window?.attachedSheet == nil else { setStatus("请先完成或关闭当前窗口的弹出表单，再编辑批注。"); return }
-        showingAnnotationList = false
-        let existing = records.count == 1 && savedAnnotations.contains(where: { $0.id == records[0].id })
-        let saveCallback = onSaveAnnotations, trashCallback = onTrashAnnotation
-        // The sheet owns its draft and retains this controller until it is explicitly
-        // dismissed; a cross-window navigation cannot silently destroy the text.
-        let editor = PDFAnnotationEditor(controller: controller, records: records, canDelete: existing, onSave: { [self] updated in
-            let saved = await saveCallback?(updated) ?? false
-            if saved { self.closeAnnotationPanel() }; return saved
-        }, onDelete: { [self] in
-            guard let record = records.first else { return false }
-            let saved = await trashCallback?(record.id, true) ?? false
-            if saved { self.closeAnnotationPanel() }; return saved
-        }, onCancel: { [self] in closeAnnotationPanel() })
-        presentAnnotationPanel(editor, title: existing ? "编辑高亮与批注" : "保存高亮与批注", asSheet: true)
+        annotationPanel = nil; editingAnnotationSheet = false
     }
 
     private func showAnnotations() {
         guard let controller else { return }
-        showingAnnotationList = true
-        let list = PDFAnnotationList(controller: controller, records: savedAnnotations, onLocate: { [weak self] record in
-            self?.closeAnnotationPanel(); self?.navigate(to: record.page)
-        }, onEdit: { [weak self] record in self?.editAnnotations([record]) }, onTrash: { [weak self] record, trashed in await self?.onTrashAnnotation?(record.id, trashed) ?? false })
-        presentAnnotationPanel(list, title: "本书PDF批注")
+        markRecordsState.update(savedAnnotations)
+        let generation = documentGeneration, navigation = navigationRequestID, source = sourceHash
+        let list = ReaderMarkRecordsView(controller: controller, model: markRecordsState, onLocate: { [weak self] record in
+            guard let self, self.contextIsCurrent(generation, navigation, source) else { return }
+            self.closeAnnotationPanel()
+            if record.text.isEmpty { self.navigate(to: record.page) }
+            else { self.focusQuote(on: record.page, quote: record.text) }
+        }, onStyle: { [weak self] record in
+            guard let self, self.contextIsCurrent(generation, navigation, source), self.savedAnnotations.contains(record) else { return }
+            self.closeAnnotationPanel()
+            let lines = record.lineStyle.map { [$0: record] } ?? [:]
+            self.showUnderlineStyle(existing: lines, generation: self.documentGeneration, navigation: self.navigationRequestID,
+                source: self.sourceHash, highlight: record.lineStyle == nil && record.effectiveKind == .text ? record : nil)
+        }, onTrash: { [weak self] record, trashed in
+            guard let self, self.contextIsCurrent(generation, navigation, source) else { return false }
+            return await self.onTrashAnnotation?(record.id, trashed) ?? false
+        },
+            onClose: { [weak self] in self?.closeAnnotationPanel() })
+        presentAnnotationPanel(list, title: "本书标记")
     }
+
 }
 
 private extension ReaderAnnotationColor {
@@ -3272,22 +3254,20 @@ private extension ReaderAnnotationColor {
     }
 }
 
-/// Region mode intercepts PDFKit's text selection only while explicitly armed.
-/// Both endpoints must belong to the same page; coordinates are converted by PDFView, including rotation/crop.
+/// Own explicit source actions while leaving PDFKit scrolling and text selection intact.
 @MainActor private final class AnnotationPDFView: PDFView {
     var paperTurnInProgress = false
     var onSourcePointerLeft: (() -> Void)?
     private var sourceTrackingArea: NSTrackingArea?
     private var contextEventMonitor: Any?
     private var selectionDragStart: (point: CGPoint, text: String?)?
-    private var pendingManagedTap: PDFAnnotation?
     private var indirectFingerCount = 0
     private var trackpadSelection: PDFTrackpadTextSelection?
     private var trackpadSelectionRevision = 0
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow(); window?.acceptsMouseMovedEvents = true
         if let contextEventMonitor { NSEvent.removeMonitor(contextEventMonitor); self.contextEventMonitor = nil }
-        trackpadSelection = nil; selectionDragStart = nil; pendingManagedTap = nil
+        trackpadSelection = nil; selectionDragStart = nil
         indirectFingerCount = 0; trackpadSelectionRevision &+= 1
         guard window != nil else { return }
         allowedTouchTypes = [.indirect]; wantsRestingTouches = true
@@ -3316,18 +3296,13 @@ private extension ReaderAnnotationColor {
             }
             if event.type == .leftMouseUp, self.trackpadSelection != nil {
                 self.presentTrackpadSelection()
-                self.trackpadSelection = nil; self.selectionDragStart = nil; self.pendingManagedTap = nil
+                self.trackpadSelection = nil; self.selectionDragStart = nil
                 return nil
             }
             if event.type == .leftMouseUp, let start = self.selectionDragStart {
                 self.selectionDragStart = nil
                 let point = self.convert(event.locationInWindow, from: nil)
                 let distance = hypot(point.x - start.point.x, point.y - start.point.y)
-                let tapped = self.pendingManagedTap; self.pendingManagedTap = nil
-                if distance <= 3, let tapped {
-                    DispatchQueue.main.async { [weak self] in self?.onAnnotationTap?(tapped) }
-                    return event
-                }
                 guard distance > 3,
                       let selection = self.currentSelection?.copy() as? PDFSelection,
                       selection.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return event }
@@ -3341,11 +3316,10 @@ private extension ReaderAnnotationColor {
                 self.showReadingContext(for: event)
                 return nil // Consume the original event before PDFKit forwards it.
             }
-            if event.type == .leftMouseDown, !self.regionArmed, !self.noteArmed {
+            if event.type == .leftMouseDown, !self.noteArmed {
                 self.cancelTrackpadSelection(); self.readingContext.close()
                 let point = self.convert(event.locationInWindow, from: nil)
                 self.selectionDragStart = (point, self.currentSelection?.string)
-                self.pendingManagedTap = event.modifierFlags.contains(.option) ? nil : self.managedAnnotation(at: point)
                 if self.indirectFingerCount >= 3, event.clickCount == 1,
                    event.modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty,
                    let selection = PDFTrackpadTextSelection(in: self, event: event) {
@@ -3391,7 +3365,7 @@ private extension ReaderAnnotationColor {
     var onSentenceActions: ((PDFPage, CGPoint) -> [ReadingContextAction])?
     var onSelectionActions: ((PDFPage, CGPoint, PDFSelection) -> [ReadingContextAction])?
     var onNotePreview: ((PDFPage, CGPoint) -> Void)?
-    func armNotePlacement() { cancelRegionSelection(); noteArmed = true }
+    func armNotePlacement() { cancelNotePlacement(); noteArmed = true }
     override func menu(for event: NSEvent) -> NSMenu? {
         showReadingContext(for: event)
         return nil
@@ -3429,73 +3403,35 @@ private extension ReaderAnnotationColor {
         }
         super.mouseMoved(with: event)
     }
-    var onRegion: ((PDFPage, CGRect) -> Void)?
-    var onRegionError: ((String) -> Void)?
-    var isManagedAnnotation: ((PDFAnnotation) -> Bool)?
-    var onAnnotationTap: ((PDFAnnotation) -> Void)?
-    private var regionArmed = false
-    var isRegionSelectionArmed: Bool { regionArmed }
-    private var regionStart: (page: PDFPage, pagePoint: CGPoint, viewPoint: CGPoint)?
-    private var regionPreview: NSView?
-
-    func armRegionSelection() { cancelRegionSelection(); regionArmed = true }
-    func cancelRegionSelection() { cancelTrackpadSelection(); noteArmed = false; regionArmed = false; pendingManagedTap = nil; regionStart = nil; regionPreview?.removeFromSuperview(); regionPreview = nil }
+    func cancelNotePlacement() { cancelTrackpadSelection(); noteArmed = false }
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
-        if paperTurnInProgress { return bounds.contains(local) ? self : nil }
-        if regionArmed || noteArmed { return bounds.contains(local) ? self : nil }
-        // Own the original window event rather than PDFKit page subviews'
-        // forwarded context events, whose coordinates can follow page layout.
+        // Wheel/gesture routing belongs to PDFKit's scroll view, including over
+        // saved highlights and ink. A display annotation must never become an
+        // input shield; the reader's page-turn monitor owns gesture boundaries.
+        if NSApp.currentEvent?.type == .scrollWheel { return super.hitTest(point) }
+        if paperTurnInProgress || noteArmed { return bounds.contains(local) ? self : nil }
+        // Context coordinates must come from the original window event.
         if NSApp.currentEvent?.type == .rightMouseDown { return bounds.contains(local) ? self : nil }
-        if NSApp.currentEvent?.modifierFlags.contains(.option) != true, managedAnnotation(at: local) != nil { return self }
         return super.hitTest(point)
-    }
-    private func managedAnnotation(at point: CGPoint) -> PDFAnnotation? {
-        guard let page = page(for: point, nearest: false) else { return nil }
-        let local = convert(point, to: page)
-        return page.annotations.reversed().first { isManagedAnnotation?($0) == true && $0.bounds.contains(local) }
     }
     override func mouseDown(with event: NSEvent) {
         guard !paperTurnInProgress else { return }
-        let point = convert(event.locationInWindow, from: nil)
         if noteArmed {
-            defer { cancelRegionSelection() }
-            if let page = page(for: point, nearest: false) { onNotePoint?(page, convert(point, to: page)) }; return
+            defer { cancelNotePlacement() }
+            let point = convert(event.locationInWindow, from: nil)
+            if let page = page(for: point, nearest: false) { onNotePoint?(page, convert(point, to: page)) }
+            return
         }
-        if !regionArmed {
-            // Wait for mouse-up to distinguish opening an existing annotation
-            // from starting a normal text selection through the same glyphs.
-            super.mouseDown(with: event); return
-        }
-        guard let page = page(for: point, nearest: false) else { cancelRegionSelection(); onRegionError?("请从PDF页面内开始框选。"); return }
-        regionStart = (page, convert(point, to: page), point)
-        let preview = NSView(frame: NSRect(origin: point, size: .zero)); preview.wantsLayer = true
-        preview.layer?.borderColor = NSColor.systemYellow.cgColor; preview.layer?.borderWidth = 1.5
-        preview.layer?.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.15).cgColor
-        addSubview(preview); regionPreview = preview
-    }
-    override func mouseDragged(with event: NSEvent) {
-        guard let start = regionStart else { if !regionArmed { super.mouseDragged(with: event) }; return }
-        let point = convert(event.locationInWindow, from: nil)
-        regionPreview?.frame = NSRect(x: min(point.x, start.viewPoint.x), y: min(point.y, start.viewPoint.y), width: abs(point.x - start.viewPoint.x), height: abs(point.y - start.viewPoint.y))
-    }
-    override func mouseUp(with event: NSEvent) {
-        guard let start = regionStart else { if !regionArmed { super.mouseUp(with: event) }; return }
-        let point = convert(event.locationInWindow, from: nil)
-        defer { cancelRegionSelection() }
-        guard let endPage = page(for: point, nearest: false), endPage === start.page else { onRegionError?("区域批注一次只能框选同一页，跨页拖框未保存，请分别框选。"); return }
-        let end = convert(point, to: start.page)
-        let rect = CGRect(x: min(end.x, start.pagePoint.x), y: min(end.y, start.pagePoint.y), width: abs(end.x - start.pagePoint.x), height: abs(end.y - start.pagePoint.y)).intersection(start.page.readingSourceBounds(for: .cropBox))
-        guard !rect.isNull, rect.width >= 2, rect.height >= 2 else { onRegionError?("框选区域太小或在页面外，未保存。"); return }
-        onRegion?(start.page, rect)
+        super.mouseDown(with: event)
     }
     override func keyDown(with event: NSEvent) {
         guard !interactionBlocked, !paperTurnInProgress else { return }
-        if event.keyCode == 53, trackpadSelection != nil { cancelTrackpadSelection(); selectionDragStart = nil; pendingManagedTap = nil; readingContext.close(); return }
-        if (regionArmed || noteArmed) && event.keyCode == 53 { let note = noteArmed; cancelRegionSelection(); if note { onNotePlacementCancelled?() }; onRegionError?(""); return }
+        if event.keyCode == 53, trackpadSelection != nil { cancelTrackpadSelection(); selectionDragStart = nil; readingContext.close(); return }
+        if noteArmed && event.keyCode == 53 { cancelNotePlacement(); onNotePlacementCancelled?(); return }
         // Every plain arrow pans along its own axis. Only the selected reading
         // axis turns pages, and only after the current magnified page boundary.
-        if !regionArmed, (displayMode == .singlePage || displayMode == .singlePageContinuous),
+        if (displayMode == .singlePage || displayMode == .singlePageContinuous),
            event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
            let onReadingNavigation {
             let input: (Int, PDFReadingDirection, Bool)?
@@ -3514,7 +3450,7 @@ private extension ReaderAnnotationColor {
     }
     override func swipe(with event: NSEvent) {
         guard !interactionBlocked, !paperTurnInProgress else { return }
-        guard !regionArmed, (displayMode == .singlePage || displayMode == .singlePageContinuous), let onReadingNavigation else {
+        guard (displayMode == .singlePage || displayMode == .singlePageContinuous), let onReadingNavigation else {
             super.swipe(with: event); return
         }
         let delta = readingDirection == .vertical ? event.deltaY : event.deltaX
@@ -3523,87 +3459,6 @@ private extension ReaderAnnotationColor {
         // scrolling. Perpendicular swipes must not invoke PDFKit's own pager.
         guard abs(delta) > 0.001, abs(delta) >= abs(cross) else { return }
         _ = onReadingNavigation(delta > 0 ? -1 : 1, readingDirection, true, false)
-    }
-}
-
-private struct PDFAnnotationEditor: View {
-    @ObservedObject var controller: PDFReaderController
-    let records: [ReaderAnnotation]
-    let canDelete: Bool
-    let onSave: ([ReaderAnnotation]) async -> Bool
-    let onDelete: () async -> Bool
-    let onCancel: () -> Void
-    @State private var color: ReaderAnnotationColor
-    @State private var comment: String
-    @State private var isSaving = false
-    @State private var failure = ""
-    @State private var confirmingCancel = false
-    init(controller: PDFReaderController, records: [ReaderAnnotation], canDelete: Bool, onSave: @escaping ([ReaderAnnotation]) async -> Bool, onDelete: @escaping () async -> Bool, onCancel: @escaping () -> Void) {
-        self.controller = controller
-        self.records = records; self.canDelete = canDelete; self.onSave = onSave; self.onDelete = onDelete; self.onCancel = onCancel
-        _color = State(initialValue: records.first?.color ?? .yellow); _comment = State(initialValue: records.first?.comment ?? "")
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(records.count > 1 ? "跨页/多段选择 · \(records.count) 处，一次保存" : "第 \(records.first?.page ?? 1) 页").font(.headline)
-            ScrollView { VStack(alignment: .leading, spacing: 10) { ForEach(records) { record in Text(record.effectiveKind == .region ? "已框选原页区域，未自动识别其中的文字。" : record.text).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) } } }.frame(maxHeight: 160)
-            Picker("高亮颜色", selection: $color) { ForEach(ReaderAnnotationColor.allCases, id: \.self) { Text($0.title).tag($0) } }
-                .pickerStyle(.segmented).labelsHidden().accessibilityLabel("高亮颜色").frame(maxWidth: .infinity)
-            Text("批注").font(.subheadline)
-            TextEditor(text: $comment).font(.body).frame(minHeight: 100).border(Color.secondary.opacity(0.2))
-            if comment.count > 16_000 { Text("批注最多16000字。").font(.caption).foregroundStyle(.red) }
-            HStack {
-                if canDelete { Button("移入回收列表", role: .destructive) { Task { isSaving = true; let saved = await onDelete(); isSaving = false; if !saved { failure = "删除未完成，原批注保留。" } } }.disabled(isSaving || !controller.canEditAnnotations) }
-                Spacer(); Button("取消") {
-                    if comment != (records.first?.comment ?? "") || color != (records.first?.color ?? .yellow) { confirmingCancel = true }
-                    else { onCancel() }
-                }.keyboardShortcut(.cancelAction).disabled(isSaving)
-                Button(isSaving ? "保存中…" : "保存") { Task { isSaving = true; let saved = await onSave(records.map { record in var copy = record; copy.color = color; copy.comment = comment; return copy }); isSaving = false; if !saved { failure = "保存未完成，已填写内容保留，请重试。" } } }.keyboardShortcut(.defaultAction).disabled(comment.count > 16_000 || isSaving || !controller.canEditAnnotations)
-            }
-            if !failure.isEmpty { Text(failure).font(.caption).foregroundStyle(.red) }
-            Text("独立保存到书项目，原PDF不改写。").font(.caption).foregroundStyle(.secondary)
-        }.padding(20).frame(minWidth: 320, minHeight: 360)
-        .alert("放弃尚未保存的批注？", isPresented: $confirmingCancel) {
-            Button("继续编辑", role: .cancel) {}
-            Button("放弃并关闭", role: .destructive, action: onCancel)
-        } message: { Text("关闭后会丢弃本次修改，原来已保存的批注保留。") }
-    }
-}
-
-private struct PDFAnnotationList: View {
-    @ObservedObject var controller: PDFReaderController
-    let records: [ReaderAnnotation]
-    let onLocate: (ReaderAnnotation) -> Void
-    let onEdit: (ReaderAnnotation) -> Void
-    let onTrash: (ReaderAnnotation, Bool) async -> Bool
-    @State private var showTrashed = false
-    @State private var savingID: String?
-    @State private var failure = ""
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Toggle("显示已删除批注", isOn: $showTrashed)
-            if !failure.isEmpty { Text(failure).font(.caption).foregroundStyle(.red) }
-            let visible = records.filter { showTrashed || $0.trashedAt == nil }.sorted { $0.page == $1.page ? $0.rangeLocation < $1.rangeLocation : $0.page < $1.page }
-            if visible.isEmpty { ContentUnavailableView("暂无批注", systemImage: "highlighter", description: Text("选中原PDF文字后，使用工具栏高亮按钮保存。")) }
-            ScrollView { LazyVStack(alignment: .leading, spacing: 16) {
-                ForEach(visible) { record in
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack { Text("第 \(record.page) 页").font(.caption.weight(.semibold)); Spacer(); if record.trashedAt != nil { Text("已删除").font(.caption).foregroundStyle(.secondary) } }
-                        Text(record.effectiveKind == .region ? "区域批注" : String(record.text.prefix(180))).font(.callout).textSelection(.enabled)
-                        if !record.comment.isEmpty { Text(String(record.comment.prefix(240))).font(.caption).foregroundStyle(.secondary) }
-                        HStack {
-                            Button("定位原页") { onLocate(record) }
-                            if record.trashedAt == nil { Button("编辑") { onEdit(record) }.disabled(!controller.canEditAnnotations); Button("删除", role: .destructive) { updateTrash(record, trashed: true) }.disabled(savingID != nil || !controller.canEditAnnotations) }
-                            else { Button("恢复") { updateTrash(record, trashed: false) }.disabled(savingID != nil || !controller.canEditAnnotations) }
-                        }.font(.caption)
-                        Divider()
-                    }
-                }
-            } }
-        }.padding(18).frame(minWidth: 320, minHeight: 300)
-    }
-    private func updateTrash(_ record: ReaderAnnotation, trashed: Bool) {
-        Task { savingID = record.id; let saved = await onTrash(record, trashed); savingID = nil; if !saved { failure = "操作未完成，原批注保留，请重试。" } }
     }
 }
 

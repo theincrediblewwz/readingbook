@@ -807,7 +807,7 @@ struct WorkspaceView: View {
             }
             if viewingPDF {
                 DockDivider()
-                DockIconButton(title: "高亮与批注", icon: "highlighter", isSelected: readerPopover == .annotations) { toggleReaderPopover(.annotations) }
+                DockIconButton(title: "阅读标记", icon: "highlighter", isSelected: readerPopover == .annotations) { toggleReaderPopover(.annotations) }
                     .disabled(!pdfController.isReady || store.isBusy)
                     .popover(isPresented: readerPopoverBinding(.annotations), arrowEdge: .bottom) { annotationTools }
                 Button { toggleReaderPopover(.zoom) } label: {
@@ -827,9 +827,8 @@ struct WorkspaceView: View {
     }
     private var annotationTools: some View {
         VStack(spacing: 2) {
-            DockMenuRow(title: "高亮选中文字", icon: "highlighter") { readerPopover = nil; pdfController.command(.createHighlight) }.disabled(!pdfController.hasSelection)
-            DockMenuRow(title: "框选页面区域", icon: "viewfinder") { readerPopover = nil; pdfController.command(.createRegion) }
-            DockMenuRow(title: "批注与恢复", icon: "list.bullet.rectangle") { readerPopover = nil; pdfController.command(.showAnnotations) }
+            DockMenuRow(title: "荧光标记选中文字", icon: "highlighter") { readerPopover = nil; pdfController.command(.createHighlight) }.disabled(!pdfController.hasSelection)
+            DockMenuRow(title: "标记记录", icon: "list.bullet.rectangle") { readerPopover = nil; pdfController.command(.showAnnotations) }
         }.padding(8).frame(width: 262).background(Palette.surface)
     }
     private var readerMoreTools: some View {
