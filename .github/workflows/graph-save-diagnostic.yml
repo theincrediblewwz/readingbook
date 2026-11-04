@@ -1,0 +1,30 @@
+name: Diagnose native graph save
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build unoptimized product with test access
+        run: swift build --scratch-path .build/tests -Xswiftc -enable-testing
+      - name: Observe original graph checks
+        run: python3 scripts/native-ui-regression/run-graph-label-reuse.py --bin-dir .build/tests/debug --tag ci-graph-save-diagnostic
+      - name: Preserve native state and original result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: graph-save-diagnostic-evidence
+          path: logs/map-allocation-20261104/ci-graph-save-diagnostic
+          if-no-files-found: error
+          retention-days: 3
