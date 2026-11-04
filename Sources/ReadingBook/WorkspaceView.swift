@@ -62,6 +62,7 @@ struct WorkspaceView: View {
     @State private var resolvingNavigation = false
     @State private var chromeBounds: [String: CGRect] = [:]
     @State private var managementRoute: String?
+    @State private var componentPresentationMountID = UUID()
     @AppStorage("reading.showProgress") private var showReadingPosition = true
     @State private var readingPageCount = 0
     private var hasWorkspaceOverlay: Bool { managementRoute != nil || store.hasWorkspaceAuxiliary }
@@ -248,6 +249,10 @@ struct WorkspaceView: View {
     }
     var body: some View {
         guardedWorkspace
+        .onChange(of: componentPresentation, initial: true) { _, value in store.renderedComponentPresentation = value }
+        .onDisappear {
+            if store.renderedComponentPresentation?.mountID == componentPresentationMountID { store.renderedComponentPresentation = nil }
+        }
         .onChange(of: store.bookID) { _, _ in dismissNavigationPickers(); showsInspector = false; compactInspector = false; readerPopover = nil; readerBookmarks = false; progressSize = CGSize(width: 260, height: 52); refreshReadingPageCount() }
         .onChange(of: store.libraryRootURL) { _, _ in clearPendingSearchResult(); dismissNavigationPickers() }
         .onChange(of: navigationExpanded) { _, visible in if !visible { dismissNavigationPickers() } }
@@ -258,6 +263,11 @@ struct WorkspaceView: View {
                 presentManagement(next)
             } else if viewingGraph || viewingSpatial { showsInspector = false; compactInspector = false }
         }
+    }
+    private var componentPresentation: ReadingComponentPresentation {
+        ReadingComponentPresentation(mountID: componentPresentationMountID, root: store.libraryRootURL,
+            bookID: store.bookID, sourceHash: store.book?.sourceHash, route: store.isNotesForeground ? "editor" : store.route,
+            unobscured: !workspaceInteractionBlocked && !servicePopover && (store.isNotesForeground || !store.hasWorkspaceAuxiliary))
     }
     private func refreshReadingPageCount() { readingPageCount = store.book?.units.compactMap(\.page).max() ?? 0 }
     private var positionPercent: Int {
@@ -535,11 +545,12 @@ struct WorkspaceView: View {
     }
     /// Exclusion rectangles stay in SwiftUI global coordinates. GraphSurface
     /// converts them once into its own canvas coordinates.
-    private var canvasInteractionBlocked: Bool {
-        navigationExpanded || bookPopover || readerPopover != nil || compactInspector || activeSheet != nil || sheetClosing || hasWorkspaceOverlay
+    private var workspaceInteractionBlocked: Bool {
+        navigationExpanded || bookPopover || readerPopover != nil || compactInspector || activeSheet != nil || sheetClosing || managementRoute != nil
             || showsRouteConfirmation || showsModelRouteConfirmation || resolvingNavigation || store.deletionRequest != nil
             || store.errorMessage != nil || store.serviceProfileDraft.pendingChange != nil || store.positionNoteRequest != nil
     }
+    private var canvasInteractionBlocked: Bool { workspaceInteractionBlocked || store.hasWorkspaceAuxiliary }
     private var canvasExclusionRects: [CGRect] { chromeBounds.keys.sorted().compactMap { chromeBounds[$0] } }
     private var showsObjectInspector: Bool {
         guard let book = store.book, let id = store.selectedObjectID, !viewingGraph, !viewingSpatial else { return false }

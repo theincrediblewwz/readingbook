@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Darwin
 import Foundation
 import SwiftUI
@@ -79,6 +80,7 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
     var output: URL!
     var transport: ComponentTransport!
     var questionIndex = 0
+    var navigationIntentCount = 0
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
             do { try await run(); try await finish(error: nil) }
@@ -158,6 +160,11 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
         let before = store.book!, access = store.readingViewToolAccess(bookID: fixture.id, sourceHash: fixture.sourceHash)
         _ = try await access.performViewAction("component_show", Data(#"{"componentID":"relations"}"#.utf8))
         try await Task.sleep(nanoseconds: 250_000_000)
+        let navigationObserver = store.$requestedWorkspaceRoute.dropFirst().sink { [weak self] route in
+            if route != nil { self?.navigationIntentCount += 1 }
+        }
+        defer { navigationObserver.cancel() }
+        let navigationBefore = navigationIntentCount
         var usageBefore = rusage(), usageAfter = rusage()
         getrusage(RUSAGE_SELF, &usageBefore)
         let epochBefore = store.currentBookRevision, start = ProcessInfo.processInfo.systemUptime
@@ -173,10 +180,39 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
             Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)*1000 + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec)/1000
         }
         let measured: [String: Any] = ["operations": 8, "currentBookPublications": store.currentBookRevision-epochBefore,
+            "navigationIntents": navigationIntentCount-navigationBefore,
             "cpuMs": milliseconds(usageAfter)-milliseconds(usageBefore), "elapsedMs": (ProcessInfo.processInfo.systemUptime-start)*1000,
             "sameViewReused": store.book?.views == before.views, "realNetworkRequests": 0]
         try JSONSerialization.data(withJSONObject: measured, options: [.prettyPrinted,.sortedKeys]).write(to: output.appendingPathComponent("repeat-show-cost.json"))
         try check("repeatedShowDoesNotRepublishBook", store.currentBookRevision == epochBefore && store.book?.views == before.views)
+        try check("repeatedShowDoesNotRenavigate", navigationIntentCount == navigationBefore)
+        let relationRoute = store.route
+        let componentOwner = ReadingQueryHostOwner(root: library, bookID: fixture.id, sourceHash: fixture.sourceHash, runID: nil)
+        store.requestedWorkspaceRoute = relationRoute
+        let duplicate = try await store.performReadingComponentAction("component_show", data: Data(#"{"componentID":"relations"}"#.utf8), owner: componentOwner, session: ReadingComponentToolSession())
+        try check("samePendingPresentationCleared", String(decoding: duplicate, as: UTF8.self).contains("\"opened\":true") && store.requestedWorkspaceRoute == nil && store.route == relationRoute)
+        store.requestedWorkspaceRoute = "reader"
+        let pending = try await store.performReadingComponentAction("component_show", data: Data(#"{"componentID":"relations"}"#.utf8), owner: componentOwner, session: ReadingComponentToolSession())
+        try check("differentPendingNavigationPreserved", String(decoding: pending, as: UTF8.self).contains("\"status\":\"busy\"") && store.requestedWorkspaceRoute == "reader")
+        try await wait { self.store.route == "reader" && self.store.requestedWorkspaceRoute == nil }
+        store.route = relationRoute
+        try await wait { self.store.renderedComponentPresentation?.matches(self.store, route: relationRoute) == true }
+        store.showingPlugins = true
+        try await wait { self.store.showingPlugins && self.store.renderedComponentPresentation?.unobscured == false }
+        let beforeObscured = navigationIntentCount
+        let uncovered = try await access.performViewAction("component_show", Data(#"{"componentID":"relations"}"#.utf8))
+        try check("managementOverlayReallyClosedBeforeSuccess", String(decoding: uncovered, as: UTF8.self).contains("\"opened\":true") && !store.showingPlugins && navigationIntentCount == beforeObscured+1 && store.renderedComponentPresentation?.matches(store, route: relationRoute) == true)
+        let editor = try await access.performViewAction("component_show", Data(#"{"componentID":"editor"}"#.utf8))
+        try check("notesForegroundReallyPresented", String(decoding: editor, as: UTF8.self).contains("\"opened\":true") && store.isNotesForeground && store.renderedComponentPresentation?.matches(store, route: "editor") == true)
+        if let owner = store.notesPresentation { store.dismissWorkspaceAuxiliary(owner.id) }
+        store.route = relationRoute
+        try await wait { self.store.renderedComponentPresentation?.matches(self.store, route: relationRoute) == true }
+        let oldMount = store.renderedComponentPresentation?.mountID
+        window.contentView = NSView()
+        try await wait { self.store.renderedComponentPresentation == nil }
+        window.contentView = NSHostingView(rootView: WorkspaceView().environmentObject(store).environmentObject(ReadingTypographySettings()))
+        try await wait { self.store.renderedComponentPresentation?.matches(self.store, route: relationRoute) == true }
+        try check("removedWorkspacePresentationNotReused", oldMount != nil && store.renderedComponentPresentation?.mountID != oldMount)
         store.route = "reader"
         let noteRequest = PositionNoteRequest(owner: WorkspacePickerOwner(store: store), text: "未保存的便签 e\u{301} 🙂")
         store.positionNoteRequest = noteRequest

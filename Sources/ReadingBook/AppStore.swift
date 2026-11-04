@@ -143,6 +143,9 @@ import ReadingCore
     var canTestAIConnection: Bool { canEditAISettings && !isTestingConnection }
     @Published var pendingAIChanges: [PendingAIChange] = []
     @Published var renderedWorkspaceVisibility: ReadingVisibleObjectsSnapshot?
+    // Presentation acknowledgement is read by actions, not UI state. Updating
+    // it must not itself trigger another workspace render or persist to disk.
+    var renderedComponentPresentation: ReadingComponentPresentation?
     @Published var renderedSelectedNodeIDs: [String] = []
     @Published var workspaceAICommand: WorkspaceAICommand?
     var workspaceAIResponses: [UUID: Data] = [:]

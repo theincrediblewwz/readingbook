@@ -2,6 +2,25 @@ import AppKit
 import Foundation
 import ReadingCore
 
+/// A mounted workspace reports its actual unobscured canvas. Route equality
+/// alone cannot prove that a component is visible behind settings or a sheet.
+struct ReadingComponentPresentation: Equatable {
+    let mountID: UUID
+    let root: URL
+    let bookID: String?
+    let sourceHash: String?
+    let route: String
+    let unobscured: Bool
+    @MainActor func matches(_ store: AppStore, route expected: String) -> Bool {
+        let foreground = expected == "editor" ? store.isNotesForeground : (store.route == expected && !store.hasWorkspaceAuxiliary)
+        return unobscured && foreground && root == store.libraryRootURL && bookID == store.bookID && sourceHash == store.book?.sourceHash
+            && route == expected
+            && !store.showingSettings && !store.showingPlugins && !store.showingOCR
+            && store.errorMessage == nil && store.deletionRequest == nil
+            && NSApp?.modalWindow == nil && NSApp?.keyWindow?.attachedSheet == nil
+    }
+}
+
 /// Navigation belongs to one request and one library, including when another
 /// library happens to contain a book with identical IDs and source bytes.
 struct ReadingQueryHostOwner {
@@ -109,13 +128,26 @@ struct ReadingQueryHostOwner {
             return try viewToolResult("needs_confirmation", "组件配置已保留；请先完成笔记编辑或位置选择，未切换界面。",
                 extra: ["viewID": route, "created": created, "opened": false, "analysisCreated": false])
         }
+        guard requestedWorkspaceRoute == nil || requestedWorkspaceRoute == route else {
+            return try viewToolResult("busy", "已有其他界面切换正在处理，未覆盖这次操作。",
+                extra: ["viewID": route, "created": created, "opened": false, "analysisCreated": false])
+        }
+        func openedResult() throws -> Data {
+            try viewToolResult("success", created ? "已加入并打开组件；显示已有资料，尚未新增分析。" : "已打开已有组件；没有重复创建。",
+                extra: ["rendererID": descriptor.id, "componentTitle": descriptor.title, "viewID": route, "created": created, "opened": true, "analysisCreated": false])
+        }
+        if renderedComponentPresentation?.matches(self, route: route) == true {
+            // Repeated same-route intentions can be coalesced by onChange.
+            // A genuine presentation needs neither a new navigation nor another
+            // whole-workspace update; clear only an identical redundant intent.
+            if requestedWorkspaceRoute == route { requestedWorkspaceRoute = nil }
+            return try openedResult()
+        }
         requestedWorkspaceRoute = route
         for _ in 0..<75 {
             guard owner.matches(self) else { throw CancellationError() }
-            let presented = route == "editor" ? isNotesForeground : (self.route == route && !hasWorkspaceAuxiliary)
-            if presented && requestedWorkspaceRoute == nil {
-                return try viewToolResult("success", created ? "已加入并打开组件；显示已有资料，尚未新增分析。" : "已打开已有组件；没有重复创建。",
-                    extra: ["rendererID": descriptor.id, "componentTitle": descriptor.title, "viewID": route, "created": created, "opened": true, "analysisCreated": false])
+            if renderedComponentPresentation?.matches(self, route: route) == true && requestedWorkspaceRoute == nil {
+                return try openedResult()
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
