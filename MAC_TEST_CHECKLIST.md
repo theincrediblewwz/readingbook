@@ -1,4 +1,18 @@
-> 2026-11-04 最新接续：0.23.48/build79已同步main、发布、安装并完成原书两次正常启动；无解锁/发布/安装待办，不重复交付。产品源922f6bb827fcc148288fadc7adff68ce0889da2e，完整CI41805192115通过906 Core、220指定、新34原生、保留42×2和全部旧门槛，零编译警告。规范包35资源/39文件、双架构、签名及公开下载回验通过。交付入口logs/component-costs-20261104/delivery48/final-delivery.json。31原库成员和25内容文件字节保留；没有用旧库覆盖。最新47回滚及新鲜保护：private-books/component-costs-20261104/install-before-0.23.48。展开App/重复包/结束helper已退役，读取本批RETIRED_PROGRAMS及dist/RETIRED_PAYLOADS后从48规范ZIP重解，并匹配全manifest。GitHub仅main和48/47，46旧Release/tag/程序artifact及已合并本地分支精确退役；源码历史、非App私人数据和关键证据保留。用户dirty进度文档SHA仍9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，禁止编辑/提交。
+> 2026-11-04 最新接续：0.23.49/build80已同步main、发布、安装并完成原书两次正常启动/退出；无解锁/发布/安装待办，不重复交付。产品源c79bdec49e1590d14b13ab84b583f1ccca55e271，完整CI41820115641通过906 Core、220指定、104便签/标记原生、34组件、42×2及全部旧门槛，零编译警告。artifact13319070650，Release433861575。规范ZIP33,325,014B，SHA c0921ffd75a1dc87becfa25a8205776a9e8733a2eefd8a3d6f1d2abe4336762b；35资源/39程序文件、双架构、严格签名、公开下载回验及安装全manifest一致。交付入口logs/reader-mark-interaction-20261104/delivery49/final-delivery.json。
+
+本批修复已保存荧光/直线/波浪线上滚动被hitTest拦截；相同实际滚动旧标记不动、相邻原文移动12，候选三类各移动12。移除旧PDFAnnotationEditor、旧通知与区域创建，工具栏直接保存独立荧光并去重；想法用便签/笔记，旧comment/region字段和文字保留。圆角标记记录可展开全文、筛选回收、恢复、定位原文与明确设置样式。原生104保留原70并新增34，覆盖18种已保存标记命中与旧文字/去重/宿主状态；首轮夹具用旧坐标/保存前快照失败已保留，修正夹具后通过，未降低保护。
+
+正式原书PID7924/8023：104/1484、277%适宽、左右连续、原便签保持，点击不弹旧表单、标记滚动有效；只读查看3在用/4回收、1条非空旧文字，关闭返回。31成员、25非Workspace内容字节及全部偏好一致，无旧库覆盖。新鲜保护及48回滚：private-books/reader-mark-interaction-20261104/install-before-0.23.49。完整Workspace本轮另有114条负尺寸诊断，三类循环/发布为零；隔离104四类零，不能混称所有日志零。47采过六条系统AppKit栈，本次不自动归因全部未采栈记录。
+
+16/1024对象两种合成规模各12轮、139阶段内存观察已完成；实际归属外部快照138/139，保留一次缺测。返回后观察到61个WebKit视图仅当前1个存活；60秒静置主程序footprint约149/150MiB、RSS约383/387MiB。没有采用内存改动，不证明长期无泄漏或新FPS/能耗收益。下一批固定离线AI遥测与长历史/Markdown准备次数，再查剩余分配类别；启动及硬件FPS单独控制条件。详见Design/2026-11-04-mark-interaction-results.md、Design/2026-11-04-next-performance-batch.md。
+
+累计清理1,159,512KiB约1.11GiB，末阶段4,943,692→4,541,872KiB；批初4,507,924KiB，净增约33MiB而非净少1.11GiB，最终文档少量变化见final-delivery。49/48规范包、最新48回滚、共享编译缓存及增量对象保留；旧47Release/tag/程序artifact、已合并分支、旧程序和重复包精确退役。GitHub只main与49/48。展开readyappPath和探针程序已退役，先读本批RETIRED_PROGRAMS及dist/RETIRED_PAYLOADS，从规范ZIP解包并全manifest验证后才复用。3205份非App私人保护在末次清理前后字节一致。
+
+用户dirty文件Design/2026-10-29-performance-progress.md SHA仍9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，禁止编辑/提交。评价清单107项：57通过、47已实现、1部分、2待验证；不是107项本轮全部重新人工穷举。数学核查不恢复，不改锁屏设置；CUA报锁先刷新核实。下方48及更早均历史。
+
+---
+
+> 2026-11-04 历史48接续：0.23.48/build79已同步main、发布、安装并完成原书两次正常启动；无解锁/发布/安装待办，不重复交付。产品源922f6bb827fcc148288fadc7adff68ce0889da2e，完整CI41805192115通过906 Core、220指定、新34原生、保留42×2和全部旧门槛，零编译警告。规范包35资源/39文件、双架构、签名及公开下载回验通过。交付入口logs/component-costs-20261104/delivery48/final-delivery.json。31原库成员和25内容文件字节保留；没有用旧库覆盖。最新47回滚及新鲜保护：private-books/component-costs-20261104/install-before-0.23.48。展开App/重复包/结束helper已退役，读取本批RETIRED_PROGRAMS及dist/RETIRED_PAYLOADS后从48规范ZIP重解，并匹配全manifest。GitHub仅main和48/47，46旧Release/tag/程序artifact及已合并本地分支精确退役；源码历史、非App私人数据和关键证据保留。用户dirty进度文档SHA仍9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，禁止编辑/提交。
 
 本批采用实际挂载/未遮挡/同owner的组件确认，64次重复导航和路由发布降至0。16对象两有效对照进程CPU中位约960→6.3ms；1024对象旧版误报busy，候选两次各64成功，不能用失败旧版算提速比例。管理浮层、其他待处理导航、笔记前台、卸载重建及原有草稿/锚点/权限保护均保留。工具说明分阶段实验没有证明总收益，未并入产品；不要重复当成尚未尝试。三轮组件内存35阶段归属采样：旧WKWebView释放，但主进程仍较初始高，没有内存/FPS收益结论。
 
