@@ -1,6 +1,6 @@
 # 阅读途中调用与组合组件
 
-本批产品目标为 0.23.47/build78。当前实现与本机检查已完成，完整 CI、发布、安装和原书验收仍在进行；交付完成后补充最终回执。
+0.23.47/build78 已完成完整 [CI](https://github.com/theincrediblewwz/readingbook/actions/runs/41784219305)、发布、安装及原书两次正常启动验收。产品源码 `686c8cdec9c0273c4bfb6b563ae348610a13712c`。906 Core、220 项指定、新 28 项组件及全部旧门槛通过，零编译警告；35 资源、39 程序文件、双架构、严格签名和公开安装包下载回验通过。
 
 ## 现在能做什么
 
@@ -24,7 +24,7 @@
 
 - `logs/dynamic-components-20261104/adopted47-core/` 与 `adopted47-format/`：16 + 13 个当前测试体，以本机独立断言运行，67 + 47 项通过。这不是 XCTest；完整 XCTest 交由 CI 执行。
 - `notesafe47-verified1/2/`：真实 AppStore、对话引擎、仓库、组件注册表及完整工作区，两轮各 28 项检查通过，四类运行时警告均为零，网络被沙盒禁止。覆盖先开图再保存有证据关系、重复复用、组合创建、重载、草稿保护、未知组件与跨库/旧请求保护。模型输出是确定性夹具，不能以此代替实模型的意图判断。
-- `show-baseline-2/3` 与 `show-candidate-1/2`：相同预热条件下，8 次重复调出已有视图的当前书发布从 8 次降到 0 次。CPU 两进程中位数约 114.25→108.31ms，差异较小、样本少，不宣布显著 CPU 加速，更不外推 FPS、整体启动或内存。采用依据是消除可精确验证的无效加载和发布。
+- `show-baseline-2/3` 与最终 `notesafe47-verified1/2`：相同预热条件下，8 次重复调出已有视图的当前书发布从 8 次降到 0 次。CPU 两进程中位数约 114.25→93.205ms；每组只有两个独立进程，不宣布显著 CPU 加速，更不外推 FPS、整体启动或内存。早期候选约108.31ms的证据保留为历史。采用依据是消除可精确验证的无效加载和发布，最终回执为 `repeat-show-adoption-notesafe.json`。
 - `show-baseline-1` 未使用同样的预热条件，排除于正式比较。基线产品对象与 `native-third/build-manifest.json` 相同；后两次基线取证时本地另有一处尚未编入对象的仓库组合范围校验，其源码漂移另行记录，不把该处文本冒充基线编译输入。优化目标文件与基线对象对应，候选有独立冻结的完整源码/对象清单。
 
 “读到这里”的保存格式使用旧版认识的 `book` 范围字段，加可选的精确范围策略；新版本恢复原语义，旧版仍可解码。原文单元与指纹不变。`legacy-scope-before.json` 为旧解码失败证据，`legacy-scope-after.json` 与当前 Core 回归为通过证据。
@@ -48,3 +48,11 @@
 [MCP 官方客户端实践](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/docs/2026-07-28/develop/clients/client-best-practices.mdx)介绍按需提供工具定义的做法。当前先保持封闭、可校验的工具目录；后续可对复杂组合声明做按需暴露的对照，减少普通聊天的工具描述开销，不能以减小目录为由丢失类型校验。
 
 [Apple 的 SwiftUI 性能指导](https://developer.apple.com/documentation/Xcode/understanding-and-improving-swiftui-performance)建议先定位更新来源，再处理高频依赖。本批去掉重复显示引起的发布；下一批继续测真实 AI 进度更新、组件循环后的主程序与 WebKit 内存平台，保持来源、取消和过期结果保护。
+
+## 最终交付
+
+正式原书验收与数据保留回执位于 `logs/dynamic-components-20261104/delivery47/`。原库 31 成员保留，25 个内容文件字节一致；仅允许正常导航/窗口状态变化，没有恢复旧库。安装包 SHA256 `f901b7a88c711c91b1adb962855fb96599fc4f075bee78b8e3c8ad0237c2f2d2`。
+
+清理 1,135,276 KiB 可重建程序和重复包，5,588,840→4,453,564 KiB；这是该次清理量，整批净变化另列在最终回执。共享缓存、当前增量对象、47/46规范包、最新46回滚和全部非App私人文件保留。GitHub只保留47/46安装版本与main，源码历史未重写。
+
+正式原书两进程 [93834, 93885] 的统一日志中，三类布局循环/视图发布/AttributeGraph诊断均为零；仍记录 54 条 AppKit 负尺寸诊断。它们没有逐条采栈，不能直接借用前面六条系统提示器的定位而宣布全部解决，也不与严格原生28项的零警告混淆。见 `delivery47/native-original-runtime.json`。
