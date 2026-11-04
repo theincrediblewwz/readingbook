@@ -42,24 +42,9 @@ struct WorkspaceComponentPicker: View {
     let select: (WorkspaceComponentDescriptor) -> Void
     var body: some View {
         WorkspaceNavigationPicker(title: "添加到本书", options: components.map {
-            WorkspacePickerOption(id: $0.id, title: $0.title, detail: description($0), icon: $0.icon, enabled: enabled)
+            WorkspacePickerOption(id: $0.id, title: $0.title, detail: $0.purpose, icon: $0.icon, enabled: enabled)
         }, width: width, maximumHeight: maximumHeight, close: close) { id in
             if let component = components.first(where: { $0.id == id }) { select(component) }
-        }
-    }
-    private func description(_ descriptor: WorkspaceComponentDescriptor) -> String {
-        switch descriptor.id {
-        case "reading.layers": return "对照原文、译文和解释"
-        case "reading.atlas": return "查看本书内容与阅读进展概览"
-        default:
-            switch descriptor.kind {
-            case .cards: return "人物、地点、概念与事件"
-            case .map, .timeline: return "按时间与地点追踪书中线索"
-            case .mindmap: return "用分支梳理观点和阅读结构"
-            case .relations: return "查看人物、事件和概念间的联系"
-            case .knowledge: return "集中查看本书已整理的资料"
-            default: return "添加到本书的阅读工作台"
-            }
         }
     }
 }

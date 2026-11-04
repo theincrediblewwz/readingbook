@@ -380,7 +380,7 @@ private struct BookChatComposer: View {
                     Text("范围、保存与公式").font(.system(size: 16, weight: .semibold))
                     Text("左下选择本次允许阅读的范围；旁边的模式按钮选择对话模式、讲解方式与本次权限，回形针可附加内容。更多菜单可查看记录、历史与记忆。")
                     Text("回答的保存菜单支持完整保存、选段和多条合并。保留公式与排版时，选择 Markdown 源文片段。")
-                    Text("纯阅读只分享所选内容；功能协作可调用组件。老师伴读会分开说明背景，原文考据只谈已读出处。已有笔记的修改仍先供你审阅。")
+                    Text("两种模式都可按需打开或加入组件。纯阅读只查看资料；功能协作可在本次授权后补充整理。老师伴读会分开说明背景，原文考据只谈已读出处。已有内容的修改仍先供你审阅。")
                 }.font(.system(size: 13)).foregroundStyle(.secondary).lineSpacing(4).padding(20).frame(width: 320)
                 }
             }
@@ -421,7 +421,7 @@ private struct BookChatComposer: View {
             HStack { Text("对话方式").font(.system(size: 17, weight: .semibold)); Spacer(); ReaderInformationButton(title: "对话方式", text: permissionSummary) }
             Text("对话模式").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
             ManagementSegmentedControl(selection: Binding(get: { store.queryInteractionMode.rawValue }, set: { if let mode = ReadingConversationMode(rawValue: $0) { store.queryInteractionMode = mode } }), options: [
-                .init(id: "reading", title: "纯阅读", detail: "只阅读本次选择的原文和资料，不修改内容。"),
+                .init(id: "reading", title: "纯阅读", detail: "查看所选资料，可加入展示组件，不新增或改写分析。"),
                 .init(id: "functional", title: "功能协作", detail: "可以使用组件功能；改动已有内容仍先供你审阅。")
             ])
             Text("讲解方式").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)

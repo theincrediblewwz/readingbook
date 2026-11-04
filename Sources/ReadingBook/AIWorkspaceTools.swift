@@ -18,11 +18,19 @@ struct WorkspaceAICommand: Equatable {
             visibleObjects: visible, selectedNodeIDs: visible == nil ? [] : renderedSelectedNodeIDs, timeAxis: temporalAxis,
             timeFrom: timeFrom, timeTo: timeTo, currentTime: timeCursor)
     }
-    func readingViewToolAccess(bookID expectedBookID: String, sourceHash: String) -> ReadingHostToolAccess {
-        ReadingHostToolAccess(viewActions: ["view_select", "view_focus", "view_set_time_window", "map_fit_objects", "graph_focus", "panel_present"], performViewAction: { [weak self] name, data in
-            guard let self else { throw CancellationError() }
-            return try await self.performReadingViewAction(name, data: data, expectedBookID: expectedBookID, sourceHash: sourceHash)
-        }, readWorkspace: { [weak self] in await self?.makeReadingWorkspaceSnapshot() })
+    func readingViewToolAccess(bookID expectedBookID: String, sourceHash: String, runID: UUID? = nil, grant: ControlledWriteGrant? = nil) -> ReadingHostToolAccess {
+        let owner = ReadingQueryHostOwner(root: libraryRootURL, bookID: expectedBookID, sourceHash: sourceHash, runID: runID)
+        let session = ReadingComponentToolSession(grant: grant)
+        return ReadingHostToolAccess(viewActions: ["components_list", "component_show", "view_select", "view_focus", "view_set_time_window", "map_fit_objects", "graph_focus", "panel_present"], performViewAction: { [weak self] name, data in
+            guard let self, await owner.matches(self) else { throw CancellationError() }
+            if ["components_list", "component_show"].contains(name) {
+                return try await self.performReadingComponentAction(name, data: data, owner: owner, session: session)
+            }
+            return try await self.performReadingViewAction(name, data: data, expectedBookID: expectedBookID, sourceHash: sourceHash, owner: owner)
+        }, readWorkspace: { [weak self] in
+            guard let self, await owner.matches(self) else { throw CancellationError() }
+            return await self.makeReadingWorkspaceSnapshot()
+        })
     }
     func viewToolResult(_ status: String, _ message: String, extra: [String: Any] = [:]) throws -> Data {
         var result = extra; result["status"] = status; result["message"] = message; result["ok"] = status == "success"
@@ -31,7 +39,8 @@ struct WorkspaceAICommand: Equatable {
     func acknowledgeViewCommand(_ command: WorkspaceAICommand, status: String = "success", message: String) {
         workspaceAIResponses[command.id] = try? viewToolResult(status, message)
     }
-    func performReadingViewAction(_ name: String, data: Data, expectedBookID: String, sourceHash: String) async throws -> Data {
+    func performReadingViewAction(_ name: String, data: Data, expectedBookID: String, sourceHash: String, owner: ReadingQueryHostOwner? = nil) async throws -> Data {
+        guard owner?.matches(self) ?? !Task.isCancelled else { throw CancellationError() }
         guard let book, book.id == expectedBookID, book.sourceHash == sourceHash else { return try viewToolResult("conflict", "当前书籍已改变。") }
         guard NSEvent.pressedMouseButtons == 0, !isSavingDocument, !isCommittingLocalWrite else { return try viewToolResult("busy", "读者正在操作，未抢占界面。") }
         guard let args = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ReadingError.invalid("视图操作参数无效。") }
@@ -45,6 +54,7 @@ struct WorkspaceAICommand: Equatable {
             requestedWorkspaceRoute = route
             for _ in 0..<50 {
                 try Task.checkCancellation()
+                guard owner?.matches(self) ?? true else { throw CancellationError() }
                 let presented = route == "editor" ? isNotesForeground : (self.route == route && !hasWorkspaceAuxiliary)
                 if presented && requestedWorkspaceRoute == nil { return try viewToolResult("success", "已打开组件。", extra: ["rendererID": route]) }
                 try await Task.sleep(nanoseconds: 20_000_000)
@@ -86,6 +96,7 @@ struct WorkspaceAICommand: Equatable {
         defer { workspaceAIResponses[command.id] = nil; if workspaceAICommand?.id == command.id { workspaceAICommand = nil } }
         for _ in 0..<50 {
             try Task.checkCancellation()
+            guard owner?.matches(self) ?? true else { throw CancellationError() }
             if let response = workspaceAIResponses[command.id] { return response }
             guard bookID == expectedBookID else { return try viewToolResult("conflict", "书籍已改变。") }
             try await Task.sleep(nanoseconds: 20_000_000)

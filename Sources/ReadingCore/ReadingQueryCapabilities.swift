@@ -100,6 +100,10 @@ enum ReadingQueryToolCatalog {
                 function("entity_history_get", "查询一个实体的有证据出现/参与/关系；footprints是明确出现点，不推造连续路线。", entity, required: ["entityID"])]
         }
         if let host {
+            result += componentSchemas.filter { tool in
+                guard let name = (tool["function"] as? [String: Any])?["name"] as? String else { return false }
+                return host.viewActions.contains(name)
+            }
             let fields: [String: Any] = ["rendererID": string, "objectID": string, "anchorID": string, "documentID": string, "nodeID": string,
                 "objectIDs": ids, "nodeIDs": ids, "panelID": string, "state": ["type": "string", "enum": ["open", "collapse", "close"]], "at": time,
                 "from": ["type": "number"], "to": ["type": "number"]]
@@ -214,6 +218,27 @@ extension ReadingQuerySession {
     mutating func executeExtended(name: String, arguments: [String: Any], maximumBytes: Int) async throws -> String {
         if ["workspace_context_get", "visible_objects_list"].contains(name), let refresh = hostTools?.readWorkspace {
             workspace = try await refresh(); try Task.checkCancellation()
+        }
+        if ReadingQueryToolCatalog.componentNames.contains(name), let hostTools, hostTools.viewActions.contains(name) {
+            guard maximumBytes >= (name == "components_list" ? 8_000 : 2_000) else {
+                return try json(["ok": false, "budgetLimited": true, "message": "没有足够空间返回组件目录或操作回执，未执行。"])
+            }
+            let data = try JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys])
+            if name == "components_list" { _ = try ReadingComponentDirectoryRequest.decode(data) }
+            else {
+                let request = try ReadingComponentRequest.decode(data)
+                if let definition = request.composition {
+                    guard let project else { throw invalid("缺少本书组件结构。") }
+                    // A saved view remains bound to the active reading boundary;
+                    // declaring a component does not authorize all book sources.
+                    guard definition.sources.allSatisfy({ $0.scope == .current }) else { throw invalid("新组件的数据源须使用current，不扩大原文权限。") }
+                    try CompositionRuntime.validate(definition, in: project)
+                }
+            }
+            try Task.checkCancellation()
+            let returned = try await hostTools.performViewAction(name, data)
+            try Task.checkCancellation()
+            let result = try hostResult(returned); hostReceipts.append(result); return result
         }
         if ReadingQueryToolCatalog.viewNames.contains(name), let hostTools, hostTools.viewActions.contains(name) {
             guard maximumBytes >= 1024 else { return try json(["ok": false, "budgetLimited": true, "message": "没有足够空间返回界面操作回执，未执行。"] ) }

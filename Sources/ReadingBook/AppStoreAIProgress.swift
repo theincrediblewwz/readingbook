@@ -143,6 +143,8 @@ struct AIProgressPresentationState: Equatable {
         switch name ?? "" {
         case "source_outline", "source_list": return "查看原文范围"
         case "source_search": return "查找相关原文"
+        case "components_list": return "选择合适的展示方式"
+        case "component_show": return "打开阅读组件"
         case "source_read": return "阅读原文片段"
         case "analysis_outline": return "查看已有分析目录"
         case "analysis_read": return "阅读已有分析"

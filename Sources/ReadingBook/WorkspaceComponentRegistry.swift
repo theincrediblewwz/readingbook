@@ -10,6 +10,24 @@ struct WorkspaceComponentDescriptor: Identifiable {
     var permanent = false
     var rendererID: String?
     var requiresDefinition = false
+    var purpose: String {
+        switch id {
+        case "reading.layers": return "对照原文、译文与解释"
+        case "reading.atlas": return "查看本书内容与阅读进展概览"
+        case "reading.composition": return "将人物列表、关系图谱、时间轴、地图和原文等现有元件组合成联动视图"
+        default:
+            switch kind {
+            case .cards: return "人物、地点、概念与事件卡片"
+            case .map, .timeline: return "按时间和地点梳理书中线索"
+            case .mindmap: return "梳理已有文档的分支结构与联系"
+            case .relations: return "梳理人物、事件和概念之间有原文依据的关系"
+            case .knowledge: return "集中查看本书已保存的资料"
+            case .editor: return "查看与编辑读者笔记"
+            case .query: return "围绕原文继续对话"
+            case .workflow: return "选择原文范围并继续智能阅读"
+            }
+        }
+    }
     init(kind: ComponentKind, title: String, icon: String, aliases: Set<ComponentKind> = [], permanent: Bool = false, rendererID: String? = nil) {
         self.kind = kind; self.title = title; self.icon = icon; self.aliases = aliases
         self.permanent = permanent; self.rendererID = rendererID

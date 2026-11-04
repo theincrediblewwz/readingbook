@@ -129,6 +129,17 @@ public actor LibraryRepository {
         try saveCanonicalProject(project)
     }
 
+    /// A request's own append-only view declaration must not invalidate its
+    /// still-current analysis grant. Any intervening content/layout edit keeps
+    /// the original conflict protection; other requests' grants stay unchanged.
+    func followOwnComponentAppend(grant: ControlledWriteGrant?, before: BookProject, after: BookProject) throws {
+        guard let grant, var session = changeGrants[grant.id], session.grant == grant,
+              grant.bookID == before.id, grant.sourceHash == before.sourceHash, grant.expiresAt > Date(),
+              session.latestRevision == (try ControlledChangeRecords.revision(before)) else { return }
+        session.latestRevision = try ControlledChangeRecords.revision(after)
+        changeGrants[grant.id] = session
+    }
+
     /// Canonical metadata after host-only caches have been merged. Callers
     /// publishing a saved result must use this returned value, not their draft.
     func saveCanonicalProject(_ project: BookProject, generatedOutline: GeneratedBookOutline? = nil, originalBookOutline: BookChapterOutline? = nil, readerCollections: ReaderCollectionState? = nil) throws -> BookProject {

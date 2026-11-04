@@ -3,9 +3,9 @@ import CoreFoundation
 
 /// A query boundary, not a relevance hint. Extra notes/layout are explicit host capabilities.
 public enum ReadingQueryScope: String, Codable, CaseIterable, Hashable, Sendable {
-    case selection, page, chapter, book, notes
+    case selection, page, readSoFar, chapter, book, notes
     public var title: String {
-        switch self { case .selection: return "选中内容"; case .page: return "当前页"; case .chapter: return "当前章节"; case .book: return "全书原文"; case .notes: return "我的笔记" }
+        switch self { case .selection: return "选中内容"; case .page: return "当前页"; case .readSoFar: return "读到这里"; case .chapter: return "当前章节"; case .book: return "全书原文"; case .notes: return "我的笔记" }
     }
 }
 
@@ -175,6 +175,12 @@ public struct ReadingQuerySnapshot: Sendable {
             guard let current else { throw ReadingError.invalid("请先打开原文页，再使用当前页范围。") }
             units = current.page.map { page in ordered.filter { $0.page == page } } ?? [current]
             title += " · " + current.locator
+        case .readSoFar:
+            guard let current, let last = ordered.lastIndex(where: { unit in current.page.map { unit.page == $0 } == true || unit.id == current.id }) else {
+                throw ReadingError.invalid("请先打开原文，再选择读到这里。")
+            }
+            units = Array(ordered[...last])
+            title += " · 从开头至" + current.locator + "（含当前页）"
         case .chapter:
             guard let current else { throw ReadingError.invalid("请先打开原文，再使用当前章节范围。") }
             let chapter: BookChapterRange

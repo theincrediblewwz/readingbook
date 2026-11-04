@@ -19,7 +19,7 @@ import ReadingCore
         case .notes:
             // Notes do not inherit an unrelated source cursor or selection.
             context.unitID = nil; context.page = nil
-        case .page, .chapter, .book:
+        case .page, .readSoFar, .chapter, .book:
             // These controls and their preview refer to the current reading
             // cursor, never the beginning of a native drag on another page.
             context.documentID = nil; context.unitID = selectedUnitID; context.page = selectedUnit?.page
@@ -51,6 +51,7 @@ import ReadingCore
         switch queryScope {
         case .selection: return querySelectionText.map { "所选文字 · \($0.count) 字" } ?? "请先在原文选择文字"
         case .page: return selectedUnit?.page.map { "当前页 · 第 \($0) 页" } ?? "当前阅读位置"
+        case .readSoFar: return selectedUnit?.page.map { "从开头至第 \($0) 页（含本页）" } ?? "从开头至当前原文"
         case .chapter: return "当前章节"
         case .book: return "整本书 · \(book?.title ?? "")"
         case .notes: return queryDocumentIDs.map { "我的笔记 · 已选 \($0.count) 篇" } ?? "我的笔记 · 全部已保存笔记"
@@ -60,7 +61,7 @@ import ReadingCore
         switch scope {
         case .selection: return querySelectionText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         case .notes: return book?.activeDocuments.isEmpty == false && queryDocumentIDs?.isEmpty != true
-        case .page, .chapter: return selectedUnit != nil
+        case .page, .readSoFar, .chapter: return selectedUnit != nil
         case .book: return book?.units.isEmpty == false
         }
     }
@@ -233,6 +234,7 @@ struct QueryScopeControl: View {
         switch scope {
         case .selection: return "只读你选中的原文片段"
         case .page: return "围绕当前页，不自动扩大到后文"
+        case .readSoFar: return "允许从开头检索至当前页，包含当前整页"
         case .chapter: return "读取当前章节的完整范围"
         case .book: return "允许检索本书的全部原文"
         case .notes: return "选择本次允许读取的已保存笔记"
@@ -242,6 +244,7 @@ struct QueryScopeControl: View {
         switch scope {
         case .selection: return "text.cursor"
         case .page: return "doc.text"
+        case .readSoFar: return "book.pages"
         case .chapter: return "book.closed"
         case .book: return "books.vertical"
         case .notes: return "square.and.pencil"

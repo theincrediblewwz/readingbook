@@ -558,7 +558,6 @@ import ReadingCore
         let requestKey = apiKey
         let workspaceSnapshot = preferences.interaction == .functional ? makeReadingWorkspaceSnapshot() : nil
         let hostOperationContext = preferences.interaction == .functional ? queryHostOperationContext : nil
-        let viewTools = preferences.interaction == .functional ? readingViewToolAccess(bookID: current.id, sourceHash: current.sourceHash) : nil
         let mayOrganize = allowsOrganizing && preferences.interaction == .functional
         queryAllowsOrganizing = false
         let requestRunID = UUID()
@@ -613,6 +612,7 @@ import ReadingCore
                         reason: "读者选择本次整理；原问题ID：\(sentMessage.id)；摘要：" + String(question.prefix(500)))
                 }
                 let proposalTools = writeGrant.map { readingProposalAccess(grant: $0, snapshot: snapshot) }
+                let viewTools = readingViewToolAccess(bookID: current.id, sourceHash: current.sourceHash, runID: requestRunID, grant: writeGrant)
                 await queryReader.resetBudget()
                 var answer = try await queryReader.answerDetailed(question: question, prepared: prepared, settings: requestSettings, apiKey: requestKey,
                     memory: memory, memoryEnabled: memoryEnabled, documentLoader: { document in
