@@ -431,9 +431,25 @@ import PDFKit
             let animation = stage.paper?.layer?.animation(forKey: "position-note-expand")
             checks["EditorUsesOneCompositorAnimation"] = animation != nil && animation?.duration == PositionNoteEditorStageView.duration
             var frames: [String] = []
-            for _ in 0..<6 { await settle(35); if let rect = stage.paper?.layer?.presentation()?.frame { frames.append(NSStringFromRect(rect)) } }
+            var sampleTimes: [Double] = []
+            let sampleStart = ProcessInfo.processInfo.systemUptime
+            let sampleWindow = PositionNoteEditorStageView.duration + 0.16
+            // Task.sleep is a minimum delay, not a frame clock. Sample the
+            // complete animation interval rather than assuming six wakeups
+            // requested35ms apart cover it on a busy hosted Mac.
+            while ProcessInfo.processInfo.systemUptime-sampleStart < sampleWindow {
+                if let rect = stage.paper?.layer?.presentation()?.frame {
+                    frames.append(NSStringFromRect(rect))
+                    sampleTimes.append((ProcessInfo.processInfo.systemUptime-sampleStart)*1000)
+                }
+                await settle(8)
+            }
+            let sampledMS = (ProcessInfo.processInfo.systemUptime-sampleStart)*1000
             observations["editorPresentationFrames"] = frames
-            checks["EditorShowsIntermediateExpansionFrames"] = Set(frames).count > 2
+            observations["editorPresentationSampleTimesMS"] = sampleTimes
+            observations["editorFrameSampling"] = ["requestedIntervalMS": 8, "windowMS": sampleWindow*1000,
+                "observedMS": sampledMS, "deadlineMS": 1500]
+            checks["EditorShowsIntermediateExpansionFrames"] = Set(frames).count > 2 && sampledMS <= 1500
             await settle(250)
             checks["EditorFinishesAtFullPaperFrame"] = stage.paper?.frame == stage.transitionTarget && stage.paper?.layer?.animation(forKey: "position-note-expand") == nil
             let texts = descendants(stage, NSTextView.self)
