@@ -177,6 +177,25 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
             "sameViewReused": store.book?.views == before.views, "realNetworkRequests": 0]
         try JSONSerialization.data(withJSONObject: measured, options: [.prettyPrinted,.sortedKeys]).write(to: output.appendingPathComponent("repeat-show-cost.json"))
         try check("repeatedShowDoesNotRepublishBook", store.currentBookRevision == epochBefore && store.book?.views == before.views)
+        store.route = "reader"
+        let noteRequest = PositionNoteRequest(owner: WorkspacePickerOwner(store: store), text: "未保存的便签 e\u{301} 🙂")
+        store.positionNoteRequest = noteRequest
+        try await wait { self.store.route == "reader" }
+        let noteReceipt = try await access.performViewAction("component_show", Data(#"{"componentID":"relations"}"#.utf8))
+        try JSONSerialization.data(withJSONObject: ["receipt": String(decoding: noteReceipt, as: UTF8.self), "route": store.route,
+            "draftText": store.positionNoteRequest?.text ?? "", "draftIDPreserved": store.positionNoteRequest?.id == noteRequest.id], options: [.prettyPrinted,.sortedKeys])
+            .write(to: output.appendingPathComponent("active-note-navigation.json"))
+        try check("activePositionNoteDraftNotNavigatedOrDiscarded", String(decoding: noteReceipt, as: UTF8.self).contains("needs_confirmation") && store.route == "reader" && store.positionNoteRequest?.id == noteRequest.id && store.positionNoteRequest?.text == noteRequest.text && store.book?.views == before.views)
+        store.positionNoteRequest = nil; store.positionNoteDraftBuffer = nil
+        let binding = PositionNoteBindingRequest(owner: WorkspacePickerOwner(store: store), documentID: note.id)
+        store.positionNoteBinding = binding
+        // The text fixture normally binds immediately on the next UI update.
+        // Exercise admission synchronously before that automatic text binding;
+        // the production action is the same one reached through the bridge.
+        let bindingReceipt = try await store.performReadingComponentAction("component_show", data: Data(#"{"componentID":"relations"}"#.utf8),
+            owner: ReadingQueryHostOwner(root: library, bookID: fixture.id, sourceHash: fixture.sourceHash, runID: nil), session: ReadingComponentToolSession())
+        try check("activePositionBindingNotNavigated", String(decoding: bindingReceipt, as: UTF8.self).contains("needs_confirmation") && store.route == "reader" && store.positionNoteBinding?.id == binding.id && store.book?.views == before.views)
+        store.positionNoteBinding = nil
         store.editorDirty = true
         let dirty = try await access.performViewAction("component_show", Data(#"{"componentID":"cards"}"#.utf8))
         try check("dirtyDraftNotNavigatedOrDiscarded", String(decoding: dirty, as: UTF8.self).contains("needs_confirmation") && store.book?.views == before.views && store.editorDirty)

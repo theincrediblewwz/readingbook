@@ -49,7 +49,9 @@ struct ReadingQueryHostOwner {
         guard name == "component_show", request.componentID != "book.scheme", let descriptor = registry.component(id: request.componentID) else {
             return try viewToolResult("unsupported", "这个组件没有安装，请从组件目录选择。")
         }
-        guard !editorDirty else { return try viewToolResult("needs_confirmation", "当前笔记有未保存内容，请先保存或放弃；没有切走。") }
+        guard !editorDirty, positionNoteRequest == nil, positionNoteBinding == nil else {
+            return try viewToolResult("needs_confirmation", "请先保存或放弃正在编辑的笔记，或完成位置选择；没有切走。")
+        }
         guard NSEvent.pressedMouseButtons == 0, canEditAISettings, !storageState.working, !isSavingDocument, !isCommittingLocalWrite else {
             return try viewToolResult("busy", "读者正在操作，稍后可再打开；没有抢占界面。")
         }
@@ -101,6 +103,12 @@ struct ReadingQueryHostOwner {
             if created { session.createdCount += 1 }
         }
         guard owner.matches(self) else { throw CancellationError() }
+        // The repository append can suspend while the reader starts editing.
+        // Keep any appended configuration, but never dismiss the new draft.
+        guard !editorDirty, positionNoteRequest == nil, positionNoteBinding == nil else {
+            return try viewToolResult("needs_confirmation", "组件配置已保留；请先完成笔记编辑或位置选择，未切换界面。",
+                extra: ["viewID": route, "created": created, "opened": false, "analysisCreated": false])
+        }
         requestedWorkspaceRoute = route
         for _ in 0..<75 {
             guard owner.matches(self) else { throw CancellationError() }
