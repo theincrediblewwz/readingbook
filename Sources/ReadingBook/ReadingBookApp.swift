@@ -32,14 +32,31 @@ struct ReadingBookApp: App {
 /// Leave About/settings/quit, native editing (including IME and undo), and
 /// window controls. Feature navigation lives in the workspace's own menus.
 @MainActor enum ReadingMenuPolicy {
+    private static let hiddenByPolicy = NSHashTable<NSMenuItem>.weakObjects()
+    private static func retains(_ item: NSMenuItem, at index: Int) -> Bool {
+        guard index != 0 else { return true }
+        let actions = Set((item.submenu?.items ?? []).compactMap { $0.action.map(NSStringFromSelector) })
+        let editing = !actions.isDisjoint(with: ["cut:", "copy:", "paste:", "undo:"])
+        let windows = !actions.isDisjoint(with: ["performMiniaturize:", "miniaturize:", "arrangeInFront:", "toggleFullScreen:"])
+        return editing || windows || ["Edit", "编辑", "Window", "窗口"].contains(item.title)
+    }
+    /// SwiftUI may reinsert stock menus when native PDF focus changes. Hide
+    /// them within the insertion notification, before AppKit draws the bar;
+    /// removing items still waits until SwiftUI has finished its rebuild.
+    static func prepareForDisplay(_ menu: NSMenu) {
+        for (index, item) in menu.items.enumerated() where !retains(item, at: index) && !item.isHidden {
+            hiddenByPolicy.add(item); item.isHidden = true
+        }
+    }
     static func apply(to menu: NSMenu) {
         for (index, item) in menu.items.enumerated().reversed() {
-            guard index != 0 else { continue }
-            let actions = Set((item.submenu?.items ?? []).compactMap { $0.action.map(NSStringFromSelector) })
-            let editing = !actions.isDisjoint(with: ["cut:", "copy:", "paste:", "undo:"])
-            let windows = !actions.isDisjoint(with: ["performMiniaturize:", "miniaturize:", "arrangeInFront:", "toggleFullScreen:"])
-            let localizedFallback = ["Edit", "编辑", "Window", "窗口"].contains(item.title)
-            if !editing && !windows && !localizedFallback { menu.removeItem(item) }
+            if !retains(item, at: index) {
+                hiddenByPolicy.remove(item); menu.removeItem(item)
+            } else if hiddenByPolicy.contains(item) {
+                // An inserted item may only receive its native edit/window
+                // actions later in the same rebuild. Restore only our hiding.
+                hiddenByPolicy.remove(item); item.isHidden = false
+            }
         }
     }
 }
@@ -49,13 +66,18 @@ struct ReadingBookApp: App {
     func applicationDidFinishLaunching(_ notification: Notification) {
         menuObserver = NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { [weak self] note in
             MainActor.assumeIsolated {
-                guard note.object as? NSMenu === NSApp.mainMenu else { return }
+                guard let menu = note.object as? NSMenu, menu === NSApp.mainMenu else { return }
+                ReadingMenuPolicy.prepareForDisplay(menu)
                 self?.scheduleMenuUpdate()
             }
         }
+        if let menu = NSApp.mainMenu { ReadingMenuPolicy.prepareForDisplay(menu) }
         scheduleMenuUpdate()
     }
-    func applicationDidBecomeActive(_ notification: Notification) { scheduleMenuUpdate() }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if let menu = NSApp.mainMenu { ReadingMenuPolicy.prepareForDisplay(menu) }
+        scheduleMenuUpdate()
+    }
     private func scheduleMenuUpdate() {
         guard !scheduled else { return }; scheduled = true
         DispatchQueue.main.async { [weak self] in

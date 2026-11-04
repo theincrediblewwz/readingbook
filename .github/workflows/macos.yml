@@ -96,6 +96,8 @@ jobs:
         run: python3 scripts/native-ui-regression/run-dynamic-components.py --bin-dir .build/tests/debug --tag ci-dynamic-components
       - name: Native chat history presentation regression
         run: python3 scripts/native-ui-regression/run-chat-history.py --bin-dir .build/tests/debug --tag ci-chat-history
+      - name: Native stable menu visibility regression
+        run: python3 scripts/native-ui-regression/run-menu-visibility.py --bin-dir .build/tests/debug --tag ci-menu-visibility
       - name: Rendered note mode transition regression
         run: |
           python3 scripts/native-ui-regression/run-note-mode-transitions.py --bin-dir .build/tests/debug --tag ci-mode-transitions-legacy --scroller-style legacy
@@ -155,6 +157,14 @@ jobs:
         with:
           name: failed-chat-history-evidence
           path: logs/ai-history-preparation-20261104/ci-chat-history
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Preserve failed menu visibility evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-menu-visibility-evidence
+          path: logs/ai-history-preparation-20261104/ci-menu-visibility
           if-no-files-found: ignore
           retention-days: 3
       - name: Diagnose failed workspace cold startup
