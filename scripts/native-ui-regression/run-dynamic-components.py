@@ -46,8 +46,9 @@ warnings['invalidViewGeometry']=len(re.findall(r'invalid (?:frame|view) (?:dimen
 expected={f'query{i}{phase}' for i in range(1,5) for phase in ['Started','Completed']} | set('newRelationsViewOpened evidencedAnalysisSavedAfterViewAppend noFutureEvidence oneViewDespiteRepeatedShow originalQuestionExact implicitRequestPipelineReusesExisting readingModeDidNotChangeAnalysis customCompositionCreatedAndOpened identicalCompositionReused dirtyDraftNotNavigatedOrDiscarded unknownRendererRejected staleRunRejected sameBookAcrossRootsRejected configurationAndAnalysisSurviveReload noteBytesAndSourceUnitsPreserved pureReadingHasComponentsButNoWrites'.split())
 checks=record.get('checks',{})
 expected.add('repeatedShowDoesNotRepublishBook')
+expected.add('nativeDSMLCompatibilityUsesOneToolRound')
 frozen=all(sha(R/name)==value for name,value in sources.items())
 passed=code==0 and unified.returncode==0 and record.get('status')=='passed' and set(checks)==expected and all(v is True for v in checks.values()) and frozen and not any(warnings.values()) and record.get('realNetworkRequests')==0 and record.get('originalLibraryUsed') is False
-report=dict(status='passed' if passed else 'failed',passed=passed,checkCount=len(checks),expectedCheckNames=sorted(expected),exitCode=code,unifiedLogReturnCode=unified.returncode,runtimeWarnings=warnings,sourceStillFrozen=frozen,sourceSHA256=sources,record=record,realNetworkRequests=0,buildResourceFallbackDenied=True,outboundNetworkDenied=True,mountedProductionWorkspace=True,modelBehaviorIsDeterministicFixture=True)
-(out/'report.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps({key:report[key] for key in ['status','checkCount','runtimeWarnings','record']}))
+report=dict(probe='dynamic-components',status='passed' if passed else 'failed',passed=passed,checkCount=len(checks),expectedCheckNames=sorted(expected),exitCode=code,unifiedLogReturnCode=unified.returncode,runtimeWarnings=warnings,sourceStillFrozen=frozen,sourceSHA256=sources,record=record,realNetworkRequests=0,buildResourceFallbackDenied=True,outboundNetworkDenied=True,mountedProductionWorkspace=True,modelBehaviorIsDeterministicFixture=True)
+(out/'report.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))
 raise SystemExit(0 if passed else 1)

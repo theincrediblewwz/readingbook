@@ -42,6 +42,20 @@ final class DynamicComponentTests: XCTestCase {
         var book = project(); for index in book.units.indices { book.units[index].page = nil }
         XCTAssertEqual(try ReadingQuerySnapshot.freeze(scope: .readSoFar, in: book, context: .init(unitID: "u2")).unitIDs, ["u1", "u2"])
     }
+    func testReadSoFarMetadataCanBeReadByPreviousScopeDecoderAndRoundTripsExactly() throws {
+        enum PreviousScope: String, Decodable { case selection, page, chapter, book, notes }
+        struct PreviousContext: Decodable { let scope: PreviousScope; let unitIDs: [String]; let scopeFingerprint: String }
+        let book = project(), snapshot = try ReadingQuerySnapshot.freeze(scope: .readSoFar, in: book, context: .init(unitID: "u1", page: 1))
+        let context = try ReadingChatContext(snapshot: snapshot, avoidsSpoilers: true), data = try JSONEncoder().encode(context)
+        let previous = try JSONDecoder().decode(PreviousContext.self, from: data)
+        XCTAssertEqual(previous.scope, .book); XCTAssertEqual(previous.unitIDs, ["u1"])
+        XCTAssertEqual(previous.scopeFingerprint, context.scopeFingerprint)
+        XCTAssertEqual(try JSONDecoder().decode(ReadingChatContext.self, from: data), context)
+        let page = try ReadingChatContext(snapshot: ReadingQuerySnapshot.freeze(scope: .page, in: book, context: .init(unitID: "u1", page: 1)), avoidsSpoilers: true)
+        let oldWire = try JSONSerialization.jsonObject(with: JSONEncoder().encode(page)) as! [String: Any]
+        XCTAssertEqual(oldWire["scope"] as? String, "page"); XCTAssertNil(oldWire["rangePolicy"])
+        XCTAssertFalse(snapshot.admits(.init(unitID: "u4", quote: book.units[3].text)))
+    }
     func testDirectoryPaginationRejectsUnknownFieldsBooleanAndUnboundedPages() throws {
         let defaults = try ReadingComponentDirectoryRequest.decode(Data("{}".utf8))
         XCTAssertEqual(defaults.offset, 0); XCTAssertEqual(defaults.limit, 8)
@@ -90,6 +104,17 @@ final class DynamicComponentTests: XCTestCase {
         do { _ = try await repository.ensureReadingComponent(bookID: book.id, sourceHash: book.sourceHash, view: view("new-relations")); XCTFail("停用组件不能复制绕过") } catch {}
         XCTAssertEqual(try Data(contentsOf: file), before)
     }
+    func testInlineRendererIsPreservedWhileNavigationEntryIsAddedAndReused() async throws {
+        let (root, repository, book) = try await fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        var staged = book, inline = view("inline-relations")
+        inline.configuration = ["presentation": "inline"]
+        staged.views = [inline]; _ = try await repository.save(staged)
+        let added = try await repository.ensureReadingComponent(bookID: book.id, sourceHash: book.sourceHash, view: view("navigation-relations"))
+        XCTAssertTrue(added.created); XCTAssertEqual(added.view.id, "navigation-relations")
+        XCTAssertEqual(added.project.views.first, inline); XCTAssertEqual(added.project.views.count, 2)
+        let repeated = try await repository.ensureReadingComponent(bookID: book.id, sourceHash: book.sourceHash, view: view("another-relations"))
+        XCTAssertFalse(repeated.created); XCTAssertEqual(repeated.view.id, added.view.id)
+    }
     func testCancelledAppendLeavesMetadataUntouched() async throws {
         let (root, repository, book) = try await fixture(); defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("library/books/\(book.id)/project.json"), before = try Data(contentsOf: root.appendingPathComponent("library/books/\(book.id)/project.json"))
@@ -113,13 +138,22 @@ final class DynamicComponentTests: XCTestCase {
         XCTAssertTrue(first.created && second.created); XCTAssertFalse(third.created)
         XCTAssertEqual(third.view.id, "a"); XCTAssertEqual(third.project.views.map(\.id), ["a", "b"])
     }
-    func testRepositoryAlsoRejectsBookWideCompositionWithoutWriting() async throws {
+    func testBookWideComponentStillProjectsOnlyReaderAdmittedUnits() async throws {
         let (root, repository, book) = try await fixture(); defer { try? FileManager.default.removeItem(at: root) }
         var definition = composition(); definition.sources[0].scope = .book
-        let request = ViewDefinition(id: "all-book", title: "越界组合", kind: .knowledge, rendererID: "reading.composition", scope: "current", composition: definition)
-        let file = root.appendingPathComponent("library/books/\(book.id)/project.json"), before = try Data(contentsOf: root.appendingPathComponent("library/books/\(book.id)/project.json"))
-        do { _ = try await repository.ensureReadingComponent(bookID: book.id, sourceHash: book.sourceHash, view: request); XCTFail("仓库入口也必须限制范围") } catch {}
-        XCTAssertEqual(try Data(contentsOf: file), before)
+        var prepared = book
+        prepared.entities = [.init(id: "liu", typeID: "person", name: "刘备", evidence: [.init(unitID: "u1", quote: book.units[0].text)]),
+            .init(id: "future", typeID: "person", name: "后文人物", evidence: [.init(unitID: "u4", quote: book.units[3].text)])]
+        _ = try await repository.save(prepared)
+        let request = ViewDefinition(id: "all-book", title: "已读人物", kind: .knowledge, rendererID: "reading.composition", scope: "current", composition: definition)
+        let saved = try await repository.ensureReadingComponent(bookID: book.id, sourceHash: book.sourceHash, view: request)
+        let boundary = try KnowledgeReadBoundary.throughSourceUnit("u3", in: saved.project)
+        let projected = try CompositionRuntime.project(definition, in: saved.project, context: .init(unitID: "u2", page: 2), boundary: boundary)
+        XCTAssertEqual(projected["people"]?.items.map(\.id), ["liu"])
+        XCTAssertEqual(saved.project.entities.count, 2)
+        let query = try ReadingQuerySnapshot.freeze(scope: .page, in: saved.project, context: .init(unitID: "u2", page: 2))
+        XCTAssertFalse(query.admits(.init(unitID: "u1", quote: book.units[0].text)))
+        XCTAssertFalse(query.admits(.init(unitID: "u4", quote: book.units[3].text)))
     }
     func testSourceMismatchAndIDCollisionLeaveAllBytesUntouched() async throws {
         let (root, repository, book) = try await fixture(); defer { try? FileManager.default.removeItem(at: root) }
@@ -150,13 +184,13 @@ final class DynamicComponentTests: XCTestCase {
         let invalid = ReadingComponentRequest(componentID: "relations", composition: composition())
         XCTAssertThrowsError(try ReadingComponentRequest.decode(JSONEncoder().encode(invalid)))
     }
-    func testComponentToolReservesBudgetBeforeCallingHostAndRejectsBookWideComposition() async throws {
+    func testComponentToolReservesBudgetAndRejectsUnknownTypeBeforeCallingHost() async throws {
         let project = project(), snapshot = try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: .init(unitID: "u1"))
         let host = ReadingHostToolAccess(viewActions: ["component_show"], performViewAction: { _, _ in XCTFail("must not execute"); return Data() })
         var session = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: project, hostTools: host)
         let limited = try await session.execute(name: "component_show", arguments: ["componentID": "relations"], maximumBytes: 1999)
         XCTAssertTrue(limited.contains("budgetLimited"))
-        var definition = composition(); definition.sources[0].scope = .book
+        var definition = composition(); definition.sources[0].typeIDs = ["unknown-type"]
         let request = ReadingComponentRequest(componentID: "reading.composition", composition: definition)
         let arguments = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as! [String: Any]
         do { _ = try await session.execute(name: "component_show", arguments: arguments, maximumBytes: 16_000); XCTFail("scope escalation") } catch {}

@@ -50,11 +50,13 @@ private actor ComponentTransport {
             else if results.count == 1 {
                 name = "component_show"
                 arguments = ["componentID": "reading.composition", "title": "人物与原文对照", "composition": [
-                    "sources": [["id": "people", "collection": "objects", "scope": "current", "selectionGroup": "people", "timeGroup": "story"]],
+                    "sources": [["id": "people", "collection": "objects", "scope": "book", "selectionGroup": "people", "timeGroup": "story"]],
                     "parts": [["id": "list", "primitive": "object.list", "sourceID": "people", "selectionGroup": "people", "timeGroup": "story"],
                               ["id": "quote", "primitive": "source.excerpt", "sourceID": "people", "selectionGroup": "people", "timeGroup": "story"]],
                     "layout": [["id": "root", "kind": "row", "children": ["left", "right"]], ["id": "left", "kind": "part", "partID": "list"], ["id": "right", "kind": "part", "partID": "quote"]], "rootID": "root"]]
             } else { return answer("已打开人物与原文对照视图，使用已有资料。") }
+        } else if mode == "dsml" && results.isEmpty {
+            return answer("<｜DSML｜ calls><｜DSML｜ invoke name=\"component_show\"><｜DSML｜ parameter name=\"componentID\" string=\"true\">relations</｜DSML｜ parameter></｜DSML｜ invoke></｜DSML｜ calls>")
         } else {
             if results.isEmpty { name = "component_show"; arguments = ["componentID": "relations"] }
             else { return answer("已打开已有关系图谱，没有重复创建。") }
@@ -141,10 +143,13 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
         try check("noFutureEvidence", organized.entities.flatMap(\.evidence).allSatisfy { $0.unitID == "u1" } && organized.relations.allSatisfy { $0.evidence.allSatisfy { $0.unitID == "u1" } })
         try check("oneViewDespiteRepeatedShow", organized.views.count == 1)
         try check("originalQuestionExact", organized.chats.first { $0.role == "user" }?.content == explicit)
-        await transport.configure("reuse"); store.queryInteractionMode = .reading
+        await transport.configure("dsml"); store.queryInteractionMode = .reading
+        store.settings.model = "deepseek-v4.1-fixture"
         try await ask("我记不太清了，帮我理一理这些人物剧情的关系。")
         try check("implicitRequestPipelineReusesExisting", store.book?.views.count == 1 && store.route == organized.views[0].id)
         try check("readingModeDidNotChangeAnalysis", store.book?.entities == organized.entities && store.book?.relations == organized.relations)
+        let dsmlCalls = await transport.records().filter { $0["mode"] as? String == "dsml" }
+        try check("nativeDSMLCompatibilityUsesOneToolRound", dsmlCalls.count == 2 && store.route == organized.views[0].id)
         await transport.configure("composition")
         try await ask("把人物列表和原文放在一起看吧。")
         try check("customCompositionCreatedAndOpened", store.book?.views.count == 2 && store.book?.views.last?.rendererID == "reading.composition" && store.route == store.book?.views.last?.id)
@@ -158,7 +163,10 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
         let epochBefore = store.currentBookRevision, start = ProcessInfo.processInfo.systemUptime
         for _ in 0..<8 {
             let receipt = try await access.performViewAction("component_show", Data(#"{"componentID":"relations"}"#.utf8))
-            guard String(decoding: receipt, as: UTF8.self).contains("\"opened\":true") else { throw ReadingError.invalid("重复打开未得到真实回执。") }
+            guard String(decoding: receipt, as: UTF8.self).contains("\"opened\":true") else {
+                throw ReadingError.invalid("重复打开未得到真实回执：" + String(decoding: receipt, as: UTF8.self) +
+                    "; editing=\(store.editorDirty), settingsEditable=\(store.canEditAISettings), storage=\(store.storageState.working), saving=\(store.isSavingDocument), committing=\(store.isCommittingLocalWrite), mouse=\(NSEvent.pressedMouseButtons)")
+            }
         }
         getrusage(RUSAGE_SELF, &usageAfter)
         func milliseconds(_ usage: rusage) -> Double {

@@ -49,6 +49,20 @@ extension ReadingQueryToolCatalog {
     }
 }
 
+extension ReadingQuerySession {
+    /// UI effects and the model's narrative are separate completion states. An
+    /// already completed operation must not disappear behind malformed prose.
+    /// A failed later request clears this receipt and cannot reuse old success.
+    func componentCompletionFallback() -> String? {
+        guard let lastComponentReceipt, let data = lastComponentReceipt.data(using: .utf8),
+              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              value["ok"] as? Bool == true, value["status"] as? String == "success", value["opened"] as? Bool == true,
+              value["analysisCreated"] as? Bool == false, value["viewID"] as? String != nil, value["rendererID"] as? String != nil else { return nil }
+        let title = String((value["componentTitle"] as? String ?? "阅读组件").prefix(80))
+        return "已打开“\(title)”。模型这次没有返回有效的文字说明，可继续追问。组件操作已完成，不代表新增分析已经完成。"
+    }
+}
+
 public struct ReadingComponentInstallation: Sendable {
     public let project: BookProject
     public let view: ViewDefinition
@@ -70,20 +84,22 @@ extension LibraryRepository {
         }
         let composition = view.rendererID == "reading.composition"
         guard composition == (view.composition != nil) else { throw ReadingError.invalid("组合组件缺少有效定义。") }
-        let match = current.views.first { saved in
+        let matches = current.views.filter { saved in
             if composition { return saved.rendererID == view.rendererID && saved.composition == view.composition && saved.title == view.title }
             return saved.rendererID == view.rendererID && (view.rendererID != nil || equivalentKinds.union([view.kind]).contains(saved.kind))
         }
-        if let match {
-            let disabled = current.plugins.contains { current.disabledPluginIDs.contains($0.id) && $0.views.contains { $0.id == match.id } }
-            guard !disabled else { throw ReadingError.invalid("此组件属于停用的声明包，请先在插件页启用；没有创建重复副本。") }
+        let isDisabled: (ViewDefinition) -> Bool = { candidate in
+            current.plugins.contains { current.disabledPluginIDs.contains($0.id) && $0.views.contains { $0.id == candidate.id } }
+        }
+        if let match = matches.first(where: { $0.configuration?["presentation"] != "inline" }) {
+            guard !isDisabled(match) else { throw ReadingError.invalid("此组件属于停用的声明包，请先在插件页启用；没有创建重复副本。") }
             return .init(project: current, view: match, created: false)
         }
+        // An inline-only renderer is not a navigable component. Preserve its
+        // declaration and add a sidebar view, without bypassing disabled packs.
+        guard !matches.contains(where: isDisabled) else { throw ReadingError.invalid("此组件属于停用的声明包，请先在插件页启用；没有创建重复副本。") }
         guard current.views.count < 128, !current.views.contains(where: { $0.id == view.id }) else { throw ReadingError.invalid("组件数量达到上限或标识已存在。") }
-        if let definition = view.composition {
-            guard definition.sources.allSatisfy({ $0.scope == .current }) else { throw ReadingError.invalid("新组件不能扩大原文范围。") }
-            try CompositionRuntime.validate(definition, in: current)
-        }
+        if let definition = view.composition { try CompositionRuntime.validate(definition, in: current) }
         let before = current
         current.views.append(view)
         try Task.checkCancellation()

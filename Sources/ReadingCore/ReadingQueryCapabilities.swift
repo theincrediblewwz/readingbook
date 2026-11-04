@@ -220,6 +220,7 @@ extension ReadingQuerySession {
             workspace = try await refresh(); try Task.checkCancellation()
         }
         if ReadingQueryToolCatalog.componentNames.contains(name), let hostTools, hostTools.viewActions.contains(name) {
+            if name == "component_show" { lastComponentReceipt = nil }
             guard maximumBytes >= (name == "components_list" ? 8_000 : 2_000) else {
                 return try json(["ok": false, "budgetLimited": true, "message": "没有足够空间返回组件目录或操作回执，未执行。"])
             }
@@ -229,18 +230,20 @@ extension ReadingQuerySession {
                 let request = try ReadingComponentRequest.decode(data)
                 if let definition = request.composition {
                     guard let project else { throw invalid("缺少本书组件结构。") }
-                    // A saved view remains bound to the active reading boundary;
-                    // declaring a component does not authorize all book sources.
-                    guard definition.sources.allSatisfy({ $0.scope == .current }) else { throw invalid("新组件的数据源须使用current，不扩大原文权限。") }
+                    // View data still passes the renderer's reading boundary;
+                    // a book-wide binding grants no new source tools here.
                     try CompositionRuntime.validate(definition, in: project)
                 }
             }
             try Task.checkCancellation()
             let returned = try await hostTools.performViewAction(name, data)
             try Task.checkCancellation()
-            let result = try hostResult(returned); hostReceipts.append(result); return result
+            let result = try hostResult(returned); hostReceipts.append(result)
+            if name == "component_show" { lastComponentReceipt = result }
+            return result
         }
         if ReadingQueryToolCatalog.viewNames.contains(name), let hostTools, hostTools.viewActions.contains(name) {
+            lastComponentReceipt = nil
             guard maximumBytes >= 1024 else { return try json(["ok": false, "budgetLimited": true, "message": "没有足够空间返回界面操作回执，未执行。"] ) }
             let data = try JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys])
             try validateViewArguments(arguments)

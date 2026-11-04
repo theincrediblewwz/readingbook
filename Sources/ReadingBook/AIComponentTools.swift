@@ -38,11 +38,12 @@ struct ReadingQueryHostOwner {
             }
             let views: [[String: Any]] = book.views.dropFirst(page.offset).prefix(page.limit).map { view in
                 ["id": view.id, "componentID": registry.component(for: view)?.id ?? (view.rendererID ?? view.kind.rawValue),
-                 "title": String(view.title.prefix(40)), "enabled": enabledViews.contains { $0.id == view.id }]
+                 "title": String(view.title.prefix(40)), "enabled": enabledViews.contains { $0.id == view.id },
+                 "inNavigation": view.configuration?["presentation"] != "inline"]
             }
             return try viewToolResult("success", "按当前需求选择组件；显示配置不代表已有分析。", extra: ["components": components,
                 "views": views, "totalViews": book.views.count, "nextOffset": page.offset + views.count < book.views.count ? page.offset + views.count as Any : NSNull(),
-                "customComponents": "只能组合现有元件，不执行代码；数据源使用current。"])
+                "customComponents": "只能组合现有元件，不执行代码；本书资料遵守阅读位置与防剧透设置，正文读取仍限本次授权。"])
         }
         let request = try ReadingComponentRequest.decode(data)
         guard name == "component_show", request.componentID != "book.scheme", let descriptor = registry.component(id: request.componentID) else {
@@ -55,7 +56,7 @@ struct ReadingQueryHostOwner {
         let route: String
         var created = false
         if let viewID = request.viewID {
-            guard let view = enabledViews.first(where: { $0.id == viewID }),
+            guard let view = enabledViews.first(where: { $0.id == viewID && $0.configuration?["presentation"] != "inline" }),
                   descriptor.requiresDefinition ? view.rendererID == descriptor.id : registry.equivalent(view, descriptor) else {
                 return try viewToolResult("unsupported", "本书没有这个已启用的组件视图；没有改动配置。")
             }
@@ -64,6 +65,7 @@ struct ReadingQueryHostOwner {
             guard request.composition == nil else { throw ReadingError.invalid("这个组件不接受组合定义。") }
             route = descriptor.rendererID ?? descriptor.kind.rawValue
         } else if let existing = enabledViews.first(where: { view in
+            guard view.configuration?["presentation"] != "inline" else { return false }
             if descriptor.requiresDefinition {
                 return view.rendererID == descriptor.id && request.composition != nil && view.composition == request.composition && view.title == (request.title ?? "本书专属视图")
             }
@@ -78,7 +80,6 @@ struct ReadingQueryHostOwner {
                 return try viewToolResult("unsupported", "请提供组合定义，或选择已经保存的视图。")
             }
             if let definition = request.composition {
-                guard definition.sources.allSatisfy({ $0.scope == .current }) else { throw ReadingError.invalid("组件不能扩大原文范围。") }
                 try CompositionRuntime.validate(definition, in: book)
             }
             // Repeated tool calls reuse the same declaration; a single turn may
@@ -106,7 +107,7 @@ struct ReadingQueryHostOwner {
             let presented = route == "editor" ? isNotesForeground : (self.route == route && !hasWorkspaceAuxiliary)
             if presented && requestedWorkspaceRoute == nil {
                 return try viewToolResult("success", created ? "已加入并打开组件；显示已有资料，尚未新增分析。" : "已打开已有组件；没有重复创建。",
-                    extra: ["rendererID": descriptor.id, "viewID": route, "created": created, "opened": true, "analysisCreated": false])
+                    extra: ["rendererID": descriptor.id, "componentTitle": descriptor.title, "viewID": route, "created": created, "opened": true, "analysisCreated": false])
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }

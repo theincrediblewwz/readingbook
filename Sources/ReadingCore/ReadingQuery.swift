@@ -401,6 +401,7 @@ struct ReadingQuerySession {
     let anchorAdmission: ((SourceAnchor) -> Bool)?
     let savedEvidenceAdmission: ((Evidence) -> Bool)?
     var hostReceipts: [String] = []
+    var lastComponentReceipt: String?
     var taskCreatedNodeIDs = Set<String>()
     var sourceExcerpts: [(String, String)] = []
     var documentExcerpts: [(String, String)] = []

@@ -139,6 +139,14 @@ jobs:
           path: logs/component-publication-20261104/ci-component-publication-*
           if-no-files-found: ignore
           retention-days: 3
+      - name: Preserve failed dynamic component evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-dynamic-component-evidence
+          path: logs/dynamic-components-20261104/ci-dynamic-components
+          if-no-files-found: ignore
+          retention-days: 3
       - name: Diagnose failed workspace cold startup
         if: failure()
         continue-on-error: true

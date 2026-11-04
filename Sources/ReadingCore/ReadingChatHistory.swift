@@ -10,6 +10,32 @@ public struct ReadingChatContext: Codable, Hashable, Sendable {
     public let documentIDs: [String]
     public let avoidsSpoilers: Bool
 
+    private enum CodingKeys: String, CodingKey { case scope, rangePolicy, sourceHash, scopeFingerprint, unitIDs, documentIDs, avoidsSpoilers }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let saved = try values.decode(ReadingQueryScope.self, forKey: .scope)
+        let policy = try values.decodeIfPresent(String.self, forKey: .rangePolicy)
+        scope = saved == .book && policy == "throughCurrentPage" ? .readSoFar : saved
+        sourceHash = try values.decode(String.self, forKey: .sourceHash)
+        scopeFingerprint = try values.decode(String.self, forKey: .scopeFingerprint)
+        unitIDs = try values.decode([String].self, forKey: .unitIDs)
+        documentIDs = try values.decode([String].self, forKey: .documentIDs)
+        avoidsSpoilers = try values.decode(Bool.self, forKey: .avoidsSpoilers)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        // Older installed versions can still open the library after rollback.
+        // The exact frozen unit IDs/hashes remain the authority, never this
+        // label. New clients recover the finer policy from an additive field.
+        try values.encode(scope == .readSoFar ? ReadingQueryScope.book : scope, forKey: .scope)
+        if scope == .readSoFar { try values.encode("throughCurrentPage", forKey: .rangePolicy) }
+        try values.encode(sourceHash, forKey: .sourceHash)
+        try values.encode(scopeFingerprint, forKey: .scopeFingerprint)
+        try values.encode(unitIDs, forKey: .unitIDs)
+        try values.encode(documentIDs, forKey: .documentIDs)
+        try values.encode(avoidsSpoilers, forKey: .avoidsSpoilers)
+    }
+
     public init(snapshot: ReadingQuerySnapshot, avoidsSpoilers: Bool) throws {
         scope = snapshot.scope; sourceHash = snapshot.sourceHash
         unitIDs = snapshot.unitIDs; documentIDs = snapshot.documentIDs
@@ -23,7 +49,7 @@ public struct ReadingChatContext: Codable, Hashable, Sendable {
 
     fileprivate static func fingerprint(scope: ReadingQueryScope, sourceHash: String,
                                         sources: [(String, String)], documents: [DocumentRecord], ranges: [ReadingSourceRange]? = nil) throws -> String {
-        var value: [String: Any] = ["scope": scope.rawValue, "sourceHash": sourceHash,
+        var value: [String: Any] = ["scope": (scope == .readSoFar ? ReadingQueryScope.book : scope).rawValue, "sourceHash": sourceHash,
             "sources": sources.map { ["id": $0.0, "hash": $0.1] },
             "documents": documents.map { ["id": $0.id, "updatedAt": $0.updatedAt.timeIntervalSince1970] as [String: Any] }]
         if let ranges { value["sourceRanges"] = ranges.map { ["id": $0.unitID, "start": $0.startUTF16, "end": $0.endUTF16] as [String: Any] } }
