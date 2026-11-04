@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Source-bound, network-denied real editable graph label integration."""
-import argparse, datetime, hashlib, json, os, pathlib, plistlib, re, shutil, subprocess
+import argparse, datetime, hashlib, json, math, os, pathlib, plistlib, re, shutil, subprocess
 R = pathlib.Path(__file__).resolve().parents[2]
 p = argparse.ArgumentParser(); p.add_argument('--bin-dir', type=pathlib.Path, required=True); p.add_argument('--tag', required=True)
 a = p.parse_args(); assert a.tag.replace('-', '').isalnum()
@@ -46,7 +46,13 @@ warnings['invalidViewGeometry']=len(re.findall(r'invalid (?:frame|view) (?:dimen
 expected = set(['actualLabelHit-12', 'actualLabelHit-17', 'actualLabelHit-19', 'actualLabelHit-2', 'actualLabelHit-21', 'actualLabelHit-23', 'actualLabelHit-4', 'actualLabelHit-9', 'cachedCallbackUsesLatestOwner', 'contextMenuHasRename', 'contextRemovalUpdatesVisibleLabels', 'contextRemovalUsesLatestOwner', 'coveredCanvasDoesNotReceiveInput', 'disabledLabelDoesNotReceiveInput', 'distantAndNearLabelsRemainEditable-0.2', 'distantAndNearLabelsRemainEditable-1.0', 'doubleClickOpensCurrentLabel', 'escapeCancelsRename', 'failedSaveKeepsDraft', 'initialLabelReceiver', 'isolatedLibrary', 'newLibraryUsesCurrentActionOwner', 'noModelRequests', 'nodeWorldCoordinatesUnchanged', 'removedRenameCapabilityIsRespected', 'retrySavesDraftAndClosesEditor', 'sameIDExternalLabelChangeRefreshes', 'singleClickDoesNotEdit', 'sourceProjectBytesUnchanged', 'themeChangePreservesInteraction', 'uncoveredCanvasRecoversInput'])
 checks=record.get('checks',{})
 frozen=all(sha(R/name)==value for name,value in sources.items())
-passed=code==0 and unified.returncode==0 and record.get('status')=='passed' and set(checks)==expected and all(v is True for v in checks.values()) and frozen and not any(warnings.values()) and record.get('realNetworkRequests')==0 and record.get('originalLibraryUsed') is False
+readiness=record.get('saveReadiness',[])
+readiness_stages=['failed-save-ready','retry-save-ready','new-library-save-ready','context-removal-ready']
+readiness_valid=record.get('saveReadinessDeadlineMS')==1500 and len(readiness)==4 and all(
+    entry.get('stage')==stage and type(entry.get('elapsedMS')) in (int,float) and math.isfinite(entry['elapsedMS']) and 0<=entry['elapsedMS']<=1500
+    and entry.get('completedSaves')==count and entry.get('failedSaves')==1
+    for entry,stage,count in zip(readiness,readiness_stages,[1,2,3,3]))
+passed=code==0 and unified.returncode==0 and record.get('status')=='passed' and set(checks)==expected and all(v is True for v in checks.values()) and readiness_valid and frozen and not any(warnings.values()) and record.get('realNetworkRequests')==0 and record.get('originalLibraryUsed') is False
 report=dict(probe='graph-label-reuse',status='passed' if passed else 'failed',passed=passed,checkCount=len(checks),expectedCheckNames=sorted(expected),exitCode=code,unifiedLogReturnCode=unified.returncode,runtimeWarnings=warnings,sourceStillFrozen=frozen,sourceSHA256=sources,record=record,realNetworkRequests=0,buildResourceFallbackDenied=True,outboundNetworkDenied=True,originalLibraryReadAndWriteDenied=True,productionEditableGraph=True)
 (out/'report.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))
 raise SystemExit(0 if passed else 1)
