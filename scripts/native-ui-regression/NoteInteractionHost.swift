@@ -18,6 +18,29 @@ import PDFKit
     func wait(_ predicate: () -> Bool) async -> Bool {
         for _ in 0..<80 { if predicate() { return true }; await settle(30) }; return predicate()
     }
+    func editorStage(_ phase: String, started: TimeInterval) async throws -> PositionNoteEditorStageView {
+        let deadline = started + 1.5
+        let expectedID = try XCT(store.positionNoteRequest?.id)
+        var polls = 0
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            polls += 1
+            if let stage = descendants(window.contentView!, PositionNoteEditorStageView.self).first,
+               Mirror(reflecting: stage).children.first(where: { $0.label == "requestID" })?.value as? UUID == expectedID,
+               PositionNoteEditorStageView.valid(stage.transitionTarget), stage.paper?.layer != nil {
+                var entries = observations["editorStageReadiness"] as? [[String: Any]] ?? []
+                entries.append(["phase": phase, "elapsedMS": (ProcessInfo.processInfo.systemUptime-started)*1000,
+                    "requestID": expectedID.uuidString, "polls": polls, "deadlineMS": 1500])
+                observations["editorStageReadiness"] = entries
+                return stage
+            }
+            await settle(5)
+        }
+        observations["editorStageTimeout"] = ["phase": phase, "requestPresent": store.positionNoteRequest != nil,
+            "error": store.errorMessage ?? "", "route": store.route,
+            "stageCount": descendants(window.contentView!, PositionNoteEditorStageView.self).count,
+            "elapsedMS": (ProcessInfo.processInfo.systemUptime-started)*1000]
+        throw ReadingError.invalid("Current native editor did not finish first layout within1500ms: " + phase)
+    }
     func descendants<T: NSView>(_ view: NSView, _: T.Type) -> [T] { (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants($0, T.self) } }
     func saveBitmap(_ view: NSView, _ name: String) {
         view.layoutSubtreeIfNeeded(); view.displayIfNeeded()
@@ -393,8 +416,12 @@ import PDFKit
             // Exact source card geometry is passed through the actual separate
             // hosting tree. The editor stage animates a layer, not TextKit width.
             let sourceRect = window.convertToScreen(.init(x: 720, y: 460, width: 230, height: 170))
+            var openingStarted = ProcessInfo.processInfo.systemUptime
             await store.editPositionNote("n0", origin: .init(screenFrame: sourceRect)); await settle(25)
-            let stage = try XCT(descendants(window.contentView!, PositionNoteEditorStageView.self).first)
+            observations["editorAtOriginal25msCheck"] = ["requestPresent": store.positionNoteRequest != nil,
+                "stageCount": descendants(window.contentView!, PositionNoteEditorStageView.self).count,
+                "elapsedMS": (ProcessInfo.processInfo.systemUptime-openingStarted)*1000, "error": store.errorMessage ?? ""]
+            let stage = try await editorStage("animated-origin", started: openingStarted)
             let actualReducedMotion = Mirror(reflecting: stage).children.first { $0.label == "reduceMotion" }?.value as? Bool
             observations["editorStageReduceMotion"] = actualReducedMotion
             checks["EditorNormalMotionFixtureAllowsAnimation"] = actualReducedMotion == false
@@ -431,10 +458,11 @@ import PDFKit
             reducedStage.removeFromSuperview()
             for (index, style) in ["plain", "warm-cotton", "mist-white", "sage-paper"].enumerated() {
                 if let request = store.positionNoteRequest { store.discardPositionNoteDraft(request) }; store.positionNoteRequest = nil; await settle()
-                await store.editPositionNote("n\(index)"); await settle(80)
+                openingStarted = ProcessInfo.processInfo.systemUptime
+                await store.editPositionNote("n\(index)")
                 let request = try XCT(store.positionNoteRequest)
                 checks["Color\(index)EditorReadsStoredPaper"] = request.placement?.paperStyle == style && PositionNoteBackground.style(request.placement?.paperStyle, inherited: "warm-cotton").rawValue == style
-                saveBitmap(try XCT(descendants(window.contentView!, PositionNoteEditorStageView.self).first), "editor-color-\(index)")
+                saveBitmap(try await editorStage("color-\(index)", started: openingStarted), "editor-color-\(index)")
             }
             if let request = store.positionNoteRequest { store.discardPositionNoteDraft(request) }; store.positionNoteRequest = nil; await settle()
             await store.editPositionNote("n0")
