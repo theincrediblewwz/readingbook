@@ -6,7 +6,7 @@ p = argparse.ArgumentParser(); p.add_argument('--bin-dir', type=pathlib.Path, re
 a = p.parse_args(); assert a.tag.replace('-', '').isalnum()
 b = a.bin_dir.resolve(); out = R / 'logs/dynamic-components-20261104' / a.tag
 assert b.is_relative_to(R) and not out.exists()
-for folder in [out, out/'tmp', out/'home']: folder.mkdir(exist_ok=False)
+for folder in [out, out/'tmp', out/'home']: folder.mkdir(parents=True, exist_ok=False)
 work = R/'.build/dynamic-component-host'; work.mkdir(exist_ok=True)
 host = pathlib.Path(__file__).with_name('DynamicComponentHost.swift')
 objects = [pathlib.Path(x) for x in (b/'ReadingBook.product/Objects.LinkFileList').read_text().splitlines() if not x.endswith('/ReadingBookLauncher.swift.o')]
