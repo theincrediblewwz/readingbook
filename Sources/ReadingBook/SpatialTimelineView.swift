@@ -837,15 +837,17 @@ private struct ReadingMapRenderer: View, Equatable {
             && zip(lhs.sequence, rhs.sequence).allSatisfy { $0.latitude == $1.latitude && $0.longitude == $1.longitude }
     }
     var body: some View {
-        let contents = ReadingMapContents(points: points, sequence: sequence, selectedID: selectedID,
+        let contents = ReadingMapContents(points: points, selectedID: selectedID,
                                           scope: scope, selection: $selection)
         Map(position: $camera) {
+            // Keep the changing trajectory at one content identity when marker
+            // counts cross the reuse threshold. Only annotations are reusable.
+            if sequence.count > 1 {
+                MapPolyline(coordinates: sequence).stroke(Palette.copper.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
+            }
             if points.count >= 64 {
                 contents
             } else {
-                if sequence.count > 1 {
-                    MapPolyline(coordinates: sequence).stroke(Palette.copper.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
-                }
                 ForEach(points) { point in
                     Annotation("", coordinate: point.coordinate) { contents.mapMarker(point) }
                 }
@@ -857,21 +859,13 @@ private struct ReadingMapRenderer: View, Equatable {
 
 private struct ReadingMapContents: MapContent, Equatable {
     let points: [ReadingMapPoint]
-    let sequence: [CLLocationCoordinate2D]
     let selectedID: String?
     let scope: ReadingMapScope
     @Binding var selection: ReadingMapSelection?
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.scope == rhs.scope && lhs.selectedID == rhs.selectedID && lhs.points == rhs.points
-            && lhs.sequence.count == rhs.sequence.count
-            && zip(lhs.sequence, rhs.sequence).allSatisfy {
-                $0.latitude == $1.latitude && $0.longitude == $1.longitude
-            }
     }
     var body: some MapContent {
-            if sequence.count > 1 {
-                MapPolyline(coordinates: sequence).stroke(Palette.copper.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
-            }
             ForEach(points) { point in
                 Annotation("", coordinate: point.coordinate) { mapMarker(point) }
             }
