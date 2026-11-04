@@ -74,7 +74,7 @@ struct CompositionWorkspaceView: View {
         }.background(embedded ? Color.clear : Palette.canvas).readingTextContext(.knowledge)
             .task { isActive = true; refresh() }
             .onDisappear { isActive = false; cancelRefresh(); clearPrepared() }
-            .onChange(of: store.projectRevision) { _, _ in refresh() }
+            .onChange(of: store.currentBookRevision) { _, _ in refresh() }
             .onChange(of: store.book?.publicationStamp) { _, _ in refresh() }
             .onChange(of: store.book?.sourceHash) { _, _ in refresh() }
             .onChange(of: store.selectedUnitID) { _, _ in refresh() }
@@ -123,7 +123,7 @@ struct CompositionWorkspaceView: View {
     private func matches(_ owner: RefreshOwner, store: AppStore) -> Bool {
         guard let book = store.book, store.libraryRootURL.path == owner.libraryRoot,
               book.id == owner.bookID, book.sourceHash == owner.sourceHash,
-              store.projectRevision == owner.revision, composition == owner.definition,
+              store.currentBookRevision == owner.revision, composition == owner.definition,
               (contextOverride ?? store.currentReadingContext) == owner.context,
               store.selectedUnitID == owner.boundaryUnitID,
               (book.temporalKnowledge?.profile?.avoidsSpoilers ?? true) == owner.avoidsSpoilers,
@@ -155,7 +155,7 @@ struct CompositionWorkspaceView: View {
             clearPrepared()
             retainedPrepared = nil
             owner = RefreshOwner(libraryRoot: store.libraryRootURL.path, bookID: book.id, sourceHash: book.sourceHash,
-                publicationStamp: book.publicationStamp, revision: store.projectRevision, definition: composition,
+                publicationStamp: book.publicationStamp, revision: store.currentBookRevision, definition: composition,
                 context: readingContext, boundary: store.temporalBoundary, currentScope: currentScope,
                 boundaryUnitID: store.selectedUnitID, avoidsSpoilers: book.temporalKnowledge?.profile?.avoidsSpoilers ?? true)
         }

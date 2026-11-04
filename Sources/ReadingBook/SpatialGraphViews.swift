@@ -71,7 +71,7 @@ struct DocumentGraphView: View {
     @State private var presentation = BookGraphPresentationCache()
     private var graphData: BookGraphSnapshot {
         guard let book = store.book else { return BookGraphSnapshot() }
-        return presentation.documents(book: book, revision: store.projectRevision)
+        return presentation.documents(book: book, revision: store.currentBookRevision)
     }
     var body: some View {
         Group {
@@ -154,7 +154,7 @@ struct RelationGraphView: View {
     @State private var presentation = BookGraphPresentationCache()
     private var graphData: BookGraphSnapshot {
         guard let book = store.book else { return BookGraphSnapshot() }
-        return presentation.relations(book: book, revision: store.projectRevision, context: store.readingScopeCurrent ? store.currentReadingContext : nil,
+        return presentation.relations(book: book, revision: store.currentBookRevision, context: store.readingScopeCurrent ? store.currentReadingContext : nil,
                                       point: store.temporalPoint, boundary: store.temporalBoundary,
                                       scopedItems: { store.readingContextItems })
     }

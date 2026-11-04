@@ -88,6 +88,10 @@ jobs:
       - name: Native note color, expansion and reading undo regression
         id: note_interaction
         run: python3 scripts/native-ui-regression/run-note-interaction.py --bin-dir .build/tests/debug --tag ci-note-interaction
+      - name: Native component publication isolation regression
+        run: |
+          python3 scripts/native-ui-regression/run-component-publication.py --bin-dir .build/tests/debug --tag ci-component-publication-small --count 16
+          python3 scripts/native-ui-regression/run-component-publication.py --bin-dir .build/tests/debug --tag ci-component-publication-large --count 1024
       - name: Rendered note mode transition regression
         run: |
           python3 scripts/native-ui-regression/run-note-mode-transitions.py --bin-dir .build/tests/debug --tag ci-mode-transitions-legacy --scroller-style legacy
@@ -123,6 +127,14 @@ jobs:
         with:
           name: failed-markdown-native-evidence
           path: logs/ci-markdown-bridge
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Preserve failed component publication evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-component-publication-evidence
+          path: logs/component-publication-20261104/ci-component-publication-*
           if-no-files-found: ignore
           retention-days: 3
       - name: Diagnose failed workspace cold startup

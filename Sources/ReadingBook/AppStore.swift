@@ -10,6 +10,7 @@ import ReadingCore
     @Published var bookID: String? {
         didSet {
             if oldValue != bookID {
+                currentBookRevision &+= 1
                 cancelPositionNoteForSourceChange()
                 clearWorkspaceAuxiliaryForNewSource()
                 queryTask?.cancel(); companionTask?.cancel()
@@ -153,6 +154,10 @@ import ReadingCore
     var readingContextCacheKey: ReadingContext?
     var readingContextCache = ReadingContextItems()
     @Published var projectRevision = 0
+    /// A different book's publication must not invalidate the displayed book's
+    /// graph or composition. Include selection/root changes and every accepted
+    /// current-book publication, even one carrying an equal or absent stamp.
+    private(set) var currentBookRevision = 0
     @Published var pdfNavigationToken = 0
     @Published var activeReadingUnitID: String?
     @Published var isSmartReadingRunning = false
@@ -230,7 +235,7 @@ import ReadingCore
     }
     @Published var catalogOperations = 0
     @Published var libraryRootURL: URL {
-        didSet { if oldValue != libraryRootURL { cancelPositionNoteForSourceChange(); readerEditUndo.clear(); positionNoteOpenID = nil; auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); questionSuggestions.reset(); queryReferencedAnswerIDs = []; companionReferencedAnswerIDs = []; positionNoteBinding = nil; queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false; queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
+        didSet { if oldValue != libraryRootURL { currentBookRevision &+= 1; cancelPositionNoteForSourceChange(); readerEditUndo.clear(); positionNoteOpenID = nil; auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); questionSuggestions.reset(); queryReferencedAnswerIDs = []; companionReferencedAnswerIDs = []; positionNoteBinding = nil; queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false; queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
     }
     @Published var lastTrashedProjectURL: URL?
     let storageState = StorageSettingsState()
@@ -403,6 +408,7 @@ import ReadingCore
     @discardableResult
     func publish(_ project: BookProject) -> Bool {
         guard LibraryPublicationStamp.accepts(project, replacing: books.first(where: { $0.id == project.id }), owner: repository.publicationOwner) else { return false }
+        if project.id == bookID { currentBookRevision &+= 1 }
         projectRevision += 1
         if let index = books.firstIndex(where: { $0.id == project.id }) { books[index] = project }
         else { books.insert(project, at: 0) }
