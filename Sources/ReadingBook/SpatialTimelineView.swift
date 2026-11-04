@@ -837,17 +837,46 @@ private struct ReadingMapRenderer: View, Equatable {
             && zip(lhs.sequence, rhs.sequence).allSatisfy { $0.latitude == $1.latitude && $0.longitude == $1.longitude }
     }
     var body: some View {
+        let contents = ReadingMapContents(points: points, sequence: sequence, selectedID: selectedID,
+                                          scope: scope, selection: $selection)
         Map(position: $camera) {
+            if points.count >= 64 {
+                contents
+            } else {
+                if sequence.count > 1 {
+                    MapPolyline(coordinates: sequence).stroke(Palette.copper.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
+                }
+                ForEach(points) { point in
+                    Annotation("", coordinate: point.coordinate) { contents.mapMarker(point) }
+                }
+            }
+        }
+        .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
+    }
+}
+
+private struct ReadingMapContents: MapContent, Equatable {
+    let points: [ReadingMapPoint]
+    let sequence: [CLLocationCoordinate2D]
+    let selectedID: String?
+    let scope: ReadingMapScope
+    @Binding var selection: ReadingMapSelection?
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.scope == rhs.scope && lhs.selectedID == rhs.selectedID && lhs.points == rhs.points
+            && lhs.sequence.count == rhs.sequence.count
+            && zip(lhs.sequence, rhs.sequence).allSatisfy {
+                $0.latitude == $1.latitude && $0.longitude == $1.longitude
+            }
+    }
+    var body: some MapContent {
             if sequence.count > 1 {
                 MapPolyline(coordinates: sequence).stroke(Palette.copper.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
             }
             ForEach(points) { point in
                 Annotation("", coordinate: point.coordinate) { mapMarker(point) }
             }
-        }
-        .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
     }
-    private func mapMarker(_ point: ReadingMapPoint) -> some View {
+    func mapMarker(_ point: ReadingMapPoint) -> some View {
         let selected = selectedID == point.targetID
         return Button { selection = ReadingMapSelection(targetID: point.targetID, scope: scope) } label: {
             VStack(spacing: 4) {
