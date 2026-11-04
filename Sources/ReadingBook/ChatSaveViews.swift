@@ -20,6 +20,24 @@ struct EnhancedBookChatView: View {
     var body: some View { BookChatContent(composerDraft: store.queryComposerDraft, embedded: embedded) }
 }
 
+/// One immutable presentation per body evaluation. It contains no retained
+/// project/cache key: every real store change derives the current lists again.
+@MainActor struct ChatHistoryPresentation {
+    let all: [ChatMessage]
+    let folded: [ChatMessage]
+    let visible: [ChatMessage]
+    var hasVisibleAnswers: Bool { visible.contains { $0.role == "assistant" } }
+    init(store: AppStore) {
+        guard let project = store.book else { all = []; folded = []; visible = []; return }
+        let history = store.queryHistory(in: project, preferences: store.currentQueryPreferences)
+        let collapsed = Set(ReaderCollectionRuntime.state(in: project).collapsedReferenceIDs)
+        let folded = history.filter { $0.role == "assistant" && collapsed.contains("chat:" + $0.id) }
+        let hidden = ReaderCollectionRuntime.turnMessageIDs(for: Set(folded.map(\.id)), in: project)
+        self.all = history; self.folded = folded
+        self.visible = history.filter { !hidden.contains($0.id) }
+    }
+}
+
 private struct BookChatContent: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject private var typography: ReadingTypographySettings
@@ -47,23 +65,24 @@ private struct BookChatContent: View {
     private var composerIsActive: Bool { !workspaceBlocked && (embedded ? panelActive && store.readingCompanionVisible && store.readingCompanionTab == "chat" : store.route == "query") }
 
     var body: some View {
+        let history = ChatHistoryPresentation(store: store)
         VStack(spacing: 0) {
             if selectionMode { selectionBar }
-            conversationCollectionBar
+            conversationCollectionBar(history)
             if !embedded && store.isQueryBusy {
                 queryStatus.padding(.horizontal, embedded ? 16 : 24).padding(.vertical, 8)
             }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 20) {
-                        if store.visibleQueryHistory.isEmpty {
+                        if history.visible.isEmpty {
                             questionEmptyState
                         }
-                        if foldedExpanded { foldedAnswerRows }
-                        ForEach(store.visibleQueryHistory) { message in answerCard(message).id(message.id) }
+                        if foldedExpanded { foldedAnswerRows(history) }
+                        ForEach(history.visible) { message in answerCard(message).id(message.id) }
                     }.padding(.horizontal, embedded ? 16 : 24).padding(.vertical, embedded ? 12 : 20).frame(maxWidth: 940).frame(maxWidth: .infinity)
-                }.onChange(of: store.currentQueryHistory.count) { _, _ in
-                    if let last = store.currentQueryHistory.last { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { proxy.scrollTo(last.id, anchor: .bottom) } }
+                }.onChange(of: history.all.count) { _, _ in
+                    if let last = history.all.last { withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
                 .onChange(of: memorySourceID) { _, id in
                     guard let id else { return }; withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { proxy.scrollTo(id, anchor: .center) }; memorySourceID = nil
@@ -79,9 +98,9 @@ private struct BookChatContent: View {
         .onChange(of: composerIsActive) { _, active in if !active { composerFocused = false } else { revealRequestedHistory(); revealRequestedMemory() } }
         .onChange(of: store.queryInteractionMode) { _, _ in store.queryAllowsOrganizing = false; resetModePresentation() }
         .onChange(of: store.queryAnswerStyle) { _, _ in resetModePresentation() }
-        .task(id: suggestionRefreshKey) {
+        .task(id: suggestionRefreshKey(hasVisibleAnswers: history.hasVisibleAnswers)) {
             store.questionSuggestions.refresh(store: store, active: composerIsActive,
-                eligible: !store.visibleQueryHistory.contains(where: { $0.role == "assistant" }))
+                eligible: !history.hasVisibleAnswers)
         }
         .sheet(item: $saveRequest, onDismiss: {
             if openTrashAfterSheet { openTrashAfterSheet = false; store.showingTrash = true }
@@ -123,33 +142,33 @@ private struct BookChatContent: View {
             ModelQuestionSuggestions(state: store.questionSuggestions, draft: composerDraft) { question = $0 }
         }.padding(.vertical, 32).frame(maxWidth: .infinity, minHeight: 180)
     }
-    private var suggestionRefreshKey: String {
-        store.collectionOwnerKey + "|" + store.queryScope.rawValue + "|" + (store.selectedUnitID ?? "") + "|" + store.currentQueryPreferences.contextIdentity + "|" + store.settings.baseURL + "|" + store.settings.model + "|" + String(composerIsActive) + "|" + String(store.isQueryBusy) + "|" + String(store.visibleQueryHistory.contains { $0.role == "assistant" })
+    private func suggestionRefreshKey(hasVisibleAnswers: Bool) -> String {
+        store.collectionOwnerKey + "|" + store.queryScope.rawValue + "|" + (store.selectedUnitID ?? "") + "|" + store.currentQueryPreferences.contextIdentity + "|" + store.settings.baseURL + "|" + store.settings.model + "|" + String(composerIsActive) + "|" + String(store.isQueryBusy) + "|" + String(hasVisibleAnswers)
     }
-    private var conversationCollectionBar: some View {
+    private func conversationCollectionBar(_ history: ChatHistoryPresentation) -> some View {
         HStack(spacing: 6) {
             Button { historyMessageID = nil; historyBook = store.book } label: { Label("历史", systemImage: "archivebox").font(.system(size: 12)).frame(minHeight: 30) }
                 .buttonStyle(ReadingQuietButtonStyle()).help("完整问答与已归档的对话，可按文件夹查看和引用。")
             Button { showingMemory = true } label: { Label("摘要", systemImage: "brain.head.profile").font(.system(size: 12)).frame(minHeight: 30) }
                 .buttonStyle(ReadingQuietButtonStyle()).help("查看简短要点、来源和整理进度；可以立即整理或清除摘要。")
-            if !store.foldedQueryAnswers.isEmpty {
+            if !history.folded.isEmpty {
                 Button { foldedExpanded.toggle() } label: {
-                    Label("已收起 \(store.foldedQueryAnswers.count)", systemImage: "tray.full").font(.system(size: 12, weight: .medium))
+                    Label("已收起 \(history.folded.count)", systemImage: "tray.full").font(.system(size: 12, weight: .medium))
                 }.buttonStyle(ReadingToolbarButtonStyle(selected: foldedExpanded)).help("收起的回答仍属于当前对话，后续问题仍可使用它们；点击展开列表。")
             }
             Spacer(minLength: 0)
             Button { Task { await store.collapseCurrentQueryAnswers() } } label: { Image(systemName: "rectangle.compress.vertical").frame(width: 32, height: 32) }
                 .buttonStyle(ReadingQuietButtonStyle()).help("一键收起所有回答；仍保留在当前上下文中。").accessibilityLabel("收起全部回答")
-                .disabled(store.isOrganizingCollections || !store.visibleQueryHistory.contains { $0.role == "assistant" })
-            if !store.foldedQueryAnswers.isEmpty {
+                .disabled(store.isOrganizingCollections || !history.visible.contains { $0.role == "assistant" })
+            if !history.folded.isEmpty {
                 Button { Task { await store.archiveFoldedQueryAnswers(); foldedExpanded = false } } label: { Label("移入历史", systemImage: "archivebox").font(.system(size: 12)).frame(minHeight: 32) }
                     .buttonStyle(ReadingQuietButtonStyle()).help("把已收起的完整问答收纳到一个历史文件夹；从下一次提问起不再自动带入上下文，仍可恢复或主动引用。")
                     .disabled(store.isOrganizingCollections)
             }
         }.padding(.horizontal, embedded ? 16 : 24).padding(.vertical, 4)
     }
-    private var foldedAnswerRows: some View {
-        ForEach(store.foldedQueryAnswers) { message in
+    private func foldedAnswerRows(_ history: ChatHistoryPresentation) -> some View {
+        ForEach(history.folded) { message in
             Button { Task { await store.organizeReaderCollections(.collapse(["chat:" + message.id], false)) } } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "text.bubble").foregroundStyle(Palette.accent)

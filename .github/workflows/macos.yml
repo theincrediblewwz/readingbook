@@ -94,6 +94,8 @@ jobs:
           python3 scripts/native-ui-regression/run-component-publication.py --bin-dir .build/tests/debug --tag ci-component-publication-large --count 1024
       - name: Native dynamic conversation component regression
         run: python3 scripts/native-ui-regression/run-dynamic-components.py --bin-dir .build/tests/debug --tag ci-dynamic-components
+      - name: Native chat history presentation regression
+        run: python3 scripts/native-ui-regression/run-chat-history.py --bin-dir .build/tests/debug --tag ci-chat-history
       - name: Rendered note mode transition regression
         run: |
           python3 scripts/native-ui-regression/run-note-mode-transitions.py --bin-dir .build/tests/debug --tag ci-mode-transitions-legacy --scroller-style legacy
@@ -145,6 +147,14 @@ jobs:
         with:
           name: failed-dynamic-component-evidence
           path: logs/dynamic-components-20261104/ci-dynamic-components
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Preserve failed chat history evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-chat-history-evidence
+          path: logs/ai-history-preparation-20261104/ci-chat-history
           if-no-files-found: ignore
           retention-days: 3
       - name: Diagnose failed workspace cold startup
