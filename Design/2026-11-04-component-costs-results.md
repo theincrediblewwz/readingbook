@@ -32,4 +32,12 @@
 
 本批未采用内存改动，未宣布内存/FPS或能耗收益。详细值和限制见 `logs/component-costs-20261104/memory-observation.json`。下一批优先延长循环与回落观察，定位主程序中仍保留的分配，再查AI遥测是否触发无关视图准备。使用Apple的[SwiftUI性能诊断](https://developer.apple.com/documentation/Xcode/understanding-and-improving-swiftui-performance)和WebKit的[内存检查方法](https://docs.webkit.org/Infrastructure/MemoryInspection.html)追踪实际原因，不把源码推测当作测量。
 
-交付状态、完整CI、原书验收和清理数据在本批 `delivery48/final-delivery.json` 生成后补齐；生成前不视为已发布或已安装。
+0.23.48/build79 已完成完整[CI](https://github.com/theincrediblewwz/readingbook/actions/runs/41805192115)、发布、安装和原书两次正常启动验收。产品源 `922f6bb827fcc148288fadc7adff68ce0889da2e`；906 Core、220指定回归、新34原生及全部旧门槛通过，零编译警告。35资源、39程序文件、双架构、严格签名及公开下载回验通过。规范包SHA256 `4e7027c5f355e44ca5ddd46cdb9a02862f59f97a45b7b8b1fe48872d48809455`。
+
+原库31个成员保持，25个非Workspace内容文件逐字节不变，全部私人非App保护资料保留；没有用旧备份覆盖原库。原书阅读模式和位置按新鲜停机保护验收。正式原书统一日志的旧类负尺寸诊断为138条，未逐条采栈，不借用47的系统提示器定位而宣布全部解决；独立34项原生四类警告零单列。
+
+本次界面工具未能点击原生About菜单项，失败菜单现场保留；版本通过实际运行路径、安装目录39文件和正式包全清单核对，不声称取得About窗口画面。普通阅读控件、退出及正常重启实际通过。
+
+精确清理1,158,000KiB可重建程序和重复包，5,665,608→4,507,608KiB。清理量不等于整批净变化；最终回执另记。共享缓存、当前增量对象、48/47规范包及最新47回滚保留；GitHub仅main和48/47安装版本。源码历史、失败记录和关键原始证据保留，已结束helper路径不能直接复用。
+
+完整交付入口：`logs/component-costs-20261104/delivery48/final-delivery.json`。
