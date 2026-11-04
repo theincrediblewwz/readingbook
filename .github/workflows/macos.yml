@@ -98,6 +98,8 @@ jobs:
         run: python3 scripts/native-ui-regression/run-chat-history.py --bin-dir .build/tests/debug --tag ci-chat-history
       - name: Native stable menu visibility regression
         run: python3 scripts/native-ui-regression/run-menu-visibility.py --bin-dir .build/tests/debug --tag ci-menu-visibility
+      - name: Native graph label reuse and current actions
+        run: python3 scripts/native-ui-regression/run-graph-label-reuse.py --bin-dir .build/tests/debug --tag ci-graph-label-reuse
       - name: Rendered note mode transition regression
         run: |
           python3 scripts/native-ui-regression/run-note-mode-transitions.py --bin-dir .build/tests/debug --tag ci-mode-transitions-legacy --scroller-style legacy
@@ -251,6 +253,14 @@ jobs:
         with:
           name: failed-ai-search-flow-evidence
           path: logs/ai-search-20261103/ci-ai-search-flow
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Preserve failed graph label reuse evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-graph-label-reuse-evidence
+          path: logs/map-allocation-20261104/ci-graph-label-reuse
           if-no-files-found: ignore
           retention-days: 3
       - name: Build universal app and package

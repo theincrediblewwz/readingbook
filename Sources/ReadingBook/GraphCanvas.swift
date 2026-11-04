@@ -854,28 +854,69 @@ struct GraphSurface: View {
         cancelConnection(); message = ""
         if editingLineID == nil { setPhysicalSelection(nil); focus = nil; deselect?() }
     }
+    private struct LineReuseKey: Equatable {
+        let line: GraphLine
+        let acceptsInput: Bool
+        let savingPosition: Bool
+        let savingConnection: Bool
+        let savingLine: Bool
+        let canRename: Bool
+        let canRemove: Bool
+        let epoch: Int
+        let canvasID: UUID
+        let root: URL
+        let scope: String?
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.line == rhs.line && lhs.line.id.utf8.elementsEqual(rhs.line.id.utf8)
+                && lhs.line.from.utf8.elementsEqual(rhs.line.from.utf8)
+                && lhs.line.to.utf8.elementsEqual(rhs.line.to.utf8)
+                && lhs.line.label.utf8.elementsEqual(rhs.line.label.utf8)
+                && lhs.acceptsInput == rhs.acceptsInput && lhs.savingPosition == rhs.savingPosition
+                && lhs.savingConnection == rhs.savingConnection && lhs.savingLine == rhs.savingLine
+                && lhs.canRename == rhs.canRename && lhs.canRemove == rhs.canRemove
+                && lhs.epoch == rhs.epoch && lhs.canvasID == rhs.canvasID
+                && lhs.root == rhs.root && lhs.scope == rhs.scope
+        }
+    }
+    private struct ReusedLineLabel<Content: View>: View, Equatable {
+        let key: LineReuseKey
+        @ViewBuilder var content: () -> Content
+        @Environment(\.colorScheme) private var colorScheme
+        static func == (lhs: Self, rhs: Self) -> Bool { lhs.key == rhs.key }
+        var body: some View { let _ = colorScheme; content() }
+    }
+    private func lineReuseKey(_ line: GraphLine) -> LineReuseKey {
+        LineReuseKey(line: line, acceptsInput: acceptsCanvasInput, savingPosition: savingPosition,
+                     savingConnection: savingConnection, savingLine: savingLine,
+                     canRename: renameLine != nil, canRemove: removeLine != nil,
+                     epoch: gestureEpoch, canvasID: canvasInputID, root: store.libraryRootURL, scope: store.workspaceMemoryKey)
+    }
     @ViewBuilder private func edgeLabel(_ edge: RenderedGraphLine) -> some View {
         if editingLineID == edge.id {
             TextField("关系名称", text: $lineDraft).textFieldStyle(.roundedBorder).font(.system(size: 12))
                 .frame(width: 150).focused($focus, equals: .line(edge.id)).onSubmit { saveRename(edge.line) }.disabled(savingLine)
                 .accessibilityLabel("关系名称，回车保存，Esc取消")
         } else {
-            Text(edge.line.label).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                .padding(.horizontal, 7).padding(.vertical, 4).background(Palette.canvas.opacity(0.96), in: Capsule())
-                .contentShape(Capsule()).overlay {
-                    if renameLine != nil || removeLine != nil {
-                    GraphPointerBridge(enabled: acceptsCanvasInput && !savingPosition && !savingConnection && !savingLine,
-                                       movable: false, resetID: gestureEpoch, canvasID: canvasInputID,
-                                       click: { twice in if twice { beginRename(edge.line) } }, drag: { _, _ in }, cancel: {})
-                    }
-                }
-                .help(renameLine == nil ? edge.line.label : "双击修改关系名称；右键将连线移入回收站")
-                .contextMenu {
-                    if renameLine != nil { Button("修改关系名称") { beginRename(edge.line) } }
-                    if removeLine != nil { Button("连线移入回收站", role: .destructive) { deleteLine(edge.id) } }
-                }
+            ReusedLineLabel(key: lineReuseKey(edge.line)) { edgeLabelContent(edge.line) }.equatable()
         }
     }
+    private func edgeLabelContent(_ line: GraphLine) -> some View {
+        Text(line.label).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            .padding(.horizontal, 7).padding(.vertical, 4).background(Palette.canvas.opacity(0.96), in: Capsule())
+            .contentShape(Capsule()).overlay {
+                if renameLine != nil || removeLine != nil {
+                    GraphPointerBridge(enabled: acceptsCanvasInput && !savingPosition && !savingConnection && !savingLine,
+                                       movable: false, resetID: gestureEpoch, canvasID: canvasInputID,
+                                       click: { twice in if twice { lineActions.send(.rename(line)) } }, drag: { _, _ in }, cancel: {})
+                }
+            }
+            .help(renameLine == nil ? line.label : "双击修改关系名称；右键将连线移入回收站")
+            .contextMenu {
+                if renameLine != nil { Button("修改关系名称") { lineActions.send(.rename(line)) } }
+                if removeLine != nil { Button("连线移入回收站", role: .destructive) { lineActions.send(.remove(line.id)) } }
+            }
+    }
+
     private func beginRename(_ line: GraphLine) {
         guard acceptsCanvasInput, nodeDragState == nil, renameLine != nil, !savingPosition, !savingLine, !savingConnection else { return }
         if let id = editingLineID { focus = .line(id); return }
