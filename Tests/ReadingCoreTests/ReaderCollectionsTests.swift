@@ -242,7 +242,7 @@ final class ReaderCollectionsTests: XCTestCase {
 
     func testBackgroundSuggestionsDoNotBlockAnotherForegroundAIRequestAndCancelCleanly() async throws {
         let project = try book(), before = try data(project), log = CollectionTransportLog()
-        let response = ProviderClient.Result(message: .init(role: "assistant", content: "{\"keywords\":[\"吕布\"]}", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 12)
+        let response = ProviderClient.Result(message: .init(role: "assistant", content: "{\"variants\":[\"吕布\"],\"related\":[]}", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 12)
         let coordinator = AIRequestCoordinator(transport: { request in
             await log.append(request)
             let body = try JSONSerialization.jsonObject(with: request.request.httpBody!) as! [String: Any]
