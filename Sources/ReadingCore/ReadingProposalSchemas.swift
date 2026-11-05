@@ -129,7 +129,7 @@ extension ReadingQuerySession {
     func validateProposal(name: String, data: Data) throws {
         let batch = try ReadingProposalTools.decode(name: name, arguments: data)
         guard let project, let scoped = scopedKnowledgeProject() else { throw invalid("宿主未提供冻结范围的项目，不能准备变更。") }
-        let admitted = Set(try TemporalKnowledgeRuntime.objects(in: scoped, boundary: KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs))).map(\.id)).union(snapshot.documentIDs)
+        let admitted = (try TemporalKnowledgeRuntime.objectIDs(in: scoped, boundary: KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs)))).union(snapshot.documentIDs)
         let newObjects = Set((batch.knowledge?.newEntityIDs ?? []) + (batch.knowledge?.newEventIDs ?? []) + (batch.documents?.create ?? []).map(\.clientID))
         let targets = admitted.union(newObjects)
         func requireTargets(_ ids: [String]) throws {

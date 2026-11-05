@@ -108,7 +108,7 @@ struct SpatialTimelineView: View {
     }
     private var admittedEntities: [KnowledgeEntity] {
         guard let book = store.book else { return [] }
-        let ids = Set(((try? TemporalKnowledgeRuntime.objects(in: book, boundary: store.temporalBoundary)) ?? []).filter { $0.kind == .entity }.map(\.id))
+        let ids = (try? TemporalKnowledgeRuntime.entityIDs(in: book, boundary: store.temporalBoundary)) ?? []
         return book.entities.filter { ids.contains($0.id) }
     }
     private var expandedEventIsVisible: Bool {

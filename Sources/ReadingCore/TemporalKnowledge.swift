@@ -222,6 +222,32 @@ public enum TemporalKnowledgeRuntime {
         return result
     }
 
+    /// Identity-only reads share the full adapter's evidence boundary, without
+    /// constructing summaries, references or content-version hashes. No result
+    /// is retained across reads, project edits, source changes or boundaries.
+    public static func entityIDs(in project: BookProject, boundary: KnowledgeReadBoundary) throws -> Set<String> {
+        var ids = Set<String>()
+        for entity in project.entities where admits(entity.evidence, boundary: boundary) {
+            // Latitude/longitude are the current TypedObject adapter's only
+            // floating values. Keep JSONEncoder's original error and coding
+            // path, rather than allowing invalid visible data through this read.
+            if entity.latitude.map({ !$0.isFinite }) == true || entity.longitude.map({ !$0.isFinite }) == true {
+                return Set(try objects(in: project, boundary: boundary).filter { $0.kind == .entity }.map(\.id))
+            }
+            ids.insert(entity.id)
+        }
+        return ids
+    }
+
+    /// Catalogue membership only. Call `objects`/`object` when content or a
+    /// version is required; this does not grant visibility or editing rights.
+    public static func objectIDs(in project: BookProject, boundary: KnowledgeReadBoundary) throws -> Set<String> {
+        var ids = try entityIDs(in: project, boundary: boundary)
+        for event in project.events where admits(event.evidence, boundary: boundary) { ids.insert(event.id) }
+        for document in project.activeDocuments where admits(document.evidence, boundary: boundary) { ids.insert(document.id) }
+        return ids
+    }
+
     public static func object(id: String, in project: BookProject, boundary: KnowledgeReadBoundary) throws -> TypedObject? {
         if let entity = project.entities.first(where: { $0.id == id }), admits(entity.evidence, boundary: boundary) { return try adapt(entity) }
         if let event = project.events.first(where: { $0.id == id }), admits(event.evidence, boundary: boundary) {

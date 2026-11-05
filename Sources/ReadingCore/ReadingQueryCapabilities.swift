@@ -361,7 +361,7 @@ extension ReadingQuerySession {
         case "workspace_context_get":
             guard let workspace else { return try json(["ok": false, "status": "unsupported", "message": "宿主尚未提供实际界面快照。"] ) }
             try validateWorkspace(workspace)
-            let admitted = Set(try TemporalKnowledgeRuntime.objects(in: scoped, boundary: boundary).map(\.id)).union(snapshot.documentIDs)
+            let admitted = (try TemporalKnowledgeRuntime.objectIDs(in: scoped, boundary: boundary)).union(snapshot.documentIDs)
             return try json(["ok": true, "rendererID": workspace.rendererID as Any? ?? NSNull(), "selectedObjectIDs": workspace.selectedObjectIDs.filter(admitted.contains),
                 "selectedNodeIDs": workspace.selectedNodeIDs.filter { admitsNode($0, admitted: admitted, project: project) },
                 "context": ["page": workspace.context?.page as Any? ?? NSNull(), "timeFrom": workspace.context?.timeFrom as Any? ?? NSNull(), "timeTo": workspace.context?.timeTo as Any? ?? NSNull()],
@@ -370,7 +370,7 @@ extension ReadingQuerySession {
         case "visible_objects_list":
             guard let workspace, let visible = workspace.visibleObjects else { return try json(["ok": false, "status": "unsupported", "message": "当前渲染器未接入真实可见对象快照；没有从项目数据猜测。"] ) }
             try validateWorkspace(workspace)
-            let admitted = Set(try TemporalKnowledgeRuntime.objects(in: scoped, boundary: boundary).map(\.id)).union(snapshot.documentIDs)
+            let admitted = (try TemporalKnowledgeRuntime.objectIDs(in: scoped, boundary: boundary)).union(snapshot.documentIDs)
             var rows = visible.objectIDs.filter(admitted.contains).map { ["objectID": $0, "rendererID": visible.rendererID, "partial": visible.partial] as [String: Any] }
             rows += visible.nodeIDs.filter { admitsNode($0, admitted: admitted, project: project) }.map { ["nodeID": $0, "rendererID": visible.rendererID, "partial": visible.partial] as [String: Any] }
             return try page(rows, arguments, maximumBytes)
@@ -413,7 +413,7 @@ extension ReadingQuerySession {
         case "profile":
             if let profile = project.temporalKnowledge?.profile { rows = [try encoded(profile) as? [String: Any] ?? [:]] } else { rows = [] }
         case "graph":
-            let admitted = Set(try TemporalKnowledgeRuntime.objects(in: scoped, boundary: KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs))).map(\.id)).union(snapshot.documentIDs)
+            let admitted = (try TemporalKnowledgeRuntime.objectIDs(in: scoped, boundary: KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs)))).union(snapshot.documentIDs)
             let nodes = project.nodes.filter { admitsNode($0.id, admitted: admitted, project: project) }, nodeIDs = Set(nodes.map(\.id))
             rows = try nodes.map { node in
                 var value = try encoded(node) as? [String: Any] ?? [:]
@@ -442,7 +442,7 @@ extension ReadingQuerySession {
     }
     private func validateViewArguments(_ arguments: [String: Any]) throws {
         guard let project, let scoped = scopedKnowledgeProject() else { throw invalid("没有当前范围项目，不能定位对象。") }
-        let admitted = Set(try TemporalKnowledgeRuntime.objects(in: scoped, boundary: KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs))).map(\.id)).union(snapshot.documentIDs)
+        let admitted = (try TemporalKnowledgeRuntime.objectIDs(in: scoped, boundary: KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs)))).union(snapshot.documentIDs)
         let objects = (arguments["objectIDs"] as? [String] ?? []) + [arguments["objectID"] as? String, arguments["documentID"] as? String].compactMap { $0 }
         let nodes = (arguments["nodeIDs"] as? [String] ?? []) + [arguments["nodeID"] as? String].compactMap { $0 }
         guard objects.allSatisfy(admitted.contains), nodes.allSatisfy({ admitsNode($0, admitted: admitted, project: project) }) else { throw invalid("视图目标不在本次获准范围内；请切换范围后再定位。") }
