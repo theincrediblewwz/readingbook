@@ -73,7 +73,42 @@ private struct MapFixtureView: View {
         guard let annotation = try annotations().first(where: { abs($0.coordinate.latitude - point.latitude!) < 1e-8 && abs($0.coordinate.longitude - point.longitude!) < 1e-8 }), let view = try map().view(for: annotation) else { throw ReadingError.invalid("Visible native marker \(index) missing") }
         return view
     }
-    func click(_ view: NSView) async throws {
+    func click(_ view: MKAnnotationView) async throws {
+        // MapKit can return a reused annotation before moving it from its old
+        // frame (including {{0,0},{44,44}}). Do not queue a click until the
+        // rendered annotation agrees with MapKit's current coordinate projection.
+        // This only bounds input readiness; the existing 550ms result deadline,
+        // exact recenter/zoom assertions and native event dispatch stay unchanged.
+        let native = try map(), started = ProcessInfo.processInfo.systemUptime
+        var stablePoint: CGPoint?, stableSince = started
+        while true {
+            host.layoutSubtreeIfNeeded(); native.layoutSubtreeIfNeeded()
+            guard let annotation = view.annotation else { throw ReadingError.invalid("Marker lost its annotation") }
+            let projected = native.convert(annotation.coordinate, toPointTo: host)
+            let center = view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: host)
+            let expected = CGPoint(x: projected.x + view.centerOffset.x,
+                                   y: projected.y + (host.isFlipped ? view.centerOffset.y : -view.centerOffset.y))
+            let aligned = hypot(center.x - expected.x, center.y - expected.y) < 0.5
+            let current = native.view(for: annotation) === view && view.window === window
+                && !view.isHidden && view.alphaValue > 0 && host.bounds.intersects(view.convert(view.bounds, to: host))
+            let now = ProcessInfo.processInfo.systemUptime
+            if current && aligned {
+                if let previous = stablePoint, hypot(previous.x - center.x, previous.y - center.y) < 0.5 {
+                    if now - stableSince >= 0.04 && now - started < 1.5 {
+                        observations.append(["stage": "click-geometry-ready", "uptime": now,
+                            "readinessSeconds": now - started, "projectedPoint": NSStringFromPoint(projected),
+                            "annotationCenter": NSStringFromPoint(center), "centerOffset": NSStringFromPoint(view.centerOffset)])
+                        break
+                    }
+                } else { stablePoint = center; stableSince = now }
+            } else { stablePoint = nil; stableSince = now }
+            guard now - started < 1.5 else {
+                observations.append(["stage": "click-geometry-not-ready", "uptime": now,
+                    "projectedPoint": NSStringFromPoint(projected), "annotationCenter": NSStringFromPoint(center)])
+                throw ReadingError.invalid("Marker geometry did not become ready within 1500ms")
+            }
+            try await settle(16)
+        }
         // Use the visible pin itself, rather than the middle of the selected
         // pin-plus-label group, which can be covered by another annotation.
         let y = view.bounds.height > 90 ? (view.isFlipped ? view.bounds.minY + 21 : view.bounds.maxY - 21) : view.bounds.midY
