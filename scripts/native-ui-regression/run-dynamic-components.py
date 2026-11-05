@@ -45,6 +45,7 @@ warnings={key:runtime.count(pattern) for key,pattern in [('layout300','300 itera
 warnings['invalidViewGeometry']=len(re.findall(r'invalid (?:frame|view) (?:dimension|geometry)',runtime,re.I))
 expected={f'query{i}{phase}' for i in range(1,5) for phase in ['Started','Completed']} | set('newRelationsViewOpened evidencedAnalysisSavedAfterViewAppend noFutureEvidence oneViewDespiteRepeatedShow originalQuestionExact implicitRequestPipelineReusesExisting readingModeDidNotChangeAnalysis customCompositionCreatedAndOpened identicalCompositionReused dirtyDraftNotNavigatedOrDiscarded unknownRendererRejected staleRunRejected sameBookAcrossRootsRejected configurationAndAnalysisSurviveReload noteBytesAndSourceUnitsPreserved pureReadingHasComponentsButNoWrites'.split())
 checks=record.get('checks',{})
+expected.update(['pendingIntentSurvivesWorkspaceRemount','bookChangeClearsQueuedComponentIntent'])
 expected.add('repeatedShowDoesNotRepublishBook')
 expected.add('nativeDSMLCompatibilityUsesOneToolRound')
 expected.update(['activePositionNoteDraftNotNavigatedOrDiscarded','activePositionBindingNotNavigated'])

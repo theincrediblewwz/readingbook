@@ -13,6 +13,8 @@ import ReadingCore
                 currentBookRevision &+= 1
                 cancelPositionNoteForSourceChange()
                 clearWorkspaceAuxiliaryForNewSource()
+                // Pending navigation belongs to the book that requested it.
+                if requestedWorkspaceRoute != nil { requestedWorkspaceRoute = nil }
                 queryTask?.cancel(); companionTask?.cancel()
                 pendingPlanRegeneration = nil
                 readingPreparationState.reset()

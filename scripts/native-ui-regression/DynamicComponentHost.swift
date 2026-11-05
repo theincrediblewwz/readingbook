@@ -213,6 +213,19 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
         window.contentView = NSHostingView(rootView: WorkspaceView().environmentObject(store).environmentObject(ReadingTypographySettings()))
         try await wait { self.store.renderedComponentPresentation?.matches(self.store, route: relationRoute) == true }
         try check("removedWorkspacePresentationNotReused", oldMount != nil && store.renderedComponentPresentation?.mountID != oldMount)
+        // An intent can be queued while no workspace is mounted, including
+        // replacement of its presentation subtree after a sheet closes.
+        window.contentView = NSView()
+        try await wait { self.store.renderedComponentPresentation == nil }
+        store.requestedWorkspaceRoute = "editor"
+        window.contentView = NSHostingView(rootView: WorkspaceView().environmentObject(store).environmentObject(ReadingTypographySettings()))
+        let pendingEditor = try await access.performViewAction("component_show", Data(#"{"componentID":"editor"}"#.utf8))
+        try check("pendingIntentSurvivesWorkspaceRemount", String(decoding: pendingEditor,as:UTF8.self).contains("\"opened\":true") && store.requestedWorkspaceRoute == nil && store.isNotesForeground && store.renderedComponentPresentation?.matches(store,route:"editor") == true)
+        if let owner = store.notesPresentation { store.dismissWorkspaceAuxiliary(owner.id) }
+        store.route = relationRoute
+        try await wait { self.store.renderedComponentPresentation?.matches(self.store,route:relationRoute) == true }
+
+
         store.route = "reader"
         let noteRequest = PositionNoteRequest(owner: WorkspacePickerOwner(store: store), text: "未保存的便签 e\u{301} 🙂")
         store.positionNoteRequest = noteRequest
@@ -252,6 +265,11 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
         try check("configurationAndAnalysisSurviveReload", reloaded.views == before.views && reloaded.entities == before.entities && reloaded.relations == before.relations)
         let savedNote = try await repository.readDocument(bookID: fixture.id, document: note)
         try check("noteBytesAndSourceUnitsPreserved", savedNote == noteBody && reloaded.units == fixture.units && reloaded.sourceHash == fixture.sourceHash)
+        let previousBooks = store.books, previousBookID = store.bookID
+        var other = before; other.id = "queued-navigation-other-book"
+        store.books.append(other); store.requestedWorkspaceRoute = "editor"; store.bookID = other.id
+        try check("bookChangeClearsQueuedComponentIntent", store.requestedWorkspaceRoute == nil && store.notesPresentation == nil)
+        store.bookID = previousBookID; store.books = previousBooks
         let records = await transport.records()
         try check("pureReadingHasComponentsButNoWrites", records.filter { $0["mode"] as? String != "organize" }.allSatisfy {
             let names = $0["toolNames"] as? [String] ?? []; return names.contains("component_show") && !names.contains("knowledge_changes_propose") && !names.contains("view_select")

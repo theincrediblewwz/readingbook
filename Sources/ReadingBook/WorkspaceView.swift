@@ -218,7 +218,7 @@ struct WorkspaceView: View {
             guard owner?.id == store.notesPresentation?.id, owner?.matches(store) == true else { return }
             requestNavigation(.internalURL(url))
         }
-        .onChange(of: store.requestedWorkspaceRoute) { _, route in
+        .onChange(of: store.requestedWorkspaceRoute, initial: true) { _, route in
             guard let route else { return }; store.requestedWorkspaceRoute = nil; navigate(route)
         }
     }
