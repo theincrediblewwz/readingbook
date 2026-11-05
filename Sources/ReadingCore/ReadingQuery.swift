@@ -404,9 +404,14 @@ struct ReadingQuerySession {
     var lastComponentReceipt: String?
     var taskCreatedNodeIDs = Set<String>()
     var sourceExcerpts: [(String, String)] = []
+    private var sourceWasPreloaded = false
+    private var modelRequestedSource = false
     var documentExcerpts: [(String, String)] = []
     var conversationExcerpts: [(String, String)] = []
     var toolCalls = 0
+    var hasOnlyPreloadedSources: Bool {
+        sourceWasPreloaded && !modelRequestedSource && !sourceExcerpts.isEmpty && documentExcerpts.isEmpty && conversationExcerpts.isEmpty
+    }
     private var cache: [String: String] = [:]
     var documentHashes: [String: String] = [:]
     private var cachedBytes = 0
@@ -434,7 +439,7 @@ struct ReadingQuerySession {
         var candidate = self
         candidate.sourceExcerpts = snapshot.sources.prefix(32).reversed().map { ($0.unitID, $0.text) }
         let supplied = try candidate.finalEvidence(maximumBytes: maximumBytes)
-        if supplied != nil { sourceExcerpts = candidate.sourceExcerpts }
+        if supplied != nil { sourceExcerpts = candidate.sourceExcerpts; sourceWasPreloaded = !sourceExcerpts.isEmpty }
         return supplied
     }
 
@@ -519,6 +524,7 @@ struct ReadingQuerySession {
             return try json(["ok": false, "budgetLimited": true, "message": "本轮空间不足以返回完整结果，正文未提供给模型。"])
         }
         try recordReturnedEvidence(result)
+        if sourceExcerpts.count > before.0 { modelRequestedSource = true }
         return result
     }
     private mutating func perform(name: String, arguments: [String: Any], maximumBytes: Int) async throws -> String {

@@ -94,12 +94,43 @@ final class SearchContextRegressionTests: XCTestCase {
 
     func testMissingCitationCannotRenewTheRequestBudget() async throws {
         let p=project(), calls=SearchContextCalls()
-        do {
-            _ = try await ReadingAnswerEngine.run(question:"这页讲啥",project:p,settings:.init(model:"fixture",contextWindowTokens:128_000),documents:[:],context:.init(unitID:"u1",page:2),scope:.page,history:[],memory:nil,memoryEnabled:false,documentIDs:nil,loader:nil,operationLimit:128_000,remainingRequests:1) { _,_,_,_ in
-                _ = await calls.next();return self.response("回答没有出处。")
-            };XCTFail("请求额度不能自动续上")
-        } catch {}
+        let result = try await ReadingAnswerEngine.run(question:"这页讲啥",project:p,settings:.init(model:"fixture",contextWindowTokens:128_000),documents:[:],context:.init(unitID:"u1",page:2),scope:.page,history:[],memory:nil,memoryEnabled:false,documentIDs:nil,loader:nil,operationLimit:128_000,remainingRequests:1) { _,_,_,_ in
+            _ = await calls.next();return self.response("回答没有出处。")
+        }
+        XCTAssertTrue(result.message.evidence.isEmpty)
+        XCTAssertTrue(result.message.content.hasPrefix("### 背景补充"),"不能把未附出处内容当作原书结论")
         let count=await calls.value();XCTAssertEqual(count,1)
+    }
+
+    func testUncitedCorrectionCannotBecomeVerifiedBookEvidence() async throws {
+        let p=project(), calls=SearchContextCalls()
+        let result=try await ReadingAnswerEngine.run(question:"这页讲啥",project:p,settings:.init(model:"fixture",contextWindowTokens:128_000),documents:[:],context:.init(unitID:"u1",page:2),scope:.page,history:[],memory:nil,memoryEnabled:false,documentIDs:nil,loader:nil,operationLimit:128_000,remainingRequests:2) { _,_,_,_ in
+            _ = await calls.next();return self.response("一段未附原文出处的说明。")
+        }
+        let count=await calls.value();XCTAssertEqual(count,2)
+        XCTAssertTrue(result.message.evidence.isEmpty);XCTAssertTrue(result.message.content.hasPrefix("### 背景补充"))
+        XCTAssertFalse(result.diagnostics.notices.contains { $0.contains("已按本次") })
+    }
+
+    func testPreloadedPageDoesNotForceCitationsOnToolOnlyStatus() async throws {
+        let p=project(), calls=SearchContextCalls()
+        let result=try await ReadingAnswerEngine.run(question:"查看可用目录",project:p,settings:.init(model:"fixture",contextWindowTokens:128_000),documents:[:],context:.init(unitID:"u1",page:2),scope:.page,history:[],memory:nil,memoryEnabled:false,documentIDs:nil,loader:nil,operationLimit:128_000,remainingRequests:3) { _,_,_,_ in
+            if await calls.next()==1 { return .init(message:.init(role:"assistant",content:nil,refusal:nil,tool_calls:[.init(id:"outline",type:"function",function:.init(name:"source_outline",arguments:"{}"))],reasoning_content:nil),finishReason:"tool_calls",tokenCost:100) }
+            return self.response("可以在目录中选择原文位置。")
+        }
+        let count=await calls.value();XCTAssertEqual(count,2)
+        XCTAssertTrue(result.message.evidence.isEmpty);XCTAssertEqual(result.diagnostics.toolCalls,1)
+    }
+
+    func testExplicitSourceReadStillRequiresCitationAfterPreloading() async throws {
+        let p=project(), calls=SearchContextCalls()
+        do {
+            _ = try await ReadingAnswerEngine.run(question:"这页讲啥",project:p,settings:.init(model:"fixture",contextWindowTokens:128_000),documents:[:],context:.init(unitID:"u1",page:2),scope:.page,history:[],memory:nil,memoryEnabled:false,documentIDs:nil,loader:nil,operationLimit:128_000,remainingRequests:2) { _,_,_,_ in
+                if await calls.next()==1 { return .init(message:.init(role:"assistant",content:nil,refusal:nil,tool_calls:[.init(id:"read",type:"function",function:.init(name:"source_read",arguments:"{\"id\":\"u1\"}"))],reasoning_content:nil),finishReason:"tool_calls",tokenCost:100) }
+                return self.response("没有引用的具体原书结论。")
+            };XCTFail("显式读取正文后仍须保留严格引用要求")
+        } catch {}
+        let count=await calls.value();XCTAssertEqual(count,2)
     }
 
     func testSearchRestoresOriginalLineBreaksAndUniqueActualPage() throws {

@@ -246,7 +246,17 @@ enum ReadingAnswerEngine {
         guard var finalText else { throw ReadingError.invalid("模型未返回最终回答；原问题和正文未被截断或覆盖。") }
         try Task.checkCancellation()
         let evidence: [Evidence]
-        do { evidence = try citations(finalText, session: session) }
+        do {
+            let checked = try citations(finalText, session: session)
+            // A direct page explanation gets one chance to supply its actual
+            // references. Preloading alone must not turn background discussion
+            // or tool-only status into an assertion about the book.
+            if checked.isEmpty, session.hasOnlyPreloadedSources, session.hostReceipts.isEmpty,
+               session.toolCalls == 0, prepared?.referencedAnswers.isEmpty != false, requests < remainingRequests {
+                throw ReadingError.invalid("当前页回答尚未给出原文出处。")
+            }
+            evidence = checked
+        }
         catch {
             try QueryBudget.propagateControl(error)
             // One bounded correction, using only genuinely supplied excerpts.
@@ -270,14 +280,17 @@ enum ReadingAnswerEngine {
                   response.message.refusal?.isEmpty != false, let corrected = response.message.content, !corrected.isEmpty else { throw error }
             evidence = try citations(corrected, session: correctedSession)
             session = correctedSession; finalText = corrected
-            notices.append("已按本次实际提供的原文补核回答出处。")
+            if !session.hasOnlyPreloadedSources || !evidence.isEmpty { notices.append("已按本次实际提供的原文补核回答出处。") }
         }
         let sourceIDs = Array(Set(session.sourceExcerpts.map { $0.0 })).sorted(), documentIDs = Array(Set(session.documentExcerpts.map { $0.0 })).sorted()
         let disclosure = sourceIDs.isEmpty && documentIDs.isEmpty && !session.hostReceipts.isEmpty
             ? "本次依据宿主工具回执报告界面或整理操作；未据此判断原书内容或增加读书覆盖。"
             : "范围：\(snapshot.displayTitle)；实际读取原文\(sourceIDs.count)/\(snapshot.unitIDs.count)单元的片段、笔记\(documentIDs.count)/\(snapshot.documentIDs.count)篇的片段。检索不增加读书覆盖，不代表全文已读。"
         let answer: String
-        if session.sourceExcerpts.isEmpty && session.documentExcerpts.isEmpty && session.conversationExcerpts.isEmpty && session.hostReceipts.isEmpty {
+        if session.hasOnlyPreloadedSources && evidence.isEmpty && session.hostReceipts.isEmpty {
+            notices.append("这条回答未附可核对的原文出处，不作为原书结论。")
+            answer = preferences.style == .mentor ? "### 背景补充\n\n" + finalText : "这次回答没有提供可以核对的原文出处，请重试；原书和已有内容保留。"
+        } else if session.sourceExcerpts.isEmpty && session.documentExcerpts.isEmpty && session.conversationExcerpts.isEmpty && session.hostReceipts.isEmpty {
             answer = preferences.style == .mentor ? "### 背景补充\n\n" + finalText : "还没有读到可以引用的正文。请确认阅读范围，再试一次。"
         } else { answer = finalText }
         return ReadingAnswerResult(message: ChatMessage(role: "assistant", content: answer, evidence: evidence), memory: memory,
@@ -296,7 +309,7 @@ enum ReadingAnswerEngine {
             count += 1
             if kind == "unit", seen.insert(id).inserted { evidence.append(Evidence(unitID: id, quote: String(provided.1.prefix(240)))) }
         }
-        if count == 0 && session.hostReceipts.isEmpty && (!session.sourceExcerpts.isEmpty || !session.documentExcerpts.isEmpty || !session.conversationExcerpts.isEmpty) {
+        if count == 0 && session.hostReceipts.isEmpty && !session.hasOnlyPreloadedSources && (!session.sourceExcerpts.isEmpty || !session.documentExcerpts.isEmpty || !session.conversationExcerpts.isEmpty) {
             throw ReadingError.invalid("回答缺少可核验的[unit:ID]、[doc:ID]或[message:ID]引用，未保存结果。")
         }
         return evidence
