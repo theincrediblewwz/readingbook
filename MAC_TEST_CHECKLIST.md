@@ -1,3 +1,34 @@
+> 2026-11-05 最新接续：0.23.53/build84 已同步main、发布、替换安装，并完成原书两次正常启动/退出。产品源367e31ceb5aff5faaccbf308f9d190f0dddf068c，完整CI41942575688成功，artifact13377839111。906 Core（含220指定）及所有旧门槛、新32轨迹/36动态组件均通过，零编译警告。双架构、35资源/39程序文件、严格签名、公开下载回验及完整安装manifest通过。规范ZIP33,350,048B，SHA7c3446e4fc263365a9cd68f277f4d4e30d1589e71923c876562ac0d291aaee89。交付总入口logs/map-rendering-20261105/delivery53/final-delivery.json；不再有解锁、发布或安装待办。
+
+相对52实际只改3个产品Swift：SpatialTimelineView保持轨迹内容身份、仅复用>=64地点标记；WorkspaceView初次挂载处理已排队请求；AppStore换书时有待办才清除旧书请求。共272个产品Swift，其他269个保持。原52跨阈值3→2轨迹仍留旧端点、本机旧首次挂载/旧换书失败、完整CI一次动态笔记失败均保留；不是仅靠重跑宣称解决。当前本机和CI32轨迹、36动态组件通过，首次挂载与旧owner取消见证通过。详见Design/2026-11-05-map-trajectory-fix.md。
+
+当前53源重新构建并完成12个新进程：16/1024地点，每种实现各3，24次相机更新/阶段。大图近景/远景/混合缩放CPU中位减少92.0%/91.9%/92.9%；小图最大增加0.8%，原0.9/1.05门槛未改。36组完整原生输出字节相同；独立计数诊断大图三阶段标记重复构建0。入口trajectory53-final-analysis.json、trajectory53-final-adoption.json。旧52数值未重标53，失去前台和旧源样本保留；不称硬件FPS、整App或内存收益。
+
+实际完整时间轴CUA七项功能确认80标记无轨迹→3点线→205年1标记/2点线→关闭，MapKit同一实例。但人工包装有36条负尺寸，严格failed报告保留；完整CI的32项轨迹严格四类零独立通过。正式原书53 PID32509/32545两次正常启动/退出：关于53/84、104/1484、277%适宽、左右连续、暖纸、你好便签和旧标记保持，CmdF及鼠标关闭返回通过。原库32成员全字节一致、26非Workspace保留，偏好全不变，没有旧库恢复覆盖。完整原书两进程另有78条负尺寸，其余三类零，本批未重新采栈，不归为全部无害或已修。
+
+52旧完整CI图谱保存与便签布局采样失败的诊断、53动态请求遗漏诊断及修复的全部原始证据保留。保存与首布局仍在既定1500ms期限，原31/104断言不减；动画采样覆盖完整540ms并记录实际时间，不改产品0.38秒动画。53旧CI41937004867 attempt2因新增导航修复在打包时主动取消，不用于发布。诊断中误读private属性的编译失败亦保留。当前完整41942575688才是交付来源。
+
+GitHub现仅main及53/52两版，旧50/51 Release、tag、程序artifact与结束诊断分支已精确退役，源历史未改写；小型retired-diagnostic-commits.bundle保留未合入诊断提交。最新52回滚和新鲜书库/偏好保护：private-books/map-rendering-20261105/install-before-0.23.53。结束探针程序、旧50/51回滚和规范包、52/53重复下载及展开App已退役；保留当前增量对象/Modules与共享编译缓存、原件、全部非App私人数据和关键证据。重放先看RETIRED_53_PROGRAMS.md及dist各RETIRED_PAYLOADS，不盲用旧readyappPath。
+
+本批已测量清理合计5,241,820KiB；末阶段6,743,752→5,062,864KiB，相对批初4,910,328KiB约净增149MiB，删除量不当作净下降。最终文档带来的少量变化以final-delivery.json为准。原库32及3,353个非App私人文件保留。
+
+需求清单112项：62通过、47已实现、1部分、2待验证；并非112项本轮重新人工穷举。02首屏、63所有入口悬停、79最新整体启动/FPS/能耗及长期内存仍保留边界。下一批优先实体成员投影的重复编码、当前尺寸告警栈、整应用成本；密集地图/图谱远景先交互方案。其他16类组件轮转计划未取消。数学核查不恢复，不改锁屏设置。用户dirty Design/2026-10-29-performance-progress.md SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4禁止编辑/提交。下方52及更早均为历史。
+
+---
+
+> 2026-11-05 第52批进行中：main源babc9e602e091e1c3394005e9d058e83509e29c2，目标0.23.52/build83；已安装仍51/82，尚无52发布/安装。前完整CI41904349498两次旧图谱重试保存失败，已以诊断41912418879确认异步回调未完；原31断言保留并改为1500ms内等待真实完成/焦点，薄诊断41913926817通过。另41915181256在便签原25ms取视图时未找到stage，当前按requestID等待首次布局，1500ms上限，薄诊断41918153733完整104通过。
+
+最近完整CI41919981173失败：104便签中仅EditorShowsIntermediateExpansionFrames失败（六次35ms仅2不同frame），其余全通过；full日志/报告在delivery52/ci-note-layout-source-*，不得使用该run发布。双进程原取样诊断41922487597/8408d81通过104×2，实测请求35ms却等125.8ms，另加观察器看到10不同frame，未改产品动画或旧104断言。中间诊断NoteInteractionHost及workflow已按SHA归档logs/map-rendering-20261105/source-archive。当前note-stage诊断分支f3a9fc33a3f3f180addb380ffcf533cce99cfd38：只改测试观察为覆盖完整540ms、请求8ms采样、保留>2不同frame并新增1500ms上限/实际时间戳。候选薄CI41923993788完整104通过，7个不同frame，观察562.1ms/1500ms、四类警告零；已只拷该NoteInteractionHost并提交main，最新完整CI41925091825运行中，draft已刷新精确source/run/hash。只从该完整run成功后交付。产品动画0.38秒不变，未做额外预热，不称产品便签性能修复。
+
+
+本批只改SpatialTimelineView.swift这一个产品Swift，其余271个保持。正式12新进程/36组完整原生输出对照通过，大图三阶段CPU中位下降92.2%/92.2%/92.4%，小图远景+3.2%；第一候选小图缩放+11.97%已拒绝。32项地图与旧31项本机Release通过，新保存测试待本机检查。证据入口logs/map-rendering-20261105/map-content-adoption.json和delivery52/delivery-plan-draft.json。MapContent与相机分离，不足64点走原路径，未减地点或改文件格式；不称硬件FPS或整App内存收益。
+
+用户本轮回复已解锁后，CUA两次刷新仍报告锁屏，已异步询问“桌面已显示”，不要重复问。解锁后先完成本机新31图谱检查，再运行logs/map-rendering-20261105/run-trajectory.py的native-trajectory-final：开虚线80点/3轨迹点、时间205后1点/2轨迹点、关虚线，共7项实际MapKit检查。此前轨迹因锁屏前台丢失失败保留。然后正式安装及原书两次正常启动退出。云端Debug的31/104诊断通过后，本机临时Debug与结束探针程序已退役（diagnostic-program-cleanup.json）；本机余下原生检查改用保留的当前Release对象重链。共享模块缓存保留；诊断worktree .build/graph-save-diagnostic-source当前附着note-stage分支；graph-save和note-stage两诊断分支完成后归档补丁并精确清理。retire50.py已写最终诊断f3a9 SHA且所采纳host与main一致；8408中间观测源已SHA归档。
+
+已清理2,330,108KiB结束原型及诊断程序（含最后1,062,696KiB：6,284,792→5,222,096KiB），未做最终交付清理；批初4,910,328KiB。原库32文件推送前全字节一致。禁止编辑或提交userdirty Design/2026-10-29-performance-progress.md，SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4。GitHub连接器重跑403，现有登录CLI可用，不重复要求授权。delivery52/finalize-docs.py尚未执行，已改为准确记录两次失败与异步测试修正。所有新文件仍在工作目录，不改锁屏设置。
+
+---
+
 > 2026-11-05 最新接续：0.23.51/build82已同步main、发布、安装，并完成原书两次正常启动/退出；无发布/安装/解锁待办，不重复交付。产品源e908153db41acc8aa26789f40eeff06536b1d978，完整CI41879039055通过906 Core、220指定、新31图谱、保留28历史/20菜单/104便签标记/34组件/42×2及全部旧门槛，零编译警告。artifact13350666793，Release434277154；规范ZIP33,340,513B、SHA c0b72969ce03ffb77700bf19e2c762d5608d4299c6ed73caf61271505de2614d。双架构、35资源/39程序文件、严格签名、公开下载和安装全manifest通过。入口logs/map-allocation-20261104/delivery51/final-delivery.json。
 
 本批只改1个产品Swift文件GraphCanvas.swift：未变化关系标签复用，外层位置/缩放继续更新，缓存操作经过现有subject送到当前父视图。两个规模每种实现各3个新进程，24次更新的大图近景/远景/混合缩放CPU中位减少18.5%/26.0%/8.0%；小图近景增加3.9%，另两项改善。42组完整几何字节及六组像素相同；不称硬件FPS、整App或内存收益。当前源/测试/脚本/资源509项已封存；其中Sources共307文件、272个Swift，不能混称307个Swift。
