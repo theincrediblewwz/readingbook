@@ -53,10 +53,11 @@ struct PDFReaderView: NSViewRepresentable {
     var inlineSearchOwner: UUID?
     var onSearchKeywords: ((String) async throws -> [String])?
     var searchAIIdentity: Int
+    var onSearchAssistance: ((String) async throws -> LibrarySearchExpansionPlan)?
     var onAddBookmark: ((Int) -> Void)?
     var noteBindingDocumentID: String?
 
-    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((PDFWorkspaceMemoryReceipt) -> Void)? = nil, interactionResetID: UUID? = nil, notePlacements: [String: ReadingNotePlacement] = [:], onCreatePositionNote: ((Int, Double, Double) -> Void)? = nil, noteMarginVisible: Bool = false, notePlacementOwner: String = "", onCancelPositionNote: (() -> Void)? = nil, onAddBookmark: ((Int) -> Void)? = nil, noteBindingDocumentID: String? = nil, onAISearch: ((String) -> Void)? = nil, makeInlineAISearch: ((String) -> ReaderInlineAISearchModel?)? = nil, inlineSearchOwner: UUID? = nil, onSearchKeywords: ((String) async throws -> [String])? = nil, searchAIIdentity: Int = 0, onQuotePositionNote: ((Int, Double, Double, ReadingNoteSourceQuote) -> Void)? = nil, onReadingConversation: ((SourceReadingSelection) -> Void)? = nil) {
+    init(controller: PDFReaderController, url: URL, sourceHash: String = "", page: Int? = nil, navigationToken: Int = 0, password: String? = nil, annotations: [ReaderAnnotation] = [], canEditAnnotations: Bool = true, onPageChange: ((Int) -> Void)? = nil, onUnlock: ((String) -> Void)? = nil, onSaveAnnotations: (([ReaderAnnotation]) async -> Bool)? = nil, onTrashAnnotation: ((String, Bool) async -> Bool)? = nil, sourceDecorations: [SourceReadingDecoration] = [], sourceDecorationRevision: Int? = nil, sourcePageTexts: [Int: PDFPageSourceText] = [:], focusedDecorationID: String? = nil, onSourceDecorationTap: ((String) -> Void)? = nil, onSourceSelection: ((SourceReadingSelection?) -> Void)? = nil, onSourceDecorationHover: ((SourceReadingHover?) -> Void)? = nil, onVisiblePagesChange: (([Int]) -> Void)? = nil, onPreparationChanged: ((ReadingPreparationEvent) -> Void)? = nil, workspaceMemory: WorkspacePDFMemory? = nil, memoryRevision: Int = 0, onWorkspaceMemory: ((PDFWorkspaceMemoryReceipt) -> Void)? = nil, interactionResetID: UUID? = nil, notePlacements: [String: ReadingNotePlacement] = [:], onCreatePositionNote: ((Int, Double, Double) -> Void)? = nil, noteMarginVisible: Bool = false, notePlacementOwner: String = "", onCancelPositionNote: (() -> Void)? = nil, onAddBookmark: ((Int) -> Void)? = nil, noteBindingDocumentID: String? = nil, onAISearch: ((String) -> Void)? = nil, makeInlineAISearch: ((String) -> ReaderInlineAISearchModel?)? = nil, inlineSearchOwner: UUID? = nil, onSearchKeywords: ((String) async throws -> [String])? = nil, searchAIIdentity: Int = 0, onQuotePositionNote: ((Int, Double, Double, ReadingNoteSourceQuote) -> Void)? = nil, onReadingConversation: ((SourceReadingSelection) -> Void)? = nil, onSearchAssistance: ((String) async throws -> LibrarySearchExpansionPlan)? = nil) {
         self.controller = controller; self.url = url; self.sourceHash = sourceHash; self.password = password; self.annotations = annotations
         self.page = page; self.navigationToken = navigationToken; self.onPageChange = onPageChange
         self.onUnlock = onUnlock; self.onSaveAnnotations = onSaveAnnotations; self.onTrashAnnotation = onTrashAnnotation
@@ -68,7 +69,7 @@ struct PDFReaderView: NSViewRepresentable {
         self.onPreparationChanged = onPreparationChanged
         self.workspaceMemory = workspaceMemory; self.memoryRevision = memoryRevision; self.onWorkspaceMemory = onWorkspaceMemory
         self.interactionResetID = interactionResetID
-        self.onSearchKeywords = onSearchKeywords; self.searchAIIdentity = searchAIIdentity
+        self.onSearchKeywords = onSearchKeywords; self.searchAIIdentity = searchAIIdentity; self.onSearchAssistance = onSearchAssistance
         self.onAISearch = onAISearch; self.makeInlineAISearch = makeInlineAISearch; self.inlineSearchOwner = inlineSearchOwner
         self.onAddBookmark = onAddBookmark; self.noteBindingDocumentID = noteBindingDocumentID
         self.onCancelPositionNote = onCancelPositionNote
@@ -415,7 +416,13 @@ struct PDFReaderView: NSViewRepresentable {
     private var keywordTask: Task<Void, Never>?
     private var keywordQuery = ""
     private var keywordEpoch = UUID()
-    private var keywordCache: [String: [String]] = [:]
+    private var keywordCache: [String: LibrarySearchExpansionPlan] = [:]
+    private var onSearchAssistance: ((String) async throws -> LibrarySearchExpansionPlan)?
+    private var relatedSearchTerms: [String] = []
+    private var relatedExpanded = false
+    private var readingRelated = false
+    private var relatedRead = false
+    private var primaryMatchCount = 0
     private let keywordSpinner = NSProgressIndicator()
     private var searchDelegate: PDFReaderSearchDelegate?
     private var matches: [PDFSelection] = []
@@ -594,6 +601,9 @@ struct PDFReaderView: NSViewRepresentable {
         resultLabel.setContentHuggingPriority(.required, for: .horizontal)
         let aiSearch = symbolButton("sparkles", "AI阅读全文查找：先理解意图，再阅读全文", #selector(openAISearch), width: 60)
         aiSearch.title = "AI"; aiSearch.imagePosition = .imageLeading
+        aiSearch.cell = ReadingCompactAIButtonCell(textCell: "AI")
+        aiSearch.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "AI")
+        aiSearch.isBordered = false; aiSearch.target = self; aiSearch.action = #selector(openAISearch)
         aiSearch.font = .systemFont(ofSize: 12, weight: .semibold)
         aiSearchButton = aiSearch
         keywordSpinner.style = .spinning; keywordSpinner.controlSize = .small; keywordSpinner.isDisplayedWhenStopped = false
@@ -607,6 +617,7 @@ struct PDFReaderView: NSViewRepresentable {
         statusLabel.isHidden = true
         // Navigation/zoom controls live in the window toolbar. Only explicitly opened search/status uses this row.
         searchResults.isHidden = true
+        searchResults.onToggleRelated = { [weak self] in self?.toggleRelatedResults() }
         searchResults.onRequest = { [weak self] index in self?.prepareSearchSnippet(index) }
         searchResults.onSelect = { [weak self] index in
             guard let self, !self.interactionBlocked, !self.searchRow.isHidden, self.matches.indices.contains(index) else { return }
@@ -702,7 +713,7 @@ struct PDFReaderView: NSViewRepresentable {
 
     func update(from input: PDFReaderView) {
         if searchAIIdentity != input.searchAIIdentity || inlineSearchOwner != input.inlineSearchOwner { cancelInlineSearch(); resetKeywordAssistance(clearCache: true) }
-        searchAIIdentity = input.searchAIIdentity; onSearchKeywords = input.onSearchKeywords
+        searchAIIdentity = input.searchAIIdentity; onSearchKeywords = input.onSearchKeywords; onSearchAssistance = input.onSearchAssistance
         onAISearch = input.onAISearch; makeInlineAISearch = input.makeInlineAISearch
         inlineSearchOwner = input.inlineSearchOwner
         aiSearchButton?.isHidden = input.onAISearch == nil && input.makeInlineAISearch == nil
@@ -1882,17 +1893,20 @@ struct PDFReaderView: NSViewRepresentable {
         clearSearchState()
         allowsSearchAutoNavigation = true
         searching = true; resultLabel.stringValue = "查找中…"; setStatus("")
-        startSearch(query, generation: searchGeneration, attempts: 0, additionalTerms: keywordCache[query] ?? [])
+        relatedSearchTerms = keywordCache[query]?.relatedKeywords ?? []
+        startSearch(query, generation: searchGeneration, attempts: 0, additionalTerms: keywordCache[query]?.keywords ?? [])
+        synchronizeSearchResults()
         prepareKeywordAssistance(query)
     }
 
-    private func startSearch(_ query: String, generation: Int, attempts: Int, additionalTerms: [String]) {
+    private func startSearch(_ query: String, generation: Int, attempts: Int, additionalTerms: [String], related: Bool = false) {
         guard generation == searchGeneration, let document, !document.isLocked else { return }
         if document.isFinding {
             guard attempts < 40 else { searching = false; setStatus("上一次搜索仍在结束，请稍后重新查找。"); updateSearchDisplay(); return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.startSearch(query, generation: generation, attempts: attempts + 1, additionalTerms: additionalTerms) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.startSearch(query, generation: generation, attempts: attempts + 1, additionalTerms: additionalTerms, related: related) }
             return
         }
+        readingRelated = related
         let delegate = PDFReaderSearchDelegate(owner: self, generation: generation)
         searchDelegate = delegate; document.delegate = delegate
         var identities = Set<String>()
@@ -1907,7 +1921,10 @@ struct PDFReaderView: NSViewRepresentable {
         if clearCache { keywordCache = [:] }
     }
     private func prepareKeywordAssistance(_ query: String) {
-        guard let operation = onSearchKeywords, (2...400).contains(query.count), keywordCache[query] == nil, keywordTask == nil else { return }
+        let operation: ((String) async throws -> LibrarySearchExpansionPlan)? = onSearchAssistance ?? onSearchKeywords.map { legacy in
+            { value in try LibrarySearchExpansionPlan(keywords: await legacy(value)) }
+        }
+        guard let operation, (2...400).contains(query.count), keywordCache[query] == nil, keywordTask == nil else { return }
         keywordQuery = query; keywordEpoch = UUID()
         let epoch = keywordEpoch, documentOwner = documentGeneration, configuration = searchAIIdentity
         keywordTask = Task { @MainActor [weak self] in
@@ -1918,16 +1935,16 @@ struct PDFReaderView: NSViewRepresentable {
                       !self.searchRow.isHidden, self.searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) == query,
                       (self.searchField.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return }
                 self.keywordSpinner.startAnimation(nil)
-                let words = try await operation(query)
+                let plan = try await operation(query)
                 try Task.checkCancellation()
                 guard self.keywordEpoch == epoch, self.documentGeneration == documentOwner, self.searchAIIdentity == configuration,
                       !self.searchRow.isHidden, self.searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
-                let plan = try LibrarySearchExpansionPlan(keywords: words)
                 if self.keywordCache.count >= 16 { self.keywordCache.removeAll(keepingCapacity: true) }
-                self.keywordCache[query] = plan.keywords; self.keywordTask = nil; self.keywordSpinner.stopAnimation(nil)
+                self.keywordCache[query] = plan; self.keywordTask = nil; self.keywordSpinner.stopAnimation(nil)
                 let original = Set(NativePDFSearchQuery.terms(for: query).map { $0.lowercased() })
                 let expanded = Set(plan.keywords.flatMap { NativePDFSearchQuery.terms(for: $0) }.map { $0.lowercased() })
                 if !expanded.isSubset(of: original) { self.findText(); self.allowsSearchAutoNavigation = false }
+                else { self.relatedSearchTerms = plan.relatedKeywords; self.synchronizeSearchResults() }
             } catch {
                 guard let self, self.keywordEpoch == epoch else { return }
                 self.keywordTask = nil; self.keywordSpinner.stopAnimation(nil)
@@ -1946,6 +1963,7 @@ struct PDFReaderView: NSViewRepresentable {
         searchResults.reset(); searchResults.isHidden = true; searchResultsHeight?.constant = 0
         document?.delegate = nil; document?.cancelFindString(); searchDelegate = nil
         matches = []; matchIndex = -1; searching = false; searchLimited = false
+        relatedSearchTerms = []; relatedExpanded = false; readingRelated = false; relatedRead = false; primaryMatchCount = 0
         highlightUpdateScheduled = false; allowsSearchAutoNavigation = false
         updateSelectionHighlights(); pdfView.clearSelection()
         resultLabel.stringValue = ""; refreshControls()
@@ -1968,9 +1986,9 @@ struct PDFReaderView: NSViewRepresentable {
             }
         }
         if !identity.isEmpty, !searchMatchKeys.insert(identity).inserted { return }
-        guard matches.count < matchLimit else {
+        guard matches.count - (readingRelated ? primaryMatchCount : 0) < matchLimit else {
             searchLimited = true; searching = false; document?.cancelFindString()
-            setStatus("结果超过 5000 处，已停止搜索；请缩小关键词。")
+            if !readingRelated { setStatus("结果超过 5000 处，已停止搜索；请缩小关键词。") }
             updateHighlights(); return
         }
         selection.color = NSColor.systemYellow.withAlphaComponent(0.45)
@@ -1988,11 +2006,28 @@ struct PDFReaderView: NSViewRepresentable {
         guard generation == searchGeneration else { return }
         searching = false; updateHighlights()
         if matches.isEmpty { setStatus("没有找到匹配文字。扫描页没有文字层时，原生搜索无法查到图中的字。") }
+        if !readingRelated, relatedExpanded { startRelatedSearch() }
+    }
+
+    private var displayedMatchCount: Int { readingRelated && !relatedExpanded ? primaryMatchCount : matches.count }
+    private func toggleRelatedResults() {
+        guard !relatedSearchTerms.isEmpty else { return }
+        relatedExpanded.toggle()
+        if relatedExpanded && !searching { startRelatedSearch() }
+        if !relatedExpanded, matchIndex >= primaryMatchCount, readingRelated { matchIndex = primaryMatchCount > 0 ? 0 : -1 }
+        updateHighlights()
+    }
+    private func startRelatedSearch() {
+        guard relatedExpanded, !relatedRead, !searching, let first = relatedSearchTerms.first else { return }
+        primaryMatchCount = matches.count; relatedRead = true; searching = true
+        allowsSearchAutoNavigation = false
+        startSearch(first, generation: searchGeneration, attempts: 0, additionalTerms: Array(relatedSearchTerms.dropFirst()), related: true)
     }
 
     private func updateSelectionHighlights() {
-        if let quoteFocusHighlight { pdfView.highlightedSelections = matches + [quoteFocusHighlight] }
-        else { pdfView.highlightedSelections = matches.isEmpty ? nil : matches }
+        let visible = Array(matches.prefix(displayedMatchCount))
+        if let quoteFocusHighlight { pdfView.highlightedSelections = visible + [quoteFocusHighlight] }
+        else { pdfView.highlightedSelections = visible.isEmpty ? nil : visible }
     }
     private func clearQuoteFocusHighlight() {
         guard quoteFocusHighlight != nil else { return }
@@ -2002,8 +2037,9 @@ struct PDFReaderView: NSViewRepresentable {
     private func synchronizeSearchResults() {
         guard !searchRow.isHidden, inlineAI == nil, let document else { return }
         let start = searchResults.entries.count
-        if matches.count > start {
-            let additions = (start..<matches.count).map { index -> PDFSearchResultEntry in
+        if displayedMatchCount < start { searchResults.trim(to: displayedMatchCount) }
+        if displayedMatchCount > start {
+            let additions = (start..<displayedMatchCount).map { index -> PDFSearchResultEntry in
                 let selection = matches[index], page = selection.pages.first(where: { $0.document === document })
                 let number = page.map { document.index(for: $0) + 1 } ?? 1
                 let range = page.flatMap { selection.numberOfTextRanges(on: $0) > 0 ? selection.range(at: 0, on: $0) : nil } ?? NSRange(location: NSNotFound, length: 0)
@@ -2011,7 +2047,9 @@ struct PDFReaderView: NSViewRepresentable {
             }
             searchResults.append(additions, selected: matchIndex)
         }
-        searchResults.isHidden = searchResults.entries.isEmpty
+        searchResults.configureRelated(terms: relatedSearchTerms, primaryCount: readingRelated ? primaryMatchCount : matches.count,
+                                       expanded: relatedExpanded, loading: readingRelated && searching)
+        searchResults.isHidden = searchResults.visibleRowCount == 0
         updateSearchResultsHeight()
         needsLayout = true
     }
@@ -2022,7 +2060,7 @@ struct PDFReaderView: NSViewRepresentable {
         // rows otherwise retain NSStackView's old spacing until its next pass.
         // Keep them as subviews so their width constraints stay connected.
         let desired: [NSView] = [showsSearch ? searchRow : nil,
-            showsSearch && inlineAI == nil && !searchResults.entries.isEmpty ? searchResults : nil,
+            showsSearch && inlineAI == nil && searchResults.visibleRowCount > 0 ? searchResults : nil,
             showsSearch && inlineAI != nil ? inlineAIContainer : nil,
             statusLabel.isHidden ? nil : statusLabel].compactMap { $0 }
         var removed = false
@@ -2033,7 +2071,7 @@ struct PDFReaderView: NSViewRepresentable {
         if removed { searchToolbar.layoutSubtreeIfNeeded() }
         if !showsSearch && statusLabel.isHidden { return }
         let available = max(34, bounds.height - (thumbnailPanel.isHidden ? 174 : 440))
-        let rows = showsSearch && inlineAI == nil ? min(searchResults.entries.count, min(10, max(1, Int(available / PDFSearchResultsList.rowHeight)))) : 0
+        let rows = showsSearch && inlineAI == nil ? min(searchResults.visibleRowCount, min(10, max(1, Int(available / PDFSearchResultsList.rowHeight)))) : 0
         let value = CGFloat(rows) * PDFSearchResultsList.rowHeight
         let aiCount = inlineAI?.session.matches.count ?? 0
         let aiHeight: CGFloat = showsSearch && inlineAI != nil ? min(max(120, available), CGFloat(min(10, aiCount)) * 34 + 120) : 0
@@ -2087,8 +2125,9 @@ struct PDFReaderView: NSViewRepresentable {
         }
     }
     private func updateSearchDisplay() {
-        if matches.isEmpty { resultLabel.stringValue = searching ? "查找中…" : "无结果" }
-        else { resultLabel.stringValue = "\(matchIndex + 1)/\(matches.count)\(searchLimited ? "+" : searching ? "…" : "")" }
+        let count = displayedMatchCount
+        if count == 0 { resultLabel.stringValue = searching && !readingRelated ? "查找中…" : "无结果" }
+        else { resultLabel.stringValue = "\(matchIndex + 1)/\(count)\(searchLimited ? "+" : searching ? "…" : "")" }
     }
     @objc private func previousMatch() { moveMatch(-1) }
     @objc private func nextMatch() { moveMatch(1) }

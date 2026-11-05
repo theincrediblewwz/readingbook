@@ -17,6 +17,10 @@ struct PDFSearchResultEntry {
     private var snippets: [Int: NativePDFSearchSnippet] = [:]
     private var snippetOrder: [Int] = []
     private var updating = false
+    private struct Related: Equatable { let terms: [String]; let primaryCount: Int; let expanded: Bool; let loading: Bool }
+    private var related: Related?
+    var visibleRowCount: Int { entries.count + (related == nil ? 0 : 1) }
+    var onToggleRelated: (() -> Void)?
     var onRequest: ((Int) -> Void)?
     var onSelect: ((Int) -> Void)?
     override init(frame: NSRect) {
@@ -40,35 +44,71 @@ struct PDFSearchResultEntry {
     deinit { NotificationCenter.default.removeObserver(self) }
     @objc private func windowResigned(_ notification: Notification) { if notification.object as? NSWindow === window { table.clearHover() } }
     func reset() {
-        updating = true; entries = []; snippets = [:]; snippetOrder = []; table.clearHover(); table.reloadData(); updating = false
+        updating = true; entries = []; snippets = [:]; snippetOrder = []; related = nil; table.clearHover(); table.reloadData(); updating = false
+    }
+    func configureRelated(terms: [String], primaryCount: Int, expanded: Bool, loading: Bool) {
+        let next = terms.isEmpty ? nil : Related(terms: terms, primaryCount: primaryCount, expanded: expanded, loading: loading)
+        guard next != related else { return }
+        related = next; updating = true; table.clearHover(); table.reloadData(); updating = false
+    }
+    func trim(to count: Int) {
+        guard count < entries.count else { return }
+        entries = Array(entries.prefix(count)); snippets = snippets.filter { $0.key < count }; snippetOrder.removeAll { $0 >= count }
+        updating = true; table.reloadData(); updating = false
+    }
+    private func row(for index: Int) -> Int { index + (related.map { index >= $0.primaryCount ? 1 : 0 } ?? 0) }
+    private func entry(at row: Int) -> Int? {
+        let index: Int
+        if let related { if row == related.primaryCount { return nil }; index = row > related.primaryCount ? row - 1 : row }
+        else { index = row }
+        return entries.indices.contains(index) ? index : nil
     }
     func append(_ additions: [PDFSearchResultEntry], selected: Int) {
         updating = true
         if !additions.isEmpty {
             let start = entries.count; entries.append(contentsOf: additions)
-            table.insertRows(at: IndexSet(integersIn: start..<entries.count), withAnimation: [])
+            if related == nil { table.insertRows(at: IndexSet(integersIn: start..<entries.count), withAnimation: []) }
+            else { table.reloadData() }
         }
-        if entries.indices.contains(selected) { table.selectRowIndexes(IndexSet(integer: selected), byExtendingSelection: false) }
+        if entries.indices.contains(selected) { table.selectRowIndexes(IndexSet(integer: row(for: selected)), byExtendingSelection: false) }
         updating = false
     }
     func showSelection(_ index: Int) {
         guard entries.indices.contains(index) else { return }
-        updating = true; table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-        table.scrollRowToVisible(index); updating = false
+        let row = row(for: index)
+        updating = true; table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        table.scrollRowToVisible(row); updating = false
     }
     func setSnippet(_ snippet: NativePDFSearchSnippet, at index: Int) {
         guard entries.indices.contains(index) else { return }
         snippets[index] = snippet; snippetOrder.removeAll { $0 == index }; snippetOrder.append(index)
         while snippetOrder.count > 256 { snippets.removeValue(forKey: snippetOrder.removeFirst()) }
-        if let cell = table.view(atColumn: 0, row: index, makeIfNecessary: false) as? PDFSearchResultCell { cell.apply(entries[index], snippet: snippet) }
+        if let cell = table.view(atColumn: 0, row: row(for: index), makeIfNecessary: false) as? PDFSearchResultCell { cell.apply(entries[index], snippet: snippet) }
     }
-    func numberOfRows(in tableView: NSTableView) -> Int { entries.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { visibleRowCount }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard entries.indices.contains(row) else { return nil }
+        if let related, row == related.primaryCount {
+            let id = NSUserInterfaceItemIdentifier("related-toggle")
+            let cell = (tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView) ?? NSTableCellView()
+            cell.identifier = id
+            if cell.subviews.isEmpty {
+                let button = ReadingNativeHoverButton(title: "", target: self, action: #selector(toggleRelated))
+                button.font = .systemFont(ofSize: 13, weight: .medium); button.isBordered = false; button.alignment = .left
+                button.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(button)
+                NSLayoutConstraint.activate([button.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
+                    button.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -10),
+                    button.topAnchor.constraint(equalTo: cell.topAnchor), button.bottomAnchor.constraint(equalTo: cell.bottomAnchor)])
+            }
+            let button = cell.subviews.first as? NSButton
+            button?.title = related.expanded ? "收起相关结果" + (related.loading ? " · 查找中…" : " · \(max(0, entries.count - related.primaryCount))处") : "更多相关结果 · 点击查找"
+            cell.toolTip = "相关主题单独收在这里，不混进上方原词、纠错和语言变体的结果。\n" + related.terms.joined(separator: "、")
+            button?.toolTip = cell.toolTip; return cell
+        }
+        guard let index = entry(at: row) else { return nil }
         let id = NSUserInterfaceItemIdentifier("search-hit")
         let cell = (tableView.makeView(withIdentifier: id, owner: self) as? PDFSearchResultCell) ?? PDFSearchResultCell()
-        cell.identifier = id; cell.apply(entries[row], snippet: snippets[row] ?? .unlocated(entries[row].match))
-        if snippets[row] == nil { DispatchQueue.main.async { [weak self] in self?.onRequest?(row) } }
+        cell.identifier = id; cell.apply(entries[index], snippet: snippets[index] ?? .unlocated(entries[index].match))
+        if snippets[index] == nil { DispatchQueue.main.async { [weak self] in self?.onRequest?(index) } }
         return cell
     }
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
@@ -81,9 +121,15 @@ struct PDFSearchResultEntry {
         (rowView as? PDFSearchResultRow)?.readingHovered = false
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
-        if !updating, NSApp.currentEvent?.type == .keyDown, entries.indices.contains(table.selectedRow) { onSelect?(table.selectedRow) }
+        if !updating, NSApp.currentEvent?.type == .keyDown, let index = entry(at: table.selectedRow) { onSelect?(index) }
     }
-    @objc private func picked() { guard !updating, entries.indices.contains(table.clickedRow) else { return }; onSelect?(table.clickedRow) }
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { entry(at: row) != nil }
+    @objc private func picked() {
+        guard !updating else { return }
+        if let related, table.clickedRow == related.primaryCount { onToggleRelated?() }
+        else if let index = entry(at: table.clickedRow) { onSelect?(index) }
+    }
+    @objc private func toggleRelated() { onToggleRelated?() }
 }
 
 @MainActor private final class PDFSearchResultCell: NSTableCellView {

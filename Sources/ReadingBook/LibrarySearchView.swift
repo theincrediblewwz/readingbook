@@ -43,7 +43,7 @@ struct LibrarySearchView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("沿真实原文查找").font(.headline)
                             Text("输入后离线检索，支持简繁、大小写和全半角互搜。原书、笔记和分析不会被改写。")
-                            Text("连接模型后，普通搜索会把检索词与抽样识别的语言发送给当前 AI 服务，请它纠错、翻译或建议相关词，再在所选书籍中查证。扩词不会发送原书或笔记正文，也不会把模型猜测当成原文结果。阅读全文是另一个主动操作，会分批发送本书可读原文，预先显示估算和读取进度。")
+                            Text("连接模型后，普通搜索会请 AI 纠错或补充同一对象的语言版本，再查原文。相关主题收在列表底部，展开才查找。扩词只发送检索词与语言提示，不发送原书或笔记，也不把猜测当成结果。阅读全文需要主动开始：能容纳时整本一次，超过当前上下文的保守容量才分批。")
                             Text("语言识别是抽样提示；未识别的扫描页需先完成 OCR。结果数量有上限，可增加关键词缩小范围。")
                                 .foregroundStyle(.secondary)
                         }.font(.system(size: 14)).padding(20).frame(width: 340).fixedSize(horizontal: false, vertical: true)
@@ -60,7 +60,7 @@ struct LibrarySearchView: View {
                         .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("清空检索词")
                 }
                 Button { performOrdinarySearch() } label: { Image(systemName: "magnifyingglass") }
-                    .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("普通查找").help("先离线查找；已连接模型时自动纠错、翻译和扩展相关词，不发送原书正文")
+                    .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("普通查找").help("先离线查找；连接模型后自动纠错并补充同一对象的语言版本，相关主题收在列表底部")
                 Button { wholeBookMode = true; if wholeBook.plan == nil && !wholeBook.preparing { prepareWholeBook() } } label: { ReadingAISearchLabel() }
                     .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("AI阅读全文查找").help("先理解意图和推测线索，再阅读全文；开始前显示估算，主动开始后才发送原文")
                     .disabled(scope != "current" || store.book == nil)
@@ -126,7 +126,7 @@ struct LibrarySearchView: View {
             guard !Task.isCancelled, key == automaticLookupKey, canAskAI,
                   (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() != true else { return }
             if wholeBookMode { if wholeBook.plan == nil && !wholeBook.preparing { prepareWholeBook() } }
-            else if hasModel, query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2, session.expandedKeywords.isEmpty { expandSearch() }
+            else if hasModel, query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2, !session.assistanceReady { expandSearch() }
         }
         .onDisappear { session.cancel(); wholeBook.cancel(); navigationTask?.cancel() }
     }
@@ -142,9 +142,12 @@ struct LibrarySearchView: View {
     }
 
     @ViewBuilder private var results: some View {
-        if let response = session.response, !response.matches.isEmpty || !response.entityMatches.isEmpty {
+        if let response = session.response {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
+                    if response.matches.isEmpty && response.entityMatches.isEmpty {
+                        Text("没有找到原词、纠错或语言变体的匹配内容。").foregroundStyle(.secondary).padding(.vertical, 20)
+                    }
                     if !response.matches.isEmpty {
                         Text("原文出现处").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         ForEach(response.matches) { match in sourceRow(match) }
@@ -153,10 +156,24 @@ struct LibrarySearchView: View {
                         Text("相关对象 · 同名结果按书籍分别保留").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 8)
                         ForEach(response.entityMatches) { match in entityRow(match) }
                     }
+                    if !session.relatedKeywords.isEmpty {
+                        Button { session.toggleRelated() } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: session.relatedExpanded ? "chevron.up" : "chevron.down")
+                                Text(session.relatedExpanded ? "收起相关结果" : "更多相关结果")
+                                if session.searchingRelated { ProgressView().controlSize(.small) }
+                                Spacer()
+                            }.font(.system(size: 13)).padding(10).contentShape(RoundedRectangle(cornerRadius: 10))
+                        }.buttonStyle(ReadingQuietButtonStyle()).padding(.top, 8)
+                            .help("相关主题、人物和作品收在这里，只有展开才查找。" + session.relatedKeywords.joined(separator: "、"))
+                        if session.relatedExpanded, let related = session.relatedResponse {
+                            if related.matches.isEmpty && related.entityMatches.isEmpty { Text("没有找到其他相关结果。").foregroundStyle(.secondary) }
+                            ForEach(related.matches) { match in sourceRow(match) }
+                            ForEach(related.entityMatches) { match in entityRow(match) }
+                        }
+                    }
                 }.padding(.vertical, 4)
             }
-        } else if !session.searching, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, session.response != nil {
-            ContentUnavailableView("没有找到匹配原文", systemImage: "text.magnifyingglass", description: Text("试试更短的词语或别名；连接模型后，普通搜索会自动纠错并补充相关词。"))
         } else {
             ContentUnavailableView("沿原文寻找线索", systemImage: "books.vertical", description: Text("在一本书里追踪称谓，也可以把同一个词在不同书中的记载放在一起查阅。"))
         }
@@ -221,11 +238,11 @@ struct LibrarySearchView: View {
                 if let plan = wholeBook.plan {
                     Text(wholeBook.understanding ? "第一步：理解意图，推测线索…" : !wholeBook.running && wholeBook.keywords.isEmpty ? "已准备好 · 先理解意图，再阅读全文" : wholeBook.complete ? "可读取的原文已查完" : "第二步：阅读全文 · 已读 \(wholeBook.completedUnits) / \(plan.readableUnitCount) 段内容 · \(wholeBook.completedBatches) / \(plan.batches.count) 批")
                         .font(.system(size: 14, weight: .medium))
-                    Text(wholeBook.tokenCost > 0 ? "已完成请求约用 \(wholeBook.tokenCost.formatted()) token · 找到 \(wholeBook.matches.count) 处" : "预计 \(plan.batches.count + 1) 次请求（含理解意图） · 最高约 \(plan.estimatedMaximumTokens.formatted()) token（保守估算）")
+                    Text(wholeBook.tokenCost > 0 ? "已完成请求约用 \(wholeBook.tokenCost.formatted()) token · 找到 \(wholeBook.matches.count) 处" : plan.readingArrangement + " · 预计 \(plan.batches.count + 1) 次请求（含理解意图） · 最高约 \(plan.estimatedMaximumTokens.formatted()) token（保守估算）")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                     if !wholeBook.keywords.isEmpty { Text("参考线索 · " + wholeBook.keywords.joined(separator: "、")).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1).help(wholeBook.keywords.joined(separator: "、")) }
                     if plan.emptyUnitCount > 0 { Text("另有 \(plan.emptyUnitCount) 段没有可读文字，尚未读取。扫描页可先做文字识别。").font(.system(size: 12)).foregroundStyle(.secondary) }
-                } else { Text(wholeBook.preparing ? "正在分批并估算，不会在准备时请求AI…" : hasModel ? "可重新准备本书的全文查找" : "先连接模型，再准备阅读全文查找").font(.system(size: 14)) }
+                } else { Text(wholeBook.preparing ? "正在核对全文与上下文容量，不会在准备时请求AI…" : hasModel ? "可重新准备本书的全文查找" : "先连接模型，再准备阅读全文查找").font(.system(size: 14)) }
             }.frame(maxWidth: .infinity, alignment: .leading)
             ReaderInformationButton(title: "阅读全文查找说明", text: "先由模型理解检索意图、推测相关线索，再将本书可读原文分批发送给当前AI服务，会消耗token。只发送本书原文和检索问题，不发送笔记、历史对话或密钥正文。每批必须完整返回且引文逐字核对通过，才计为已读；这说明模型收到并处理了原文，不保证找出每一处相关内容。中断或失败请求也可能计费，用量以服务商为准。达到本轮预算后停下，点继续才开始下一轮。停止保留本窗口已完成进度；换书、改词或关闭后不自动继续请求，也不写入书籍分析。")
             if wholeBook.running {

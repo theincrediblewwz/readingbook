@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import argparse,datetime,hashlib,json,os,plistlib,re,shutil,subprocess
-r=Path(__file__).resolve().parents[2];b=r/'logs/find-panel-startup-20261105'
-p=argparse.ArgumentParser();p.add_argument('--tag',required=True);p.add_argument('--mode',choices=['inline','layout'],default='inline');p.add_argument('--bin-dir',type=Path,required=True);a=p.parse_args();assert a.tag.replace('-','').isalnum()
+r=Path(__file__).resolve().parents[2]
+p=argparse.ArgumentParser();p.add_argument('--tag',required=True);p.add_argument('--mode',choices=['inline','layout','precision'],default='inline');p.add_argument('--bin-dir',type=Path,required=True);a=p.parse_args();assert a.tag.replace('-','').isalnum()
+b=r/('logs/search-precision-20261105' if a.mode=='precision' else 'logs/find-panel-startup-20261105')
 b.mkdir(parents=True,exist_ok=True);out=b/a.tag;assert not out.exists();out.mkdir();(out/'home').mkdir();(out/'tmp').mkdir()
 release=a.bin_dir.resolve();assert release.is_relative_to(r);work=r/'.build/reader-find-host';work.mkdir(exist_ok=True)
 objects=[Path(x) for x in (release/'ReadingBook.product/Objects.LinkFileList').read_text().splitlines() if not x.endswith('/ReadingBookLauncher.swift.o')]
-host=Path(__file__).with_name('ReaderFindHost.swift' if a.mode=='inline' else 'ReaderFindLayoutHost.swift');sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+host=Path(__file__).with_name({'inline':'ReaderFindHost.swift','layout':'ReaderFindLayoutHost.swift','precision':'SearchPrecisionHost.swift'}[a.mode]);sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
 sources={str(f.relative_to(r)):sha(f) for f in [*r.glob('Sources/**/*.swift'),host,Path(__file__)]}
 modules=list((release/'Modules').glob('*')); inputs={str(f.relative_to(r)):sha(f) for f in objects+modules if f.is_file()}
 commands=subprocess.check_output(['ps','-axo','comm='],text=True).splitlines()
@@ -31,6 +32,6 @@ with (out/'unified.log').open('x') as f:logs=subprocess.run(['/usr/bin/log','sho
 record=json.loads((out/'result.json').read_text()) if (out/'result.json').exists() else {}
 text=(out/'runtime.log').read_text()+(out/'unified.log').read_text();warnings={k:text.count(v) for k,v in [('layout300','300 iterations'),('publishingDuringViewUpdates','Publishing changes from within view updates'),('attributeGraphCycles','AttributeGraph: cycle detected'),('unsatisfiableConstraints','Unable to simultaneously satisfy constraints:')]};warnings['invalidViewGeometry']=len(re.findall(r'invalid (?:frame|view) (?:dimension|geometry)',text,re.I))
 frozen=all(sha(r/n)==h for n,h in sources.items()) and all(sha(r/n)==h for n,h in inputs.items());passed=code==logs.returncode==0 and record.get('status')=='passed' and frozen and not any(warnings.values())
-report=dict(status='passed' if passed else 'failed',probe='reader-inline-find' if a.mode=='inline' else 'reader-find-layout',checkCount=len(record.get('checks',{})),record=record,exitCode=code,unifiedLogReturnCode=logs.returncode,runtimeWarnings=warnings,sourceStillFrozen=frozen,sourceSHA256=sources,sourceManifest=str((out/'manifest.json').relative_to(r)),outboundNetworkDenied=True,originalLibraryReadAndWriteDenied=True,buildResourceFallbackDenied=True)
+report=dict(status='passed' if passed else 'failed',probe={'inline':'reader-inline-find','layout':'reader-find-layout','precision':'search-precision'}[a.mode],checkCount=len(record.get('checks',{})),record=record,exitCode=code,unifiedLogReturnCode=logs.returncode,runtimeWarnings=warnings,sourceStillFrozen=frozen,sourceSHA256=sources,sourceManifest=str((out/'manifest.json').relative_to(r)),outboundNetworkDenied=True,originalLibraryReadAndWriteDenied=True,buildResourceFallbackDenied=True)
 (out/'report.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2));print('failed checks',[k for k,v in record.get('checks',{}).items() if not v])
 raise SystemExit(0 if passed else 1)

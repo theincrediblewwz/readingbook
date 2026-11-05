@@ -67,9 +67,9 @@ struct ReaderInlineAISearchView: View {
                 } else if model.hasModel, session.plan != nil, !session.complete {
                     Button(session.keywords.isEmpty && session.completedBatches == 0 ? "开始 AI 查找" : "继续查找") { model.start() }
                         .buttonStyle(ReadingToolbarButtonStyle(selected: true)).accessibilityIdentifier("inline-ai-search-start")
-                        .help("将本书可读原文分批发给当前模型；先理解意图，再阅读全文，会消耗本轮预算")
+                        .help("按当前上下文容量发送本书原文；能容纳时整本一次。先理解意图再阅读全文，会消耗本轮预算")
                 }
-                ReaderInformationButton(title: "AI阅读全文查找",text: "先理解你想找什么，再逐批阅读全文；结果必须能在原文中逐字核对。准备和估算不会发送原文，点击开始才使用当前模型并消耗token。只发送本书可读原文和检索问题，不发送笔记或历史对话。停止保留本次已完成进度，关闭、改词或换书会取消；不会自动续费或自动开始下一轮。没有文字的扫描页要先识别。模型可能遗漏相关内容，用量以服务商为准。")
+                ReaderInformationButton(title: "AI阅读全文查找",text: "先理解你想找什么，再阅读全文；能容纳时整本一次，超过配置的保守容量才分批。估算按请求字节计算，可能高于模型实际分词。结果必须能在原文中逐字核对。准备和估算不会发送原文，点击开始才使用当前模型并消耗token。只发送本书可读原文和检索问题，不发送笔记或历史对话。停止保留本次已完成进度，关闭、改词或换书会取消；不会自动续费或自动开始下一轮。没有文字的扫描页要先识别。模型可能遗漏相关内容，用量以服务商为准。")
             }
             Text(detail).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).help(detail)
             if !model.issue.isEmpty || !session.errorMessage.isEmpty {
@@ -114,8 +114,8 @@ struct ReaderInlineAISearchView: View {
     }
     private var detail: String {
         guard let plan=session.plan else { return "结果保留真实原文与位置，点击可在当前书页定位。" }
-        if session.tokenCost>0 { return "\(session.completedBatches)/\(plan.batches.count)批 · 已用约\(session.tokenCost.formatted()) token"+(session.limited ? " · 结果最多300处" : "") }
-        return "预计\(plan.batches.count+1)次请求 · 最高约\(plan.estimatedMaximumTokens.formatted()) token"+(plan.emptyUnitCount>0 ? " · \(plan.emptyUnitCount)段暂无可读文字" : "")
+        if session.tokenCost>0 { return "\(plan.batches.count == 1 ? "整本读取" : "\(session.completedBatches)/\(plan.batches.count)批") · 已用约\(session.tokenCost.formatted()) token"+(session.limited ? " · 结果最多300处" : "") }
+        return plan.readingArrangement + " · 预计\(plan.batches.count+1)次请求 · 最高约\(plan.estimatedMaximumTokens.formatted()) token"+(plan.emptyUnitCount>0 ? " · \(plan.emptyUnitCount)段暂无可读文字" : "")
     }
     private func snippet(_ hit: LibraryTextMatch) -> AttributedString {
         var value=AttributedString((hit.hasEarlierText ? "…" : "")+hit.snippetBefore)

@@ -89,6 +89,7 @@ jobs:
         run: |
           python3 scripts/native-ui-regression/run-reader-find.py --bin-dir .build/tests/debug --mode layout --tag ci-reader-find-layout
           python3 scripts/native-ui-regression/run-reader-find.py --bin-dir .build/tests/debug --mode inline --tag ci-reader-inline-find
+          python3 scripts/native-ui-regression/run-reader-find.py --bin-dir .build/tests/debug --mode precision --tag ci-search-precision
       - name: Native note color, expansion and reading undo regression
         id: note_interaction
         run: python3 scripts/native-ui-regression/run-note-interaction.py --bin-dir .build/tests/debug --tag ci-note-interaction

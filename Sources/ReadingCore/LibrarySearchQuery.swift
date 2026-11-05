@@ -4,7 +4,9 @@ import NaturalLanguage
 /// Model output is a bounded keyword plan, never a source result or authority to
 /// read another book. The host still searches its immutable, scoped snapshots.
 public struct LibrarySearchExpansionPlan: Hashable, Sendable {
+    /// Corrections and names for the same object, never merely related topics.
     public let keywords: [String]
+    public let relatedKeywords: [String]
 
     public init(keywords: [String]) throws {
         guard (1...8).contains(keywords.count) else { throw Self.invalidPlan }
@@ -18,7 +20,27 @@ public struct LibrarySearchExpansionPlan: Hashable, Sendable {
             if seen.insert(identity).inserted { accepted.append(word) }
         }
         guard !accepted.isEmpty else { throw Self.invalidPlan }
-        self.keywords = accepted
+        self.keywords = accepted; self.relatedKeywords = []
+    }
+
+    public init(variants: [String], related: [String]) throws {
+        guard variants.count + related.count <= 8 else { throw Self.invalidPlan }
+        var seen = Set<String>()
+        func checked(_ values: [String]) throws -> [String] {
+            guard !values.isEmpty else { return [] }
+            return try Self(keywords: values).keywords.filter {
+                seen.insert($0.folding(options: [.caseInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))).inserted
+            }
+        }
+        keywords = try checked(variants); relatedKeywords = try checked(related)
+    }
+
+    public static func parseAssistance(_ json: String) throws -> Self {
+        guard json.utf8.count <= 8_192, let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == ["variants", "related"],
+              let variants = object["variants"] as? [String], let related = object["related"] as? [String] else { throw invalidPlan }
+        return try Self(variants: variants, related: related)
     }
 
     public static func parse(_ json: String) throws -> Self {

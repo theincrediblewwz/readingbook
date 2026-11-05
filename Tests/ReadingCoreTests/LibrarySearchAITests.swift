@@ -24,6 +24,41 @@ private actor SearchAITransportGate {
 }
 
 final class LibrarySearchAITests: XCTestCase {
+    func testOrdinaryAssistanceSeparatesSameObjectFromRelatedTopics() async throws {
+        let response = result("{\"variants\":[\"貂蝉\",\"貂蟬\",\"Diao Chan\"],\"related\":[\"三国演义\",\"连环计\"]}")
+        let records = SearchAITransportRecords()
+        let reader = AIReader(transport: { request in await records.append(request); return response })
+        let plan = try await reader.expandLibrarySearch(query: "貂禅", languageProfile: profile, settings: settings, apiKey: "")
+        XCTAssertEqual(plan.keywords, ["貂蝉", "貂蟬", "Diao Chan"])
+        XCTAssertEqual(plan.relatedKeywords, ["三国演义", "连环计"])
+        let requests = await records.requests
+        let request = try XCTUnwrap(requests.first)
+        let messages = try XCTUnwrap(try body(request)["messages"] as? [[String: Any]])
+        XCTAssertTrue((messages[0]["content"] as? String)?.contains("不能扩大用户要找的对象") == true)
+    }
+    func testOrdinaryAssistanceDoesNotAcceptLegacyMixedKeywordBuckets() async throws {
+        let response = result("{\"keywords\":[\"貂蟬\",\"三国演义\"]}")
+        let reader = AIReader(transport: { _ in response })
+        do { _ = try await reader.expandLibrarySearch(query: "貂蝉", languageProfile: profile, settings: settings, apiKey: ""); XCTFail("Mixed bucket admitted") }
+        catch { XCTAssertFalse(error is CancellationError) }
+    }
+    func testAssistanceValidationBoundsBothGroupsAndGivesVariantsPriority() throws {
+        let plan = try LibrarySearchExpansionPlan.parseAssistance("{\"variants\":[\" Alice \",\"ALICE\"],\"related\":[\"alice\",\"book\"]}")
+        XCTAssertEqual(plan.keywords, ["Alice"]); XCTAssertEqual(plan.relatedKeywords, ["book"])
+        XCTAssertTrue(try LibrarySearchExpansionPlan.parseAssistance("{\"variants\":[],\"related\":[]}").keywords.isEmpty)
+        for raw in ["{\"variants\":[],\"related\":[],\"results\":[]}", "{\"variants\":[],\"related\":null}", "{\"variants\":[\"x\\ny\"],\"related\":[]}"] {
+            XCTAssertThrowsError(try LibrarySearchExpansionPlan.parseAssistance(raw))
+        }
+        XCTAssertThrowsError(try LibrarySearchExpansionPlan(variants: Array(repeating: "x", count: 5), related: Array(repeating: "y", count: 4)))
+    }
+    func testHeaderAndPlotTopicsCannotConsumeThePrimaryResultLimit() throws {
+        let plan = try LibrarySearchExpansionPlan(variants: ["貂蝉"], related: ["三国演义", "连环计"])
+        let units = (0..<200).map { SourceUnit(id: "u\($0)", order: $0, chapter: "章", page: $0 + 1, text: "三國演義 頁頭。" + ($0 == 199 ? "貂蟬在此。" : "連環計")) }
+        let source = LibrarySourceSnapshot(bookID: "b", title: "书", sourceHash: "hash", units: units)
+        let result = try LibraryTextSearch.search(query: "貂禅", snapshots: [source], resultLimit: 10, additionalQueries: plan.keywords)
+        XCTAssertEqual(result.matches.count, 1); XCTAssertEqual(result.matches.first?.page, 200)
+        XCTAssertEqual(result.matches.first?.quote, "貂蟬"); XCTAssertFalse(result.bounded)
+    }
     private var settings: ProviderSettings {
         ProviderSettings(baseURL: "https://offline.invalid", model: "offline-search", maxRequestsPerRun: 10,
                          maxOutputTokens: 6_000, contextWindowTokens: 32_768)
@@ -31,7 +66,7 @@ final class LibrarySearchAITests: XCTestCase {
     private var profile: LibrarySearchLanguageProfile {
         LibrarySearchLanguageProfile(languageCodes: ["zh-Hant", "en"], sampledCharacterCount: 512)
     }
-    private func result(_ content: String = "{\"keywords\":[\"貂蟬\",\"Diaochan\"]}", finish: String = "stop",
+    private func result(_ content: String = "{\"variants\":[\"貂蟬\",\"Diaochan\"],\"related\":[]}", finish: String = "stop",
                         role: String = "assistant", refusal: String? = nil,
                         calls: [ProviderClient.ToolCall]? = nil, cost: Int = 12) -> ProviderClient.Result {
         .init(message: .init(role: role, content: content, refusal: refusal, tool_calls: calls, reasoning_content: nil),
@@ -144,7 +179,7 @@ final class LibrarySearchAITests: XCTestCase {
     }
 
     func testKeywordsStillRequireRealScopedSourceMatches() async throws {
-        let response = result("{\"keywords\":[\"貂蟬\",\"nothing-in-source\"]}"), reader = AIReader(transport: { _ in response })
+        let response = result("{\"variants\":[\"貂蟬\",\"nothing-in-source\"],\"related\":[]}"), reader = AIReader(transport: { _ in response })
         let plan = try await reader.expandLibrarySearch(query: "貂禅", languageProfile: profile, settings: settings, apiKey: "")
         let snapshots = [LibrarySourceSnapshot(bookID: "permitted", title: "书", sourceHash: "hash",
                                               units: [.init(id: "u", order: 0, chapter: "一", page: 1, text: "貂蟬入告。")]),

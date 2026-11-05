@@ -3,6 +3,37 @@ import Foundation
 @testable import ReadingCore
 
 final class WholeBookSearchTests: XCTestCase {
+    func testLongContextReceivesWholeBookInOneBatchInsteadOfArtificial64KSlices() throws {
+        let source = snapshot((0..<100).map { "第\($0)页：" + String(repeating: "完整原文内容。", count: 80) })
+        let config = ProviderSettings(model: "fixture", maxOutputTokens: 384_000, contextWindowTokens: 1_000_000)
+        let plan = try WholeBookSearchPlan.prepare(query: "内容", snapshot: source, settings: config)
+        XCTAssertEqual(plan.batches.count, 1); XCTAssertEqual(plan.contextCapacity, 1_000_000)
+        XCTAssertEqual(plan.batches[0].outputLimit, 65_536)
+        XCTAssertEqual(Set(plan.batches[0].parts.map { $0.unit.id }), Set(source.units.map(\.id)))
+        XCTAssertEqual(plan.completedUnitCount(afterBatchCount: 0), 0)
+        XCTAssertEqual(plan.completedUnitCount(afterBatchCount: 1), source.units.count)
+    }
+    func testCapacityFallbackAccountsForNestedJSONEscapingAndKeepsAllCharacters() throws {
+        let source = snapshot((0..<50).map { "\($0) \"/\\ 😀 e\u{301} " + String(repeating: "原文/\"\\\n", count: 80) })
+        let config = ProviderSettings(model: "fixture", maxOutputTokens: 8_000, contextWindowTokens: 32_000)
+        let plan = try WholeBookSearchPlan.prepare(query: "\"/\\ 查找", snapshot: source, settings: config)
+        XCTAssertGreaterThan(plan.batches.count, 1)
+        for batch in plan.batches {
+            var bounded = config; bounded.maxOutputTokens = batch.outputLimit
+            let actual = try ProviderClient.prepare(messages: WholeBookSearchEngine.messages(batch), tools: [], settings: bounded, apiKey: "", remainingTokens: batch.capacity)
+            XCTAssertEqual(actual.estimatedInputTokens, batch.estimatedInputTokens)
+            XCTAssertLessThanOrEqual(actual.estimatedInputTokens + batch.outputLimit + 8_192 + 64, batch.capacity)
+        }
+        XCTAssertEqual(Set(plan.batches.flatMap(\.parts).map { $0.unit.id }), Set(source.units.map(\.id)))
+    }
+    func testOutputRoomUsesConfiguredLimitAndDoesNotSilentlyReduceExistingBudget() throws {
+        for maximum in [64, 512, 4_096, 32_768, 384_000] {
+            let config = ProviderSettings(model: "fixture", maxOutputTokens: maximum, contextWindowTokens: 1_000_000)
+            let plan = try WholeBookSearchPlan.prepare(query: "内容", snapshot: snapshot(["原文"]), settings: config)
+            XCTAssertEqual(plan.batches[0].outputLimit, min(maximum, 65_536))
+            XCTAssertEqual(plan.batches.count, 1)
+        }
+    }
     private var settings: ProviderSettings { .init(model: "fixture", maxRequestsPerRun: 100, maxOutputTokens: 512, contextWindowTokens: 12_000) }
     private func snapshot(_ texts: [String]) -> LibrarySourceSnapshot {
         .init(bookID: "original-book", title: "测试书", sourceHash: String(repeating: "a", count: 64),

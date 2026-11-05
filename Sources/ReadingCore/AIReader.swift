@@ -127,7 +127,7 @@ public actor AIReader {
     public func expandLibrarySearch(query: String, languageProfile: LibrarySearchLanguageProfile,
                                     settings: ProviderSettings, apiKey: String) async throws -> LibrarySearchExpansionPlan {
         try beginOperation(settings: settings); defer { operationActive = false }
-        return try await LibrarySearchAIEngine.generate(query: query, languageProfile: languageProfile, settings: settings) { [self] messages, requestSettings, remainingTokens in
+        return try await LibrarySearchAIEngine.generate(query: query, languageProfile: languageProfile, settings: settings, purpose: .ordinaryLookup) { [self] messages, requestSettings, remainingTokens in
             try await self.request(messages: messages, tools: [], settings: requestSettings, apiKey: apiKey, remainingTokens: remainingTokens)
         }
     }

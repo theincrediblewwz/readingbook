@@ -106,12 +106,7 @@ struct ReaderWorkspaceView: View {
                                    guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
                                          store.book?.sourceHash == preparationSourceHash else { return nil }
                                    return store.makeInlinePDFSearch(query, owner: findOwner, repositoryOwner: findRepository)
-                               }, inlineSearchOwner: findRepository, onSearchKeywords: store.settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : { query in
-                                   let owner = WorkspacePickerOwner(store: store)
-                                   guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
-                                         store.book?.sourceHash == preparationSourceHash else { throw CancellationError() }
-                                   return try await store.inferNativeSearchKeywords(query, owner: owner)
-                               }, searchAIIdentity: store.readingSearchAIIdentity, onQuotePositionNote: { page, x, y, quote in
+                               }, inlineSearchOwner: findRepository, searchAIIdentity: store.readingSearchAIIdentity, onQuotePositionNote: { page, x, y, quote in
                                    guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner, store.book?.sourceHash == preparationSourceHash else { return }
                                    store.beginPositionNote(page: page, x: x, y: y, quote: quote)
                                }, onReadingConversation: { selection in
@@ -121,6 +116,11 @@ struct ReaderWorkspaceView: View {
                                    // opened note as the focus of the next question.
                                    store.readingContextDocumentID = nil; store.selectedObjectID = nil
                                    store.askAboutReadingContext()
+                               }, onSearchAssistance: store.settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : { query in
+                                   let owner = WorkspacePickerOwner(store: store)
+                                   guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
+                                         store.book?.sourceHash == preparationSourceHash else { throw CancellationError() }
+                                   return try await store.inferNativeSearchKeywords(query, owner: owner)
                                })
                             .id(store.pdfDisplayReloadID)
                             .environment(\.workspaceCanvasBlocked, interactionBlocked || noteFan != nil || store.positionNoteRequest != nil)

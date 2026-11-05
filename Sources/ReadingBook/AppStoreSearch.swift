@@ -9,7 +9,7 @@ extension AppStore {
          settings.tokenLimitParameter ?? "", apiKey].hashValue
     }
 
-    func inferNativeSearchKeywords(_ query: String, owner: WorkspacePickerOwner) async throws -> [String] {
+    func inferNativeSearchKeywords(_ query: String, owner: WorkspacePickerOwner) async throws -> LibrarySearchExpansionPlan {
         let identity = readingSearchAIIdentity
         guard owner.matches(self) else { throw CancellationError() }
         var configuration = settings
@@ -26,7 +26,7 @@ extension AppStore {
         let reader = AIReader(coordinator: coordinator, lane: .foreground)
         let plan = try await reader.expandLibrarySearch(query: query, languageProfile: profile, settings: configuration, apiKey: key)
         guard !Task.isCancelled, owner.matches(self), readingSearchAIIdentity == identity else { throw CancellationError() }
-        return plan.keywords
+        return plan
     }
 }
 

@@ -7,6 +7,11 @@ import ReadingCore
     @Published private(set) var response: LibrarySearchResponse?
     @Published private(set) var languageProfile: LibrarySearchLanguageProfile?
     @Published private(set) var expandedKeywords: [String] = []
+    @Published private(set) var relatedKeywords: [String] = []
+    @Published private(set) var relatedResponse: LibrarySearchResponse?
+    @Published private(set) var relatedExpanded = false
+    @Published private(set) var searchingRelated = false
+    @Published private(set) var assistanceReady = false
     @Published private(set) var searching = false
     @Published private(set) var expanding = false
     @Published var errorMessage = ""
@@ -21,13 +26,17 @@ import ReadingCore
     private var generation = UUID()
     private var localTask: Task<Void, Never>?
     private var expansionTask: Task<Void, Never>?
+    private var relatedTask: Task<Void, Never>?
 
     func schedule(query: String, snapshots: [LibrarySourceSnapshot], bookID: String?, root: String, debounce: Bool = true) {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let next = Input(query: text, snapshots: snapshots, bookID: bookID, root: root)
         let retainedKeywords = input == next ? expandedKeywords : []
+        let retainedRelated = input == next ? relatedKeywords : []
+        let retainedReady = input == next && assistanceReady
         cancel()
         input = next; response = nil; languageProfile = nil; expandedKeywords = retainedKeywords; errorMessage = ""
+        relatedKeywords = retainedRelated; relatedResponse = nil; relatedExpanded = false; assistanceReady = retainedReady
         guard !text.isEmpty else { return }
         let owner = generation
         searching = true
@@ -57,6 +66,7 @@ import ReadingCore
         guard let input, !input.query.isEmpty, !expanding else { return }
         let needsLocalResult = response == nil
         localTask?.cancel(); expansionTask?.cancel(); generation = UUID()
+        relatedTask?.cancel(); relatedTask = nil; searchingRelated = false; relatedResponse = nil; relatedExpanded = false
         let owner = generation
         searching = false; expanding = true; errorMessage = ""
         expansionTask = Task { [weak self] in
@@ -84,10 +94,38 @@ import ReadingCore
                 try Task.checkCancellation()
                 guard let self, self.generation == owner else { return }
                 self.response = result; self.languageProfile = language; self.expandedKeywords = plan.keywords
+                self.relatedKeywords = plan.relatedKeywords; self.relatedResponse = nil; self.relatedExpanded = false; self.assistanceReady = true
                 self.expanding = false
             } catch {
                 guard let self, self.generation == owner, !Task.isCancelled else { return }
                 self.errorMessage = error.localizedDescription; self.expanding = false
+            }
+        }
+    }
+
+    /// Broad concepts never consume the primary result limit, and are not
+    /// scanned at all until the reader reaches and opens the bottom section.
+    func toggleRelated() {
+        relatedExpanded.toggle()
+        guard relatedExpanded, relatedResponse == nil, !searchingRelated,
+              let input, let first = relatedKeywords.first else { return }
+        let owner = generation, terms = relatedKeywords
+        let primaryIDs = Set(response?.matches.map(\.id) ?? []), primaryEntities = Set(response?.entityMatches.map(\.id) ?? [])
+        searchingRelated = true
+        relatedTask = Task { [weak self] in
+            do {
+                let worker = Task.detached(priority: .userInitiated) {
+                    var value = try LibraryTextSearch.search(query: first, snapshots: input.snapshots, bookID: input.bookID, additionalQueries: Array(terms.dropFirst()))
+                    value.matches.removeAll { primaryIDs.contains($0.id) }; value.entityMatches.removeAll { primaryEntities.contains($0.id) }
+                    return value
+                }
+                let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                try Task.checkCancellation()
+                guard let self, self.generation == owner else { return }
+                self.relatedResponse = result; self.searchingRelated = false
+            } catch {
+                guard let self, self.generation == owner, !Task.isCancelled else { return }
+                self.errorMessage = error.localizedDescription; self.searchingRelated = false
             }
         }
     }
@@ -103,7 +141,7 @@ import ReadingCore
 
     /// Closing/changing the owner cancels all work, retaining verified results.
     func cancel() {
-        generation = UUID(); localTask?.cancel(); expansionTask?.cancel()
-        localTask = nil; expansionTask = nil; searching = false; expanding = false
+        generation = UUID(); localTask?.cancel(); expansionTask?.cancel(); relatedTask?.cancel()
+        localTask = nil; expansionTask = nil; relatedTask = nil; searching = false; expanding = false; searchingRelated = false
     }
 }
