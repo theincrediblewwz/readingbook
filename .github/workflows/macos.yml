@@ -85,6 +85,10 @@ jobs:
         run: python3 scripts/native-ui-regression/run-ux-refinement.py --bin-dir .build/tests/debug --tag ci-ux-refinement
       - name: Native AI search intent and full-book flow regression
         run: python3 scripts/native-ui-regression/run-ai-search-flow.py --bin-dir .build/tests/debug --tag ci-ai-search-flow
+      - name: Native reader inline AI find and transition layout regression
+        run: |
+          python3 scripts/native-ui-regression/run-reader-find.py --bin-dir .build/tests/debug --mode layout --tag ci-reader-find-layout
+          python3 scripts/native-ui-regression/run-reader-find.py --bin-dir .build/tests/debug --mode inline --tag ci-reader-inline-find
       - name: Native note color, expansion and reading undo regression
         id: note_interaction
         run: python3 scripts/native-ui-regression/run-note-interaction.py --bin-dir .build/tests/debug --tag ci-note-interaction

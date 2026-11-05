@@ -61,7 +61,7 @@ struct LibrarySearchView: View {
                 }
                 Button { performOrdinarySearch() } label: { Image(systemName: "magnifyingglass") }
                     .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("普通查找").help("先离线查找；已连接模型时自动纠错、翻译和扩展相关词，不发送原书正文")
-                Button { wholeBookMode = true; if wholeBook.plan == nil && !wholeBook.preparing { prepareWholeBook() } } label: { Image(systemName: "sparkle.magnifyingglass") }
+                Button { wholeBookMode = true; if wholeBook.plan == nil && !wholeBook.preparing { prepareWholeBook() } } label: { ReadingAISearchLabel() }
                     .buttonStyle(ReadingToolbarButtonStyle()).accessibilityLabel("AI阅读全文查找").help("先理解意图和推测线索，再阅读全文；开始前显示估算，主动开始后才发送原文")
                     .disabled(scope != "current" || store.book == nil)
             }.padding(.leading, 16).padding(.trailing, 4).frame(minHeight: 52)

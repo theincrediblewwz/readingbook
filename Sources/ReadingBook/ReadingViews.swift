@@ -44,6 +44,7 @@ struct ReaderWorkspaceView: View {
                             let preparationOwner = store.libraryRootURL.path + "|" + (sourceBookID ?? "")
                             let preparationSourceHash = store.book?.sourceHash ?? ""
                             let memoryOwner = store.pdfWorkspaceMemoryOwner
+                            let findOwner = WorkspacePickerOwner(store: store), findRepository = store.repository.publicationOwner
                             PDFReaderView(controller: pdfController, url: url, sourceHash: store.book?.sourceHash ?? "", page: unit.page, navigationToken: requestToken, password: store.pdfPassword(for: store.bookID), annotations: store.book?.readerAnnotations ?? [], canEditAnnotations: !store.isBusy, onPageChange: { page in
                                 guard store.pdfNavigationToken == requestToken else { return }
                                 if store.selectedUnit?.page != page {
@@ -101,11 +102,11 @@ struct ReaderWorkspaceView: View {
                                          let unit = store.book?.units.first(where: { $0.page == page }),
                                          store.book?.bookmarks.contains(unit.id) == false else { return }
                                    Task { await store.toggleBookmark(unit.id) }
-                               }, noteBindingDocumentID: store.positionNoteBinding?.documentID, onAISearch: { query in
+                               }, noteBindingDocumentID: store.positionNoteBinding?.documentID, makeInlineAISearch: { query in
                                    guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
-                                         store.book?.sourceHash == preparationSourceHash else { return }
-                                   store.libraryAISearchQuery = query; store.showingLibrarySearch = true
-                               }, onSearchKeywords: store.settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : { query in
+                                         store.book?.sourceHash == preparationSourceHash else { return nil }
+                                   return store.makeInlinePDFSearch(query, owner: findOwner, repositoryOwner: findRepository)
+                               }, inlineSearchOwner: findRepository, onSearchKeywords: store.settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : { query in
                                    let owner = WorkspacePickerOwner(store: store)
                                    guard store.libraryRootURL.path + "|" + (store.bookID ?? "") == preparationOwner,
                                          store.book?.sourceHash == preparationSourceHash else { throw CancellationError() }

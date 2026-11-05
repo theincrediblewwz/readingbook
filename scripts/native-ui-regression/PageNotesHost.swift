@@ -109,6 +109,7 @@ import PDFKit
             checks["ClosingNotesRestoresEveryNativeBox"] = first.bounds(for: .cropBox) == originalBox && second.bounds(for: .cropBox) == originalBox
             checks["SameDocumentIsReused"] = pdf.document.map(ObjectIdentifier.init) == identity
             checks["NoOriginalPDFWrite"] = try Data(contentsOf: source) == original
+            input.onAISearch = { _ in }; reader.update(from: input)
             controller.command(.showSearch); await settle(100)
             guard let field = descendants(reader, NSSearchField.self).first, let list = descendants(reader, PDFSearchResultsList.self).first else { throw ReadingError.invalid("Missing find controls") }
             window.makeFirstResponder(field)
@@ -120,7 +121,7 @@ import PDFKit
             checks["TypingFindsWithoutReturn"] = list.entries.count == 36 && list.entries.allSatisfy { $0.match == "Same" }
             query("Absent old query"); query("Page"); await settle(850)
             checks["LatestTypingCancelsOldQuery"] = list.entries.count == 36 && list.entries.allSatisfy { $0.match == "Page" }
-            let buttons = descendants(reader, NSButton.self).filter { ["上一个搜索结果", "下一个搜索结果", "关闭查找（Esc）"].contains($0.toolTip ?? "") }
+            let buttons = descendants(reader, NSButton.self).filter { ["普通查找", "AI阅读全文查找：先理解意图，再阅读全文", "关闭查找（Esc）"].contains($0.toolTip ?? "") }
             checks["FindButtonsHaveHoverTargets"] = buttons.count == 3 && buttons.allSatisfy { $0 is ReadingNativeHoverButton && $0.bounds.width >= 42 && $0.bounds.height >= 42 }
             for row in 0..<min(8, list.entries.count) {
                 let point = list.table.convert(CGPoint(x: 15, y: list.table.rect(ofRow: row).midY), to: nil)

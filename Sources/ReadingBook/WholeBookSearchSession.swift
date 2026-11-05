@@ -37,27 +37,38 @@ import ReadingCore
         }
     }
 
-    func start(settings: ProviderSettings, apiKey: String, coordinator: AIRequestCoordinator, concurrency: Int) {
+    func start(settings: ProviderSettings, apiKey: String, coordinator: AIRequestCoordinator, concurrency: Int, validate: (@MainActor () async throws -> Void)? = nil) {
         guard let plan, !preparing, !running, !complete else { return }
         let owner = generation, start = completedBatches
         errorMessage = ""; running = true
         task = Task { [weak self] in
+            @MainActor func checkOwner() async throws {
+                try Task.checkCancellation()
+                guard let self, self.generation == owner else { throw CancellationError() }
+                try await validate?()
+                try Task.checkCancellation()
+                guard self.generation == owner else { throw CancellationError() }
+            }
             do {
+                try await checkOwner()
                 let run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: concurrency)
                 defer { run.finish(); Task { await coordinator.endRun(run) } }
+                try await checkOwner()
                 let reader = AIReader(coordinator: coordinator, lane: .foreground)
                 guard let self, self.generation == owner else { return }
                 if self.keywords.isEmpty {
                     self.understanding = true
                     let intent = try await reader.prepareWholeBookSearchIntent(query: plan.query, languageProfile: plan.languageProfile, settings: settings, apiKey: apiKey)
                     guard !Task.isCancelled, self.generation == owner else { return }
+                    try await checkOwner()
                     self.keywords = intent.keywords; self.tokenCost += intent.tokenCost; self.understanding = false
                 }
                 let keywords = self.keywords
                 for batch in plan.batches.dropFirst(start) {
-                    try Task.checkCancellation()
+                    try await checkOwner()
                     let result = try await reader.searchWholeBookBatch(batch, keywords: keywords, settings: settings, apiKey: apiKey)
                     guard !Task.isCancelled, self.generation == owner else { return }
+                    try await checkOwner()
                     var updated = self.matches, seen = Set(updated.map(\.id)), limited = self.limited || result.limited
                     for hit in result.matches where !seen.contains(hit.id) {
                         if updated.count < 300 { updated.append(hit); seen.insert(hit.id) }
@@ -76,8 +87,12 @@ import ReadingCore
         }
     }
 
+    /// Cancel transport before a representable dismantles, without publishing
+    /// ObservableObject changes inside the current SwiftUI update transaction.
+    func invalidateWork() { generation = UUID(); task?.cancel(); task = nil }
+
     func cancel(clear: Bool = false) {
-        generation = UUID(); task?.cancel(); task = nil; running = false; preparing = false; understanding = false
+        invalidateWork(); running = false; preparing = false; understanding = false
         if clear { keywords = []; plan = nil; matches = []; completedBatches = 0; tokenCost = 0; limited = false; errorMessage = "" }
     }
 }
