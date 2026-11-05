@@ -199,6 +199,14 @@ jobs:
           if [[ -d .build/tests/debug/Modules ]]; then
             python3 scripts/native-ui-regression/run-note-interaction.py --bin-dir .build/tests/debug --tag ci-note-interaction-diagnostic
           fi
+      - name: Preserve reader find visual evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-reader-find-evidence
+          path: logs/find-panel-startup-20261105/ci-reader-*
+          if-no-files-found: ignore
+          retention-days: 3
       - name: Preserve failed experience regression evidence
         if: failure()
         uses: actions/upload-artifact@v7

@@ -57,6 +57,99 @@ actor InlineFindTransport {
         host.cacheDisplay(in: host.bounds, to: bitmap)
         try? bitmap.representation(using: .png, properties: [:])?.write(to: output.appendingPathComponent(name + ".png"))
     }
+    struct Pixel: Hashable { let x: Int; let y: Int }
+    func mask(_ view: NSView, blueOnly: Bool = false, normalizeSecondary: Bool = false) -> Set<Pixel> {
+        view.layoutSubtreeIfNeeded(); view.displayIfNeeded()
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return [] }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        guard let image = bitmap.cgImage else { return [] }
+        let width = image.width, height = image.height
+        var bytes = [UInt8](repeating: 255, count: width * height * 4)
+        bytes.withUnsafeMutableBytes { memory in
+            let gc = CGContext(data: memory.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            gc.setFillColor(NSColor.white.cgColor); gc.fill(.init(x: 0, y: 0, width: width, height: height)); gc.draw(image, in: .init(x: 0, y: 0, width: width, height: height))
+        }
+        // A secondary label resolves differently in an active window and an
+        // offscreen reference window. Compare glyph coverage at half its own
+        // ink contrast; require visible contrast rather than accepting blank.
+        let rightStart = width - 300 * max(1, Int((view.window?.backingScaleFactor ?? 1) / 2))
+        var secondaryMin = 765
+        if normalizeSecondary {
+            for y in 0..<height { for x in max(0, rightStart)..<width {
+                let i = (y * width + x) * 4
+                secondaryMin = min(secondaryMin, Int(bytes[i]) + Int(bytes[i + 1]) + Int(bytes[i + 2]))
+            } }
+        }
+        var pixels = Set<Pixel>()
+        for index in 0..<(width * height) {
+            let i = index * 4, red = Int(bytes[i]), green = Int(bytes[i + 1]), blue = Int(bytes[i + 2])
+            let threshold = normalizeSecondary && index % width >= rightStart ? (765 + secondaryMin) / 2 : 450
+            let ink = blueOnly ? blue > 100 && blue > red + 50 && blue > green + 20 && red + green + blue < 450
+                : red + green + blue < threshold && (!normalizeSecondary || index % width < rightStart || secondaryMin < 665)
+            if ink { pixels.insert(.init(x: index % width, y: index / width)) }
+        }
+        guard let x = pixels.map(\.x).min(), let y = pixels.map(\.y).min() else { return [] }
+        return Set(pixels.map { .init(x: $0.x - x, y: $0.y - y) })
+    }
+    func similarity(_ actual: Set<Pixel>, _ expected: Set<Pixel>) -> Double {
+        guard !expected.isEmpty else { return actual.isEmpty ? 1 : 0 }
+        var best = 0.0
+        for dx in -1...1 { for dy in -1...1 {
+            let shifted = Set(actual.map { Pixel(x: $0.x + dx, y: $0.y + dy) })
+            best = max(best, Double(shifted.intersection(expected).count) / Double(shifted.union(expected).count))
+        } }
+        return best
+    }
+    func reference<V: View>(_ content: V, size: NSSize, blueOnly: Bool = false) -> Set<Pixel> {
+        let host = NSHostingView(rootView: content); host.frame = .init(origin: .zero, size: size)
+        let reference = NSWindow(contentRect: .init(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        reference.contentView = host
+        defer { reference.contentView = nil; reference.orderOut(nil) }
+        return mask(host, blueOnly: blueOnly)
+    }
+    func controlPixels() -> (actual: Set<Pixel>, expected: Set<Pixel>, absent: Set<Pixel>) {
+        let size = NSSize(width: 160, height: 44)
+        let expected = reference(Button("开始 AI 查找") {}.buttonStyle(ReadingToolbarButtonStyle(selected: true)), size: size, blueOnly: true)
+        let absent = reference(Button(" ") {}.buttonStyle(ReadingToolbarButtonStyle(selected: true)), size: size, blueOnly: true)
+        return (hosted().map { mask($0, blueOnly: true) } ?? [], expected, absent)
+    }
+    func resultPixels() -> (actual: Set<Pixel>, expected: Set<Pixel>, absent: Set<Pixel>) {
+        guard let host = hosted(), let scroll = views(host).compactMap({ $0 as? NSScrollView }).first, let document = scroll.documentView else { return ([], [], []) }
+        // Independent literal oracle: no query result, model state or snippet
+        // parser supplies the expected quote, surrounding text or page locator.
+        var text = AttributedString("最终一页：请到"); text.foregroundColor = Palette.ink.opacity(0.65)
+        var quote = AttributedString("寒舍商议"); quote.foregroundColor = Palette.ink; quote.backgroundColor = Color.yellow.opacity(0.24); text.append(quote)
+        var end = AttributedString("。"); end.foregroundColor = Palette.ink.opacity(0.65); text.append(end)
+        let row = Button {} label: {
+            HStack(spacing: 12) {
+                Text(text).font(.system(size: 14)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                Text("第 13 页 · 行 1–1").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: 130, alignment: .trailing)
+            }.padding(.horizontal, 10).frame(minHeight: 34).contentShape(RoundedRectangle(cornerRadius: 8))
+        }.buttonStyle(ReadingQuietButtonStyle())
+        let expectedHost = NSHostingView(rootView: ScrollView { LazyVStack(spacing: 0) { row } })
+        expectedHost.frame = .init(origin: .zero, size: scroll.bounds.size)
+        let referenceWindow = NSWindow(contentRect: expectedHost.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        referenceWindow.contentView = expectedHost
+        defer { referenceWindow.contentView = nil; referenceWindow.orderOut(nil) }
+        expectedHost.layoutSubtreeIfNeeded(); expectedHost.displayIfNeeded()
+        let referenceDocument = views(expectedHost).compactMap { $0 as? NSScrollView }.first?.documentView
+        if let referenceDocument {
+            for (name, view) in [("actual-result-row", document), ("expected-result-row", referenceDocument)] {
+                if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: bitmap)
+                    try? bitmap.representation(using: .png, properties: [:])?.write(to: output.appendingPathComponent(name + ".png"))
+                }
+            }
+        }
+        let expected = referenceDocument.map { mask($0, normalizeSecondary: true) } ?? []
+        let absent = reference(Color.clear, size: document.bounds.size)
+        observations["resultDocumentBounds"] = NSStringFromRect(document.bounds)
+        observations["referenceResultDocumentBounds"] = referenceDocument.map { NSStringFromRect($0.bounds) } ?? "missing"
+        observations["resultPixelWidth"] = document.convertToBacking(document.bounds).width
+        return (mask(document, normalizeSecondary: true), expected, absent)
+    }
+
     func run() async {
         do {
             UserDefaults.standard.setVolatileDomain(["service-profiles": Data("[]".utf8), "library.root.path.v1": output.appendingPathComponent("library").path,
@@ -104,7 +197,11 @@ actor InlineFindTransport {
             checks["NativeFindStaysVisibleWithoutLibraryModal"] = controller.isSearchVisible && hosted() != nil && !store.showingLibrarySearch && store.baseWorkspaceRoute == "reader" && store.auxiliaryPresentation == nil
             let modelCount = models.count; aiButton()?.performClick(nil); await settle()
             checks["RepeatedAIClickKeepsOneEstimateAndSession"] = models.count == modelCount
-            checks["EstimateControlsAppearInsideNativePanel"] = hosted().map { textAndIDs($0).contains("inline-ai-search-start") && textAndIDs($0).contains("开始 AI 查找") } == true
+            observations["estimateAXText"] = hosted().map(textAndIDs) ?? ""
+            var control = controlPixels()
+            checks["EstimateControlsAppearInsideNativePanel"] = await wait { control = self.controlPixels(); return self.similarity(control.actual, control.expected) > 0.97 }
+            checks["ControlPixelOracleRejectsMissingLabel"] = control.expected.count > 100 && similarity(control.absent, control.expected) < 0.85
+            observations["estimateControlGlyphOverlap"] = similarity(control.actual, control.expected)
             let hostFrame = hosted().map { $0.convert($0.bounds, to: reader) } ?? .zero
             checks["InlineBodyHasUsableWidthBelowSearchField"] = hostFrame.width >= 500 && hostFrame.height >= 119 && field.frame.height >= 43.5
             raster("estimate")
@@ -115,7 +212,18 @@ actor InlineFindTransport {
             checks["ResultHasExactOriginalQuoteAndPage"] = model.session.matches.count == 1 && model.session.matches.first?.source.page == 13 && model.session.matches.first?.source.quote == "寒舍商议"
             let savedHit = model.session.matches.first
             await settle(250)
-            checks["RealResultRowIsRenderedInInlineHost"] = hosted().map { textAndIDs($0).contains("寒舍商议") && textAndIDs($0).contains("inline-ai-result-") } == true
+            observations["resultAXText"] = hosted().map(textAndIDs) ?? ""
+            var result = resultPixels()
+            checks["RealResultRowIsRenderedInInlineHost"] = await wait {
+                result = self.resultPixels()
+                let split = Int((self.observations["resultPixelWidth"] as? Double ?? 0) / 2)
+                let quote = self.similarity(Set(result.actual.filter { $0.x < split }), Set(result.expected.filter { $0.x < split }))
+                let locator = self.similarity(Set(result.actual.filter { $0.x >= split }), Set(result.expected.filter { $0.x >= split }))
+                self.observations["quoteGlyphOverlap"] = quote; self.observations["locatorGlyphOverlap"] = locator
+                return !result.expected.filter { $0.x >= split }.isEmpty && quote > 0.97 && locator > 0.97
+            }
+            checks["ResultPixelOracleRejectsMissingRow"] = result.expected.count > 100 && similarity(result.absent, result.expected) < 0.85
+            observations["resultRowGlyphOverlap"] = similarity(result.actual, result.expected)
             if let hit = model.session.matches.first { model.pick(hit) }
             checks["InlineResultNavigatesSamePDFToActualPage"] = await wait { controller.page == 13 }
             checks["ResultNavigationKeepsFindAndUnderlyingReader"] = controller.isSearchVisible && pdf.document.map(ObjectIdentifier.init) == identity && !store.showingLibrarySearch
