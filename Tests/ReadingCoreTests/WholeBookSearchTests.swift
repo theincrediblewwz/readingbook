@@ -252,6 +252,12 @@ final class WholeBookSearchTests: XCTestCase {
         let plan = try WholeBookSearchPlan.prepare(query: "意思", snapshot: snapshot(["甲处原文", "乙处才有寒舍商议"]), settings: settings)
         let batch = plan.batches[0]
         XCTAssertEqual(batch.parts[0].unit.id, "u0")
-        XCTAssertThrowsError(try WholeBookSearchEngine.parse(json([hit(batch, quote: "寒舍商议")]), batch: batch))
+        // The provider's part label is only a hint. A uniquely located quote
+        // may recover its real sent part, never inherit the claimed u0 page.
+        let recovered = try WholeBookSearchEngine.parse(json([hit(batch, quote: "寒舍商议")]), batch: batch)
+        XCTAssertEqual(recovered.map { $0.source.unitID }, ["u1"])
+        XCTAssertEqual(recovered.map { $0.source.page }, [2])
+        XCTAssertEqual(recovered.map { $0.source.quote }, ["寒舍商议"])
+        XCTAssertThrowsError(try WholeBookSearchEngine.parse(json([["partID":"not-sent", "quote":"寒舍商议", "reason":"相关"]]), batch: batch))
     }
 }

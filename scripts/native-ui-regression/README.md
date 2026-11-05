@@ -292,3 +292,17 @@ system preference. Both branches retain exact original-page and byte checks.
 The runner denies access to the separate SwiftPM build-tree resource bundle.
 The real helper app keeps its copy under Contents/Resources, matching the
 installed layout, so a direct Bundle.module regression fails before packaging.
+
+
+## Search progress and frozen page source
+
+`run-reader-find.py --bin-dir .build/tests/debug --mode context --tag ci-search-context`
+links the real inline search view/session and AppStore into an isolated native host.
+Its 25 checks require streaming for intent and reading, waiting progress before any
+completed batch, stop/continue and stale-result rejection, and a frozen page body
+in the first actual chat request. Navigation during the request cannot change its
+citation page. One bounded citation correction is exercised without authorizing an
+adjacent page. Private notes, source bytes and old history remain preserved.
+The deterministic transport uses no real model; network and original-library access
+are denied. This is separate from the bounded actual-service diagnostic recorded
+in Design/2026-11-05-search-context-reliability.md.

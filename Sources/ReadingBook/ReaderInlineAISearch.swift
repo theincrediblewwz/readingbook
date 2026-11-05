@@ -106,11 +106,7 @@ struct ReaderInlineAISearchView: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
     }
     private var status: String {
-        if session.preparing { return "正在准备本书原文…" }
-        if session.understanding { return "AI 正在理解你的意思…" }
-        if session.running { return "AI 阅读中 · 已读 \(session.completedUnits) 段" }
-        if session.complete { return "AI 已查完可读原文 · \(session.matches.count) 处" }
-        return session.plan == nil ? "AI 阅读全文" : session.completedBatches == 0 ? "先理解意图，再阅读全文" : "已暂停 · \(session.matches.count) 处"
+        session.statusDescription
     }
     private var detail: String {
         guard let plan=session.plan else { return "结果保留真实原文与位置，点击可在当前书页定位。" }

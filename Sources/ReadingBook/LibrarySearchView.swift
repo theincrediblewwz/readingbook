@@ -236,7 +236,7 @@ struct LibrarySearchView: View {
             if wholeBook.preparing || wholeBook.running { ProgressView().controlSize(.small) }
             VStack(alignment: .leading, spacing: 5) {
                 if let plan = wholeBook.plan {
-                    Text(wholeBook.understanding ? "第一步：理解意图，推测线索…" : !wholeBook.running && wholeBook.keywords.isEmpty ? "已准备好 · 先理解意图，再阅读全文" : wholeBook.complete ? "可读取的原文已查完" : "第二步：阅读全文 · 已读 \(wholeBook.completedUnits) / \(plan.readableUnitCount) 段内容 · \(wholeBook.completedBatches) / \(plan.batches.count) 批")
+                    Text(wholeBook.statusDescription)
                         .font(.system(size: 14, weight: .medium))
                     Text(wholeBook.tokenCost > 0 ? "已完成请求约用 \(wholeBook.tokenCost.formatted()) token · 找到 \(wholeBook.matches.count) 处" : plan.readingArrangement + " · 预计 \(plan.batches.count + 1) 次请求（含理解意图） · 最高约 \(plan.estimatedMaximumTokens.formatted()) token（保守估算）")
                         .font(.system(size: 12)).foregroundStyle(.secondary)

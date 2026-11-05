@@ -425,6 +425,19 @@ struct ReadingQuerySession {
         self.savedEvidenceAdmission = savedEvidenceAdmission
     }
 
+    /// The reader explicitly chose this page/selection. Supply a bounded,
+    /// source-labelled excerpt before asking the model, rather than relying on
+    /// it to discover and call a read tool before understanding "this page".
+    /// Wide scopes and notes keep their existing on-demand capabilities.
+    mutating func initialSource(maximumBytes: Int) throws -> String? {
+        guard snapshot.scope == .page || snapshot.scope == .selection, maximumBytes >= 512 else { return nil }
+        var candidate = self
+        candidate.sourceExcerpts = snapshot.sources.prefix(32).reversed().map { ($0.unitID, $0.text) }
+        let supplied = try candidate.finalEvidence(maximumBytes: maximumBytes)
+        if supplied != nil { sourceExcerpts = candidate.sourceExcerpts }
+        return supplied
+    }
+
     /// Repack only genuinely supplied text for a standalone final request.
     /// Dropped/truncated fragments lose their citation permission as well.
     mutating func finalEvidence(maximumBytes: Int) throws -> String? {

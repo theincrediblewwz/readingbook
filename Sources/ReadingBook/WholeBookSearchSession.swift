@@ -15,10 +15,42 @@ import ReadingCore
     @Published private(set) var tokenCost = 0
     @Published private(set) var limited = false
     @Published private(set) var errorMessage = ""
+    @Published private(set) var activeBatchNumber = 0
+    @Published private(set) var requestProgress: AIProgressEvent?
     private var generation = UUID()
+    private var progressOperation = UUID()
     private var task: Task<Void, Never>?
     var complete: Bool { plan.map { completedBatches == $0.batches.count } ?? false }
     var completedUnits: Int { plan?.completedUnitCount(afterBatchCount: completedBatches) ?? 0 }
+    var statusDescription: String {
+        if preparing { return "正在准备本书原文…" }
+        if understanding { return "AI 正在理解你的意思…" }
+        if running {
+            let batch = "第\(activeBatchNumber)/\(plan?.batches.count ?? 0)批"
+            guard let progress = requestProgress else { return activeBatchNumber > 0 ? "正在准备\(batch)原文…" : "正在安排模型请求…" }
+            switch progress.phase {
+            case .waitingForResponse: return "\(batch)请求中 · 等待模型响应"
+            case .reasoning: return "\(batch)模型思考中 · 已返回\(progress.reasoningCharacters ?? 0)字"
+            case .answering: return "\(batch)正在返回结果 · \(progress.answerCharacters ?? 0)字"
+            case .receiving, .receivingTools: return "\(batch)服务已响应 · 正在接收"
+            case .requestCompleted: return "\(batch)已返回 · 正在核对原文"
+            default: return "正在准备\(batch)请求…"
+            }
+        }
+        if complete { return "AI 已查完可读原文 · \(matches.count)处" }
+        if activeBatchNumber > 0 || !keywords.isEmpty { return "已暂停 · 完成\(completedBatches)/\(plan?.batches.count ?? 0)批" }
+        return plan == nil ? "AI 阅读全文" : "先理解意图，再阅读全文"
+    }
+
+    private func observe(_ reader: AIReader, owner: UUID) async {
+        let operation = UUID(); progressOperation = operation; requestProgress = nil
+        await reader.setProgressHandler { [weak self] event in
+            Task { @MainActor in
+                guard let self, self.generation == owner, self.progressOperation == operation, self.running else { return }
+                self.requestProgress = event
+            }
+        }
+    }
 
     func prepare(query: String, snapshot: LibrarySourceSnapshot, settings: ProviderSettings) {
         cancel(clear: true)
@@ -58,6 +90,7 @@ import ReadingCore
                 guard let self, self.generation == owner else { return }
                 if self.keywords.isEmpty {
                     self.understanding = true
+                    await self.observe(reader, owner: owner)
                     let intent = try await reader.prepareWholeBookSearchIntent(query: plan.query, languageProfile: plan.languageProfile, settings: settings, apiKey: apiKey)
                     guard !Task.isCancelled, self.generation == owner else { return }
                     try await checkOwner()
@@ -66,6 +99,8 @@ import ReadingCore
                 let keywords = self.keywords
                 for batch in plan.batches.dropFirst(start) {
                     try await checkOwner()
+                    self.activeBatchNumber = batch.index + 1
+                    await self.observe(reader, owner: owner)
                     let result = try await reader.searchWholeBookBatch(batch, keywords: keywords, settings: settings, apiKey: apiKey)
                     guard !Task.isCancelled, self.generation == owner else { return }
                     try await checkOwner()
@@ -93,6 +128,7 @@ import ReadingCore
 
     func cancel(clear: Bool = false) {
         invalidateWork(); running = false; preparing = false; understanding = false
-        if clear { keywords = []; plan = nil; matches = []; completedBatches = 0; tokenCost = 0; limited = false; errorMessage = "" }
+        requestProgress = nil; progressOperation = UUID()
+        if clear { keywords = []; plan = nil; matches = []; completedBatches = 0; tokenCost = 0; limited = false; errorMessage = ""; activeBatchNumber = 0 }
     }
 }
