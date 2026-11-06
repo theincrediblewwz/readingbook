@@ -6,6 +6,7 @@ struct SettingsActionButtonStyle: ButtonStyle {
     var prominent = false
     @Environment(\.isEnabled) private var enabled
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.readingReduceMotion) private var reduceMotion
     @State private var hovered = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -18,9 +19,11 @@ struct SettingsActionButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(prominent ? Palette.accent : Palette.paper)
                     .overlay {
-                        if !prominent, hovered || configuration.isPressed {
+                        if enabled, hovered || configuration.isPressed {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Palette.accent.opacity(configuration.isPressed ? 0.12 : 0.045))
+                                .fill(prominent ? Color.white.opacity(configuration.isPressed ? 0.16 : 0.09)
+                                      : Palette.accent.opacity(configuration.isPressed ? 0.12 : 0.045))
+                                .allowsHitTesting(false)
                         }
                     }
             }
@@ -33,6 +36,7 @@ struct SettingsActionButtonStyle: ButtonStyle {
             .opacity(enabled ? (configuration.isPressed ? 0.88 : 1) : 0.45)
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .onHover { hovered = $0 }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.14), value: hovered)
     }
 }
 

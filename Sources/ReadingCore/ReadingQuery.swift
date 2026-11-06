@@ -368,12 +368,29 @@ public struct ReadingAnswerResult: Sendable {
 
 /// Shared conservative estimator: ProviderClient also budgets UTF-8 transport bytes.
 enum QueryBudget {
+    /// One question freezes its model and tool catalogue. JSON encodes the
+    /// messages array independently of its enclosing object, so replacing the
+    /// empty [] contributes exactly its encoded size minus two bytes. Keep the
+    /// provider's existing upper estimate and validate the real request later.
+    struct Envelope {
+        private let withoutTools: Int
+        private let withTools: Int
+        init(tools: [[String: Any]], model: String) throws {
+            withoutTools = try QueryBudget.inputBytes([], tools: [], model: model) - 2
+            withTools = try QueryBudget.inputBytes([], tools: tools, model: model) - 2
+        }
+        func inputBytes(_ messages: [[String: Any]], includingTools: Bool = true) throws -> Int {
+            guard JSONSerialization.isValidJSONObject(messages) else { throw ReadingError.invalid("模型消息包含无法编码的JSON值，未发送请求。") }
+            return try JSONSerialization.data(withJSONObject: messages, options: [.sortedKeys]).count + (includingTools ? withTools : withoutTools)
+        }
+    }
     static func inputBytes(_ messages: [[String: Any]], tools: [[String: Any]], model: String = "") throws -> Int {
         // Same body fields and byte-based upper estimate as ProviderClient.
         // Use the longer output key and largest legal numeral conservatively.
         var body: [String: Any] = ["model": model.trimmingCharacters(in: .whitespacesAndNewlines), "messages": messages,
             "stream": false, "n": 1, "max_completion_tokens": 1_048_576]
         if !tools.isEmpty { body["tools"] = tools; body["tool_choice"] = "auto" }
+        guard JSONSerialization.isValidJSONObject(body) else { throw ReadingError.invalid("模型消息或工具声明包含无法编码的JSON值，未发送请求。") }
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]).count + 256
     }
     static func fitHistory(_ history: [ChatMessage], maximumBytes: Int) -> [[String: Any]] {

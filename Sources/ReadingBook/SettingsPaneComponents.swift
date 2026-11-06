@@ -9,7 +9,7 @@ struct SettingsPaneField<Control: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
-            control()
+            control().help(detail ?? title).accessibilityHint(detail ?? title)
             if let detail {
                 Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
@@ -28,7 +28,7 @@ struct SettingsPaneControlRow<Control: View>: View {
                 Text(title).font(.system(size: 14, weight: .medium))
                 Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }.frame(maxWidth: .infinity, alignment: .leading)
-            control().frame(maxWidth: .infinity, alignment: .leading)
+            control().frame(maxWidth: .infinity, alignment: .leading).help(detail).accessibilityHint(detail)
         }.padding(16)
     }
 }

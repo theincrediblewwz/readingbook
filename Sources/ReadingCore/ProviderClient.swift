@@ -97,6 +97,9 @@ enum ProviderClient {
         let outputKey = settings.tokenLimitParameter ?? "max_tokens"
         guard ["max_tokens", "max_completion_tokens"].contains(outputKey) else { throw ReadingError.invalid("不支持的输出 token 参数。") }
         body[outputKey] = settings.maxOutputTokens
+        // Darwin JSONSerialization can raise an Objective-C exception for NaN,
+        // infinity or unsupported values instead of a catchable Swift error.
+        guard JSONSerialization.isValidJSONObject(body) else { throw ReadingError.invalid("模型请求包含无法编码的JSON值，未发送请求。") }
         let initial = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         guard initial.count <= 16 * 1024 * 1024 else { throw ReadingError.invalid("模型请求超过 16 MiB，请缩小页图或内容范围。") }
         // Base64 bytes are transport data, not text tokens. Price images separately

@@ -273,13 +273,8 @@ extension ReadingQuerySession {
             return result
         }
         guard let project else { return try json(["ok": false, "status": "unsupported", "message": "宿主尚未连接该读取能力。"] ) }
-        let scoped = scopedKnowledgeProject() ?? project
-        let boundary = KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs))
-        // Construct this index once, rather than rebuilding it per result row.
-        // Previous sources stay derived context, never current citation grants.
-        let reuse = ["objects_search", "object_get"].contains(name) ? SavedKnowledgeReuse(project: project, currentUnitIDs: Set(snapshot.unitIDs),
-            currentSlices: Dictionary(snapshot.sources.map { ($0.unitID, $0.text) }, uniquingKeysWith: { first, _ in first }),
-            currentRanges: try snapshot.sourceRanges(in: project)) : nil
+        // Capability/coverage metadata does not depend on projected knowledge.
+        // Defer that projection to calls which actually read scoped objects.
         switch name {
         case "capabilities_list":
             if let group = arguments["schemaFor"] as? String {
@@ -288,16 +283,29 @@ extension ReadingQuerySession {
                 switch group { case "knowledge": schema = ReadingProposalSchemas.knowledge; case "graph": schema = ReadingProposalSchemas.graph
                 case "documents": schema = ReadingProposalSchemas.documents; case "bookScheme": schema = ReadingProposalSchemas.bookScheme; default: throw invalid("未知提案组。") }
                 var result: [String: Any] = ["ok": true, "group": group, "schema": schema, "note": "只是结构说明，不是授权或提交。"]
-                if group == "knowledge" { result["referenceGuide"] = ReadingProposalSchemas.referenceGuide(in: scoped) }
+                if group == "knowledge" { result["referenceGuide"] = ReadingProposalSchemas.referenceGuide(in: project) }
                 return try json(result)
             }
             let schemas = ReadingQueryToolCatalog.schemas(snapshot: snapshot, host: hostTools, proposals: proposalAccess)
             return try json(["ok": true, "tools": schemas.compactMap { ($0["function"] as? [String: Any])?["name"] }, "scope": snapshot.scope.rawValue,
                 "writes": proposalAccess == nil ? "disabled" : "host_controlled_proposals", "workspace": workspace != nil, "visibleObjects": workspace?.visibleObjects != nil])
         case "book_schema_get":
-            return try schemaSection(arguments, scoped: scoped, maximumBytes: maximumBytes)
+            // Only the graph section reads scoped objects. Other sections are
+            // declarations or this run's receipts, not a knowledge projection.
+            return try schemaSection(arguments, scoped: arguments["section"] as? String == "graph" ? (scopedKnowledgeProject() ?? project) : project, maximumBytes: maximumBytes)
         case "reading_coverage_get":
-            return try page(snapshot.unitIDs.map { id in ["id": id, "status": project.coverage[id]?.status.rawValue ?? "pending", "warning": project.units.first { $0.id == id }?.warning as Any? ?? NSNull()] as [String: Any] }, arguments, maximumBytes)
+            let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            return try page(snapshot.unitIDs.map { id in ["id": id, "status": project.coverage[id]?.status.rawValue ?? "pending", "warning": units[id]?.warning as Any? ?? NSNull()] as [String: Any] }, arguments, maximumBytes)
+        default: break
+        }
+        let scoped = scopedKnowledgeProject() ?? project
+        let boundary = KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs))
+        // Construct this index once, rather than rebuilding it per result row.
+        // Previous sources stay derived context, never current citation grants.
+        let reuse = ["objects_search", "object_get"].contains(name) ? SavedKnowledgeReuse(project: project, currentUnitIDs: Set(snapshot.unitIDs),
+            currentSlices: Dictionary(snapshot.sources.map { ($0.unitID, $0.text) }, uniquingKeysWith: { first, _ in first }),
+            currentRanges: try snapshot.sourceRanges(in: project)) : nil
+        switch name {
         case "objects_search":
             let query = arguments["query"] as? String ?? "", types = Set(arguments["typeIDs"] as? [String] ?? [])
             guard query.count <= 400 else { throw invalid("检索词过长。") }
