@@ -8,11 +8,13 @@ public enum ReadingSpoilerProjection {
         fileprivate let entities: [String: KnowledgeEntity]
         fileprivate let allowed: Set<String>?
         fileprivate let versions: ReadingKnowledgeRuntime.VersionContext
+        fileprivate let userNames: Set<String>
         public init(project: BookProject, allowedUnitIDs: Set<String>?) {
             units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             entities = Dictionary(project.entities.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             allowed = allowedUnitIDs
             versions = ReadingKnowledgeRuntime.VersionContext(project: project, allowed: allowedUnitIDs)
+            userNames = Set((project.knowledgeUserEdits?.records ?? []).filter { $0.fields.contains("name") }.map { $0.kind.rawValue + "/" + $0.objectID })
         }
         public func entity(_ value: KnowledgeEntity) -> KnowledgeEntity? { ReadingSpoilerProjection.entity(value, context: self) }
         public func event(_ value: KnowledgeEvent) -> KnowledgeEvent? { ReadingSpoilerProjection.event(value, context: self) }
@@ -41,10 +43,11 @@ public enum ReadingSpoilerProjection {
             !name.isEmpty && local.contains { exact(name, in: $0.quote) }
         }
         var result = original
-        result.name = names.first ?? "本段关联对象"
+        let userName = context.userNames.contains("entity/" + canonical.id) && original.name == canonical.name && local.count == original.evidence.count
+        result.name = userName ? original.name : (names.first ?? "本段关联对象")
         result.aliases = original.aliases.filter { names.contains($0) }
         result.evidence = local
-        if local.count != original.evidence.count || !names.contains(original.name) {
+        if local.count != original.evidence.count || (!names.contains(original.name) && !userName) {
             result.summary = ""; result.properties = [:]
             result.latitude = nil; result.longitude = nil; result.locationNote = nil
         }
@@ -70,7 +73,8 @@ public enum ReadingSpoilerProjection {
         }
         guard !local.isEmpty else { return nil }
         var result = original
-        let nameVisible = local.contains(where: { exact(original.name, in: $0.quote) })
+        let nameVisible = local.contains(where: { exact(original.name, in: $0.quote) }) ||
+            context.userNames.contains("event/" + canonical.id) && original.name == canonical.name && local.count == original.evidence.count
         if !nameVisible { result.name = "本段关联事件" }
         result.evidence = local
         let complete = local.count == original.evidence.count

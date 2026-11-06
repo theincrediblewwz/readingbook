@@ -5,6 +5,11 @@ import Foundation
 enum AIProjectMerge {
     static let writable: Set<String> = ["coverage", "types", "entities", "events", "relations", "views", "methods", "plan", "insights", "syntheses", "nodes", "edges", "chats", "audit", "plugins", "appliedOperationIDs", "lastUnitID", "paragraphReceipts", "readingStepResults", "workflowRuns", "receiptBatch", "smartReading", "readingExperience", "bookSchemes", "mathVerifications", "temporalKnowledge", "graphGroups"]
     static func merge(base: BookProject, result: BookProject, latest: BookProject) throws -> BookProject {
+        // Reject attempted ownership changes, then rebase locked values before
+        // conflict detection so a late AI job can still add independent evidence.
+        guard base.knowledgeUserEdits == result.knowledgeUserEdits else { throw ReadingError.invalid("AI 不能改写用户修正保护。") }
+        let base = try KnowledgeUserEditsRuntime.preserving(base, from: latest)
+        let result = try KnowledgeUserEditsRuntime.preserving(result, from: latest)
         func sameSource(_ other: BookProject) -> Bool {
             base.units == other.units && zip(base.units, other.units).allSatisfy { $0.text.utf8.elementsEqual($1.text.utf8) }
         }

@@ -32,6 +32,7 @@ public enum ControlledKnowledgeRuntime {
     }
 
     static func apply(_ changes: ControlledKnowledgeChanges, to project: inout BookProject, allowedUnitIDs: Set<String>, requiresReceipts: Bool, identity: inout ControlledIdentityMap) throws {
+        let userEditsBaseline = project
         guard !allowedUnitIDs.isEmpty, allowedUnitIDs.isSubset(of: Set(project.units.map(\.id))), try ControlledChangeCoding.data(changes).count <= 262_144 else { throw ControlledChangeError.invalid("知识批次须有获准原文，且不能超过256 KiB。") }
         if requiresReceipts { try SmartReadingRuntime.requireAnalysisAuthority(unitIDs: allowedUnitIDs, in: project) }
         let counts = [(changes.types ?? []).count, (changes.entities ?? []).count, (changes.events ?? []).count, (changes.relations ?? []).count,
@@ -74,6 +75,9 @@ public enum ControlledKnowledgeRuntime {
             try evidence(entity.evidence)
             if let index = project.entities.firstIndex(where: { $0.id == entity.id }) {
                 var old = project.entities[index]
+                if KnowledgeUserEditsRuntime.locked("typeID", id: entity.id, kind: .entity, in: project) { entity.typeID = old.typeID }
+                if KnowledgeUserEditsRuntime.locked("latitude", id: entity.id, kind: .entity, in: project) { entity.latitude = old.latitude }
+                if KnowledgeUserEditsRuntime.locked("longitude", id: entity.id, kind: .entity, in: project) { entity.longitude = old.longitude }
                 guard old.typeID == entity.typeID, old.latitude == nil || entity.latitude == nil || old.latitude == entity.latitude,
                       old.longitude == nil || entity.longitude == nil || old.longitude == entity.longitude else { throw ControlledChangeError.conflict("不能改写已有实体类型或冲突坐标。") }
                 old.aliases = union(old.aliases, entity.aliases + (old.name == entity.name ? [] : [entity.name]))
@@ -96,6 +100,8 @@ public enum ControlledKnowledgeRuntime {
                   event.endYear.map({ (-1_000_000_000_000...1_000_000_000_000).contains($0) }) ?? true else { throw ControlledChangeError.invalid("事件实体引用或年份无效。") }
             if let index = project.events.firstIndex(where: { $0.id == event.id }) {
                 var old = project.events[index]
+                if KnowledgeUserEditsRuntime.locked("startYear", id: event.id, kind: .event, in: project) { event.startYear = old.startYear }
+                if KnowledgeUserEditsRuntime.locked("endYear", id: event.id, kind: .event, in: project) { event.endYear = old.endYear }
                 guard old.startYear == nil || event.startYear == nil || old.startYear == event.startYear,
                       old.endYear == nil || event.endYear == nil || old.endYear == event.endYear else { throw ControlledChangeError.conflict("事件年份与既有记录冲突。") }
                 old.startYear = old.startYear ?? event.startYear; old.endYear = old.endYear ?? event.endYear
@@ -113,6 +119,9 @@ public enum ControlledKnowledgeRuntime {
             let targets = Set(project.entities.map(\.id)).union(project.events.map(\.id)).union(project.documents.map(\.id))
             guard targets.contains(relation.fromID), targets.contains(relation.toID) else { throw ControlledChangeError.invalid("知识关系引用了不存在的对象。") }
             if let index = project.relations.firstIndex(where: { $0.id == relation.id }) {
+                if KnowledgeUserEditsRuntime.locked("label", id: relation.id, kind: .relation, in: project) { relation.label = project.relations[index].label }
+                if KnowledgeUserEditsRuntime.locked("fromID", id: relation.id, kind: .relation, in: project) { relation.fromID = project.relations[index].fromID }
+                if KnowledgeUserEditsRuntime.locked("toID", id: relation.id, kind: .relation, in: project) { relation.toID = project.relations[index].toID }
                 guard project.relations[index].fromID == relation.fromID, project.relations[index].toID == relation.toID,
                       project.relations[index].label == relation.label else { throw ControlledChangeError.conflict("不能用同一关系 ID 改写含义或端点。") }
                 project.relations[index].evidence = union(project.relations[index].evidence, relation.evidence)
@@ -175,6 +184,7 @@ public enum ControlledKnowledgeRuntime {
             try ReadingExperienceTools.validateTransition(from: project.readingExperience, to: experience, allowedUnitIDs: allowedUnitIDs, in: project)
             project.readingExperience = experience
         }
+        project = try KnowledgeUserEditsRuntime.preserving(project, from: userEditsBaseline)
         try TemporalKnowledgeRuntime.validateStoredState(in: project)
     }
 

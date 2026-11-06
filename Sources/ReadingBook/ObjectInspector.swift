@@ -52,6 +52,7 @@ private struct ObjectInspectorProjection: Sendable {
     @State private var pendingAction: PendingAction?
     @State private var showsDraftConfirmation = false
     @State private var projection: ObjectInspectorProjection?
+    @State private var sharedEdit: SharedKnowledgeEditRequest?
 
     private enum PendingAction { case show(String), close }
     private var objectID: String { displayedID ?? id }
@@ -131,6 +132,7 @@ private struct ObjectInspectorProjection: Sendable {
                 restoreDraft(checkOtherDrafts: true)
             }
             .onDisappear { cacheDraft() }
+            .sheet(item: $sharedEdit) { request in SharedKnowledgeEditor(request: request).environmentObject(store) }
             .task(id: projectionRequest) {
                 guard let book = store.componentDataBook else { projection = nil; return }
                 let owner = projectionOwner, target = objectID, allowed = store.temporalBoundary.allowedUnitIDs
@@ -153,6 +155,7 @@ private struct ObjectInspectorProjection: Sendable {
 
     @ViewBuilder private var objectContents: some View {
         if let entity = presentedEntity {
+            KnowledgeOwnershipBadge(id: entity.id, kind: .entity)
             Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent.opacity(0.08), in: Capsule())
             Text(entity.name).font(.system(size: 25, weight: .semibold)).textSelection(.enabled)
             if store.queryAnswerStyle == .mentor { TeacherBackgroundCard(objectID: entity.id) }
@@ -161,7 +164,7 @@ private struct ObjectInspectorProjection: Sendable {
             HStack(spacing: 12) {
                 Button {
                     guard let original = store.book?.entities.first(where: { $0.id == entity.id }) else { return }
-                    draft = EntityEditDraft(entity: original); localError = nil; restoredDraft = false
+                    draft = EntityEditDraft(entity: original, basis: KnowledgeUserEditsRuntime.record(original.id, kind: .entity, in: store.book!)?.basis ?? .interpretation); localError = nil; restoredDraft = false
                 } label: { Label("编辑", systemImage: "square.and.pencil") }
                 Spacer(minLength: 0)
                 ObjectManagementControl(kind: .entity, id: entity.id, title: entity.name)
@@ -183,6 +186,7 @@ private struct ObjectInspectorProjection: Sendable {
             }
             EvidenceList(evidence: visibleEvidence(entity.evidence))
         } else if let event = presentedEvent {
+            KnowledgeOwnershipBadge(id: event.id, kind: .event)
             Text("事件").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent.opacity(0.08), in: Capsule())
             Text(event.name).font(.system(size: 25, weight: .semibold))
             if store.queryAnswerStyle == .mentor { TeacherBackgroundCard(objectID: event.id) }
@@ -191,6 +195,9 @@ private struct ObjectInspectorProjection: Sendable {
             explanationButton(event.name)
             if canShow(event.evidence) { linkGroup("地点", ids: event.placeIDs); linkGroup("参与者", ids: event.participantIDs) }
             EvidenceList(evidence: visibleEvidence(event.evidence))
+            Button { if let current = store.book?.events.first(where: { $0.id == event.id }) { sharedEdit = .init(value: .event(current), store: store) } } label: {
+                Label("修正事件介绍", systemImage: "square.and.pencil").frame(minHeight: 44)
+            }.buttonStyle(ReadingToolbarButtonStyle()).help("修改共享的事件名称和概述；所有组件同步，后续 AI 整理保留。")
             ObjectManagementControl(kind: .event, id: event.id, title: event.name, showsTitle: true).disabled(store.isBusy)
         } else if projection?.owner != projectionOwner {
             HStack(spacing: 8) { ProgressView().controlSize(.small); Text("读取本地介绍…").font(.callout).foregroundStyle(.secondary) }
@@ -211,10 +218,13 @@ private struct ObjectInspectorProjection: Sendable {
         }
         ForEach((store.componentDataBook?.relations ?? []).filter { canShow($0.evidence) && ($0.fromID == objectID || $0.toID == objectID) }) { relation in
             if let title = visibleObjectTitle(relation.fromID == objectID ? relation.toID : relation.fromID) { HStack {
+                KnowledgeOwnershipBadge(id: relation.id, kind: .relation, compact: true)
                 Button { showObject(relation.fromID == objectID ? relation.toID : relation.fromID) } label: {
                     Label("\(relation.label) · \(title)", systemImage: "arrow.up.right").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
                 Spacer(minLength: 0)
+                Button { if let current = store.book?.relations.first(where: { $0.id == relation.id }) { sharedEdit = .init(value: .relation(current), store: store) } } label: { Image(systemName: "square.and.pencil") }
+                    .buttonStyle(ReadingToolbarButtonStyle()).help("修正关系名称；各组件共用，保留原文出处。").accessibilityLabel("修正关系名称").disabled(store.isBusy || store.editorDirty)
                 Button {
                     let sourceBookID = store.bookID
                     Task { guard store.bookID == sourceBookID else { return }; await store.removeConnection(relation.id, relation: true) }
@@ -311,7 +321,7 @@ private struct ObjectInspectorProjection: Sendable {
             let entity = try draft.validated(types: store.book?.types ?? [])
             saving = true; localError = nil
             Task {
-                let saved = await store.saveEntity(entity, inBook: expectedBookID, onError: { message in
+                let saved = await store.saveEntity(entity, inBook: expectedBookID, basis: draft.basis, expected: draft.original, onError: { message in
                     if loadedBookID == expectedBookID { localError = message }
                 })
                 saving = false

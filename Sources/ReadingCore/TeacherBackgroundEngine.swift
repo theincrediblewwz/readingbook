@@ -50,7 +50,9 @@ public struct TeacherBackgroundRequest: Hashable, Sendable {
         let complete = local.count <= 16
         let allFacts = (entity?.summary ?? event?.summary ?? "") +
             (entity?.properties.sorted(by: { $0.key < $1.key }).map { "\n" + $0.key + "：" + $0.value }.joined() ?? "")
-        let visibleFacts = complete ? allFacts : ""
+        let correction = KnowledgeUserEditsRuntime.record(objectID, kind: entity == nil ? .event : .entity, in: project)
+        let ownership = correction.map { "读者修正（\($0.basis.title)；只表示读者判断，不能当作原文明载）：\n" } ?? ""
+        let visibleFacts = complete ? ownership + allFacts : ""
         let facts = visibleFacts.count <= 2400 ? visibleFacts : String(visibleFacts.prefix(1000)) + "\n……\n" + String(visibleFacts.suffix(1400))
         let fingerprintPayload = ["version": "teacher-context-v2", "sourceHash": project.sourceHash,
             "objectID": objectID, "title": title, "factsHash": try BookImporter.sha256(Data(visibleFacts.utf8)), "spoilers": avoidsSpoilers ? "avoid" : "allow"]

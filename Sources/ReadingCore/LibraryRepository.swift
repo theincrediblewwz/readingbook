@@ -142,7 +142,7 @@ public actor LibraryRepository {
 
     /// Canonical metadata after host-only caches have been merged. Callers
     /// publishing a saved result must use this returned value, not their draft.
-    func saveCanonicalProject(_ project: BookProject, generatedOutline: GeneratedBookOutline? = nil, originalBookOutline: BookChapterOutline? = nil, readerCollections: ReaderCollectionState? = nil) throws -> BookProject {
+    func saveCanonicalProject(_ project: BookProject, generatedOutline: GeneratedBookOutline? = nil, originalBookOutline: BookChapterOutline? = nil, readerCollections: ReaderCollectionState? = nil, knowledgeUserEdits: KnowledgeUserEditState? = nil) throws -> BookProject {
         let directory = try bookDirectory(project.id, mustExist: true)
         try recoverDocument(in: directory)
         let existing = try readProject(in: directory)
@@ -154,7 +154,8 @@ public actor LibraryRepository {
         guard Set(existing.documents.map(\.id)).isSubset(of: Set(project.documents.map(\.id))) else {
             throw ReadingError.invalid("项目中的 Markdown 引用比磁盘版本少，已阻止覆盖。请重新载入书籍。")
         }
-        var updated = project
+        var updated = try KnowledgeUserEditsRuntime.preserving(project, from: existing)
+        if let knowledgeUserEdits { updated = project; updated.knowledgeUserEdits = knowledgeUserEdits }
         updated.aiRequestHistory = try AIRequestHistoryMerge.merge(proposed: project.aiRequestHistory, canonical: existing.aiRequestHistory)
         updated.readerAnnotations = existing.readerAnnotations
         updated.generatedOutline = generatedOutline ?? existing.generatedOutline
@@ -223,7 +224,7 @@ public actor LibraryRepository {
         let data = Data(markdown.utf8)
         guard data.count <= Self.documentLimit else { throw ReadingError.invalid("单篇 Markdown 超过 16 MiB。") }
         try validateDocumentPath(document)
-        var updated = project
+        var updated = try KnowledgeUserEditsRuntime.preserving(project, from: existing)
         updated.aiRequestHistory = try AIRequestHistoryMerge.merge(proposed: project.aiRequestHistory, canonical: existing.aiRequestHistory)
         updated.readerAnnotations = existing.readerAnnotations
         updated.generatedOutline = existing.generatedOutline
@@ -710,6 +711,7 @@ public actor LibraryRepository {
         }
         try TemporalKnowledgeRuntime.validateStoredState(in: project)
         try ReadingKnowledgeRuntime.validateStoredState(in: project)
+        try KnowledgeUserEditsRuntime.validate(in: project)
         try BookOutlineRuntime.validateStored(project.generatedOutline)
         try BookChapterRuntime.validateStored(project.originalBookOutline)
         try ControlledGraphRuntime.validate(in: project)

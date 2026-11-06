@@ -517,18 +517,22 @@ public enum PluginEngine {
     }
 
     private static func cardsTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        let baseline = project
         try keys(input, allowed: ["entities"])
         let values = try objects(input, key: "entities", maximum: 128)
         try uniqueIDs(try values.map { try string($0, key: "id", maximum: 128) })
         for value in values { try upsertEntity(value, project: &project, allowed: allowed) }
+        project = try KnowledgeUserEditsRuntime.preserving(project, from: baseline)
         return "已创建或合并 \(values.count) 张实体卡，证据已保留。"
     }
 
     private static func eventsTool(_ input: [String: Any], project: inout BookProject, allowed: Set<String>) throws -> String {
+        let baseline = project
         try keys(input, allowed: ["events"])
         let values = try objects(input, key: "events", maximum: 128)
         try uniqueIDs(try values.map { try string($0, key: "id", maximum: 128) })
         for value in values { try upsertEvent(value, project: &project, allowed: allowed) }
+        project = try KnowledgeUserEditsRuntime.preserving(project, from: baseline)
         return "已创建或合并 \(values.count) 个共享事件。"
     }
 
@@ -539,11 +543,12 @@ public enum PluginEngine {
         for value in values {
             try keys(value, allowed: ["id", "fromID", "toID", "label", "evidence"])
             let id = try identifier(value, key: "id"), from = try identifier(value, key: "fromID"), to = try identifier(value, key: "toID")
-            let label = try string(value, key: "label", maximum: 400)
+            var label = try string(value, key: "label", maximum: 400)
             let evidence = try parseEvidence(value, project: project, allowed: allowed)
             guard objectExists(from, in: project), objectExists(to, in: project) else { throw invalid("关系引用了不存在的实体、事件或文档。") }
             guard !project.entities.contains(where: { $0.id == id }), !project.events.contains(where: { $0.id == id }), !project.documents.contains(where: { $0.id == id }) else { throw invalid("关系 ID 与已有知识对象冲突。") }
             if let index = project.relations.firstIndex(where: { $0.id == id }) {
+                if KnowledgeUserEditsRuntime.locked("label", id: id, kind: .relation, in: project) { label = project.relations[index].label }
                 guard project.relations[index].fromID == from, project.relations[index].toID == to, project.relations[index].label == label else { throw invalid("关系 ID 已指向不同关系。") }
                 project.relations[index].evidence = union(project.relations[index].evidence, evidence)
             } else { project.relations.append(KnowledgeRelation(id: id, fromID: from, toID: to, label: label, evidence: evidence)) }
@@ -599,9 +604,9 @@ public enum PluginEngine {
         let evidence = try parseEvidence(input, project: project, allowed: allowed)
         if let index = project.entities.firstIndex(where: { $0.id == id }) {
             var old = project.entities[index]
-            guard old.typeID == typeID else { throw invalid("已有实体不能通过 upsert 改变类型。") }
-            if let oldLatitude = old.latitude, let latitude = latitude, oldLatitude != latitude { throw invalid("坐标与已有实体冲突；请保留原坐标并另行复核。") }
-            if let oldLongitude = old.longitude, let longitude = longitude, oldLongitude != longitude { throw invalid("坐标与已有实体冲突；请保留原坐标并另行复核。") }
+            guard old.typeID == typeID || KnowledgeUserEditsRuntime.locked("typeID", id: id, kind: .entity, in: project) else { throw invalid("已有实体不能通过 upsert 改变类型。") }
+            if let oldLatitude = old.latitude, let latitude = latitude, oldLatitude != latitude, !KnowledgeUserEditsRuntime.locked("latitude", id: id, kind: .entity, in: project) { throw invalid("坐标与已有实体冲突；请保留原坐标并另行复核。") }
+            if let oldLongitude = old.longitude, let longitude = longitude, oldLongitude != longitude, !KnowledgeUserEditsRuntime.locked("longitude", id: id, kind: .entity, in: project) { throw invalid("坐标与已有实体冲突；请保留原坐标并另行复核。") }
             if old.name != name { old.aliases = union(old.aliases, [name]) }
             old.aliases = union(old.aliases, aliases)
             old.summary = merge(old.summary, summary)

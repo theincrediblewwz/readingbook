@@ -6,6 +6,10 @@ enum ControlledChangeRecords {
     static func revision(_ project: BookProject) throws -> String {
         var value = project
         value.chats = []; value.audit = []; value.lastUnitID = nil
+        // Saving a chat appends its host idempotency marker as well as the
+        // message. Neither changes the reviewed content. Actual analysis,
+        // corrections, documents and layout remain covered below.
+        value.appliedOperationIDs = []
         value.bookmarks = []; value.readerAnnotations = nil
         // Transport counters and host-only explanation caches do not change
         // what the reader reviewed or grant new write authority. Actual source,

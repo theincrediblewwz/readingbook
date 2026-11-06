@@ -96,6 +96,11 @@ struct CompositionWorkspaceView: View {
             Image(systemName: "square.grid.2x2").foregroundStyle(Palette.accent)
             Text(definition?.title ?? "组合阅读").font(.system(size: 21, weight: .semibold, design: .serif))
             Spacer(minLength: 8)
+            if ReadingWorkbench.isWorkbench(definition), let definition {
+                Button { store.prepareWorkbenchContinuation(definition) } label: { Label("继续整理", systemImage: "sparkles").frame(minHeight: 48) }
+                    .buttonStyle(ReadingToolbarButtonStyle()).help("准备一条读到这里的补充请求；先检查已有资料和缺口，保留你的修正，查看后发送。")
+                    .disabled(store.isQueryBusy || store.editorDirty)
+            }
             if !selections.values.allSatisfy(\.isEmpty) || !clocks.isEmpty {
                 Button { selections = [:]; clocks = [:] } label: { Label("全部内容", systemImage: "arrow.counterclockwise").frame(minHeight: 48) }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("清除本页选择和时间筛选")
@@ -536,12 +541,22 @@ private struct CompositionObjectDetails: View {
     @EnvironmentObject private var store: AppStore
     let items: [CompositionItem]
     let selected: Set<String>
+    @State private var showsInspector = false
     private var item: CompositionItem? { items.first { selected.contains($0.objectID ?? $0.documentID ?? $0.id) } ?? (items.count == 1 ? items.first : nil) }
     var body: some View {
         if let item {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(item.title).font(.system(size: 27, weight: .semibold, design: .serif)).textSelection(.enabled)
+                    if let objectID = item.objectID, item.kind == "entity" || item.kind == "event" {
+                        HStack {
+                            KnowledgeOwnershipBadge(id: objectID, kind: item.kind == "event" ? .event : .entity)
+                            Spacer()
+                            Button { showsInspector = true } label: { Label("核对与修正", systemImage: "square.and.pencil").frame(minHeight: 40) }
+                                .buttonStyle(ReadingQuietButtonStyle()).help("打开共享资料；修正后这里和其他组件同步更新。")
+                                .popover(isPresented: $showsInspector) { ObjectInspector(id: objectID, onClose: { showsInspector = false }).frame(width: 470, height: 580) }
+                        }
+                    }
                     if !item.summary.isEmpty { MarkdownText(markdown: item.summary) }
                     if let match = item.fields["temporalMatch"], ["possible", "unknown"].contains(match) {
                         Label(match == "possible" ? "可能在这一时期" : "时间尚未确定", systemImage: "clock.badge.questionmark").font(.caption).foregroundStyle(.secondary)

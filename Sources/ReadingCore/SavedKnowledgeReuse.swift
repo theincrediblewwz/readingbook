@@ -13,6 +13,7 @@ struct SavedKnowledgeReuse {
     private let currentSlices: [String: String]?
     private let savedEvidenceAdmission: ((Evidence) -> Bool)?
     private let versions: ReadingKnowledgeRuntime.VersionContext
+    private let corrections: [String: KnowledgeUserEdit]
 
     init?(project: BookProject, currentUnitIDs: Set<String>, currentSlices: [String: String]? = nil, currentRanges: [ReadingSourceRange]? = nil) {
         let units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -20,6 +21,7 @@ struct SavedKnowledgeReuse {
               currentSlices.map({ Set($0.keys) == currentUnitIDs }) ?? true,
               let cursor = currentUnitIDs.compactMap({ units[$0]?.order }).max() else { return nil }
         self.sourceHash = project.sourceHash; self.cursorOrder = cursor; self.units = units
+        self.corrections = Dictionary((project.knowledgeUserEdits?.records ?? []).map { ($0.kind.rawValue + "/" + $0.objectID, $0) }, uniquingKeysWith: { first, _ in first })
         self.currentSlices = currentSlices
         let admission: ((Evidence) -> Bool)?
         if let currentRanges {
@@ -37,8 +39,15 @@ struct SavedKnowledgeReuse {
     }
 
     func record(id: String) -> [String: Any]? {
-        if let original = entities[id], let value = entity(original) { return record(summary: value.summary, evidence: value.evidence) }
-        if let original = events[id], let value = event(original) { return record(summary: value.summary, evidence: value.evidence) }
+        func marked(_ result: [String: Any]?, kind: KnowledgeRecordKind, currentSummary: String, summary: String) -> [String: Any]? {
+            guard var result else { return nil }
+            if currentSummary == summary, let edit = corrections[kind.rawValue + "/" + id] {
+                result["readerCorrection"] = ["basis": edit.basis.title, "protectedFields": edit.fields, "notice": "保留用户修正；推断和个人理解不是原文明载。"]
+            }
+            return result
+        }
+        if let original = entities[id], let value = entity(original) { return marked(record(summary: value.summary, evidence: value.evidence), kind: .entity, currentSummary: original.summary, summary: value.summary) }
+        if let original = events[id], let value = event(original) { return marked(record(summary: value.summary, evidence: value.evidence), kind: .event, currentSummary: original.summary, summary: value.summary) }
         return nil
     }
 

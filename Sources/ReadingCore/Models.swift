@@ -300,6 +300,8 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var coverImage: BookCoverImage? = nil
     /// Explicit user rename, protected from later AI/editor snapshots.
     public var userTitle: String? = nil
+    /// Host-owned field ownership, not a second copy of the knowledge values.
+    public var knowledgeUserEdits: KnowledgeUserEditState? = nil
     /// In-memory delivery order only; never part of library data, grants or caches.
     public internal(set) var publicationStamp: LibraryPublicationStamp? = nil
     private enum CodingKeys: String, CodingKey {
@@ -307,7 +309,7 @@ public struct BookProject: Codable, Identifiable, Sendable {
         case views, methods, plan, insights, syntheses, documents, nodes, edges, chats, audit, aiRequestHistory
         case plugins, disabledPluginIDs, appliedOperationIDs, lastUnitID, bookmarks, ocrPages, paragraphReceipts
         case readingStepResults, workflowRuns, receiptBatch, smartReading, readerAnnotations, readingExperience
-        case bookSchemes, mathVerifications, temporalKnowledge, graphGroups, controlledChanges, manualTrash, readingKnowledge, generatedOutline, originalBookOutline, readerCollections, coverImage, userTitle
+        case bookSchemes, mathVerifications, temporalKnowledge, graphGroups, controlledChanges, manualTrash, readingKnowledge, generatedOutline, originalBookOutline, readerCollections, coverImage, userTitle, knowledgeUserEdits
     }
     public init(id: String = UUID().uuidString, title: String, originalName: String, sourceHash: String, units: [SourceUnit]) {
         self.id = id; self.title = title; self.originalName = originalName; self.sourceHash = sourceHash; self.units = units

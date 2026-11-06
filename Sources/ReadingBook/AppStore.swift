@@ -891,9 +891,10 @@ import ReadingCore
         catch { if let onError { onError(error.localizedDescription) } else { errorMessage = error.localizedDescription }; return false }
     }
     @discardableResult
-    func saveEntity(_ entity: KnowledgeEntity, inBook expectedBookID: String? = nil, onError: ((String) -> Void)? = nil) async -> Bool {
+    func saveEntity(_ entity: KnowledgeEntity, inBook expectedBookID: String? = nil, basis: KnowledgeEditBasis = .interpretation,
+                    expected: KnowledgeEntity? = nil, onError: ((String) -> Void)? = nil) async -> Bool {
         func fail(_ message: String) -> Bool { if let onError { onError(message) } else { errorMessage = message }; return false }
-        guard var current = book, expectedBookID == nil || current.id == expectedBookID else { return fail("书籍已切换，编辑草稿保留，请回到原书保存。") }
+        guard let current = book, expectedBookID == nil || current.id == expectedBookID else { return fail("书籍已切换，编辑草稿保留，请回到原书保存。") }
         guard !isBusy, let index = current.entities.firstIndex(where: { $0.id == entity.id }) else { return fail("当前任务尚未完成，或卡片已被移除。") }
         guard !entity.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return fail("名称不能为空。") }
         guard (entity.latitude == nil) == (entity.longitude == nil) else { return fail("经度和纬度需要同时填写，或同时留空。") }
@@ -903,8 +904,13 @@ import ReadingCore
         isBusy = true; defer { isBusy = false }
         var edited = entity
         if edited.latitude != nil, (edited.latitude != current.entities[index].latitude || edited.longitude != current.entities[index].longitude), edited.locationNote?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false { edited.locationNote = "用户手动指定坐标；尚未作外部考证。" }
-        current.entities[index] = edited; current.audit.append(ToolAudit(name: "user_edit", summary: "用户编辑卡片：\(entity.name)"))
-        do { publish(try await repository.save(current)); return true } catch { return fail(error.localizedDescription) }
+        let root = libraryRootURL, sourceHash = current.sourceHash
+        do {
+            let saved = try await repository.saveKnowledgeEdit(bookID: current.id, sourceHash: sourceHash,
+                expected: .entity(expected ?? current.entities[index]), replacement: .entity(edited), basis: basis)
+            guard libraryRootURL == root, bookID == current.id, book?.sourceHash == sourceHash else { return false }
+            publish(saved); activity = "共享资料已修正，后续 AI 整理保留你的修改。"; return true
+        } catch { return fail(error.localizedDescription) }
     }
     var enabledViews: [ViewDefinition] {
         guard let current = book else { return [] }

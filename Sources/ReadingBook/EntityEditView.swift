@@ -7,15 +7,18 @@ struct EntityEditDraft: Equatable {
     var entity: KnowledgeEntity
     var latitude: String
     var longitude: String
+    let originalBasis: KnowledgeEditBasis
+    var basis: KnowledgeEditBasis
 
-    init(entity: KnowledgeEntity) {
+    init(entity: KnowledgeEntity, basis: KnowledgeEditBasis = .interpretation) {
         original = entity; self.entity = entity
+        originalBasis = basis; self.basis = basis
         latitude = entity.latitude.map { String($0) } ?? ""
         longitude = entity.longitude.map { String($0) } ?? ""
     }
 
     var isDirty: Bool {
-        entity != original || latitude != (original.latitude.map { String($0) } ?? "")
+        basis != originalBasis || entity != original || latitude != (original.latitude.map { String($0) } ?? "")
             || longitude != (original.longitude.map { String($0) } ?? "")
     }
 
@@ -76,6 +79,7 @@ struct EntityEditView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            KnowledgeEditBasisPicker(basis: $draft.basis)
             field("名称 · 必填") { TextField("卡片名称", text: $draft.entity.name, axis: .vertical).lineLimit(1...3) }
             field("内容类型") {
                 Picker("内容类型", selection: $draft.entity.typeID) {

@@ -7,17 +7,21 @@ public struct ReadingComponentRequest: Codable, Sendable {
     public let viewID: String?
     public let title: String?
     public let composition: CompositionDefinition?
-    public init(componentID: String, viewID: String? = nil, title: String? = nil, composition: CompositionDefinition? = nil) {
+    public let templateID: String?
+    public init(componentID: String, viewID: String? = nil, title: String? = nil, composition: CompositionDefinition? = nil, templateID: String? = nil) {
         self.componentID = componentID; self.viewID = viewID; self.title = title; self.composition = composition
+        self.templateID = templateID
     }
+    public var resolvedComposition: CompositionDefinition? { templateID == ReadingWorkbench.templateID ? ReadingWorkbench.definition() : composition }
     public static func decode(_ data: Data) throws -> Self {
         guard data.count <= 32_768, let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(fields.keys).isSubset(of: ["componentID", "viewID", "title", "composition"]) else { throw ReadingError.invalid("组件请求结构无效。") }
+              Set(fields.keys).isSubset(of: ["componentID", "viewID", "title", "composition", "templateID"]) else { throw ReadingError.invalid("组件请求结构无效。") }
         let value = try JSONDecoder().decode(Self.self, from: data)
         guard !value.componentID.isEmpty, value.componentID.utf8.count <= 128,
               value.viewID.map({ !$0.isEmpty && $0.utf8.count <= 128 }) ?? true,
               value.title.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 400 }) ?? true,
               value.composition == nil || (value.componentID == "reading.composition" && value.viewID == nil) else { throw ReadingError.invalid("组件名称、标题或组合定义无效。") }
+        guard value.templateID == nil || (value.templateID == ReadingWorkbench.templateID && value.componentID == "reading.composition" && value.composition == nil && value.viewID == nil) else { throw ReadingError.invalid("工作台模板无效或与已有视图参数冲突。") }
         return value
     }
 }
@@ -45,6 +49,7 @@ extension ReadingQueryToolCatalog {
             ["componentID": ["type": "string", "minLength": 1, "maxLength": 128],
              "viewID": ["type": "string", "minLength": 1, "maxLength": 128, "description": "复用components_list返回的已有视图；不改其配置。"],
              "title": ["type": "string", "minLength": 1, "maxLength": 400],
+             "templateID": ["type": "string", "enum": [ReadingWorkbench.templateID], "description": "人物、关系、事件和笔记联动工作台；宿主构建布局并自动复用。componentID为reading.composition，勿同时传composition/viewID。"],
              "composition": CompositionSchema.definition], required: ["componentID"])]
     }
 }
@@ -85,7 +90,7 @@ extension LibraryRepository {
         let composition = view.rendererID == "reading.composition"
         guard composition == (view.composition != nil) else { throw ReadingError.invalid("组合组件缺少有效定义。") }
         let matches = current.views.filter { saved in
-            if composition { return saved.rendererID == view.rendererID && saved.composition == view.composition && saved.title == view.title }
+            if composition { return saved.rendererID == view.rendererID && saved.composition == view.composition && (ReadingWorkbench.isWorkbench(view) || saved.title == view.title) }
             return saved.rendererID == view.rendererID && (view.rendererID != nil || equivalentKinds.union([view.kind]).contains(saved.kind))
         }
         let isDisabled: (ViewDefinition) -> Bool = { candidate in

@@ -66,6 +66,7 @@ struct ReadingQueryHostOwner {
             }
             return try viewToolResult("success", "按当前需求选择组件；显示配置不代表已有分析。", extra: ["components": components,
                 "views": views, "totalViews": book.views.count, "nextOffset": page.offset + views.count < book.views.count ? page.offset + views.count as Any : NSNull(),
+                "templates": [["id": ReadingWorkbench.templateID, "componentID": "reading.composition", "title": ReadingWorkbench.title, "purpose": "人物/关系/相关事件/读者笔记联动，选择一个人物时一起查看；已保存的工作台自动复用。"]],
                 "customComponents": "只能组合现有元件，不执行代码；打开的组件沿用这次提问的原文范围，正文读取仍限本次授权。"])
         }
         let request = try ReadingComponentRequest.decode(data)
@@ -80,6 +81,7 @@ struct ReadingQueryHostOwner {
         }
         let route: String
         var created = false
+        let composition = request.resolvedComposition
         if let viewID = request.viewID {
             guard let view = enabledViews.first(where: { $0.id == viewID && $0.configuration?["presentation"] != "inline" }),
                   descriptor.requiresDefinition ? view.rendererID == descriptor.id : registry.equivalent(view, descriptor) else {
@@ -87,32 +89,32 @@ struct ReadingQueryHostOwner {
             }
             route = view.id
         } else if descriptor.permanent {
-            guard request.composition == nil else { throw ReadingError.invalid("这个组件不接受组合定义。") }
+            guard composition == nil else { throw ReadingError.invalid("这个组件不接受组合定义。") }
             route = descriptor.rendererID ?? descriptor.kind.rawValue
         } else if let existing = enabledViews.first(where: { view in
             guard view.configuration?["presentation"] != "inline" else { return false }
             if descriptor.requiresDefinition {
-                return view.rendererID == descriptor.id && request.composition != nil && view.composition == request.composition && view.title == (request.title ?? "本书专属视图")
+                return view.rendererID == descriptor.id && composition != nil && view.composition == composition && (request.templateID != nil || view.title == (request.title ?? "本书专属视图"))
             }
-            return request.composition == nil && registry.equivalent(view, descriptor)
+            return composition == nil && registry.equivalent(view, descriptor)
         }) {
             // Navigation needs no canonical reload or publication. In
             // particular, repeated AI presentation must not invalidate graph
             // and composition preparations for unchanged book content.
             route = existing.id
         } else {
-            guard descriptor.requiresDefinition == (request.composition != nil) else {
+            guard descriptor.requiresDefinition == (composition != nil) else {
                 return try viewToolResult("unsupported", "请提供组合定义，或选择已经保存的视图。")
             }
-            if let definition = request.composition {
+            if let definition = composition {
                 try CompositionRuntime.validate(definition, in: book)
             }
             // Repeated tool calls reuse the same declaration; a single turn may
             // not fill the sidebar with unbounded generated pages.
             guard session.createdCount < 3 else { return try viewToolResult("busy", "这次已经加入三个组件，请先使用它们。") }
-            let title = request.composition == nil ? descriptor.title : (request.title ?? "本书专属视图")
+            let title = composition == nil ? descriptor.title : (request.title ?? (request.templateID != nil ? ReadingWorkbench.title : "本书专属视图"))
             let definition = ViewDefinition(id: "chat-component-" + UUID().uuidString, title: title, kind: descriptor.kind,
-                rendererID: descriptor.rendererID, scope: "current", composition: request.composition)
+                rendererID: descriptor.rendererID, scope: "current", composition: composition)
             let saved = try await repository.ensureReadingComponent(bookID: book.id, sourceHash: book.sourceHash,
                 view: definition, equivalentKinds: descriptor.aliases, grant: session.grant)
             // The atomic append may have completed before cancellation. Keep
@@ -144,7 +146,7 @@ struct ReadingQueryHostOwner {
         }
         func openedResult() throws -> Data {
             try viewToolResult("success", created ? "已加入并打开组件；显示已有资料，尚未新增分析。" : "已打开已有组件；没有重复创建。",
-                extra: ["rendererID": descriptor.id, "componentTitle": descriptor.title, "viewID": route, "created": created, "opened": true, "analysisCreated": false,
+                extra: ["rendererID": descriptor.id, "componentTitle": self.book?.views.first(where: { $0.id == route })?.title ?? descriptor.title, "viewID": route, "created": created, "opened": true, "analysisCreated": false,
                     "sourceScope": session.snapshot?.displayTitle ?? "跟随阅读位置"])
         }
         if renderedComponentPresentation?.matches(self, route: route) == true {
