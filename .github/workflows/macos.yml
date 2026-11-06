@@ -100,6 +100,8 @@ jobs:
           python3 scripts/native-ui-regression/run-component-publication.py --bin-dir .build/tests/debug --tag ci-component-publication-large --count 1024
       - name: Native dynamic conversation component regression
         run: python3 scripts/native-ui-regression/run-dynamic-components.py --bin-dir .build/tests/debug --tag ci-dynamic-components
+      - name: Native component question source scope regression
+        run: python3 scripts/native-ui-regression/run-component-scope.py --bin-dir .build/tests/debug --tag ci-component-scope
       - name: Native chat history presentation regression
         run: python3 scripts/native-ui-regression/run-chat-history.py --bin-dir .build/tests/debug --tag ci-chat-history
       - name: Native stable menu visibility regression
@@ -153,6 +155,14 @@ jobs:
         with:
           name: failed-component-publication-evidence
           path: logs/component-publication-20261104/ci-component-publication-*
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Preserve failed component scope evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-component-scope-evidence
+          path: logs/component-workbench-20261106/ci-component-scope
           if-no-files-found: ignore
           retention-days: 3
       - name: Preserve failed dynamic component evidence

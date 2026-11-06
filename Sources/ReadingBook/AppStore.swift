@@ -18,6 +18,7 @@ import ReadingCore
                 queryTask?.cancel(); companionTask?.cancel()
                 pendingPlanRegeneration = nil
                 readingPreparationState.reset()
+                readingComponentView = nil
                 readerChapterAnchor = nil
                 teacherBackground.cancelAll(); sentenceTranslation.cancelAll()
                 queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []; queryReferencedAnswerIDs = []; queryComposerDraft.text = ""
@@ -148,6 +149,7 @@ import ReadingCore
     // Presentation acknowledgement is read by actions, not UI state. Updating
     // it must not itself trigger another workspace render or persist to disk.
     var renderedComponentPresentation: ReadingComponentPresentation?
+    @Published var readingComponentView: ReadingComponentViewState?
     @Published var renderedSelectedNodeIDs: [String] = []
     @Published var workspaceAICommand: WorkspaceAICommand?
     var workspaceAIResponses: [UUID: Data] = [:]
@@ -240,7 +242,7 @@ import ReadingCore
     }
     @Published var catalogOperations = 0
     @Published var libraryRootURL: URL {
-        didSet { if oldValue != libraryRootURL { currentBookRevision &+= 1; cancelPositionNoteForSourceChange(); readerEditUndo.clear(); positionNoteOpenID = nil; auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); questionSuggestions.reset(); queryReferencedAnswerIDs = []; companionReferencedAnswerIDs = []; positionNoteBinding = nil; queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false; queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
+        didSet { if oldValue != libraryRootURL { readingComponentView = nil; currentBookRevision &+= 1; cancelPositionNoteForSourceChange(); readerEditUndo.clear(); positionNoteOpenID = nil; auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); questionSuggestions.reset(); queryReferencedAnswerIDs = []; companionReferencedAnswerIDs = []; positionNoteBinding = nil; queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false; queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
     }
     @Published var lastTrashedProjectURL: URL?
     let storageState = StorageSettingsState()
@@ -282,7 +284,7 @@ import ReadingCore
     var book: BookProject? { books.first { $0.id == bookID } }
     var selectedUnit: SourceUnit? { book?.units.first { $0.id == selectedUnitID } }
     var visibleEvents: [KnowledgeEvent] {
-        let scoped = readingScopeCurrent ? readingContextItems.events : (book?.events ?? [])
+        let scoped = componentUsesCurrentContext ? readingContextItems.events : (componentDataBook?.events ?? [])
         return scoped.filter {
             guard let year = $0.startYear else { return showUndated }
             return Double($0.endYear ?? year) >= timeFrom && Double(year) <= timeTo
@@ -418,6 +420,7 @@ import ReadingCore
         if let index = books.firstIndex(where: { $0.id == project.id }) { books[index] = project }
         else { books.insert(project, at: 0) }
         if project.id == bookID {
+            refreshComponentData(project)
             let activeDocumentIDs = Set(project.activeDocuments.map(\.id))
             queryAttachedDocumentIDs.formIntersection(activeDocumentIDs)
             queryAuthorizedNodeIDs.formIntersection(Set(project.nodes.map(\.id)))
@@ -617,7 +620,8 @@ import ReadingCore
                         reason: "读者选择本次整理；原问题ID：\(sentMessage.id)；摘要：" + String(question.prefix(500)))
                 }
                 let proposalTools = writeGrant.map { readingProposalAccess(grant: $0, snapshot: snapshot) }
-                let viewTools = readingViewToolAccess(bookID: current.id, sourceHash: current.sourceHash, runID: requestRunID, grant: writeGrant)
+                let viewTools = readingViewToolAccess(bookID: current.id, sourceHash: current.sourceHash,
+                    runID: requestRunID, grant: writeGrant, snapshot: snapshot, context: context)
                 await queryReader.resetBudget()
                 var answer = try await queryReader.answerDetailed(question: question, prepared: prepared, settings: requestSettings, apiKey: requestKey,
                     memory: memory, memoryEnabled: memoryEnabled, documentLoader: { document in

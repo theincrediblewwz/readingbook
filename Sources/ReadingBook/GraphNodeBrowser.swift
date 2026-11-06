@@ -173,16 +173,16 @@ private struct GraphNodeDetails: View {
     @State private var loadedDocumentRevision: String?
     private var documents: [DocumentRecord] {
         let ids = Set(item.documentIDs + [item.targetID])
-        return store.book?.activeDocuments.filter { ids.contains($0.id) } ?? []
+        return store.componentDataBook?.activeDocuments.filter { ids.contains($0.id) } ?? []
     }
     private var document: DocumentRecord? { documents.first { $0.id == previewDocumentID } ?? documents.first }
     private var revision: String {
         store.libraryRootURL.path + "|" + (store.bookID ?? "") + "|" + (store.book?.sourceHash ?? "") + "|" + item.targetID + "|" +
-            (document?.id ?? "") + "|" + (document?.relativePath ?? "") + "|" + String(document?.updatedAt.timeIntervalSince1970 ?? 0)
+            (document?.id ?? "") + "|" + (document?.relativePath ?? "") + "|" + String(document?.updatedAt.timeIntervalSince1970 ?? 0) + "|" + (store.componentDataScopeID?.uuidString ?? "reader")
     }
     private var projectionRequest: String {
         store.libraryRootURL.path + "|" + (store.bookID ?? "") + "|" + (store.book?.sourceHash ?? "") + "|" + item.targetID + "|" +
-            (store.selectedUnitID ?? "") + "|" + (store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false ? "safe" : "open") + "|" + String(store.projectRevision)
+            (store.selectedUnitID ?? "") + "|" + (store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false ? "safe" : "open") + "|" + String(store.projectRevision) + "|" + (store.componentDataScopeID?.uuidString ?? "reader")
     }
     private var visibleProjection: GraphNodeDetailProjection? { projection?.request == projectionRequest ? projection : nil }
     private var title: String {
@@ -234,7 +234,7 @@ private struct GraphNodeDetails: View {
                 } else { Text("这个节点暂时没有可预览的内容。").font(.system(size: 15)).foregroundStyle(.secondary) }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
         }.task(id: projectionRequest) {
-            guard document == nil, let book = store.book else { projection = nil; return }
+            guard document == nil, let book = store.componentDataBook else { projection = nil; return }
             let request = projectionRequest, target = item.targetID, allowed = store.temporalBoundary.allowedUnitIDs
             let worker = Task.detached(priority: .userInitiated) { GraphNodeDetailProjection.build(request: request, targetID: target, book: book, allowed: allowed) }
             let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })

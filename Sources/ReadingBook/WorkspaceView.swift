@@ -604,6 +604,9 @@ struct WorkspaceView: View {
                     }
             }
             if store.book != nil && store.route != "library" {
+                if store.activeComponentView != nil {
+                    ReadingComponentScopeControl().workspaceChromeBounds("component-scope")
+                }
                 ReaderCompanionLauncher(active: store.route == "reader" && store.readingCompanionVisible, action: toggleReadingCompanion)
                     .workspaceChromeBounds("primary")
             } else {

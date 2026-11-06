@@ -13,13 +13,15 @@ public enum CompositionRuntime {
 
     public static func prepare(_ definition: CompositionDefinition, in project: BookProject, context: ReadingContext? = nil,
                                currentScope: CompositionCurrentScope = .automatic,
-                               boundary: KnowledgeReadBoundary = .all) throws -> PreparedCompositionInput {
+                               boundary: KnowledgeReadBoundary = .all,
+                               sourceSnapshot: ReadingQuerySnapshot? = nil) throws -> PreparedCompositionInput {
         try Task.checkCancellation()
         try validate(definition, in: project)
         var bases: [CompositionScope: ScopeBase] = [:]
         for source in definition.sources where bases[source.scope] == nil {
             try Task.checkCancellation()
-            bases[source.scope] = try scoped(source.scope, project: project, context: context, currentScope: currentScope, boundary: boundary)
+            bases[source.scope] = try scoped(source.scope, project: project, context: context, currentScope: currentScope,
+                boundary: boundary, sourceSnapshot: sourceSnapshot)
         }
         return PreparedCompositionInput(definition: definition, bases: bases,
             mapSourceIDs: Set(definition.parts.filter { $0.primitive == .map }.map(\.sourceID)))
@@ -450,12 +452,16 @@ public enum CompositionRuntime {
         return (result, byEdge)
     }
     private static func scoped(_ scope: CompositionScope, project original: BookProject, context: ReadingContext?,
-                               currentScope: CompositionCurrentScope, boundary: KnowledgeReadBoundary) throws -> ScopeBase {
+                               currentScope: CompositionCurrentScope, boundary: KnowledgeReadBoundary,
+                               sourceSnapshot: ReadingQuerySnapshot?) throws -> ScopeBase {
         var project = original
-        if let allowed = boundary.allowedUnitIDs { project.units = project.units.filter { allowed.contains($0.id) } }
+        if sourceSnapshot == nil, let allowed = boundary.allowedUnitIDs { project.units = project.units.filter { allowed.contains($0.id) } }
         var diagnostics: [String] = []
         let snapshot: ReadingQuerySnapshot
-        if scope == .current, context?.unitID == nil && context?.selectedText == nil {
+        if let sourceSnapshot {
+            _ = try sourceSnapshot.sourceRanges(in: original)
+            snapshot = sourceSnapshot
+        } else if scope == .current, context?.unitID == nil && context?.selectedText == nil {
             project.units = []; diagnostics.append("打开原文页后，这里会显示与当前阅读位置有关的内容。")
             snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: project)
         } else if scope == .current, let id = context?.unitID, !project.units.contains(where: { $0.id == id }) {
@@ -479,11 +485,19 @@ public enum CompositionRuntime {
             if !document.evidence.isEmpty { return document.evidence.allSatisfy(snapshot.admits) }
             return scope == .book && boundary.allowedUnitIDs == nil
         }
-        let finalSnapshot = try ReadingQuerySnapshot.freeze(scope: snapshot.scope, in: project,
-            context: snapshot.scope == .book ? nil : context, appendedDocumentIDs: documents.map(\.id))
-        let session = ReadingQuerySession(snapshot: finalSnapshot, history: [], loader: nil, providedDocuments: [:], project: project)
-        var safe = session.scopedKnowledgeProject() ?? project
-        safe.units = project.units.filter { finalSnapshot.unitIDs.contains($0.id) }
+        let finalSnapshot: ReadingQuerySnapshot
+        if sourceSnapshot != nil { finalSnapshot = try snapshot.componentSnapshot(in: project) }
+        else {
+            finalSnapshot = try ReadingQuerySnapshot.freeze(scope: snapshot.scope, in: project,
+                context: snapshot.scope == .book ? nil : context, appendedDocumentIDs: documents.map(\.id))
+        }
+        var safe: BookProject
+        if sourceSnapshot != nil { safe = try ReadingComponentProjection.project(snapshot, in: original) }
+        else {
+            let session = ReadingQuerySession(snapshot: finalSnapshot, history: [], loader: nil, providedDocuments: [:], project: project)
+            safe = session.scopedKnowledgeProject() ?? project
+            safe.units = project.units.filter { finalSnapshot.unitIDs.contains($0.id) }
+        }
         var objects = try TemporalKnowledgeRuntime.objects(in: safe, boundary: .all)
         let visible = Set(objects.map(\.id))
         objects = objects.map { original in

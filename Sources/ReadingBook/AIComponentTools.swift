@@ -37,7 +37,11 @@ struct ReadingQueryHostOwner {
 @MainActor final class ReadingComponentToolSession {
     var createdCount = 0
     let grant: ControlledWriteGrant?
-    init(grant: ControlledWriteGrant? = nil) { self.grant = grant }
+    let snapshot: ReadingQuerySnapshot?
+    let context: ReadingContext?
+    init(grant: ControlledWriteGrant? = nil, snapshot: ReadingQuerySnapshot? = nil, context: ReadingContext? = nil) {
+        self.grant = grant; self.snapshot = snapshot; self.context = context
+    }
 }
 
 @MainActor extension AppStore {
@@ -62,7 +66,7 @@ struct ReadingQueryHostOwner {
             }
             return try viewToolResult("success", "按当前需求选择组件；显示配置不代表已有分析。", extra: ["components": components,
                 "views": views, "totalViews": book.views.count, "nextOffset": page.offset + views.count < book.views.count ? page.offset + views.count as Any : NSNull(),
-                "customComponents": "只能组合现有元件，不执行代码；本书资料遵守阅读位置与防剧透设置，正文读取仍限本次授权。"])
+                "customComponents": "只能组合现有元件，不执行代码；打开的组件沿用这次提问的原文范围，正文读取仍限本次授权。"])
         }
         let request = try ReadingComponentRequest.decode(data)
         guard name == "component_show", request.componentID != "book.scheme", let descriptor = registry.component(id: request.componentID) else {
@@ -132,9 +136,16 @@ struct ReadingQueryHostOwner {
             return try viewToolResult("busy", "已有其他界面切换正在处理，未覆盖这次操作。",
                 extra: ["viewID": route, "created": created, "opened": false, "analysisCreated": false])
         }
+        if let snapshot = session.snapshot {
+            let current = readingComponentView
+            if current?.route != route || current?.snapshot?.scopeFingerprint != snapshot.scopeFingerprint {
+                try installComponentView(route: route, snapshot: snapshot, context: session.context)
+            }
+        }
         func openedResult() throws -> Data {
             try viewToolResult("success", created ? "已加入并打开组件；显示已有资料，尚未新增分析。" : "已打开已有组件；没有重复创建。",
-                extra: ["rendererID": descriptor.id, "componentTitle": descriptor.title, "viewID": route, "created": created, "opened": true, "analysisCreated": false])
+                extra: ["rendererID": descriptor.id, "componentTitle": descriptor.title, "viewID": route, "created": created, "opened": true, "analysisCreated": false,
+                    "sourceScope": session.snapshot?.displayTitle ?? "跟随阅读位置"])
         }
         if renderedComponentPresentation?.matches(self, route: route) == true {
             // Repeated same-route intentions can be coalesced by onChange.

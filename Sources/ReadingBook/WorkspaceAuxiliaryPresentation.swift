@@ -162,6 +162,9 @@ enum WorkspaceAuxiliaryNavigationAdmission: Equatable {
         if let kind = WorkspaceAuxiliaryKind(rawValue: value) { presentWorkspaceAuxiliary(kind); return }
         guard !["models", "plugins", "book.scheme", "preferences"].contains(value) else { requestedWorkspaceRoute = value; return }
         if !preservingAuxiliary { auxiliaryPresentation = nil; notesPresentation = nil }
+        if let scope = readingComponentView, scope.route != value {
+            readingComponentView = nil; readingContextCacheKey = nil
+        }
         baseWorkspaceRoute = value
         if value != "query" { queryAllowsOrganizing = false }
         rememberWorkspaceNavigation()

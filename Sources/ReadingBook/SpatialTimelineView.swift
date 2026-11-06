@@ -49,12 +49,12 @@ struct SpatialTimelineView: View {
 
     private var temporalMode: Bool { store.temporalAxis != "legacy" }
     private var visibleEvents: [KnowledgeEvent] {
-        guard let book = store.book else { return [] }
+        guard let book = store.componentDataBook else { return [] }
         // A snapshot can traverse all temporal records. Resolve it once, rather
         // than once per event while a reader drags the current-time pointer.
         let snapshots = store.temporalEvents
         let byID = Dictionary(snapshots.map { ($0.object.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let scoped = (store.readingScopeCurrent ? store.readingContextItems.events : book.events).compactMap { event -> KnowledgeEvent? in
+        let scoped = (store.componentUsesCurrentContext ? store.readingContextItems.events : book.events).compactMap { event -> KnowledgeEvent? in
             guard let object = byID[event.id]?.object else { return nil }
             var safe = event; safe.summary = object.summary
             safe.participantIDs = object.references["participants"] ?? []; safe.placeIDs = object.references["places"] ?? []
@@ -75,9 +75,9 @@ struct SpatialTimelineView: View {
     private var axisEvents: [KnowledgeEvent] {
         guard temporalMode else {
             let ids = Set(store.temporalEvents.map(\.object.id))
-            return (store.readingScopeCurrent ? store.readingContextItems.events : (store.book?.events ?? [])).filter { ids.contains($0.id) }
+            return (store.componentUsesCurrentContext ? store.readingContextItems.events : (store.componentDataBook?.events ?? [])).filter { ids.contains($0.id) }
         }
-        let eventsByID = Dictionary((store.book?.events ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let eventsByID = Dictionary((store.componentDataBook?.events ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return store.temporalEvents.compactMap { item in
             guard var event = eventsByID[item.object.id], let value = axisValue(item.extent) else { return nil }
             event.startYear = Int(value); event.endYear = axisEnd(item.extent).map(Int.init); return event
@@ -101,13 +101,13 @@ struct SpatialTimelineView: View {
         visibleEvents.filter { eventQuery.isEmpty || $0.name.localizedCaseInsensitiveContains(eventQuery) || $0.dateText.localizedCaseInsensitiveContains(eventQuery) || $0.participantIDs.contains(where: { store.objectTitle($0).localizedCaseInsensitiveContains(eventQuery) }) }
     }
     private var expandedEvent: KnowledgeEvent? {
-        guard let book = store.book, var event = book.events.first(where: { $0.id == expandedEventID }),
+        guard let book = store.componentDataBook, var event = book.events.first(where: { $0.id == expandedEventID }),
               let object = try? TemporalKnowledgeRuntime.object(id: event.id, in: book, boundary: store.temporalBoundary) else { return nil }
         event.summary = object.summary; event.participantIDs = object.references["participants"] ?? []; event.placeIDs = object.references["places"] ?? []
         return event
     }
     private var admittedEntities: [KnowledgeEntity] {
-        guard let book = store.book else { return [] }
+        guard let book = store.componentDataBook else { return [] }
         let ids = (try? TemporalKnowledgeRuntime.entityIDs(in: book, boundary: store.temporalBoundary)) ?? []
         return book.entities.filter { ids.contains($0.id) }
     }
@@ -116,7 +116,7 @@ struct SpatialTimelineView: View {
         return visibleEvents.contains { $0.id == expandedEventID }
     }
     private var points: [ReadingMapPoint] {
-        guard let book = store.book else { return [] }
+        guard let book = store.componentDataBook else { return [] }
         let places = Dictionary(uniqueKeysWithValues: book.entities.map { ($0.id, $0) })
         if temporalMode, let id = store.selectedTemporalEntityID {
             return (store.temporalSnapshot(id)?.footprints ?? []).compactMap { presence in
@@ -134,7 +134,7 @@ struct SpatialTimelineView: View {
         }
         if book.events.isEmpty {
             let admitted = Set(admittedEntities.map(\.id))
-            result = (store.readingScopeCurrent ? store.readingContextItems.entities : book.entities).filter { admitted.contains($0.id) }.compactMap { place in
+            result = (store.componentUsesCurrentContext ? store.readingContextItems.entities : book.entities).filter { admitted.contains($0.id) }.compactMap { place in
                 guard let lat = place.latitude, let lon = place.longitude else { return nil }
                 return ReadingMapPoint(id: place.id, targetID: place.id, title: place.name, subtitle: place.locationNote ?? "书中地点", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon))
             }
@@ -153,7 +153,7 @@ struct SpatialTimelineView: View {
         return (Double(first) - 5)...(Double(last) + 5)
     }
     private var footprintSequence: [CLLocationCoordinate2D] {
-        guard showsFootprintSequence, temporalMode, let book = store.book, let id = store.selectedTemporalEntityID,
+        guard showsFootprintSequence, temporalMode, let book = store.componentDataBook, let id = store.selectedTemporalEntityID,
               let snapshot = try? TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: book, boundary: store.temporalBoundary) else { return [] }
         let candidates = snapshot.footprints.filter { item in
             guard let value = axisValue(item.extent) else { return false }
@@ -271,7 +271,7 @@ struct SpatialTimelineView: View {
             if FloatingPanelDock(rawValue: dockRaw) == nil { dockRaw = FloatingPanelDock.bottomLeading.rawValue }
             normalizeRange()
             restoreMapMemory()
-            if let id = store.selectedObjectID, store.book?.events.contains(where: { $0.id == id }) == true { expandedEventID = id }
+            if let id = store.selectedObjectID, store.componentDataBook?.events.contains(where: { $0.id == id }) == true { expandedEventID = id }
         }
         .onDisappear { selectionLayoutToken = nil; saveMapPanelMemory(); cancelPanelDrag() }
         .onChange(of: store.workspaceMemoryRevision) { _, _ in restoreMapMemory() }
@@ -311,7 +311,7 @@ struct SpatialTimelineView: View {
             selectionLayoutToken = nil
             normalizeRange(); showingEvents = false; editingRange = false; eventQuery = ""; expandedEventID = nil; inspectedObjectID = nil; camera = .automatic; showsTimeline = true; timelineCollapsed = false
         }
-        .onChange(of: store.book?.events.map(\.id) ?? []) { _, ids in
+        .onChange(of: store.componentDataBook?.events.map(\.id) ?? []) { _, ids in
             if let id = expandedEventID, !ids.contains(id) { expandedEventID = nil }
         }
         .onChange(of: bounds) { previous, _ in
@@ -322,7 +322,7 @@ struct SpatialTimelineView: View {
 
     private func handleObjectSelection(_ selectedID: String?) {
         guard let id = selectedID else { return }
-        if store.book?.events.contains(where: { $0.id == id }) == true {
+        if store.componentDataBook?.events.contains(where: { $0.id == id }) == true {
             expand(id)
         } else if let entity = admittedEntities.first(where: { $0.id == id }),
                   entity.latitude == nil, entity.longitude == nil {
@@ -386,7 +386,7 @@ struct SpatialTimelineView: View {
         dockRaw = saved.timelineDock.flatMap { FloatingPanelDock(rawValue: $0)?.rawValue } ?? FloatingPanelDock.bottomLeading.rawValue
         store.temporalAxis = saved.temporalAxis ?? "legacy"
         store.timeCursor = saved.timeCursor ?? store.timeFrom
-        store.selectedTemporalEntityID = saved.temporalEntityID.flatMap { id in store.book?.entities.contains(where: { $0.id == id }) == true ? id : nil }
+        store.selectedTemporalEntityID = saved.temporalEntityID.flatMap { id in store.componentDataBook?.entities.contains(where: { $0.id == id }) == true ? id : nil }
     }
     private func saveMapPanelMemory() {
         mapMemorySaveTask?.cancel(); mapMemorySaveTask = nil
@@ -476,7 +476,11 @@ struct SpatialTimelineView: View {
                 }
                 Toggle("显示出现次序虚线", isOn: $showsFootprintSequence).disabled(store.selectedTemporalEntityID == nil || !temporalMode)
                 Text("虚线连接有出处的出现点，不代表真实路线。")
-                Toggle("只看当前原文相关事件", isOn: $store.readingScopeCurrent)
+                if store.activeComponentView?.snapshot != nil {
+                    Button { store.toggleComponentWholeBook() } label: {
+                        Label(store.componentSpatialScopeTitle + " · 切换范围", systemImage: "book")
+                    }.buttonStyle(ReadingToolbarButtonStyle())
+                } else { Toggle("只看当前原文相关事件", isOn: $store.readingScopeCurrent) }
                 Toggle("保留时间待考事件", isOn: $store.showUndated)
                 Button("地图适合全部标记") { camera = .automatic }
                 Button("显示全部时间") { fitTime() }
@@ -588,7 +592,7 @@ struct SpatialTimelineView: View {
             if expandedEventIsVisible {
                 HStack(spacing: 12) {
                     if let evidence = event.evidence.first {
-                        Text(store.book?.units.first(where: { $0.id == evidence.unitID })?.locator ?? "原文依据")
+                        Text(store.componentDataBook?.units.first(where: { $0.id == evidence.unitID })?.locator ?? "原文依据")
                             .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                         Spacer(minLength: 0)
                         Button {
@@ -722,7 +726,7 @@ struct SpatialTimelineView: View {
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) { expandedEventID = nil }
     }
     private func selectEvent(_ id: String) {
-        if let event = store.book?.events.first(where: { $0.id == id }) {
+        if let event = store.componentDataBook?.events.first(where: { $0.id == id }) {
             if event.startYear == nil { store.showUndated = true }
             store.focus(id); expand(id)
         } else { store.focus(id); inspectedObjectID = id }

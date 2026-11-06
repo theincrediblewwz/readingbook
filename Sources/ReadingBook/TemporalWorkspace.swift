@@ -4,6 +4,7 @@ import ReadingCore
 /// All spatial components ask the same canonical objects for a time snapshot.
 @MainActor extension AppStore {
     var temporalBoundary: KnowledgeReadBoundary {
+        if activeComponentView?.snapshot != nil { return .all }
         guard let book, book.temporalKnowledge?.profile?.avoidsSpoilers ?? true, let unit = selectedUnit else { return .all }
         // A PDF page can span several imported units. The reader can see all
         // of that page, even though PDF navigation selects its first unit.
@@ -25,7 +26,7 @@ import ReadingCore
         availableTemporalExtents.contains { $0.narrativeStart != nil }
     }
     var availableTemporalExtents: [TemporalExtent] {
-        guard let book, let state = book.temporalKnowledge else { return [] }
+        guard let book = componentDataBook, let state = book.temporalKnowledge else { return [] }
         // Reuse this read's source boundary instead of rebuilding its unit set per record.
         let allowedUnitIDs = temporalBoundary.allowedUnitIDs
         let anchors = Dictionary(((book.readingExperience?.anchors ?? []) + state.anchors).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -39,11 +40,11 @@ import ReadingCore
             + state.relationMetadata.filter { admits($0.sourceAnchorIDs) }.map(\.validity)
     }
     func temporalSnapshot(_ id: String, at point: TemporalQueryPoint? = nil) -> EntityTimeSnapshot? {
-        guard let book else { return nil }
+        guard let book = componentDataBook else { return nil }
         return try? TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: book, at: point ?? temporalPoint, boundary: temporalBoundary)
     }
     var temporalEvents: [TemporalEventSnapshot] {
-        guard let book else { return [] }
+        guard let book = componentDataBook else { return [] }
         return (try? TemporalKnowledgeRuntime.events(in: book, entityID: selectedTemporalEntityID,
             at: selectedTemporalEntityID == nil ? nil : temporalPoint, boundary: temporalBoundary)) ?? []
     }
@@ -112,7 +113,7 @@ struct TemporalPersonContents: View {
         }
     }
     @ViewBuilder private func anchorEvidence(_ ids: [String]) -> some View {
-        let anchors = store.book?.temporalKnowledge?.anchors.filter { ids.contains($0.id) } ?? []
+        let anchors = store.componentDataBook?.temporalKnowledge?.anchors.filter { ids.contains($0.id) } ?? []
         if !anchors.isEmpty { EvidenceDisclosure(evidence: anchors.map { Evidence(unitID: $0.unitID, quote: $0.quote) }) }
     }
 }

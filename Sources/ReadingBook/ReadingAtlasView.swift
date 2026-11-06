@@ -5,11 +5,12 @@ import ReadingCore
 struct ReadingAtlasView: View {
     @EnvironmentObject var store: AppStore
     var definition: ViewDefinition?
+    @State private var loadedKey: String?
     @State private var snapshot: ReadingAtlasSnapshot?
     @State private var section = "chapters"
     @State private var selectedBucket: String?
     @State private var inspectedID: String?
-    private var refreshKey: String { "\(store.bookID ?? ""):\(store.projectRevision)" }
+    private var refreshKey: String { store.libraryRootURL.path + "|" + (store.bookID ?? "") + "|" + String(store.projectRevision) + "|" + (store.componentDataScopeID?.uuidString ?? "reader") }
     var body: some View {
         VStack(spacing: 0) {
             CompactWorkspaceHeader(definition?.title ?? "全书总览") {
@@ -17,7 +18,7 @@ struct ReadingAtlasView: View {
                     Picker("总览内容", selection: $section) { Text("章节与覆盖").tag("chapters"); Text("内容类型").tag("types"); Text("事件年代").tag("time"); Text("原文共现").tag("cooccurrence") }
                 } label: { Label(sectionTitle, systemImage: "chart.bar.xaxis") }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface())
             }
-            if let snapshot {
+            if let snapshot, loadedKey == refreshKey {
                 if section == "cooccurrence" { cooccurrenceView(snapshot) }
                 else {
                     ScrollView {
@@ -32,11 +33,12 @@ struct ReadingAtlasView: View {
             } else { ProgressView("从已保存的原文依据生成总览…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }.padding(.top, 96).background(Palette.canvas)
         .task(id: refreshKey) {
-            guard let project = store.book else { return }
+            guard let project = store.componentDataBook else { snapshot = nil; return }
+            let request = refreshKey
             let work = Task.detached(priority: .userInitiated) { ReadingAtlasRuntime.build(project) }
             let result = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
-            guard !Task.isCancelled, store.bookID == project.id else { return }
-            snapshot = result
+            guard !Task.isCancelled, refreshKey == request else { return }
+            loadedKey = request; snapshot = result
         }
         .popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
             if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 340, height: 520) }
@@ -101,7 +103,7 @@ struct ReadingAtlasView: View {
             }
             Button("时间待考：\(snapshot.undatedEventIDs.count) 条，单独查看") { selectedBucket = nil }.buttonStyle(ReadingQuietButtonStyle())
             ForEach(ids, id: \.self) { id in
-                if let event = store.book?.events.first(where: { $0.id == id }) {
+                if let event = store.componentDataBook?.events.first(where: { $0.id == id }) {
                     DisclosureGroup("\(event.dateText) · \(event.name)") { VStack(alignment: .leading, spacing: 12) { Text(event.summary).font(.subheadline); EvidenceList(evidence: event.evidence); Button("在时间与地图查看") { store.selectedObjectID = id; store.readingScopeCurrent = false; store.activate(.map) }.buttonStyle(ReadingQuietButtonStyle()) }.padding(.top, 12) }.padding(16).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
                 }
             }

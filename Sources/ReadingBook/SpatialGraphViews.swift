@@ -8,7 +8,7 @@ struct EntityCardsView: View {
     @State private var query = ""
     @State private var inspectedEntity: KnowledgeEntity?
     private var entities: [KnowledgeEntity] {
-        (store.book?.entities ?? []).filter { (typeIDs.isEmpty || typeIDs.contains($0.typeID)) && (filter.isEmpty || $0.typeID == filter) && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.summary.localizedCaseInsensitiveContains(query)) }
+        (store.componentDataBook?.entities ?? []).filter { (typeIDs.isEmpty || typeIDs.contains($0.typeID)) && (filter.isEmpty || $0.typeID == filter) && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.summary.localizedCaseInsensitiveContains(query)) }
     }
     var body: some View {
         let visibleEntities = entities
@@ -23,7 +23,7 @@ struct EntityCardsView: View {
                         ForEach(visibleEntities) { entity in
                             Button { store.focus(entity.id); inspectedEntity = entity } label: {
                                 VStack(alignment: .leading, spacing: 10) {
-                                    HStack { Image(systemName: store.book?.types.first { $0.id == entity.typeID }?.icon ?? "square.stack").font(.system(size: 24)).foregroundStyle(Palette.accent); Spacer(); Text(store.book?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.system(size: 13)).foregroundStyle(.secondary) }
+                                    HStack { Image(systemName: store.componentDataBook?.types.first { $0.id == entity.typeID }?.icon ?? "square.stack").font(.system(size: 24)).foregroundStyle(Palette.accent); Spacer(); Text(store.componentDataBook?.types.first { $0.id == entity.typeID }?.name ?? entity.typeID).font(.system(size: 13)).foregroundStyle(.secondary) }
                                     Text(entity.name).font(.system(size: 16, weight: .semibold))
                                     Text(entity.summary).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(4).frame(maxWidth: .infinity, minHeight: 66, alignment: .topLeading)
                                     HStack { Text("\(entity.evidence.count) 处原文依据").font(.system(size: 12)).foregroundStyle(.secondary); Spacer(); Image(systemName: "arrow.up.right").font(.system(size: 13)).foregroundStyle(Palette.accent) }
@@ -53,7 +53,7 @@ struct EntityCardsView: View {
                 Menu {
                     Picker("类型", selection: $filter) {
                         Text("全部类型").tag("")
-                        ForEach((store.book?.types ?? []).filter { typeIDs.isEmpty || typeIDs.contains($0.id) }) { type in Text(type.name).tag(type.id) }
+                        ForEach((store.componentDataBook?.types ?? []).filter { typeIDs.isEmpty || typeIDs.contains($0.id) }) { type in Text(type.name).tag(type.id) }
                     }
                 } label: { Image(systemName: filter.isEmpty ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill").frame(width: 44, height: 44).contentShape(Rectangle()) }.menuStyle(.borderlessButton).modifier(ReadingHoverSurface()).fixedSize().help("筛选卡片类型")
         }
@@ -70,12 +70,12 @@ struct DocumentGraphView: View {
     @State private var focusToken: UUID?
     @State private var presentation = BookGraphPresentationCache()
     private var graphData: BookGraphSnapshot {
-        guard let book = store.book else { return BookGraphSnapshot() }
-        return presentation.documents(book: book, revision: store.currentBookRevision)
+        guard let book = store.componentDataBook else { return BookGraphSnapshot() }
+        return presentation.documents(book: book, revision: store.currentBookRevision, scopeID: store.componentDataScopeID)
     }
     var body: some View {
         Group {
-            if let book = store.book, !graphData.items.isEmpty {
+            if let book = store.componentDataBook, !graphData.items.isEmpty {
                 graphWorkspace(book).id(book.id)
             } else {
                 EmptyState(title: "从第一篇笔记开始", detail: "在“我的笔记”写一篇笔记，或主动保存 AI 回答。双击节点打开文档，从节点边缘的圆点拖出连线。", icon: "point.3.connected.trianglepath.dotted")
@@ -136,7 +136,7 @@ struct DocumentGraphView: View {
                 )
     }
     private func openNode(_ id: String, nodeID: String? = nil) {
-        guard let book = store.book else { return }
+        guard let book = store.componentDataBook else { return }
         let chosen = nodeID.flatMap { physical in book.nodes.first { $0.id == physical } } ?? book.nodes.first { $0.targetID == id }
         if let documentID = chosen?.documentIDs?.first(where: { id in book.activeDocuments.contains { $0.id == id } }),
            let document = book.activeDocuments.first(where: { $0.id == documentID }) { Task { await store.openDocument(document) }; return }
@@ -153,8 +153,8 @@ struct RelationGraphView: View {
     @State private var focusToken: UUID?
     @State private var presentation = BookGraphPresentationCache()
     private var graphData: BookGraphSnapshot {
-        guard let book = store.book else { return BookGraphSnapshot() }
-        return presentation.relations(book: book, revision: store.currentBookRevision, context: store.readingScopeCurrent ? store.currentReadingContext : nil,
+        guard let book = store.componentDataBook else { return BookGraphSnapshot() }
+        return presentation.relations(book: book, revision: store.currentBookRevision, context: store.componentUsesCurrentContext ? store.componentReadingContext : nil, scopeID: store.componentDataScopeID,
                                       point: store.temporalPoint, boundary: store.temporalBoundary,
                                       scopedItems: { store.readingContextItems })
     }
@@ -166,8 +166,8 @@ struct RelationGraphView: View {
                 EmptyState(title: "关系来自阅读", detail: "AI 发现的依赖、参与、发生于等关系会在这里连接。双击节点查看卡片与原文。", icon: "point.3.filled.connected.trianglepath.dotted")
                     .overlay(alignment: .bottom) {
                         ReadingDockSurface {
-                            Button { store.readingScopeCurrent.toggle() } label: {
-                                Label(store.readingScopeCurrent ? "当前原文 · 切换全书" : "全书关系 · 切换当前原文", systemImage: "line.3.horizontal.decrease").frame(minHeight: 44)
+                            Button { store.toggleComponentSpatialScope() } label: {
+                                Label(store.componentSpatialScopeTitle + " · 切换范围", systemImage: "line.3.horizontal.decrease").frame(minHeight: 44)
                             }.buttonStyle(ReadingToolbarButtonStyle())
                         }.padding(.bottom, 18)
                     }
@@ -180,7 +180,7 @@ struct RelationGraphView: View {
                                 title: "关系图谱", isEnabled: !store.isBusy,
                                 focusNodeID: focusRequest, focusRequestToken: focusToken, selectedNodeIDChanged: { physicalSelection = $0 },
                                 interactionExclusion: exclusion, obscuredLeadingWidth: leading, obscuredTrailingWidth: trailing,
-                                scopeTitle: store.readingScopeCurrent ? "当前原文" : "全书关系", toggleScope: { store.readingScopeCurrent.toggle() }, ambientMotion: true)
+                                scopeTitle: store.componentSpatialScopeTitle, toggleScope: { store.toggleComponentSpatialScope() }, ambientMotion: true)
                 }.id(store.bookID) }
         }.popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
             if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 330, height: 500) }
@@ -195,12 +195,12 @@ private struct BookGraphSnapshot { var items: [GraphItem] = []; var lines: [Grap
 private final class BookGraphPresentationCache {
     private struct Key: Equatable {
         var bookID: String; var revision: Int; var kind: String; var context: ReadingContext?
-        var point: TemporalQueryPoint? = nil; var boundary: KnowledgeReadBoundary = .all
+        var scopeID: UUID? = nil; var point: TemporalQueryPoint? = nil; var boundary: KnowledgeReadBoundary = .all
     }
     private var key: Key?
     private var snapshot = BookGraphSnapshot()
-    func documents(book: BookProject, revision: Int) -> BookGraphSnapshot {
-        let next = Key(bookID: book.id, revision: revision, kind: "documents", context: nil)
+    func documents(book: BookProject, revision: Int, scopeID: UUID? = nil) -> BookGraphSnapshot {
+        let next = Key(bookID: book.id, revision: revision, kind: "documents", context: nil, scopeID: scopeID)
         if key == next { return snapshot }
         let hidden = Set(book.trashedDocuments.map(\.id)), active = Set(book.activeDocuments.map(\.id))
         let nodes = book.nodes.filter { node in !hidden.contains(node.targetID) || (node.documentIDs ?? []).contains(where: active.contains) }, ids = Set(nodes.map(\.id))
@@ -214,8 +214,8 @@ private final class BookGraphPresentationCache {
         snapshot = BookGraphSnapshot(items: items, lines: book.edges.filter { ids.contains($0.fromID) && ids.contains($0.toID) }.map { GraphLine(id: $0.id, from: $0.fromID, to: $0.toID, label: $0.label) })
         key = next; return snapshot
     }
-    func relations(book: BookProject, revision: Int, context: ReadingContext?, point: TemporalQueryPoint? = nil, boundary: KnowledgeReadBoundary = .all, scopedItems: () -> ReadingContextItems) -> BookGraphSnapshot {
-        let next = Key(bookID: book.id, revision: revision, kind: "relations", context: context, point: point, boundary: boundary)
+    func relations(book: BookProject, revision: Int, context: ReadingContext?, scopeID: UUID? = nil, point: TemporalQueryPoint? = nil, boundary: KnowledgeReadBoundary = .all, scopedItems: () -> ReadingContextItems) -> BookGraphSnapshot {
+        let next = Key(bookID: book.id, revision: revision, kind: "relations", context: context, scopeID: scopeID, point: point, boundary: boundary)
         if key == next { return snapshot }
         let scoped = context == nil ? nil : scopedItems()
         let scopedIDs = scoped.map { Set($0.entities.map(\.id) + $0.events.map(\.id)) }
@@ -264,13 +264,13 @@ struct KnowledgeLibraryView: View {
     }
     private var documents: [DocumentRecord] {
         let contentIsCurrent = loadedDocumentKey == documentSearchKey
-        return (store.book?.activeDocuments ?? []).filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || (contentIsCurrent && documentTexts[$0.id]?.localizedCaseInsensitiveContains(query) == true) }
+        return (store.componentDataBook?.activeDocuments ?? []).filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || (contentIsCurrent && documentTexts[$0.id]?.localizedCaseInsensitiveContains(query) == true) }
     }
     private var insights: [ReadingInsight] {
-        (store.book?.insights ?? []).filter { query.isEmpty || $0.markdown.localizedCaseInsensitiveContains(query) }
+        (store.componentDataBook?.insights ?? []).filter { query.isEmpty || $0.markdown.localizedCaseInsensitiveContains(query) }
     }
     private var entities: [KnowledgeEntity] {
-        (store.book?.entities ?? []).filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.summary.localizedCaseInsensitiveContains(query) }
+        (store.componentDataBook?.entities ?? []).filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.summary.localizedCaseInsensitiveContains(query) }
     }
     var body: some View {
         let searching = !query.isEmpty
@@ -295,7 +295,7 @@ struct KnowledgeLibraryView: View {
             documentTexts = [:]; loadedDocumentKey = nil
             // Opening the library needs metadata only. Read Markdown bodies
             // once when a content search is active, not on every library visit.
-            guard let request = documentSearchKey, let book = store.book else { return }
+            guard let request = documentSearchKey, let book = store.componentDataBook else { return }
             let repository = store.repository
             var loaded: [String: String] = [:]
             do {
@@ -348,7 +348,7 @@ struct KnowledgeLibraryView: View {
                     }.padding(.top, 10)
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(insight.unitIDs.first.flatMap { id in store.book?.units.first { $0.id == id }?.locator } ?? "阅读分析").font(.subheadline.weight(.medium))
+                        Text(insight.unitIDs.first.flatMap { id in store.componentDataBook?.units.first { $0.id == id }?.locator } ?? "阅读分析").font(.subheadline.weight(.medium))
                         Text(excerpt(insight.markdown)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     }
                 }.softPanel()
@@ -362,7 +362,7 @@ struct KnowledgeLibraryView: View {
             ForEach(entities) { entity in
                 Button { store.focus(entity.id); inspectedID = entity.id } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: store.book?.types.first { $0.id == entity.typeID }?.icon ?? "square.stack").foregroundStyle(Palette.accent).frame(width: 20)
+                        Image(systemName: store.componentDataBook?.types.first { $0.id == entity.typeID }?.icon ?? "square.stack").foregroundStyle(Palette.accent).frame(width: 20)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(entity.name).font(.subheadline.weight(.medium))
                             Text(entity.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -410,7 +410,7 @@ struct KnowledgeLibraryView: View {
     private func insightSources(_ insight: ReadingInsight) -> some View {
         Menu("回到原文") {
             ForEach(insight.unitIDs, id: \.self) { id in
-                Button(store.book?.units.first { $0.id == id }?.locator ?? "原文") { store.navigateToUnit(id); store.route = "reader" }
+                Button(store.componentDataBook?.units.first { $0.id == id }?.locator ?? "原文") { store.navigateToUnit(id); store.route = "reader" }
             }
         }
     }
@@ -418,7 +418,7 @@ struct KnowledgeLibraryView: View {
         HStack { insightSources(insight); Spacer(); Button("保存为文档") { Task { await store.saveInsight(insight) } }.disabled(store.isBusy) }
     }
     private var documentSearchKey: DocumentSearchRequest? {
-        guard !query.isEmpty, let book = store.book else { return nil }
+        guard !query.isEmpty, let book = store.componentDataBook else { return nil }
         return DocumentSearchRequest(libraryRoot: store.libraryRootURL, bookID: book.id, sourceHash: book.sourceHash,
             documents: book.activeDocuments.map { DocumentSearchEntry(id: $0.id, relativePath: $0.relativePath, updatedAt: $0.updatedAt) })
     }

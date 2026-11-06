@@ -544,8 +544,8 @@ private struct CompanionScopePreparation: Sendable {
         return anchor
     }
     var readingContextItems: ReadingContextItems {
-        guard let book else { return ReadingContextItems() }
-        let context = currentReadingContext
+        guard let book = componentDataBook else { return ReadingContextItems() }
+        let context = componentReadingContext
         if readingContextCacheKey == context { return readingContextCache }
         let result = ReadingExperienceRuntime.contextualItems(in: book, context: context, state: readingExperienceIndex)
         readingContextCache = result; readingContextCacheKey = context

@@ -18,9 +18,11 @@ struct WorkspaceAICommand: Equatable {
             visibleObjects: visible, selectedNodeIDs: visible == nil ? [] : renderedSelectedNodeIDs, timeAxis: temporalAxis,
             timeFrom: timeFrom, timeTo: timeTo, currentTime: timeCursor)
     }
-    func readingViewToolAccess(bookID expectedBookID: String, sourceHash: String, runID: UUID? = nil, grant: ControlledWriteGrant? = nil) -> ReadingHostToolAccess {
+    func readingViewToolAccess(bookID expectedBookID: String, sourceHash: String, runID: UUID? = nil,
+                               grant: ControlledWriteGrant? = nil, snapshot: ReadingQuerySnapshot? = nil,
+                               context: ReadingContext? = nil) -> ReadingHostToolAccess {
         let owner = ReadingQueryHostOwner(root: libraryRootURL, bookID: expectedBookID, sourceHash: sourceHash, runID: runID)
-        let session = ReadingComponentToolSession(grant: grant)
+        let session = ReadingComponentToolSession(grant: grant, snapshot: snapshot, context: context)
         return ReadingHostToolAccess(viewActions: ["components_list", "component_show", "view_select", "view_focus", "view_set_time_window", "map_fit_objects", "graph_focus", "panel_present"], performViewAction: { [weak self] name, data in
             guard let self, await owner.matches(self) else { throw CancellationError() }
             if ["components_list", "component_show"].contains(name) {

@@ -150,6 +150,20 @@ public struct ReadingQuerySnapshot: Sendable {
             sources: sources, documents: documents, sourceByID: sourceByID)
     }
 
+    /// Local presentation may include already saved, source-bound documents.
+    /// This derived snapshot is never returned as a model or write grant.
+    func componentSnapshot(in project: BookProject) throws -> ReadingQuerySnapshot {
+        _ = try sourceRanges(in: project)
+        let explicit = Set(documentIDs)
+        let visible = project.activeDocuments.filter { document in
+            explicit.contains(document.id) || scope == .book ||
+                (!document.evidence.isEmpty && document.evidence.allSatisfy(admits))
+        }
+        return ReadingQuerySnapshot(scope: scope, bookID: bookID, sourceHash: sourceHash,
+            scopeFingerprint: scopeFingerprint, displayTitle: displayTitle, authorizedNodeIDs: [],
+            sources: sources, documents: visible, sourceByID: sourceByID)
+    }
+
     public static func freeze(scope: ReadingQueryScope, in project: BookProject, context suppliedContext: ReadingContext? = nil,
                               documentIDs: [String]? = nil, appendedDocumentIDs: [String] = [],
                               authorizedNodeIDs: [String] = []) throws -> ReadingQuerySnapshot {

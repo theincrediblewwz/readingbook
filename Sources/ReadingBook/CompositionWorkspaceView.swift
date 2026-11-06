@@ -42,6 +42,7 @@ struct CompositionWorkspaceView: View {
         let currentScope: CompositionCurrentScope
         let boundaryUnitID: String?
         let avoidsSpoilers: Bool
+        let componentScopeID: UUID?
     }
     private struct ProjectionResult: Sendable {
         let prepared: CompositionRuntime.PreparedCompositionInput
@@ -53,7 +54,7 @@ struct CompositionWorkspaceView: View {
     private var points: [String: TemporalQueryPoint] { clocks.compactMapValues(\.point) }
     private var windows: [String: TemporalQueryWindow] { clocks.compactMapValues(\.window) }
     private var mapModes: [String: CompositionMapTimeMode] { clocks.mapValues(\.mapMode) }
-    private var readingContext: ReadingContext { contextOverride ?? store.currentReadingContext }
+    private var readingContext: ReadingContext { contextOverride ?? (embedded ? store.currentReadingContext : store.componentReadingContext) }
 
     var body: some View {
         GeometryReader { geometry in
@@ -80,6 +81,7 @@ struct CompositionWorkspaceView: View {
             .onChange(of: store.selectedUnitID) { _, _ in refresh() }
             .onChange(of: store.book?.temporalKnowledge?.profile?.avoidsSpoilers) { _, _ in refresh() }
             .onChange(of: store.currentReadingContext) { _, _ in refresh() }
+            .onChange(of: store.componentDataScopeID) { _, _ in refresh() }
             .onChange(of: contextOverride) { _, _ in reset() }
             .onChange(of: currentScope) { _, _ in reset() }
             .onChange(of: store.libraryRootURL) { _, _ in reset() }
@@ -124,7 +126,7 @@ struct CompositionWorkspaceView: View {
         guard let book = store.book, store.libraryRootURL.path == owner.libraryRoot,
               book.id == owner.bookID, book.sourceHash == owner.sourceHash,
               store.currentBookRevision == owner.revision, composition == owner.definition,
-              (contextOverride ?? store.currentReadingContext) == owner.context,
+              readingContext == owner.context, (embedded ? nil : store.componentDataScopeID) == owner.componentScopeID,
               store.selectedUnitID == owner.boundaryUnitID,
               (book.temporalKnowledge?.profile?.avoidsSpoilers ?? true) == owner.avoidsSpoilers,
               currentScope == owner.currentScope else { return false }
@@ -157,9 +159,11 @@ struct CompositionWorkspaceView: View {
             owner = RefreshOwner(libraryRoot: store.libraryRootURL.path, bookID: book.id, sourceHash: book.sourceHash,
                 publicationStamp: book.publicationStamp, revision: store.currentBookRevision, definition: composition,
                 context: readingContext, boundary: store.temporalBoundary, currentScope: currentScope,
-                boundaryUnitID: store.selectedUnitID, avoidsSpoilers: book.temporalKnowledge?.profile?.avoidsSpoilers ?? true)
+                boundaryUnitID: store.selectedUnitID, avoidsSpoilers: book.temporalKnowledge?.profile?.avoidsSpoilers ?? true,
+                componentScopeID: embedded ? nil : store.componentDataScopeID)
         }
         let generation = refreshGeneration, selection = selections, times = points, ranges = windows, modes = mapModes
+        let sourceSnapshot = embedded ? nil : store.activeComponentView?.snapshot
         let baselineMatches = baselineOwner.map { matches($0, store: store) } ?? false
         let retainedBaseline = !includeBaseline && baselineSelection == selection && baselineMatches ? baseline : nil
         if !retainingContent {
@@ -170,7 +174,7 @@ struct CompositionWorkspaceView: View {
         refreshTask = Task { [weak store] in
             let worker = Task.detached(priority: .userInitiated) {
                 let prepared = try retainedPrepared ?? CompositionRuntime.prepare(composition, in: book, context: owner.context,
-                    currentScope: owner.currentScope, boundary: owner.boundary)
+                    currentScope: owner.currentScope, boundary: owner.boundary, sourceSnapshot: sourceSnapshot)
                 let baseline = try retainedBaseline ?? CompositionRuntime.project(prepared, selections: selection)
                 try Task.checkCancellation()
                 let projections: [String: CompositionProjection]

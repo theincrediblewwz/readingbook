@@ -56,7 +56,7 @@ private struct ObjectInspectorProjection: Sendable {
     private enum PendingAction { case show(String), close }
     private var objectID: String { displayedID ?? id }
     private var hasChanges: Bool { draft?.isDirty == true }
-    private var projectionOwner: String { store.libraryRootURL.path + "|" + (store.bookID ?? "") + "|" + objectID + "|" + (store.selectedUnitID ?? "") + "|" + (store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false ? "safe" : "open") }
+    private var projectionOwner: String { store.libraryRootURL.path + "|" + (store.bookID ?? "") + "|" + (store.book?.sourceHash ?? "") + "|" + objectID + "|" + (store.selectedUnitID ?? "") + "|" + (store.book?.temporalKnowledge?.profile?.avoidsSpoilers != false ? "safe" : "open") + "|" + (store.componentDataScopeID?.uuidString ?? "reader") + "|" + (store.activeComponentView?.issue ?? "") }
     private var projectionRequest: String { projectionOwner + "|" + String(store.projectRevision) }
     private var presentedEntity: KnowledgeEntity? { projection?.owner == projectionOwner ? projection?.entity : nil }
     private var presentedEvent: KnowledgeEvent? { projection?.owner == projectionOwner ? projection?.event : nil }
@@ -132,7 +132,7 @@ private struct ObjectInspectorProjection: Sendable {
             }
             .onDisappear { cacheDraft() }
             .task(id: projectionRequest) {
-                guard let book = store.book else { projection = nil; return }
+                guard let book = store.componentDataBook else { projection = nil; return }
                 let owner = projectionOwner, target = objectID, allowed = store.temporalBoundary.allowedUnitIDs
                 let worker = Task.detached(priority: .userInitiated) { ObjectInspectorProjection.build(owner: owner, objectID: target, book: book, allowed: allowed) }
                 let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
@@ -178,7 +178,7 @@ private struct ObjectInspectorProjection: Sendable {
             if canShow(entity.evidence), let note = entity.locationNote, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
-            ForEach((store.book?.events ?? []).filter { $0.participantIDs.contains(objectID) || $0.placeIDs.contains(objectID) }.compactMap(visibleEvent)) { event in
+            ForEach((store.componentDataBook?.events ?? []).filter { $0.participantIDs.contains(objectID) || $0.placeIDs.contains(objectID) }.compactMap(visibleEvent)) { event in
                 Button { showObject(event.id) } label: { Label(event.name, systemImage: "calendar").frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
             }
             EvidenceList(evidence: visibleEvidence(entity.evidence))
@@ -196,20 +196,20 @@ private struct ObjectInspectorProjection: Sendable {
             HStack(spacing: 8) { ProgressView().controlSize(.small); Text("读取本地介绍…").font(.callout).foregroundStyle(.secondary) }
         } else if store.book?.entities.contains(where: { $0.id == objectID }) == true || store.book?.events.contains(where: { $0.id == objectID }) == true {
             Text("当前阅读位置还没有可显示的介绍。").font(.callout).foregroundStyle(.secondary)
-        } else if let document = store.book?.activeDocuments.first(where: { $0.id == objectID }) {
+        } else if let document = store.componentDataBook?.activeDocuments.first(where: { $0.id == objectID }) {
             Text("Markdown 文档").font(.system(size: 13)).foregroundStyle(Palette.accent)
             Text(document.title).font(.system(size: 25, weight: .semibold))
             Button { store.openObject(document.id) } label: { Label("打开文档", systemImage: "doc.text").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(ReadingToolbarButtonStyle())
             ObjectManagementControl(kind: .document, id: document.id, title: document.title, showsTitle: true).disabled(store.isBusy)
             if !document.origin.hasPrefix("ai-perspective:") { DocumentPerspectiveView(document: document) }
             EvidenceList(evidence: document.evidence)
-        } else if let unit = store.book?.units.first(where: { $0.id == objectID }) {
+        } else if let unit = store.componentDataBook?.units.first(where: { $0.id == objectID }) {
             Text(unit.chapter).font(.title3); Text(unit.locator).font(.caption).foregroundStyle(.secondary)
             Text(String(unit.text.prefix(500))).font(typography.font(for: .source)).lineSpacing(6).textSelection(.enabled)
         } else {
             Text("对象已不存在，或已移入回收站。").font(.callout).foregroundStyle(.secondary)
         }
-        ForEach((store.book?.relations ?? []).filter { canShow($0.evidence) && ($0.fromID == objectID || $0.toID == objectID) }) { relation in
+        ForEach((store.componentDataBook?.relations ?? []).filter { canShow($0.evidence) && ($0.fromID == objectID || $0.toID == objectID) }) { relation in
             if let title = visibleObjectTitle(relation.fromID == objectID ? relation.toID : relation.fromID) { HStack {
                 Button { showObject(relation.fromID == objectID ? relation.toID : relation.fromID) } label: {
                     Label("\(relation.label) · \(title)", systemImage: "arrow.up.right").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle())
@@ -222,7 +222,7 @@ private struct ObjectInspectorProjection: Sendable {
                     .buttonStyle(ReadingToolbarButtonStyle()).help("将这条知识关系移入回收站").accessibilityLabel("将知识关系移入回收站").disabled(store.isBusy || store.editorDirty)
             } }
         }
-        ForEach((store.book?.activeDocuments ?? []).filter { $0.linkedIDs.contains(objectID) }) { document in
+        ForEach((store.componentDataBook?.activeDocuments ?? []).filter { $0.linkedIDs.contains(objectID) }) { document in
             Button { Task { await store.openDocument(document) } } label: { Label(document.title, systemImage: "doc.text").font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).contentShape(Rectangle()) }
                 .buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
         }
