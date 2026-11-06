@@ -147,6 +147,7 @@ struct ReadingQueryHostOwner {
         func openedResult() throws -> Data {
             try viewToolResult("success", created ? "已加入并打开组件；显示已有资料，尚未新增分析。" : "已打开已有组件；没有重复创建。",
                 extra: ["rendererID": descriptor.id, "componentTitle": self.book?.views.first(where: { $0.id == route })?.title ?? descriptor.title, "viewID": route, "created": created, "opened": true, "analysisCreated": false,
+                    "confirmationOnly": request.confirmationOnly == true,
                     "sourceScope": session.snapshot?.displayTitle ?? "跟随阅读位置",
                     "displayPurpose": descriptor.purpose])
         }

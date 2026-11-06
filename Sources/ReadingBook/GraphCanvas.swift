@@ -280,7 +280,7 @@ struct GraphSurface: View {
             .onPreferenceChange(GraphChromeSizesKey.self) { if chromeSizes != $0 { chromeSizes = $0 } }
             .onChange(of: chrome.controls, initial: true) { _, frame in controlsRect = frame ?? .zero }
             .task(id: visibility) {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, visibility.contextID == store.readingVisibilityContextID else { return }
                 if store.renderedWorkspaceVisibility != visibility { store.renderedWorkspaceVisibility = visibility }
             }
             .onContinuousHover { phase in
@@ -416,8 +416,13 @@ struct GraphSurface: View {
             if !viewport.contains(bounds) || exclusions.contains(where: { $0.intersects(clipped) }) { partial = true }
             return true
         }
+        let world = worldViewport(in: size).insetBy(dx: -12 / camera.scale, dy: -12 / camera.scale)
+        let connections = renderedLines().lazy.filter { $0.curve.bounds.intersects(world) }.prefix(128).compactMap { edge -> ReadingVisibleConnection? in
+            guard let from = renderCache.byID[edge.line.from], let to = renderCache.byID[edge.line.to] else { return nil }
+            return .init(fromID: from.targetID, toID: to.targetID, label: edge.line.label)
+        }
         return ReadingVisibleObjectsSnapshot(rendererID: rendererIdentity.isEmpty ? store.route : rendererIdentity, objectIDs: Array(Set(visible.map(\.targetID))).sorted(),
-            partial: partial || ambientMotion, description: "渲染节点矩形与视口相交，排除浮窗完全遮挡；部分遮挡单独标明。可见不代表正文已读。", nodeIDs: visible.map(\.id))
+            partial: partial || ambientMotion || connections.count == 128, description: "当前图形画布的可见节点，排除浮窗完全遮挡；这不是整个工作台的全部资料，可见不代表正文已读。", nodeIDs: visible.map(\.id), contextID: store.readingVisibilityContextID, connections: Array(connections))
     }
     private func worldViewport(in size: CGSize) -> CGRect {
         let origin = camera.world(.zero, in: size)
@@ -468,8 +473,10 @@ struct GraphSurface: View {
     }
     @ViewBuilder private var expandedCameraActions: some View {
         DockDivider()
-        DockIconButton(title: "显示全部节点", icon: "arrow.up.left.and.arrow.down.right") { fitAll() }
-        DockIconButton(title: "定位选中节点", icon: "scope") { centerSelection() }.disabled(selectedPhysicalID == nil)
+        DockIconButton(title: "显示全部节点", icon: "arrow.up.left.and.arrow.down.right",
+                       explanation: "调整缩放和位置，让全部节点进入画面；不会移动节点或修改布局。") { fitAll() }
+        DockIconButton(title: "定位选中节点", icon: "scope",
+                       explanation: "把选中的节点移到画面中央，保持当前缩放。先选择一个节点后可用。") { centerSelection() }.disabled(selectedPhysicalID == nil)
         if let browserControls {
             DockDivider()
             DockIconButton(title: "节点列表", icon: "sidebar.right", isSelected: browserControls.isPresented, action: browserControls.toggle)
@@ -494,7 +501,10 @@ struct GraphSurface: View {
                 Divider()
             }
             Button { fitAll() } label: { Label("显示全部节点", systemImage: "arrow.up.left.and.arrow.down.right") }
-            Button { centerSelection() } label: { Label("定位选中节点", systemImage: "scope") }.disabled(selectedPhysicalID == nil)
+                .help("调整视野，让全部节点进入画面；不修改节点位置。")
+            Button { centerSelection() } label: { Label("定位选中节点", systemImage: "scope") }
+                .help("把选中节点移到画面中央，保持当前缩放。")
+                .disabled(selectedPhysicalID == nil)
             if let browserControls { Button(action: browserControls.toggle) { Label(browserControls.isPresented ? "收起节点列表" : "显示节点列表", systemImage: "sidebar.right") } }
             if let scopeTitle, let toggleScope { Button(action: toggleScope) { Label(scopeTitle, systemImage: "line.3.horizontal.decrease") } }
             if let createDocument { Button(action: createDocument) { Label("新建节点", systemImage: "plus") } }

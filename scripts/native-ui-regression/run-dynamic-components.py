@@ -51,6 +51,8 @@ expected.add('nativeDSMLCompatibilityUsesOneToolRound')
 expected.update(['activePositionNoteDraftNotNavigatedOrDiscarded','activePositionBindingNotNavigated'])
 expected.update(['repeatedShowDoesNotRenavigate','samePendingPresentationCleared','differentPendingNavigationPreserved',
     'managementOverlayReallyClosedBeforeSuccess','notesForegroundReallyPresented','removedWorkspacePresentationNotReused'])
+expected.update(['rendererPublishesOwnedActualVisibility','legacyUnownedVisibilityNotReused','changedRangeRejectsPriorVisibility',
+    'matchingRangeAcceptsCurrentVisibility','otherRouteRejectsPriorVisibility','otherRootRejectsPriorVisibility','reopenedBookRejectsPriorVisibility'])
 frozen=all(sha(R/name)==value for name,value in sources.items())
 passed=code==0 and unified.returncode==0 and record.get('status')=='passed' and set(checks)==expected and all(v is True for v in checks.values()) and frozen and not any(warnings.values()) and record.get('realNetworkRequests')==0 and record.get('originalLibraryUsed') is False
 report=dict(probe='dynamic-components',status='passed' if passed else 'failed',passed=passed,checkCount=len(checks),expectedCheckNames=sorted(expected),exitCode=code,unifiedLogReturnCode=unified.returncode,runtimeWarnings=warnings,sourceStillFrozen=frozen,sourceSHA256=sources,record=record,realNetworkRequests=0,buildResourceFallbackDenied=True,outboundNetworkDenied=True,mountedProductionWorkspace=True,modelBehaviorIsDeterministicFixture=True)

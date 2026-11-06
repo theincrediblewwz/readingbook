@@ -276,6 +276,29 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
         })
         try JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("model-transport.json"))
         try JSONEncoder().encode(reloaded).write(to: output.appendingPathComponent("final-fixture.json"))
+        store.libraryRootURL = library
+        store.route = organized.views[0].id
+        try await wait { self.store.makeReadingWorkspaceSnapshot()?.visibleObjects != nil }
+        try check("rendererPublishesOwnedActualVisibility", store.renderedWorkspaceVisibility?.contextID == store.readingVisibilityContextID)
+        let visible = store.renderedWorkspaceVisibility!
+        store.renderedWorkspaceVisibility?.contextID = nil
+        try check("legacyUnownedVisibilityNotReused", store.makeReadingWorkspaceSnapshot()?.visibleObjects == nil)
+        store.renderedWorkspaceVisibility = visible
+        let frozen = try ReadingQuerySnapshot.freeze(scope: .page, in: store.book!, context: .init(unitID: "u1", page: 1))
+        try store.installComponentView(route: store.route, snapshot: frozen, context: .init(unitID: "u1", page: 1))
+        try check("changedRangeRejectsPriorVisibility", store.makeReadingWorkspaceSnapshot()?.visibleObjects == nil)
+        var current = visible; current.contextID = store.readingVisibilityContextID
+        store.renderedWorkspaceVisibility = current
+        try check("matchingRangeAcceptsCurrentVisibility", store.makeReadingWorkspaceSnapshot()?.visibleObjects != nil)
+        let sameRoute = store.route
+        store.route = "reader"
+        try check("otherRouteRejectsPriorVisibility", store.makeReadingWorkspaceSnapshot()?.visibleObjects == nil)
+        store.route = sameRoute
+        store.libraryRootURL = output.appendingPathComponent("another-root")
+        try check("otherRootRejectsPriorVisibility", store.makeReadingWorkspaceSnapshot()?.visibleObjects == nil)
+        store.libraryRootURL = library
+        store.bookID = nil; store.bookID = fixture.id
+        try check("reopenedBookRejectsPriorVisibility", store.makeReadingWorkspaceSnapshot()?.visibleObjects == nil)
         if CommandLine.arguments.contains("--inspect") {
             store.route = "reader"
             try Data("ready".utf8).write(to: output.appendingPathComponent("inspection-ready"))

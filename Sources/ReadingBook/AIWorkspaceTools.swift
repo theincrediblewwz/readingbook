@@ -10,9 +10,17 @@ struct WorkspaceAICommand: Equatable {
 }
 
 @MainActor extension AppStore {
+    /// Visibility belongs to an exact library, publication, component scope and
+    /// route. A late canvas task must not describe a previous book or range.
+    var readingVisibilityContextID: String {
+        [libraryRootURL.path, bookID ?? "", book?.sourceHash ?? "", String(currentBookRevision),
+         componentDataScopeID?.uuidString ?? "", route].joined(separator: "\u{1f}")
+    }
     func makeReadingWorkspaceSnapshot() -> ReadingWorkspaceSnapshot? {
         guard let book else { return nil }
-        let visible = renderedWorkspaceVisibility.flatMap { $0.rendererID == route ? $0 : nil }
+        let visible = renderedWorkspaceVisibility.flatMap {
+            $0.rendererID == route && $0.contextID == readingVisibilityContextID ? $0 : nil
+        }
         return ReadingWorkspaceSnapshot(bookID: book.id, sourceHash: book.sourceHash, rendererID: route,
             selectedObjectIDs: selectedObjectID.map { [$0] } ?? [], context: queryReadingContext,
             visibleObjects: visible, selectedNodeIDs: visible == nil ? [] : renderedSelectedNodeIDs, timeAxis: temporalAxis,

@@ -2,15 +2,26 @@ import Foundation
 import CoreFoundation
 
 /// Only the renderer can supply real visibility; project membership is not visibility.
+public struct ReadingVisibleConnection: Codable, Hashable, Sendable {
+    public var fromID: String
+    public var toID: String
+    public var label: String
+    public init(fromID: String, toID: String, label: String) { self.fromID = fromID; self.toID = toID; self.label = label }
+}
 public struct ReadingVisibleObjectsSnapshot: Codable, Hashable, Sendable {
     public var rendererID: String
     public var objectIDs: [String]
     public var partial: Bool
     public var description: String
     public var nodeIDs: [String]
-    public init(rendererID: String, objectIDs: [String], partial: Bool = false, description: String = "", nodeIDs: [String] = []) {
+    /// Host-only render ownership, never included in model tool payloads.
+    public var contextID: String?
+    public var connections: [ReadingVisibleConnection]?
+    public init(rendererID: String, objectIDs: [String], partial: Bool = false, description: String = "", nodeIDs: [String] = [], contextID: String? = nil, connections: [ReadingVisibleConnection]? = nil) {
         self.rendererID = rendererID; self.objectIDs = objectIDs; self.partial = partial; self.description = description
         self.nodeIDs = nodeIDs
+        self.contextID = contextID
+        self.connections = connections
     }
 }
 public struct ReadingWorkspaceSnapshot: Codable, Hashable, Sendable {
@@ -243,7 +254,9 @@ extension ReadingQuerySession {
             try Task.checkCancellation()
             let returned = try await hostTools.performViewAction(name, data)
             try Task.checkCancellation()
-            let result = try hostResult(returned); hostReceipts.append(result)
+            let checked = try hostResult(returned)
+            let result = name == "component_show" ? try await componentReceiptWithActualView(checked, maximumBytes: maximumBytes) : checked
+            hostReceipts.append(result)
             if name == "component_show" { lastComponentReceipt = result }
             return result
         }
@@ -473,10 +486,54 @@ extension ReadingQuerySession {
     private func hostResult(_ data: Data) throws -> String {
         guard data.count <= 16_000, (try? JSONSerialization.jsonObject(with: data)) is [String: Any], let text = String(data: data, encoding: .utf8) else { throw invalid("宿主工具必须返回有界JSON对象回执。") }; return text
     }
+    /// A successful navigation receipt is not evidence about canvas contents.
+    /// Attach only a fresh, authorized renderer snapshot; absent snapshots remain
+    /// explicitly unavailable rather than being replaced with project membership.
+    private mutating func componentReceiptWithActualView(_ receipt: String, maximumBytes: Int) async throws -> String {
+        guard var result = try JSONSerialization.jsonObject(with: Data(receipt.utf8)) as? [String: Any],
+              result["ok"] as? Bool == true, result["opened"] as? Bool == true,
+              let route = result["viewID"] as? String else { return receipt }
+        var actual: [String: Any] = ["status": "unsupported", "note": "尚未取得当前渲染器的可见快照；不表示画布为空，也不表示某人物孤立。"]
+        if let refresh = hostTools?.readWorkspace {
+            do {
+                workspace = try await refresh(); try Task.checkCancellation()
+                if let workspace, workspace.rendererID == route {
+                    try validateWorkspace(workspace)
+                    if let visible = workspace.visibleObjects, visible.rendererID == route, let project {
+                        let scoped = scopedKnowledgeProject() ?? project
+                        let boundary = KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs))
+                        let objects = try TemporalKnowledgeRuntime.objects(in: scoped, boundary: boundary)
+                        let byID = Dictionary(objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                        let admitted = Set(byID.keys).union(snapshot.documentIDs)
+                        let rows: [[String: Any]] = visible.objectIDs.filter(admitted.contains).map { id in
+                            var row: [String: Any] = ["objectID": id]
+                            if let object = byID[id] { row["kind"] = object.kind.rawValue; row["name"] = String(object.name.prefix(80)) }
+                            return row
+                        } + visible.nodeIDs.filter { admitsNode($0, admitted: admitted, project: project) }.map { ["nodeID": $0] }
+                        actual = ["status": "success", "rendererID": route, "items": Array(rows.prefix(24)),
+                            "partial": visible.partial || rows.count > 24 || rows.count < visible.objectIDs.count + visible.nodeIDs.count || (visible.connections?.count ?? 0) > 24,
+                            "note": "只描述当前画布可见且本轮获准的项目；浮窗遮挡、未分享笔记、范围外内容已排除，不能据此断言整个工作台没有资料或某节点没有关系。"]
+                        actual["connections"] = Array((visible.connections ?? []).filter { admitted.contains($0.fromID) && admitted.contains($0.toID) }.prefix(24)).map {
+                            ["fromID": $0.fromID, "toID": $0.toID, "label": String($0.label.prefix(80))]
+                        }
+                    }
+                }
+            } catch {
+                try QueryBudget.propagateControl(error)
+                // The view was already opened. A failed optional read must not
+                // turn that completed operation into a reported navigation failure.
+            }
+        }
+        result["actualView"] = actual
+        let data = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+        guard data.count <= min(16_000, maximumBytes) else { return receipt }
+        return String(decoding: data, as: UTF8.self)
+    }
     private func validateWorkspace(_ value: ReadingWorkspaceSnapshot) throws {
         guard value.bookID == snapshot.bookID, value.sourceHash == snapshot.sourceHash, value.selectedObjectIDs.count <= 1024,
               value.selectedNodeIDs.count <= 1024, (value.visibleObjects?.objectIDs.count ?? 0) <= 10_000,
               (value.visibleObjects?.nodeIDs.count ?? 0) <= 10_000,
+              (value.visibleObjects?.connections?.count ?? 0) <= 10_000,
               [value.timeFrom, value.timeTo, value.currentTime].compactMap({ $0 }).allSatisfy({ $0.isFinite && abs($0) <= 1_000_000_000_000 }) else { throw invalid("界面快照属于其他书或超过界限。") }
     }
     private func timePoint(_ arguments: [String: Any]) throws -> TemporalQueryPoint? {

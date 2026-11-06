@@ -23,11 +23,13 @@ struct DockIconButton: View {
     let title: String
     let icon: String
     var isSelected = false
+    var explanation: String? = nil
     var action: () -> Void
     var body: some View {
         Button(action: action) { Image(systemName: icon).font(.system(size: 18, weight: .medium)) }
             .buttonStyle(ReadingToolbarButtonStyle(selected: isSelected))
-            .help(title).accessibilityLabel(title)
+            .help(explanation ?? title).accessibilityLabel(title)
+            .accessibilityHint(explanation ?? title)
             .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

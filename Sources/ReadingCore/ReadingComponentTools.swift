@@ -8,14 +8,16 @@ public struct ReadingComponentRequest: Codable, Sendable {
     public let title: String?
     public let composition: CompositionDefinition?
     public let templateID: String?
-    public init(componentID: String, viewID: String? = nil, title: String? = nil, composition: CompositionDefinition? = nil, templateID: String? = nil) {
+    public let confirmationOnly: Bool?
+    public init(componentID: String, viewID: String? = nil, title: String? = nil, composition: CompositionDefinition? = nil, templateID: String? = nil, confirmationOnly: Bool? = nil) {
         self.componentID = componentID; self.viewID = viewID; self.title = title; self.composition = composition
         self.templateID = templateID
+        self.confirmationOnly = confirmationOnly
     }
     public var resolvedComposition: CompositionDefinition? { templateID == ReadingWorkbench.templateID ? ReadingWorkbench.definition() : composition }
     public static func decode(_ data: Data) throws -> Self {
         guard data.count <= 32_768, let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(fields.keys).isSubset(of: ["componentID", "viewID", "title", "composition", "templateID"]) else { throw ReadingError.invalid("组件请求结构无效。") }
+              Set(fields.keys).isSubset(of: ["componentID", "viewID", "title", "composition", "templateID", "confirmationOnly"]) else { throw ReadingError.invalid("组件请求结构无效。") }
         let value = try JSONDecoder().decode(Self.self, from: data)
         guard !value.componentID.isEmpty, value.componentID.utf8.count <= 128,
               value.viewID.map({ !$0.isEmpty && $0.utf8.count <= 128 }) ?? true,
@@ -49,12 +51,22 @@ extension ReadingQueryToolCatalog {
             ["componentID": ["type": "string", "minLength": 1, "maxLength": 128],
              "viewID": ["type": "string", "minLength": 1, "maxLength": 128, "description": "复用components_list返回的已有视图；不改其配置。"],
              "title": ["type": "string", "minLength": 1, "maxLength": 400],
+             "confirmationOnly": ["type": "boolean", "description": "仅当用户只要求打开或切换已有资料视图、没有要求解释内容或补充整理时设true；宿主按真实结果简短确认，不再请求模型编写说明。内容问题须false。"],
              "templateID": ["type": "string", "enum": [ReadingWorkbench.templateID], "description": "人物、关系、事件和笔记联动工作台；宿主构建布局并自动复用。componentID为reading.composition，勿同时传composition/viewID。"],
              "composition": CompositionSchema.definition], required: ["componentID"])]
     }
 }
 
 extension ReadingQuerySession {
+    func componentPresentationConfirmation() -> String? {
+        guard let lastComponentReceipt, let data = lastComponentReceipt.data(using: .utf8),
+              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              value["ok"] as? Bool == true, value["status"] as? String == "success", value["opened"] as? Bool == true,
+              value["analysisCreated"] as? Bool == false, value["confirmationOnly"] as? Bool == true,
+              value["viewID"] as? String != nil, value["rendererID"] as? String != nil else { return nil }
+        let title = String((value["componentTitle"] as? String ?? "阅读组件").prefix(80))
+        return "已打开“\(title)”。原有资料保留，这次没有重新生成分析。"
+    }
     /// UI effects and the model's narrative are separate completion states. An
     /// already completed operation must not disappear behind malformed prose.
     /// A failed later request clears this receipt and cannot reuse old success.

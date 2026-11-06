@@ -857,6 +857,7 @@ private struct ReadingMapRenderer: View, Equatable {
                 }
             }
         }
+        .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
         .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
     }
 }
