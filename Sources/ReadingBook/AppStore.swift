@@ -937,7 +937,10 @@ import ReadingCore
     func libraryLoadIssueSummary(_ issues: [LibraryLoadIssue]) -> String {
         "有 \(issues.count) 个目录未载入，其他书籍仍可使用；原文件保留。\n" + issues.prefix(8).map { "\($0.folder)：\($0.message)" }.joined(separator: "\n")
     }
-    func objectTitle(_ id: String) -> String { book?.entities.first { $0.id == id }?.name ?? book?.events.first { $0.id == id }?.name ?? book?.documents.first { $0.id == id }?.title ?? id }
+    func objectTitle(_ id: String) -> String {
+        let source = componentDataBook
+        return source?.entities.first { $0.id == id }?.name ?? source?.events.first { $0.id == id }?.name ?? source?.documents.first { $0.id == id }?.title ?? id
+    }
 }
 
 /// Read-only compatibility; only the explicit recovery action calls this.

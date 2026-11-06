@@ -94,6 +94,8 @@ final class ComponentSourceScopeTests: XCTestCase {
     }
     func testNarrowScopeOmitsUnrelatedNotesAndGlobalSummariesButKeepsOriginalRecords() throws {
         var book = book()
+        book.entities.append(.init(id: "masked", typeID: "person", name: "后文身份", summary: "后文说明", aliases: ["甲方"],
+            evidence: [.init(unitID: "u2", quote: "甲方说法。"), .init(unitID: "u3", quote: "后文人物出现。")]))
         book.documents = [.init(id: "current-note", title: "本页资料", evidence: [.init(unitID: "u2", quote: "甲方说法。")]),
             .init(id: "future-note", title: "后文资料", evidence: [.init(unitID: "u3", quote: "后文人物出现。")]),
             .init(id: "personal", title: "未附加的私人笔记")]
@@ -103,6 +105,9 @@ final class ComponentSourceScopeTests: XCTestCase {
         let result = try ReadingComponentProjection.project(page, in: book)
         XCTAssertEqual(result.documents.map(\.id), ["current-note"])
         XCTAssertEqual(result.insights.map(\.id), ["local"])
+        XCTAssertEqual(result.entities.first { $0.id == "masked" }?.name, "甲方")
+        XCTAssertEqual(result.entities.first { $0.id == "masked" }?.summary, "")
+        XCTAssertEqual(book.entities.first { $0.id == "masked" }?.name, "后文身份")
         let full = try ReadingComponentProjection.project(ReadingQuerySnapshot.freeze(scope: .book, in: book), in: book)
         XCTAssertEqual(full.documents, book.documents)
         XCTAssertEqual(book.documents.count, 3)

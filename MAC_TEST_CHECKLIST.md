@@ -1,4 +1,4 @@
-> 2026-11-06 进行中：本批仅修组件/对话范围一致性，目标0.23.58/build89。用户取消临时查看/手动保存提议，原有自动保存与复用保留，不做数据迁移。分支codex/component-workbench-58；原57全书问答与组件截点不一致已在隔离宿主复现。当前本机53方法857 standalone断言、原36动态组件及最终27项范围检查通过（五类告警零）；完整CI尚待完成，不将候选称为已发布。详见Design/2026-11-06-component-range-consistency.md和logs/component-workbench-20261106/decision.json。用户dirty性能文档SHA保持9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，禁止提交。保留原书/笔记/分析和现有自动保存，不改锁屏或系统共享设置。
+> 2026-11-06 进行中：本批仅修组件/对话范围一致性，目标0.23.58/build89。用户取消临时查看/手动保存提议，原有自动保存与复用保留，不做数据迁移。分支codex/component-workbench-58；原57全书问答与组件截点不一致已在隔离宿主复现。当前本机53方法860 standalone断言、原36动态组件及最终29项范围检查通过；最终完整CI尚待完成，不将候选称为已发布。详见Design/2026-11-06-component-range-consistency.md和logs/component-workbench-20261106/decision.json。用户dirty性能文档SHA保持9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4，禁止提交。保留原书/笔记/分析和现有自动保存，不改锁屏或系统共享设置。
 
 ---
 

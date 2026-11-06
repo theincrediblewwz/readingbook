@@ -168,8 +168,12 @@ private actor ScopeTransport {
         try store.installComponentView(route: scopedRoute, snapshot: page, context: .init(unitID: "u2", page: 2))
         var updated = store.book!
         updated.entities.append(.init(id: "new-guan", typeID: "person", name: "关羽", evidence: [.init(unitID: "u2", quote: "关羽来到这里。")]))
+        updated.entities.append(.init(id: "masked", typeID: "person", name: "后文身份", aliases: ["关羽"],
+            evidence: [.init(unitID: "u2", quote: "关羽来到这里。"), .init(unitID: "u3", quote: "曹操来到这里。")]))
         store.publish(try await repository.save(updated))
         try check("newAnalysisRefreshesSameSharedScope", store.componentDataBook?.entities.contains { $0.id == "new-guan" } == true && store.activeComponentView?.snapshot?.scopeFingerprint == page.scopeFingerprint)
+        try check("componentTitlesUseScopedIdentity", store.componentDataBook?.entities.first { $0.id == "masked" }?.name == "关羽" && store.objectTitle("masked") == "关羽")
+        try check("componentTitleCannotRevealExcludedObject", store.objectTitle("cao") == "cao")
         updated.units[1].text = "原文已被替换。"; store.refreshComponentData(updated)
         try check("invalidatedSnapshotNeverFallsBackToWholeBook", store.activeComponentView?.issue != nil && store.componentDataBook == nil)
         updated.sourceHash = "replaced-source"; store.books = [updated]; store.refreshComponentData(updated)
