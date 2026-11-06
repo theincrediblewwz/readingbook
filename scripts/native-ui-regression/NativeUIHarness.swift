@@ -16,6 +16,7 @@ import Darwin
     func runMapRecenterScenario() async {
         var checks: [String: Bool] = [:]
         var observations: [[String: Double]] = []
+        var clickInputs: [[String: Any]] = []
         func require(_ name: String, _ value: Bool) throws {
             checks[name] = value
             guard value else { throw ReadingError.invalid(name) }
@@ -57,10 +58,50 @@ import Darwin
                 observations.append(["latitude": map.region.center.latitude, "longitude": map.region.center.longitude,
                     "latitudeDelta": map.region.span.latitudeDelta, "longitudeDelta": map.region.span.longitudeDelta])
             }
-            func clickMarker() throws {
-                guard let annotation = map.annotations.first(where: { abs($0.coordinate.latitude - 27) < 1e-8 }),
-                      let view = map.view(for: annotation) else { throw ReadingError.invalid("Marker view missing") }
-                let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+            func clickMarker() async throws {
+                // Presence in annotations does not mean MapKit has positioned
+                // the native marker yet. Use the same bounded geometry readiness
+                // as the newer map fixture; retain the original result deadlines.
+                let started = ProcessInfo.processInfo.systemUptime, host = window.contentView!
+                var stablePoint: CGPoint?, stableSince = started, point: CGPoint?
+                var polls = 0, firstDistance: Double?
+                while true {
+                    host.layoutSubtreeIfNeeded(); map.layoutSubtreeIfNeeded(); polls += 1
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if let annotation = map.annotations.first(where: { abs($0.coordinate.latitude - 27) < 1e-8 }),
+                       let view = map.view(for: annotation) {
+                        let center = view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: host)
+                        let projected = map.convert(annotation.coordinate, toPointTo: host)
+                        let expected = CGPoint(x: projected.x + view.centerOffset.x,
+                            y: projected.y + (host.isFlipped ? view.centerOffset.y : -view.centerOffset.y))
+                        let distance = hypot(center.x - expected.x, center.y - expected.y)
+                        if firstDistance == nil { firstDistance = distance }
+                        let current = view.window === window && map.view(for: annotation) === view && !view.isHidden && view.alphaValue > 0
+                            && host.bounds.intersects(view.convert(view.bounds, to: host))
+                        if current && distance < 0.5 {
+                            if let previous = stablePoint, hypot(previous.x - center.x, previous.y - center.y) < 0.5 {
+                                if now - stableSince >= 0.04 && now - started < 1.5 {
+                                    // Selected markers can include a tall label;
+                                    // click the visible pin rather than that label.
+                                    let y = view.bounds.height > 90 ? (view.isFlipped ? view.bounds.minY + 21 : view.bounds.maxY - 21) : view.bounds.midY
+                                    point = view.convert(CGPoint(x: view.bounds.midX, y: y), to: nil)
+                                    clickInputs.append(["stage": "geometry-ready", "polls": polls, "readinessSeconds": now - started,
+                                        "firstProjectionDistance": firstDistance ?? -1, "projectionDistance": distance,
+                                        "windowPoint": NSStringFromPoint(point!), "markerBounds": NSStringFromRect(view.bounds),
+                                        "windowIsKey": window.isKeyWindow, "appIsActive": NSApp.isActive])
+                                    break
+                                }
+                            } else { stablePoint = center; stableSince = now }
+                        } else { stablePoint = nil; stableSince = now }
+                    }
+                    guard now - started < 1.5 else {
+                        clickInputs.append(["stage": "geometry-not-ready", "polls": polls, "readinessSeconds": now - started,
+                            "firstProjectionDistance": firstDistance ?? -1, "windowIsKey": window.isKeyWindow, "appIsActive": NSApp.isActive])
+                        throw ReadingError.invalid("Marker geometry did not become ready within 1500ms")
+                    }
+                    try await Task.sleep(nanoseconds: 16_000_000)
+                }
+                guard let point else { throw ReadingError.invalid("Marker view missing") }
                 guard window.contentView!.bounds.contains(window.contentView!.convert(point, from: nil)) else {
                     throw ReadingError.invalid("Marker must be visible inside its test window")
                 }
@@ -74,7 +115,7 @@ import Darwin
                 NSApp.postEvent(down, atStart: false); NSApp.postEvent(up, atStart: false)
             }
             try require("allMarkersInitiallyPresent", map.annotations.filter { !($0 is MKUserLocation) }.count == 10)
-            try clickMarker(); try await Task.sleep(nanoseconds: 700_000_000)
+            try await clickMarker(); try await Task.sleep(nanoseconds: 700_000_000)
             try require("actualMarkerClickSelectedEvent", store.selectedObjectID == "map-event-7")
             let target = map.region
             observe(); metrics.scenario()
@@ -87,7 +128,7 @@ import Darwin
                 try await Task.sleep(nanoseconds: 250_000_000)
                 observe()
                 try require("nativeMovementApplied-\(cycle)", abs(map.region.center.longitude - target.center.longitude) > 0.2)
-                try clickMarker(); try await Task.sleep(nanoseconds: 500_000_000)
+                try await clickMarker(); try await Task.sleep(nanoseconds: 500_000_000)
                 observe()
                 try require("sameMarkerRecentered-\(cycle)", abs(map.region.center.latitude - target.center.latitude) < 1e-6
                     && abs(map.region.center.longitude - target.center.longitude) < 1e-6)
@@ -99,11 +140,11 @@ import Darwin
             try require("projectBytesUnchanged", try encoder.encode(store.books[0]) == before)
             try require("noModelRequests", !store.isQueryBusy && !store.isSmartReadingRunning && store.apiKey.isEmpty)
             writeJSON("result.json", ["status": "passed", "mode": mode, "checks": checks, "checkCount": checks.count,
-                "regions": observations, "metrics": metrics.snapshot(), "realModelRequests": 0,
+                "regions": observations, "clickInputs": clickInputs, "metrics": metrics.snapshot(), "realModelRequests": 0,
                 "scope": "Actual product MapKit; controlled native camera change and fixture-window AppKit marker clicks. Separate CUA covers physical pan."])
         } catch {
             writeJSON("result.json", ["status": "failed", "mode": mode, "reason": String(describing: error),
-                "checks": checks, "regions": observations, "metrics": metrics.snapshot()])
+                "checks": checks, "regions": observations, "clickInputs": clickInputs, "metrics": metrics.snapshot()])
         }
         timer?.cancel(); window?.orderOut(nil); NSApp.terminate(nil)
     }
