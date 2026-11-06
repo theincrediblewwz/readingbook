@@ -347,8 +347,8 @@ extension ReadingQuerySession {
                 "identityOnly": isIdentityStub(object.id), "note": "稳定id可复用关联；跨范围聚合属性隐藏，安全旧简介单列为派生资料。只有本范围实际返回原文可作本次引用。"]
             if let saved = reuse?.record(id: object.id) { row["previouslySaved"] = saved }
             let kind: KnowledgeRecordKind = object.kind == .event ? .event : .entity
-            if !isIdentityStub(object.id), let edit = KnowledgeUserEditsRuntime.record(object.id, kind: kind, in: scoped) {
-                row["readerCorrection"] = ["basis": edit.basis.title, "protectedFields": edit.fields, "notice": "用户修正，后续整理保留；原文出处单列，不把个人理解当作原文明载。"]
+            if !isIdentityStub(object.id), let edit = KnowledgeUserEditsRuntime.record(object.id, kind: kind, in: scoped), !edit.fields.isEmpty {
+                row["readerCorrection"] = ["basis": edit.basis.title, "protectedFields": edit.fields, "notice": "仅这些字段是用户修正，其余不代表已核对；原文出处单列，不把个人理解当作原文明载。"]
             }
             return try objectResultWithTeacherBackground(row, objectID: object.id, visibleName: object.name, project: project, maximumBytes: maximumBytes)
         case "relations_list":

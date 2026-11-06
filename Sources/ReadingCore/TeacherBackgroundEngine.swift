@@ -51,7 +51,8 @@ public struct TeacherBackgroundRequest: Hashable, Sendable {
         let allFacts = (entity?.summary ?? event?.summary ?? "") +
             (entity?.properties.sorted(by: { $0.key < $1.key }).map { "\n" + $0.key + "：" + $0.value }.joined() ?? "")
         let correction = KnowledgeUserEditsRuntime.record(objectID, kind: entity == nil ? .event : .entity, in: project)
-        let ownership = correction.map { "读者修正（\($0.basis.title)；只表示读者判断，不能当作原文明载）：\n" } ?? ""
+            .flatMap { $0.fields.isEmpty ? nil : $0 }
+        let ownership = correction.map { "读者修正（\($0.basis.title)；只表示读者判断，不能当作原文明载）。仅适用于这些字段：\($0.fields.joined(separator: ", "))；其他字段不代表读者已核对：\n" } ?? ""
         let visibleFacts = complete ? ownership + allFacts : ""
         let facts = visibleFacts.count <= 2400 ? visibleFacts : String(visibleFacts.prefix(1000)) + "\n……\n" + String(visibleFacts.suffix(1400))
         let fingerprintPayload = ["version": "teacher-context-v2", "sourceHash": project.sourceHash,

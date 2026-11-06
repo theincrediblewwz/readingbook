@@ -21,7 +21,7 @@ struct SavedKnowledgeReuse {
               currentSlices.map({ Set($0.keys) == currentUnitIDs }) ?? true,
               let cursor = currentUnitIDs.compactMap({ units[$0]?.order }).max() else { return nil }
         self.sourceHash = project.sourceHash; self.cursorOrder = cursor; self.units = units
-        self.corrections = Dictionary((project.knowledgeUserEdits?.records ?? []).map { ($0.kind.rawValue + "/" + $0.objectID, $0) }, uniquingKeysWith: { first, _ in first })
+        self.corrections = Dictionary((project.knowledgeUserEdits?.records ?? []).filter { !$0.fields.isEmpty }.map { ($0.kind.rawValue + "/" + $0.objectID, $0) }, uniquingKeysWith: { first, _ in first })
         self.currentSlices = currentSlices
         let admission: ((Evidence) -> Bool)?
         if let currentRanges {
@@ -42,7 +42,7 @@ struct SavedKnowledgeReuse {
         func marked(_ result: [String: Any]?, kind: KnowledgeRecordKind, currentSummary: String, summary: String) -> [String: Any]? {
             guard var result else { return nil }
             if currentSummary == summary, let edit = corrections[kind.rawValue + "/" + id] {
-                result["readerCorrection"] = ["basis": edit.basis.title, "protectedFields": edit.fields, "notice": "保留用户修正；推断和个人理解不是原文明载。"]
+                result["readerCorrection"] = ["basis": edit.basis.title, "protectedFields": edit.fields, "notice": "仅这些字段是用户修正，其余不代表已核对；推断和个人理解不是原文明载。"]
             }
             return result
         }

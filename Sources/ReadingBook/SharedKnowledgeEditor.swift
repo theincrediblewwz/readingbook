@@ -20,7 +20,10 @@ struct KnowledgeOwnershipBadge: View {
     let id: String
     let kind: KnowledgeRecordKind
     var compact = false
-    private var edit: KnowledgeUserEdit? { store.componentDataBook.flatMap { KnowledgeUserEditsRuntime.record(id, kind: kind, in: $0) } }
+    private var edit: KnowledgeUserEdit? {
+        store.componentDataBook.flatMap { KnowledgeUserEditsRuntime.record(id, kind: kind, in: $0) }
+            .flatMap { $0.fields.isEmpty ? nil : $0 }
+    }
     var body: some View {
         Label(edit.map { compact ? "已修正" : "你的修正 · " + $0.basis.title } ?? (compact ? "资料" : "整理资料 · 待核对"), systemImage: edit == nil ? "text.book.closed" : "person.crop.circle.badge.checkmark")
             .font(.system(size: 12)).foregroundStyle(.secondary)

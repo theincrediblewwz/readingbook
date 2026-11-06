@@ -70,6 +70,11 @@ final class SharedKnowledgeWorkbenchTests: XCTestCase {
         let result = try KnowledgeUserEditsRuntime.applying(expected: .entity(original.entities[0]), replacement: .entity(original.entities[0]), basis: .checkedSource, to: original)
         XCTAssertEqual(result.knowledgeUserEdits?.records.first?.basis, .checkedSource)
         XCTAssertEqual(result.knowledgeUserEdits?.records.first?.fields, [])
+        let request = try TeacherBackgroundRequest.freeze(objectID: "liu", in: result, currentUnitID: "u1", avoidsSpoilers: true)
+        XCTAssertFalse(request.knownFacts.contains("读者修正"))
+        XCTAssertEqual(request.contextFingerprint, try TeacherBackgroundRequest.freeze(objectID: "liu", in: original, currentUnitID: "u1", avoidsSpoilers: true).contextFingerprint)
+        let reuse = try XCTUnwrap(SavedKnowledgeReuse(project: result, currentUnitIDs: ["u2"]))
+        XCTAssertNil(reuse.record(id: "liu")?["readerCorrection"])
         var noProof = original; noProof.entities[0].evidence = []
         XCTAssertThrowsError(try KnowledgeUserEditsRuntime.applying(expected: .entity(noProof.entities[0]), replacement: .entity(noProof.entities[0]), basis: .checkedSource, to: noProof))
     }
@@ -216,7 +221,7 @@ final class SharedKnowledgeWorkbenchTests: XCTestCase {
         let before = try TeacherBackgroundRequest.freeze(objectID: "liu", in: original, currentUnitID: "u1", avoidsSpoilers: true)
         let after = try TeacherBackgroundRequest.freeze(objectID: "liu", in: edited, currentUnitID: "u1", avoidsSpoilers: true)
         XCTAssertNotEqual(before.contextFingerprint, after.contextFingerprint)
-        XCTAssertTrue(after.knownFacts.contains("读者修正（我的理解")); XCTAssertTrue(after.knownFacts.contains("不能当作原文明载"))
+        XCTAssertTrue(after.knownFacts.contains("仅适用于这些字段：summary")); XCTAssertTrue(after.knownFacts.contains("读者修正（我的理解")); XCTAssertTrue(after.knownFacts.contains("不能当作原文明载"))
         let reuse = try XCTUnwrap(SavedKnowledgeReuse(project: edited, currentUnitIDs: ["u2"]))
         let saved = try XCTUnwrap(reuse.record(id: "liu"))
         XCTAssertEqual((saved["readerCorrection"] as? [String: Any])?["basis"] as? String, "我的理解")
