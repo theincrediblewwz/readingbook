@@ -49,25 +49,14 @@ enum AIProjectMerge {
             let value = try rebase(old, proposed, stored, path: key) ?? NSNull()
             canonical[keyPath: path] = try decoder.decode(T.self, from: JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys]))
         }
-        let originalIDs = Set(base.entities.map(\.id))
-        struct IdentityKey: Hashable { let typeID: String; let name: String }
-        var concurrentNames: [IdentityKey: Set<String>] = [:]
-        for entity in latest.entities {
-            for name in [entity.name] + entity.aliases {
-                let key = IdentityKey(typeID: entity.typeID, name: name.trimmingCharacters(in: .whitespacesAndNewlines))
-                concurrentNames[key, default: []].insert(entity.id)
-            }
-        }
-        for entity in result.entities where !originalIDs.contains(entity.id) {
-            if ([entity.name] + entity.aliases).contains(where: { name in
-                let key = IdentityKey(typeID: entity.typeID, name: name.trimmingCharacters(in: .whitespacesAndNewlines))
-                return concurrentNames[key]?.contains(where: { $0 != entity.id }) == true
-            }) {
-                throw ReadingError.invalid("并行保存了同名对象，请重新查询本地身份后继续；已有内容保留。")
-            }
-        }
-        try patch("coverage", \.coverage); try patch("types", \.types); try patch("entities", \.entities)
-        try patch("events", \.events); try patch("relations", \.relations); try patch("views", \.views)
+        let sameEntities = sharesStorage(base.entities, result.entities)
+        let originalIDs = sameEntities ? [] : Set(base.entities.map(\.id))
+        let newEntityIDs = sameEntities ? [] : Set(result.entities.lazy.filter { !originalIDs.contains($0.id) }.map(\.id))
+        try patch("coverage", \.coverage); try patch("types", \.types)
+        if !sameEntities { try patch("entities", \.entities) }
+        if !sharesStorage(base.events, result.events) { try patch("events", \.events) }
+        if !sharesStorage(base.relations, result.relations) { try patch("relations", \.relations) }
+        try patch("views", \.views)
         try patch("methods", \.methods); try patch("plan", \.plan); try patch("insights", \.insights)
         try patch("syntheses", \.syntheses); try patch("nodes", \.nodes); try patch("edges", \.edges)
         try patch("chats", \.chats); try patch("audit", \.audit); try patch("plugins", \.plugins)
@@ -77,7 +66,24 @@ enum AIProjectMerge {
         try patch("smartReading", \.smartReading); try patch("readingExperience", \.readingExperience)
         try patch("bookSchemes", \.bookSchemes); try patch("mathVerifications", \.mathVerifications)
         try patch("temporalKnowledge", \.temporalKnowledge); try patch("graphGroups", \.graphGroups)
+        // Check the effective, fully rebased names: an alias added to an old
+        // object in the same batch also belongs to that object's stable ID.
+        // Answer-only saves skip the index entirely.
+        if let conflict = try KnowledgeIdentityIndex.conflict(in: canonical.entities, checking: newEntityIDs) {
+            throw ReadingError.invalid(KnowledgeIdentityIndex.conflictMessage(conflict))
+        }
         return canonical
+    }
+    /// Swift value arrays keep the same storage until mutation. This proves a
+    /// no-op without encoding every existing fact. Different storage still uses
+    /// the exact JSON comparison below: String equality alone would hide a real
+    /// UTF-8 normalization change, and matching IDs/counts cannot prove equality.
+    private static func sharesStorage<T>(_ lhs: [T], _ rhs: [T]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        if lhs.isEmpty { return true }
+        return lhs.withUnsafeBufferPointer { left in
+            rhs.withUnsafeBufferPointer { right in left.baseAddress == right.baseAddress }
+        }
     }
     private static func same(_ a: Any?, _ b: Any?) -> Bool {
         if a == nil && b == nil { return true }

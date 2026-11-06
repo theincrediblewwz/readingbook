@@ -322,7 +322,7 @@ public struct BookProject: Codable, Identifiable, Sendable {
     public var trashedDocuments: [DocumentRecord] { documents.filter { $0.trashedAt != nil } }
 }
 
-public struct ProviderSettings: Codable, Sendable {
+public struct ProviderSettings: Codable, Equatable, Sendable {
     public var baseURL: String
     public var model: String
     public var maxRequestsPerRun: Int

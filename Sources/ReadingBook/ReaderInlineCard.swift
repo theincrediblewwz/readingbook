@@ -309,8 +309,13 @@ struct ReaderInlineContent: Sendable {
     func pin() { cancelPending(); pinned = true; refreshDisplayed() }
     func clear() {
         task?.cancel(); task = nil; closing = false; pendingID = nil; invalidateRefresh()
-        inputs = [:]; scope = nil; displayedSerial = nil; hover = nil; content = nil; pinned = false
-        inside = false; sourceInside = false; automaticTranslationActive = false; lastHover = nil
+        inputs = [:]; scope = nil; displayedSerial = nil
+        if hover != nil { hover = nil }
+        if content != nil { content = nil }
+        if pinned { pinned = false }
+        inside = false; sourceInside = false
+        if automaticTranslationActive { automaticTranslationActive = false }
+        lastHover = nil
     }
     private func scheduleClose() {
         guard !pinned, !closing else { return }

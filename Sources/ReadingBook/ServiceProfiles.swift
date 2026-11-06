@@ -20,27 +20,36 @@ extension AppStore {
     var matchingModel: ModelPreset? { matchingPreset?.models.first { $0.id == settings.model } }
 
     func loadServiceProfiles() {
-        var loadError: String?
         do {
-            if let data = UserDefaults.standard.data(forKey: "service-profiles"), let profiles = try? JSONDecoder().decode([SavedAIService].self, from: data) {
-                savedServices = profiles
+            let profiles: [SavedAIService]
+            let selected: SavedAIService?
+            let key: String
+            if let data = UserDefaults.standard.data(forKey: "service-profiles") {
+                do { profiles = try JSONDecoder().decode([SavedAIService].self, from: data) }
+                catch { throw ReadingError.invalid("已保存的 AI 配置无法读取；原配置与密钥保留，请检查配置后重试。") }
+                guard Set(profiles.map(\.id)).count == profiles.count else {
+                    throw ReadingError.invalid("已保存的 AI 配置存在重复标识；原配置与密钥保留。")
+                }
                 let remembered = UserDefaults.standard.string(forKey: "selected-service")
-                if let first = profiles.first(where: { $0.id == remembered }) ?? profiles.first {
-                    selectedServiceID = first.id; serviceName = first.name; settings = first.settings
-                    apiKey = try keyForService(first.id)
-                } else { selectedServiceID = nil; serviceName = "新服务"; settings = ProviderSettings(); apiKey = "" }
+                selected = profiles.first(where: { $0.id == remembered }) ?? profiles.first
+                key = try selected.map { try keyForService($0.id) } ?? ""
             } else {
                 // Starting the app never opens Keychain. Existing credentials
                 // remain there until the reader explicitly asks to recover one.
-                apiKey = try localCredentials.key(for: "legacy") ?? ""
-                selectedServiceID = "legacy"; serviceName = "我的 AI"
-                savedServices = [SavedAIService(id: "legacy", name: serviceName, settings: settings)]
+                key = try localCredentials.key(for: "legacy") ?? ""
+                let legacy = SavedAIService(id: "legacy", name: "我的 AI", settings: settings)
+                selected = legacy; profiles = [legacy]
             }
+            // Publish one matching tuple only after both metadata and its key
+            // are readable. A failed reload must not pair another profile with
+            // the previous profile's credential or silently fall back to legacy.
+            savedServices = profiles; selectedServiceID = selected?.id
+            serviceName = selected?.name ?? "新服务"; settings = selected?.settings ?? ProviderSettings(); apiKey = key
+            connectionStatus = ""
             ocrServiceID = UserDefaults.standard.string(forKey: "ocr-service")
             if !savedServices.contains(where: { $0.id == ocrServiceID }) { ocrServiceID = nil }
-        } catch { loadError = error.localizedDescription }
-        serviceProfileDraft.capture(from: self)
-        if let loadError { serviceProfileDraft.errorMessage = loadError }
+            serviceProfileDraft.capture(from: self)
+        } catch { serviceProfileDraft.errorMessage = error.localizedDescription; connectionStatus = "" }
     }
 
     func selectService(_ id: String) {
@@ -181,7 +190,7 @@ extension AppStore {
             // The editor remains usable. A response for the old endpoint must
             // not label a newly selected/edited connection as tested.
             guard libraryRootURL == root, selectedServiceID == profile,
-                  settings.baseURL == configuration.baseURL, settings.model == configuration.model, apiKey == key else {
+                  settings == configuration, apiKey == key else {
                 if connectionStatus == waitingMessage { connectionStatus = "配置已更改，请重新测试当前配置。" }
                 return
             }

@@ -520,9 +520,13 @@ public enum PluginEngine {
         let baseline = project
         try keys(input, allowed: ["entities"])
         let values = try objects(input, key: "entities", maximum: 128)
-        try uniqueIDs(try values.map { try string($0, key: "id", maximum: 128) })
+        let ids = try values.map { try string($0, key: "id", maximum: 128) }
+        try uniqueIDs(ids)
         for value in values { try upsertEntity(value, project: &project, allowed: allowed) }
         project = try KnowledgeUserEditsRuntime.preserving(project, from: baseline)
+        if let conflict = try KnowledgeIdentityIndex.conflict(in: project.entities, checking: Set(ids).subtracting(baseline.entities.map(\.id))) {
+            throw invalid(KnowledgeIdentityIndex.conflictMessage(conflict))
+        }
         return "已创建或合并 \(values.count) 张实体卡，证据已保留。"
     }
 
@@ -617,14 +621,9 @@ public enum PluginEngine {
             try requiredFields(type, properties: old.properties)
             project.entities[index] = old
         } else {
-            let requestedNames = Set([name] + aliases)
-            if let existing = project.entities.first(where: {
-                $0.typeID == typeID && !requestedNames.isDisjoint(with: Set([$0.name] + $0.aliases))
-            }) {
-                throw invalid("同类型中已有名称或别名相同的对象（ID：\(existing.id)）。请复用该稳定 ID；若是同名的不同对象，请用可区分的名称和别名消歧后再创建。")
-            }
+            let entity = KnowledgeEntity(id: id, typeID: typeID, name: name, summary: summary, properties: properties, aliases: union([], aliases), latitude: latitude, longitude: longitude, locationNote: locationNote, evidence: evidence)
             try requiredFields(type, properties: properties)
-            project.entities.append(KnowledgeEntity(id: id, typeID: typeID, name: name, summary: summary, properties: properties, aliases: union([], aliases), latitude: latitude, longitude: longitude, locationNote: locationNote, evidence: evidence))
+            project.entities.append(entity)
         }
     }
 

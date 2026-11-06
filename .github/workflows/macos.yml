@@ -104,6 +104,10 @@ jobs:
         run: python3 scripts/native-ui-regression/run-component-scope.py --bin-dir .build/tests/debug --tag ci-component-scope
       - name: Native shared corrections and continued workbench regression
         run: python3 scripts/native-ui-regression/run-shared-workbench.py --bin-dir .build/tests/debug --tag ci-shared-workbench
+      - name: Native model failure recovery and stable shared identities
+        run: python3 scripts/native-ui-regression/run-collaboration-recovery.py --bin-dir .build/tests/debug --tag ci-collaboration-recovery
+      - name: Saved service profiles and credential association regression
+        run: python3 scripts/native-ui-regression/run-service-profiles.py --bin-dir .build/tests/debug --tag ci-service-profiles
       - name: Native chat history presentation regression
         run: python3 scripts/native-ui-regression/run-chat-history.py --bin-dir .build/tests/debug --tag ci-chat-history
       - name: Native stable menu visibility regression
@@ -173,6 +177,16 @@ jobs:
         with:
           name: failed-shared-workbench-evidence
           path: logs/shared-workbench-20261106/ci-shared-workbench
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Preserve failed collaboration and profile evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-collaboration-and-profile-evidence
+          path: |
+            logs/ai-collaboration-20261106/ci-collaboration-recovery
+            logs/service-profiles-20261106/ci-service-profiles
           if-no-files-found: ignore
           retention-days: 3
       - name: Preserve failed dynamic component evidence

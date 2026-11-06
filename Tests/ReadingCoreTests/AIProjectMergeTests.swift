@@ -3,6 +3,20 @@ import XCTest
 @testable import ReadingCore
 
 final class AIProjectMergeTests: XCTestCase {
+    func testUnchangedKnowledgeFastPathKeepsConcurrentEditsAndExactChangedUTF8() throws {
+        var base = BookProject(title: "不变资料", originalName: "book.txt", sourceHash: "fixture", units: [])
+        base.entities = [.init(id: "person", typeID: "person", name: "Jos\u{e9}")]
+        var answer = base, latest = base
+        answer.chats = [.init(id: "answer", role: "assistant", content: "只保存回答")]
+        latest.entities[0].summary = "并行保存的介绍"
+        let merged = try AIProjectMerge.merge(base: base, result: answer, latest: latest)
+        XCTAssertEqual(merged.entities, latest.entities); XCTAssertEqual(merged.chats.map(\.id), answer.chats.map(\.id))
+        XCTAssertEqual(merged.chats.map(\.content), answer.chats.map(\.content))
+        var changed = base; changed.entities[0].name = "Jose\u{301}"
+        let exact = try AIProjectMerge.merge(base: base, result: changed, latest: base)
+        XCTAssertEqual(Array(exact.entities[0].name.utf8), Array(changed.entities[0].name.utf8))
+        XCTAssertNotEqual(Array(exact.entities[0].name.utf8), Array(base.entities[0].name.utf8))
+    }
     func testCanonicalHistorySurvivesStaleMetadataAndMarkdownSaves() async throws {
         let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.directory) }
         let record = AIRequestHistoryRecord(id: UUID().uuidString, title: "刚结束的请求", number: 1,

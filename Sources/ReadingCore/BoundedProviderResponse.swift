@@ -6,10 +6,13 @@ import FoundationNetworking
 /// Stop while receiving, rather than buffering an unbounded body before checking its size.
 final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     static let maximumBytes = 4 * 1024 * 1024
+    static let maximumErrorBytes = 16 * 1024
     private let lock = NSLock()
     private var continuation: CheckedContinuation<(Data, URLResponse), Error>?
     private var task: URLSessionDataTask?
     private var response: URLResponse?
+    private var failureResponse: HTTPURLResponse?
+    private var failureDeadline: DispatchWorkItem?
     private var data = Data()
     private var terminal = false
     private let onResponse: (@Sendable (HTTPURLResponse) -> Void)?
@@ -44,12 +47,19 @@ final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecke
         lock.lock()
         guard !terminal else { lock.unlock(); return }
         terminal = true
-        let pending = continuation, running = task, savedResponse = response, savedData = data
-        continuation = nil; task = nil; response = nil; data = Data()
+        let pending = continuation, running = task, savedResponse = response, savedData = data, deadline = failureDeadline
+        continuation = nil; task = nil; response = nil; failureResponse = nil; failureDeadline = nil; data = Data()
         lock.unlock()
+        deadline?.cancel()
         if let error { running?.cancel(); pending?.resume(throwing: error) }
         else if let savedResponse { pending?.resume(returning: (savedData, savedResponse)) }
         else { pending?.resume(throwing: ReadingError.invalid("模型服务未返回 HTTP 响应。")) }
+    }
+    private func finishHTTPFailure() {
+        lock.lock()
+        let http = failureResponse, body = data
+        lock.unlock()
+        if let http { finish(error: ProviderHTTPFailure(response: http, body: body)) }
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
@@ -57,8 +67,16 @@ final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecke
             finish(error: ReadingError.invalid("模型服务未返回 HTTP 响应。")); completionHandler(.cancel); return
         }
         guard (200...299).contains(http.statusCode) else {
-            finish(error: ReadingError.invalid("模型请求失败（HTTP \(http.statusCode)）；请检查服务地址、模型、授权与额度。"))
-            completionHandler(.cancel); return
+            // Collect only a small error prefix, with a short deadline even if
+            // the server leaves its error response open. Never feed it into the
+            // answer stream and never retry a potentially billable request here.
+            let deadline = DispatchWorkItem { [weak self] in self?.finishHTTPFailure() }
+            lock.lock()
+            let active = !terminal
+            if active { failureResponse = http; failureDeadline = deadline }
+            lock.unlock()
+            if active { DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(250), execute: deadline) }
+            completionHandler(active ? .allow : .cancel); return
         }
         guard response.expectedContentLength <= Int64(Self.maximumBytes) else {
             finish(error: ReadingError.invalid("模型响应超过 4 MiB 限制。")); completionHandler(.cancel); return
@@ -73,13 +91,23 @@ final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecke
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
         lock.lock()
         guard !terminal else { lock.unlock(); return }
-        let overflow = chunk.count > Self.maximumBytes - data.count
-        if !overflow { data.append(chunk) }
+        let failing = failureResponse != nil
+        let maximum = failing ? Self.maximumErrorBytes : Self.maximumBytes
+        let overflow = chunk.count > maximum - data.count
+        if failing { data.append(chunk.prefix(maximum - data.count)) }
+        else if !overflow { data.append(chunk) }
+        let reachedErrorLimit = failing && data.count == Self.maximumErrorBytes
         lock.unlock()
-        if overflow { finish(error: ReadingError.invalid("模型响应超过 4 MiB 限制。")) }
+        if failing {
+            if overflow || reachedErrorLimit { finishHTTPFailure() }
+        }
+        else if overflow { finish(error: ReadingError.invalid("模型响应超过 4 MiB 限制。")) }
         else { do { try onChunk?(chunk) } catch { finish(error: error) } }
     }
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) { finish(error: error) }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock(); let failing = failureResponse != nil; lock.unlock()
+        if failing { finishHTTPFailure() } else { finish(error: error) }
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }

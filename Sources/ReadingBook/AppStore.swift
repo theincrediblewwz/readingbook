@@ -210,7 +210,8 @@ import ReadingCore
     @Published var isImportingBookCommit = false
     @Published var isCommittingLocalWrite = false
     @Published var activity = "把一本书带进来，让理解慢慢长出来。"
-    @Published var errorMessage: String?
+    @Published var errorMessage: String? { didSet { errorMessageRevision &+= 1 } }
+    private var errorMessageRevision: UInt64 = 0
     @Published var showingSettings = false
     @Published var showingPlugins = false
     @Published var showingOCR = false
@@ -252,7 +253,7 @@ import ReadingCore
     @Published var apiKey = ""
     @Published var isRecoveringLegacyKey = false
     @Published var legacyKeyRecoveryStatus = ""
-    let localCredentials = LocalCredentialStore()
+    let localCredentials: LocalCredentialStore
     @Published var requestsUsed = 0
     @Published var timeFrom = -5000.0
     @Published var timeTo = 3000.0
@@ -291,10 +292,12 @@ import ReadingCore
         }.sorted { ($0.startYear ?? Int.max) < ($1.startYear ?? Int.max) }
     }
     init(sharedAIRequests: AIRequestCoordinator = AIRequestCoordinator(),
+         localCredentials: LocalCredentialStore = LocalCredentialStore(),
          connectionProbe: @escaping @Sendable (ProviderSettings, String) async throws -> String = {
              try await ProviderProbe.test(settings: $0, apiKey: $1)
          }) {
         self.sharedAIRequests = sharedAIRequests
+        self.localCredentials = localCredentials
         self.connectionProbe = connectionProbe
         reader = AIReader(coordinator: sharedAIRequests)
         readingReader = AIReader(coordinator: sharedAIRequests)
@@ -445,6 +448,17 @@ import ReadingCore
     var providerReady: Bool {
         if settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { errorMessage = "请先在模型设置中填写模型名称与服务地址。"; showingSettings = true; return false }
         return true
+    }
+    func dismissErrorAfterViewUpdate() {
+        guard errorMessage != nil else { return }
+        let revision = errorMessageRevision
+        // AppKit can dismiss a SwiftUI alert while its view graph is updating.
+        // Avoid a synchronous publication, and never let that old dismissal
+        // erase a newer error (even one with the same visible text).
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.errorMessageRevision == revision, self.errorMessage != nil else { return }
+            self.errorMessage = nil
+        }
     }
     func handle(_ error: Error) {
         if error is CancellationError || (error as? URLError)?.code == .cancelled { activity = "已暂停；从最后一次成功保存的位置继续。" }

@@ -185,6 +185,9 @@ public enum ControlledKnowledgeRuntime {
             project.readingExperience = experience
         }
         project = try KnowledgeUserEditsRuntime.preserving(project, from: userEditsBaseline)
+        if let conflict = try KnowledgeIdentityIndex.conflict(in: project.entities, checking: Set((changes.newEntityIDs ?? []).map(identity.resolve))) {
+            throw ControlledChangeError.conflict(KnowledgeIdentityIndex.conflictMessage(conflict))
+        }
         try TemporalKnowledgeRuntime.validateStoredState(in: project)
     }
 

@@ -236,8 +236,8 @@ struct WorkspaceView: View {
         } message: { review in
             Text("《\(review.bookTitle)》的新方案准备成功后更新；原书、笔记和已有分析保留。此操作会再次请求AI。")
         }
-        .alert("需要处理", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
-            Button("知道了", role: .cancel) { store.errorMessage = nil }
+        .alert("需要处理", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.dismissErrorAfterViewUpdate() } })) {
+            Button("知道了", role: .cancel) { store.dismissErrorAfterViewUpdate() }
         } message: { Text(store.errorMessage ?? "") }
         .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
             guard !store.isBusy, let provider = providers.first else { return false }

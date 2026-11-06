@@ -166,8 +166,7 @@ enum ProviderClient {
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw ReadingError.invalid("模型服务未返回 HTTP 响应。") }
         guard (200...299).contains(http.statusCode) else {
-            // Provider response bodies may echo secrets or source text.
-            throw ReadingError.invalid("模型请求失败（HTTP \(http.statusCode)）；请检查服务地址、模型、授权与额度。")
+            throw ProviderHTTPFailure(response: http)
         }
         guard data.count <= 4 * 1024 * 1024 else { throw ReadingError.invalid("模型响应超过 4 MiB 限制。") }
         let message: Message, reason: String, reported: Int?
