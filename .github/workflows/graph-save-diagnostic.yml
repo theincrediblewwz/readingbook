@@ -2,6 +2,11 @@ name: Diagnose native graph save
 
 on:
   workflow_dispatch:
+    inputs:
+      scenario:
+        type: choice
+        default: graph-save
+        options: [graph-save, component-presentation]
 
 permissions:
   contents: read
@@ -19,12 +24,24 @@ jobs:
       - name: Build unoptimized product with test access
         run: swift build --scratch-path .build/tests -Xswiftc -enable-testing
       - name: Observe original graph checks
+        if: inputs.scenario != 'component-presentation'
         run: python3 scripts/native-ui-regression/run-graph-label-reuse.py --bin-dir .build/tests/debug --tag ci-graph-save-diagnostic
+      - name: Observe repeated component presentation checks
+        if: inputs.scenario == 'component-presentation'
+        shell: bash
+        run: |
+          result=0
+          for attempt in 1 2 3 4 5 6; do
+            python3 scripts/native-ui-regression/run-dynamic-components.py --bin-dir .build/tests/debug --tag ci-presentation-diagnostic-$attempt || result=1
+          done
+          exit "$result"
       - name: Preserve native state and original result
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: graph-save-diagnostic-evidence
-          path: logs/map-allocation-20261104/ci-graph-save-diagnostic
+          name: native-presentation-diagnostic-evidence
+          path: |
+            logs/map-allocation-20261104/ci-graph-save-diagnostic
+            logs/dynamic-components-20261104/ci-presentation-diagnostic-*
           if-no-files-found: error
           retention-days: 3

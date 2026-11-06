@@ -203,6 +203,15 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
         let uncovered = try await access.performViewAction("component_show", Data(#"{"componentID":"relations"}"#.utf8))
         try check("managementOverlayReallyClosedBeforeSuccess", String(decoding: uncovered, as: UTF8.self).contains("\"opened\":true") && !store.showingPlugins && navigationIntentCount == beforeObscured+1 && store.renderedComponentPresentation?.matches(store, route: relationRoute) == true)
         let editor = try await access.performViewAction("component_show", Data(#"{"componentID":"editor"}"#.utf8))
+        let editorState: [String: Any] = ["receipt": String(decoding: editor, as: UTF8.self), "route": store.route,
+            "requestedRoute": store.requestedWorkspaceRoute as Any? ?? NSNull(), "notesForeground": store.isNotesForeground,
+            "notesPresented": store.isNotesPresented, "hasAuxiliary": store.hasWorkspaceAuxiliary,
+            "presentationMatchesEditor": store.renderedComponentPresentation?.matches(store, route: "editor") == true,
+            "presentationRoute": store.renderedComponentPresentation?.route as Any? ?? NSNull(),
+            "presentationUnobscured": store.renderedComponentPresentation?.unobscured as Any? ?? NSNull(),
+            "canEditAISettings": store.canEditAISettings, "saving": store.isSavingDocument, "pressedMouseButtons": NSEvent.pressedMouseButtons,
+            "windowKey": window.isKeyWindow, "attachedSheet": window.attachedSheet != nil, "modalWindow": NSApp.modalWindow != nil]
+        try JSONSerialization.data(withJSONObject: editorState, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("editor-transition.json"))
         try check("notesForegroundReallyPresented", String(decoding: editor, as: UTF8.self).contains("\"opened\":true") && store.isNotesForeground && store.renderedComponentPresentation?.matches(store, route: "editor") == true)
         if let owner = store.notesPresentation { store.dismissWorkspaceAuxiliary(owner.id) }
         store.route = relationRoute
