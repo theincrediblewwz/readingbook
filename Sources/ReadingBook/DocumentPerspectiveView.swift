@@ -97,8 +97,9 @@ struct DocumentPerspectiveView: View {
                 }
                 let prepared = try await withTaskCancellationHandler(operation: { try await preparation.value }, onCancel: { preparation.cancel() })
                 try Task.checkCancellation(); guard owner.matches(store) else { throw CancellationError() }
-                run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: limit)
+                run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: limit, independentBudget: true)
                 let reader = AIReader(coordinator: coordinator, lane: .background)
+                await reader.setRequestRun(run)
                 let question = expectedStyle == .mentor
                     ? "请围绕这篇附加笔记和允许的原文片段，用老师伴读的方式解释意思与思路。必要背景单独说明，不复述整篇笔记，不透露未读后文。"
                     : "请对这篇附加笔记作原文考据。逐项区别原文明载、笔记或旧AI的推断与未知，给出本次允许片段内可核对的短引文；范围外出处不推定存在。没有原文时明确说明只能核对笔记内部表述。"

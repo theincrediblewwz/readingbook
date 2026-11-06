@@ -148,8 +148,9 @@ final class ReadingAssistanceProgressMailbox: @unchecked Sendable {
                     return
                 }
                 claimedContext = context
-                requestRun = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: limit)
+                requestRun = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: limit, independentBudget: true)
                 let reader = AIReader(coordinator: coordinator, lane: .foreground)
+                await reader.setRequestRun(requestRun)
                 await reader.setProgressHandler { [weak self] event in
                     guard mailbox.append(event) else { return }
                     Task { @MainActor [weak self] in self?.flush(mailbox, key: key, runID: runID) }

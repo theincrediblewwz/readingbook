@@ -253,7 +253,8 @@ struct ProviderSettingsView: View {
                             Text("max_completion_tokens").tag("max_completion_tokens")
                         }.labelsHidden()
                     }
-                    Stepper("每轮最多 \(store.settings.maxRequestsPerRun) 次请求", value: $store.settings.maxRequestsPerRun, in: 1...2000)
+                    Stepper("单次任务最多 \(store.settings.maxRequestsPerRun) 次模型请求", value: $store.settings.maxRequestsPerRun, in: 1...2000)
+                        .help("一条问题可能需要多次查阅和组件调用。每次新提问重新计数，不限制整本书的提问次数；后台阅读与新问题分别计数，但仍共用并发上限。实际还受本次token与服务账户额度限制。")
                     Text("推理模型的输出额度可能包含推理 Token。未知型号不自动推测。模型目录核查于 \(store.providerCatalog.verifiedAt.isEmpty ? "未记录" : store.providerCatalog.verifiedAt)。")
                         .font(.system(size: 13)).foregroundStyle(.secondary)
                 }.padding(.top, 16)

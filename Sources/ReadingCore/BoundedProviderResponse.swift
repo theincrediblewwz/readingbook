@@ -16,17 +16,20 @@ final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecke
     private var data = Data()
     private var terminal = false
     private let onResponse: (@Sendable (HTTPURLResponse) -> Void)?
+    private let onHeaders: (@Sendable (HTTPURLResponse) -> Void)?
     private let onChunk: (@Sendable (Data) throws -> Void)?
 
-    init(onResponse: (@Sendable (HTTPURLResponse) -> Void)? = nil, onChunk: (@Sendable (Data) throws -> Void)? = nil) {
-        self.onResponse = onResponse; self.onChunk = onChunk
+    init(onResponse: (@Sendable (HTTPURLResponse) -> Void)? = nil, onChunk: (@Sendable (Data) throws -> Void)? = nil,
+         onHeaders: (@Sendable (HTTPURLResponse) -> Void)? = nil) {
+        self.onResponse = onResponse; self.onChunk = onChunk; self.onHeaders = onHeaders
         super.init()
     }
 
     static func read(_ request: URLRequest, configuration: URLSessionConfiguration,
                      onResponse: (@Sendable (HTTPURLResponse) -> Void)? = nil,
-                     onChunk: (@Sendable (Data) throws -> Void)? = nil) async throws -> (Data, URLResponse) {
-        let receiver = BoundedProviderResponse(onResponse: onResponse, onChunk: onChunk)
+                     onChunk: (@Sendable (Data) throws -> Void)? = nil,
+                     onHeaders: (@Sendable (HTTPURLResponse) -> Void)? = nil) async throws -> (Data, URLResponse) {
+        let receiver = BoundedProviderResponse(onResponse: onResponse, onChunk: onChunk, onHeaders: onHeaders)
         let session = URLSession(configuration: configuration, delegate: receiver, delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         return try await withTaskCancellationHandler {
@@ -66,6 +69,7 @@ final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecke
         guard let http = response as? HTTPURLResponse else {
             finish(error: ReadingError.invalid("模型服务未返回 HTTP 响应。")); completionHandler(.cancel); return
         }
+        onHeaders?(http)
         guard (200...299).contains(http.statusCode) else {
             // Collect only a small error prefix, with a short deadline even if
             // the server leaves its error response open. Never feed it into the

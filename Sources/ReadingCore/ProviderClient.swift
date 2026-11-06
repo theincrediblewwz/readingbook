@@ -138,7 +138,11 @@ enum ProviderClient {
     }
 
     static func perform(_ prepared: Prepared, configuration suppliedConfiguration: URLSessionConfiguration? = nil,
+                        pacer: ProviderRequestPacer = .shared,
                         progress: (@Sendable (ProviderStreamSnapshot) -> Void)? = nil) async throws -> Result {
+        try Task.checkCancellation()
+        guard let destination = prepared.request.url else { throw ReadingError.invalid("模型地址无效。") }
+        try await pacer.acquire(for: destination)
         try Task.checkCancellation()
         let configuration = suppliedConfiguration ?? URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 600
@@ -154,14 +158,24 @@ enum ProviderClient {
         streaming.decoder.onProgress = { value in reporter?.emit(value) }
         streaming.onBufferedProgress = { bytes in reporter?.emit(ProviderStreamSnapshot(receivedBytes: bytes)) }
         defer { reporter?.stop() }
+        let timing = ProviderTimingReceipt()
         let transport: (Data, URLResponse)
         do {
             transport = try await BoundedProviderResponse.read(prepared.request, configuration: configuration,
                 onResponse: { response in
                     streaming.setContentType(response.mimeType)
                     reporter?.emit(ProviderStreamSnapshot())
-                }, onChunk: { chunk in try streaming.append(chunk) })
-        } catch { throw userFacingTransportError(error) }
+                }, onChunk: { chunk in try streaming.append(chunk) }, onHeaders: { response in
+                    let hint = pacer.hint(for: response); timing.set(hint)
+                    if (200...299).contains(response.statusCode) {
+                        Task { await pacer.observe(hint, for: destination) }
+                    }
+                })
+        } catch {
+            if let hint = timing.get() { await pacer.observe(hint, for: destination, failure: error as? ProviderHTTPFailure) }
+            throw userFacingTransportError(error)
+        }
+        if let hint = timing.get() { await pacer.observe(hint, for: destination) }
         let (data, response) = transport
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw ReadingError.invalid("模型服务未返回 HTTP 响应。") }

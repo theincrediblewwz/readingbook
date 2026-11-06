@@ -15,7 +15,7 @@ extension AppStore {
         var configuration = settings
         configuration.transportSessionID = "readingbook-native-search-" + UUID().uuidString
         let key = apiKey, coordinator = sharedAIRequests
-        let run = try await coordinator.beginManagedRun(settings: configuration, maximumConcurrency: aiConcurrencyLimit)
+        let run = try await coordinator.beginManagedRun(settings: configuration, maximumConcurrency: aiConcurrencyLimit, independentBudget: true)
         defer { run.finish(); Task { await coordinator.endRun(run) } }
         let sources = book.map { [LibrarySourceSnapshot(project: $0)] } ?? []
         let worker = Task.detached(priority: .utility) { try LibrarySearchLanguageProfile.identify(in: sources) }
@@ -24,6 +24,7 @@ extension AppStore {
         // matching and actual source validation do not depend on recognition.
         guard !Task.isCancelled, owner.matches(self), readingSearchAIIdentity == identity else { throw CancellationError() }
         let reader = AIReader(coordinator: coordinator, lane: .foreground)
+        await reader.setRequestRun(run)
         let plan = try await reader.expandLibrarySearch(query: query, languageProfile: profile, settings: configuration, apiKey: key)
         guard !Task.isCancelled, owner.matches(self), readingSearchAIIdentity == identity else { throw CancellationError() }
         return plan

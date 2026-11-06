@@ -651,7 +651,7 @@ import ReadingCore
                 markAIProgressSaving(aiRunID)
                 let committed = try await repository.commitAIResult(base: questionBase, result: result, operationID: "answer-" + answer.message.id)
                 guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
-                publish(committed); requestsUsed = await sharedAIRequests.requestsUsed
+                publish(committed); requestsUsed = await queryReader.requestCount
                 queryReferencedAnswerIDs.subtract(referencedAnswerIDs)
                 queryDisclosure = ([answer.diagnostics.disclosure] + answer.diagnostics.notices).joined(separator: "\n")
                 if memoryEnabled { await saveQueryMemory(answer.memory, for: snapshot, preferences: preferences, root: requestRoot) }
@@ -665,7 +665,7 @@ import ReadingCore
                 else { errorMessage = error.localizedDescription }
                 let saved = book?.id == current.id ? (book?.controlledChanges?.receipts.filter { !previousChangeIDs.contains($0.operationID) && $0.undoneAt == nil }.count ?? 0) : 0
                 if saved > 0 { queryDisclosure = "回答未完成；已保存的授权整理可在记录中查看或撤销。" }
-                requestsUsed = await sharedAIRequests.requestsUsed
+                requestsUsed = await queryReader.requestCount
             }
         }
     }

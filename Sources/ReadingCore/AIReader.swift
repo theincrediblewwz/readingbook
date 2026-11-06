@@ -10,6 +10,7 @@ public actor AIReader {
     private let registry: PluginToolRegistry
     private var progressHandler: AIProgressHandler?
     private var currentRequestID: UUID?
+    private var requestRun: AIRequestRun?
     private let coordinator: AIRequestCoordinator?
     private let lane: AIRequestCoordinator.Lane
     private var publicationHandler: AIReadingPublicationHandler?
@@ -26,6 +27,13 @@ public actor AIReader {
     init(registry: PluginToolRegistry = PluginEngine.registry,
          transport: @escaping @Sendable (ProviderClient.Prepared) async throws -> ProviderClient.Result) {
         self.registry = registry; self.coordinator = nil; self.lane = .background; self.testTransport = transport
+    }
+
+    /// Attach the task's host-owned budget before starting work. It cannot be
+    /// changed during an operation or inferred from a model/tool argument.
+    public func setRequestRun(_ run: AIRequestRun?) {
+        guard !operationActive else { return }
+        requestRun = run
     }
 
     public func setProgressHandler(_ handler: AIProgressHandler?) {
@@ -869,7 +877,7 @@ public actor AIReader {
         } else { observer = nil }
         let result: ProviderClient.Result
         if let testTransport { result = try await testTransport(prepared) }
-        else if let coordinator { result = try await coordinator.perform(prepared, lane: lane, progress: observer, onStart: { sharedNumber in
+        else if let coordinator { result = try await coordinator.perform(prepared, lane: lane, run: requestRun, progress: observer, onStart: { sharedNumber in
             handler?(AIProgressEvent(.waitingForResponse, requestID: requestID, requestNumber: sharedNumber))
         }) }
         else { result = try await ProviderClient.perform(prepared, progress: observer) }

@@ -5,6 +5,16 @@ import Foundation
 /// tools, can be normalized. No prose, source text, arbitrary tools or writes
 /// are interpreted here. Normal query validation/admission still follows.
 enum ReadingComponentProtocol {
+    /// Recognize a leaked assistant envelope, including the double-bar form
+    /// observed from the official service. This never grants execution rights.
+    static func containsInternalToolFormat(_ content: String) -> Bool {
+        let text = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let starts = ["<｜DSML｜", "<｜｜DSML｜｜", "<|DSML|", "<||DSML||", "<tool_call>", "<tool_calls>"]
+        if starts.contains(where: text.hasPrefix) { return true }
+        let ends = ["</｜DSML｜ calls>", "</｜DSML｜tool_calls>", "</｜｜DSML｜｜ calls>", "</｜｜DSML｜｜tool_calls>", "</|DSML| calls>", "</||DSML|| calls>"]
+        return starts.prefix(4).contains(where: text.contains) && ends.contains(where: text.hasSuffix)
+    }
+
     static func recover(_ content: String, model: String, allowedNames: Set<String>) -> [ProviderClient.ToolCall]? {
         guard model.lowercased().split(separator: "/").last?.hasPrefix("deepseek-v4") == true,
               content.utf8.count <= 32_768 else { return nil }

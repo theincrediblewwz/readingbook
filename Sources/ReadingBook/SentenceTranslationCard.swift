@@ -99,8 +99,9 @@ import ReadingCore
                 guard !requestSettings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     self.finish(key, runID: runID, message: "连接模型后，可以翻译这句话。"); return
                 }
-                requestRun = try await coordinator.beginManagedRun(settings: requestSettings, maximumConcurrency: limit)
+                requestRun = try await coordinator.beginManagedRun(settings: requestSettings, maximumConcurrency: limit, independentBudget: true)
                 let reader = AIReader(coordinator: coordinator, lane: .foreground)
+                await reader.setRequestRun(requestRun)
                 await reader.setProgressHandler { [weak self] event in
                     guard mailbox.append(event) else { return }
                     Task { @MainActor [weak self] in self?.flush(mailbox, key: key, runID: runID) }

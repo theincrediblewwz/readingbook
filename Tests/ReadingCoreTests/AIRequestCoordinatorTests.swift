@@ -221,3 +221,87 @@ final class AIRequestCoordinatorTests: XCTestCase {
         next.finish(); await coordinator.endRun(next)
     }
 }
+
+extension AIRequestCoordinatorTests {
+    func testThousandsOfIndependentQuestionsDoNotInheritAnExhaustedBackgroundBudget() async throws {
+        var limited = settings; limited.maxRequestsPerRun = 1
+        let result = response(), coordinator = AIRequestCoordinator(transport: { _ in result })
+        let background = try await coordinator.beginManagedRun(settings: limited, maximumConcurrency: 2, independentBudget: true)
+        _ = try await coordinator.perform(prepared("background"), lane: .background, run: background, progress: nil, onStart: { _ in })
+        for index in 0..<1_201 {
+            let question = try await coordinator.beginManagedRun(settings: limited, maximumConcurrency: 2, independentBudget: true)
+            let value = try await coordinator.perform(prepared("question-\(index)"), lane: .foreground, run: question, progress: nil, onStart: { _ in })
+            XCTAssertEqual(value.tokenCost, 1)
+            await coordinator.endRun(question)
+        }
+        do {
+            _ = try await coordinator.perform(prepared("background-again"), lane: .background, run: background, progress: nil, onStart: { _ in })
+            XCTFail("新问题不能反过来重置后台同一任务的预算")
+        } catch { XCTAssertTrue(error is ReadingWorkflowBudgetPause) }
+        let count = await coordinator.requestsUsed
+        XCTAssertEqual(count, 1_202)
+        await coordinator.endRun(background)
+    }
+    func testIndependentQuestionStartsWhileBackgroundHoldsItsTokenReservation() async throws {
+        let gate = CoordinatorTransportGate(), result = response()
+        let coordinator = AIRequestCoordinator(transport: { await gate.wait($0.request.url!.lastPathComponent); return result })
+        let background = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 2, independentBudget: true)
+        let one = try prepared("active-background", input: 500)
+        let active = Task { try await coordinator.perform(one, lane: .background, run: background, progress: nil, onStart: { _ in }) }
+        defer { active.cancel(); Task { await gate.releaseAll() }; background.finish() }
+        try await waitUntil { await gate.started.contains("active-background") }
+        let question = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 2, independentBudget: true)
+        let two = try prepared("independent-question", input: 500)
+        let asking = Task { try await coordinator.perform(two, lane: .foreground, run: question, progress: nil, onStart: { _ in }) }
+        defer { asking.cancel(); question.finish() }
+        try await waitUntil { await gate.started.contains("independent-question") }
+        await gate.releaseAll(); _ = try await active.value; _ = try await asking.value
+        await coordinator.endRun(background); await coordinator.endRun(question)
+    }
+    func testFinishedIndependentRunCancelsQueuedWorkEvenWhenConcurrencyIsFull() async throws {
+        let gate = CoordinatorTransportGate(), result = response()
+        let coordinator = AIRequestCoordinator(transport: { await gate.wait($0.request.url!.lastPathComponent); return result })
+        let background = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 1, independentBudget: true)
+        let one = try prepared("occupied")
+        let active = Task { try await coordinator.perform(one, lane: .background, run: background, progress: nil, onStart: { _ in }) }
+        defer { active.cancel(); Task { await gate.releaseAll() }; background.finish() }
+        try await waitUntil { await gate.started.contains("occupied") }
+        let question = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 1, independentBudget: true)
+        let two = try prepared("cancelled-question")
+        let asking = Task { try await coordinator.perform(two, lane: .foreground, run: question, progress: nil, onStart: { _ in }) }
+        defer { asking.cancel(); question.finish() }
+        try await waitUntil { await coordinator.queuedRequestCount == 1 }
+        await coordinator.endRun(question)
+        try await waitUntil { await coordinator.queuedRequestCount == 0 }
+        do { _ = try await asking.value; XCTFail("已结束任务的排队请求不可发送") } catch { XCTAssertTrue(error is CancellationError) }
+        let started = await gate.started; XCTAssertEqual(started, ["occupied"])
+        await gate.releaseAll(); _ = try await active.value; await coordinator.endRun(background)
+    }
+    func testWorkersInOneIndependentRunCannotEachSpendTheFullTaskBudget() async throws {
+        var limited = settings; limited.maxRequestsPerRun = 1
+        let result = response(), coordinator = AIRequestCoordinator(transport: { _ in result })
+        let run = try await coordinator.beginManagedRun(settings: limited, maximumConcurrency: 2, independentBudget: true)
+        _ = try await coordinator.perform(prepared("worker-one"), lane: .foreground, run: run, progress: nil, onStart: { _ in })
+        do {
+            _ = try await coordinator.perform(prepared("worker-two"), lane: .background, run: run, progress: nil, onStart: { _ in })
+            XCTFail("同一任务的子步骤仍共用一次额度")
+        } catch { XCTAssertTrue(error is ReadingWorkflowBudgetPause) }
+        await coordinator.endRun(run)
+        do {
+            _ = try await coordinator.perform(prepared("expired"), lane: .foreground, run: run, progress: nil, onStart: { _ in })
+            XCTFail("结束后的预算不能复活")
+        } catch { XCTAssertTrue(error is CancellationError) }
+    }
+    func testExtremeProviderUsageStaysInsideItsIndependentTask() async throws {
+        let extreme = response(tokenCost: Int.max), coordinator = AIRequestCoordinator(transport: { _ in extreme })
+        let first = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 2, independentBudget: true)
+        _ = try await coordinator.perform(prepared("invalid-usage"), lane: .foreground, run: first, progress: nil, onStart: { _ in })
+        do {
+            _ = try await coordinator.perform(prepared("same-task"), lane: .foreground, run: first, progress: nil, onStart: { _ in })
+            XCTFail("同一任务仍必须被超预算保护")
+        } catch { XCTAssertTrue(error is ReadingWorkflowBudgetPause) }
+        let next = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: 2, independentBudget: true)
+        _ = try await coordinator.perform(prepared("new-question"), lane: .foreground, run: next, progress: nil, onStart: { _ in })
+        await coordinator.endRun(first); await coordinator.endRun(next)
+    }
+}

@@ -38,6 +38,14 @@ public enum ReadingProposalTools {
 }
 
 enum ReadingProposalSchemas {
+    static func referenceGuide(in project: BookProject) -> [String: Any] {
+        let ids = Set(project.types.map(\.id)).sorted()
+        return ["knownTypeIDs": Array(ids.prefix(24)), "typesTruncated": ids.count > 24,
+                "typeLookup": "book_schema_get(section:types)，按offset/limit分页读取完整类型。",
+                "eventMetadataTypeID": "可省略；填写时须为本书已定义或本批明确新增的类型ID。对象kind为event不代表存在名为event的类型。",
+                "newTypes": "新增类型须同时提供types与newTypeIDs；已有对象复用稳定id，不把类型名称当作ID。"]
+    }
+
     static func object(_ fields: [String: Any], required: [String]? = nil) -> [String: Any] {
         ["type": "object", "additionalProperties": false, "properties": fields, "required": required ?? fields.keys.sorted()]
     }
@@ -74,7 +82,8 @@ enum ReadingProposalSchemas {
         return object(fields, required: ["id", "entityID", "eventID", "role", "sourceAnchorIDs", "assertion", "explanation"])
     }
     static var eventMetadata: [String: Any] {
-        var fields = attribution; fields.merge(["eventID": id, "typeID": id, "kind": text(80), "parentEventID": id, "phaseOrder": integer, "extent": extent]) { _, next in next }
+        var fields = attribution; var eventType = id; eventType["description"] = "可省略；只能使用本书实际定义或本批新增的类型ID，不能因对象kind为event就填event。"
+        fields.merge(["eventID": id, "typeID": eventType, "kind": text(80), "parentEventID": id, "phaseOrder": integer, "extent": extent]) { _, next in next }
         return object(fields, required: ["eventID", "kind", "sourceAnchorIDs", "assertion", "explanation"])
     }
     static var relationMetadata: [String: Any] {

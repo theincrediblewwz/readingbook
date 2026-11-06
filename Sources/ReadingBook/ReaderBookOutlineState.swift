@@ -112,8 +112,9 @@ import ReadingCore
                 if self?.runID == run { self?.generating = false; self?.task = nil }
             }
             do {
-                if needsModel { managed = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: limit) }
+                if needsModel { managed = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: limit, independentBudget: true) }
                 let reader = AIReader(coordinator: coordinator, lane: .foreground)
+                await reader.setRequestRun(managed)
                 await reader.setProgressHandler { [weak self] event in
                     guard mailbox.append(event) else { return }
                     Task { @MainActor [weak self] in self?.flush(mailbox, run: run) }

@@ -290,9 +290,10 @@ struct LibrarySearchView: View {
         settings.transportSessionID = "readingbook-search-" + UUID().uuidString
         let frozenSettings = settings, key = store.apiKey, coordinator = store.sharedAIRequests, limit = store.aiConcurrencyLimit
         session.expand { text, language in
-            let run = try await coordinator.beginManagedRun(settings: frozenSettings, maximumConcurrency: limit)
+            let run = try await coordinator.beginManagedRun(settings: frozenSettings, maximumConcurrency: limit, independentBudget: true)
             do {
                 let reader = AIReader(coordinator: coordinator, lane: .foreground)
+                await reader.setRequestRun(run)
                 let plan = try await reader.expandLibrarySearch(query: text, languageProfile: language, settings: frozenSettings, apiKey: key)
                 run.finish(); await coordinator.endRun(run)
                 return plan

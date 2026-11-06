@@ -89,8 +89,9 @@ struct NoteTopicOrganizer: View {
                 }
                 guard captured.matches(store), root == store.libraryRootURL else { throw CancellationError() }
                 status = "模型正在为 \(notes.count) 篇笔记建议主题…"
-                run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: limit)
+                run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: limit, independentBudget: true)
                 let reader = AIReader(coordinator: coordinator, lane: .background)
+                await reader.setRequestRun(run)
                 let result = try await reader.organizeNotesByTopic(notes: inputs, settings: settings, apiKey: apiKey)
                 try Task.checkCancellation(); guard captured.matches(store) else { return }
                 groups = result; documents = notes; status = "请核对下方分类，确认后再应用。"

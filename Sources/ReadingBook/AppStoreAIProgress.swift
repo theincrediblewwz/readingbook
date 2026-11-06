@@ -199,25 +199,25 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
     @discardableResult func beginAIProgress(title: String, ocr: Bool = false, backgroundReading: Bool = false, settings frozenSettings: ProviderSettings? = nil) async -> UUID {
         let sourceBookID = bookID, sourceRoot = libraryRootURL, owner = repository
         var run: AIRequestRun?
-        if !ocr { run = try? await sharedAIRequests.beginManagedRun(settings: frozenSettings ?? settings, maximumConcurrency: aiConcurrencyLimit) }
+        if !ocr { run = try? await sharedAIRequests.beginManagedRun(settings: frozenSettings ?? settings, maximumConcurrency: aiConcurrencyLimit, independentBudget: true) }
         return await prepareProgress(title: title, destination: .general, ocr: ocr, worker: backgroundReading ? readingReader : reader, requestRun: run,
             sourceBookID: sourceBookID, sourceRoot: sourceRoot, owner: owner)
     }
     @discardableResult func beginQueryProgress(title: String, settings frozenSettings: ProviderSettings? = nil) async -> UUID {
         let sourceBookID = bookID, sourceRoot = libraryRootURL, owner = repository
-        let run = try? await sharedAIRequests.beginManagedRun(settings: frozenSettings ?? settings, maximumConcurrency: aiConcurrencyLimit)
+        let run = try? await sharedAIRequests.beginManagedRun(settings: frozenSettings ?? settings, maximumConcurrency: aiConcurrencyLimit, independentBudget: true)
         return await prepareProgress(title: title, destination: .query, ocr: false, worker: queryReader, requestRun: run,
             sourceBookID: sourceBookID, sourceRoot: sourceRoot, owner: owner)
     }
     @discardableResult func beginCompanionProgress(title: String, settings frozenSettings: ProviderSettings? = nil) async -> UUID {
         let sourceBookID = bookID, sourceRoot = libraryRootURL, owner = repository
-        let run = try? await sharedAIRequests.beginManagedRun(settings: frozenSettings ?? settings, maximumConcurrency: aiConcurrencyLimit)
+        let run = try? await sharedAIRequests.beginManagedRun(settings: frozenSettings ?? settings, maximumConcurrency: aiConcurrencyLimit, independentBudget: true)
         return await prepareProgress(title: title, destination: .companion, ocr: false, worker: companionReader, requestRun: run,
             sourceBookID: sourceBookID, sourceRoot: sourceRoot, owner: owner)
     }
     @discardableResult func beginSummaryProgress(title: String, worker: AIReader, settings: ProviderSettings) async -> UUID {
         let sourceBookID = bookID, sourceRoot = libraryRootURL, owner = repository
-        let run = try? await sharedAIRequests.beginManagedRun(settings: settings, maximumConcurrency: aiConcurrencyLimit)
+        let run = try? await sharedAIRequests.beginManagedRun(settings: settings, maximumConcurrency: aiConcurrencyLimit, independentBudget: true)
         return await prepareProgress(title: title, destination: .summary, ocr: false, worker: worker, requestRun: run,
             sourceBookID: sourceBookID, sourceRoot: sourceRoot, owner: owner)
     }
@@ -253,7 +253,7 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
         case .summary: summaryProgressState.value = value
         }
         let handler = workerProgressHandler(runID)
-        if ocr { await pdfOCRReader.setProgressHandler(handler) } else { await worker.setProgressHandler(handler) }
+        if ocr { await pdfOCRReader.setProgressHandler(handler) } else { await worker.setRequestRun(requestRun); await worker.setProgressHandler(handler) }
         return runID
     }
     func workerProgressHandler(_ runID: UUID) -> AIProgressHandler {

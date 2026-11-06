@@ -287,7 +287,9 @@ extension ReadingQuerySession {
                 let schema: [String: Any]
                 switch group { case "knowledge": schema = ReadingProposalSchemas.knowledge; case "graph": schema = ReadingProposalSchemas.graph
                 case "documents": schema = ReadingProposalSchemas.documents; case "bookScheme": schema = ReadingProposalSchemas.bookScheme; default: throw invalid("未知提案组。") }
-                return try json(["ok": true, "group": group, "schema": schema, "note": "只是结构说明，不是授权或提交。"])
+                var result: [String: Any] = ["ok": true, "group": group, "schema": schema, "note": "只是结构说明，不是授权或提交。"]
+                if group == "knowledge" { result["referenceGuide"] = ReadingProposalSchemas.referenceGuide(in: scoped) }
+                return try json(result)
             }
             let schemas = ReadingQueryToolCatalog.schemas(snapshot: snapshot, host: hostTools, proposals: proposalAccess)
             return try json(["ok": true, "tools": schemas.compactMap { ($0["function"] as? [String: Any])?["name"] }, "scope": snapshot.scope.rawValue,

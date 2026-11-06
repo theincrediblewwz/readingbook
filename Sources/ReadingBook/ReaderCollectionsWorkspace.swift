@@ -113,8 +113,9 @@ import ReadingCore
                 let worker = Task.detached(priority: .utility) { try ReadingQuerySnapshot.freeze(scope: scope, in: book, context: context, documentIDs: documents) }
                 let snapshot = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
                 try Task.checkCancellation()
-                run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: limit)
+                run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: limit, independentBudget: true)
                 let reader = AIReader(coordinator: coordinator, lane: .background)
+                await reader.setRequestRun(run)
                 let result = try await reader.suggestReadingQuestions(snapshot: snapshot, title: book.title, settings: settings, apiKey: apiKey)
                 try Task.checkCancellation()
                 guard let self, let store, self.generation == token, self.owner == key,

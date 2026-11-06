@@ -83,10 +83,11 @@ import ReadingCore
             }
             do {
                 try await checkOwner()
-                let run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: concurrency)
+                let run = try await coordinator.beginManagedRun(settings: settings, maximumConcurrency: concurrency, independentBudget: true)
                 defer { run.finish(); Task { await coordinator.endRun(run) } }
                 try await checkOwner()
                 let reader = AIReader(coordinator: coordinator, lane: .foreground)
+                await reader.setRequestRun(run)
                 guard let self, self.generation == owner else { return }
                 if self.keywords.isEmpty {
                     self.understanding = true
