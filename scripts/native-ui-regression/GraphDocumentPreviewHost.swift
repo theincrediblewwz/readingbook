@@ -137,17 +137,22 @@ private actor PreviewTransport {
     func timelineTrack() -> NSView? {
         nativeViews().first { String(reflecting: type(of: $0)).contains("TimelinePointerInput.PointerView") && !$0.isHiddenOrHasHiddenAncestor }
     }
-    func texts() -> [String] {
+    func nodeTexts() -> [String] {
         let accessible = forceRaster ? [] : accessibilityTexts()
         if !accessible.isEmpty { return accessible }
         refreshRaster()
         let nodes = nativeViews().compactMap { $0 as? GraphPointerBridge.PointerView }
-            .filter { $0.reservePorts && $0.bounds.width > 100 && !$0.isHiddenOrHasHiddenAncestor }
-        let groups = nodes.map { node in
+            .filter { abs($0.bounds.width - 232) < 1 && abs($0.bounds.height - 100) < 1 && !$0.isHiddenOrHasHiddenAncestor }
+        return nodes.map { node in
             let frame = node.convert(node.bounds, to: host).insetBy(dx: -2, dy: -2)
             return rasterRows.filter { frame.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) }
                 .map(\.text).joined()
         }
+    }
+    func texts() -> [String] {
+        let accessible = forceRaster ? [] : accessibilityTexts()
+        if !accessible.isEmpty { return accessible }
+        let groups = nodeTexts()
         return rasterRows.map(\.text) + groups + [rasterRows.map(\.text).joined()]
     }
     func hasText(_ text: String) -> Bool { texts().contains { comparable($0).contains(comparable(text)) } }
@@ -290,7 +295,7 @@ private actor PreviewTransport {
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         store.route = "mindmap"; show(DocumentGraphView())
         try await waitFor("standaloneShowsSavedBody", { self.hasText(self.firstBody) })
-        try check("allThreeNodesHaveBodyHints", (0..<3).allSatisfy { index in self.texts().contains { self.comparable($0).contains("阅读理解\(index)") && self.comparable($0).contains(self.comparable(index == 0 ? self.firstBody : "独立笔记\(index)")) } })
+        try check("allThreeNodesHaveBodyHints", (0..<3).allSatisfy { index in self.nodeTexts().contains { self.comparable($0).contains("阅读理解\(index)") && self.comparable($0).contains(self.comparable(index == 0 ? self.firstBody : "独立笔记\(index)")) } })
         let owner = GraphDocumentPreviewOwner(repository: repository.publicationOwner, bookID: book.id, sourceHash: book.sourceHash, revision: 1, scope: nil)
         let item = GraphItem(id: "n", targetID: "d0", title: "标题", subtitle: "fallback", x: 0, y: 0, documentIDs: ["empty", "d0"])
         let snapshot = GraphDocumentPreviewSnapshot(owner: owner, texts: ["empty": "", "d0": firstBody])
