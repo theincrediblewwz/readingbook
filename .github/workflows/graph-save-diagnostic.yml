@@ -6,7 +6,7 @@ on:
       scenario:
         type: choice
         default: graph-save
-        options: [graph-save, component-presentation]
+        options: [graph-save, component-presentation, graph-document-previews]
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ jobs:
       - name: Build unoptimized product with test access
         run: swift build --scratch-path .build/tests -Xswiftc -enable-testing
       - name: Observe original graph checks
-        if: inputs.scenario != 'component-presentation'
+        if: inputs.scenario == 'graph-save'
         run: python3 scripts/native-ui-regression/run-graph-label-reuse.py --bin-dir .build/tests/debug --tag ci-graph-save-diagnostic
       - name: Observe repeated component presentation checks
         if: inputs.scenario == 'component-presentation'
@@ -35,6 +35,12 @@ jobs:
             python3 scripts/native-ui-regression/run-dynamic-components.py --bin-dir .build/tests/debug --tag ci-presentation-diagnostic-$attempt || result=1
           done
           exit "$result"
+      - name: Compare native graph preview accessibility getters
+        if: inputs.scenario == 'graph-document-previews'
+        shell: bash
+        run: |
+          python3 scripts/native-ui-regression/run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-preview-kvc --legacy-kvc-getters || true
+          python3 scripts/native-ui-regression/run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-preview-selector
       - name: Preserve native state and original result
         if: always()
         uses: actions/upload-artifact@v7
@@ -43,5 +49,6 @@ jobs:
           path: |
             logs/map-allocation-20261104/ci-graph-save-diagnostic
             logs/dynamic-components-20261104/ci-presentation-diagnostic-*
+            logs/graph-content-20261107/ci-graph-preview-*
           if-no-files-found: error
           retention-days: 3

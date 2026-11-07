@@ -20,9 +20,13 @@ private actor PreviewTransport {
     var checks: [String: Bool] = [:]
     var observations: [[String: Any]] = []
     let firstBody = "王允问吕布为何长叹，吕布答自己被谗言所困。"
+    private var legacyKVC: Bool { CommandLine.arguments.contains("--legacy-kvc-getters") }
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
-            do { try await run(); try finish(nil) } catch { try? finish(String(describing: error)) }
+            do { try await run(); try finish(nil) } catch {
+                captureState("failed-native-state")
+                try? finish(String(describing: error))
+            }
             if CommandLine.arguments.contains("--inspect") {
                 try? Data("ready".utf8).write(to: output.appendingPathComponent("ready"))
                 while !FileManager.default.fileExists(atPath: output.appendingPathComponent("end-inspection").path) {
@@ -35,6 +39,32 @@ private actor PreviewTransport {
     func check(_ name: String, _ value: Bool) throws {
         checks[name] = value
         guard value else { throw ReadingError.invalid(name) }
+    }
+    func readObject(_ value: NSObject, _ key: String) -> Any? {
+        let selector = NSSelectorFromString(key)
+        guard value.responds(to: selector) else { return nil }
+        return legacyKVC ? value.value(forKey: key) : value.perform(selector)?.takeUnretainedValue()
+    }
+    func captureState(_ stage: String) {
+        guard let host, let window else { return }
+        var hierarchy: [[String: Any]] = []
+        func walk(_ view: NSView, _ depth: Int) {
+            guard depth < 20 else { return }
+            hierarchy.append(["class": String(describing: type(of: view)), "depth": depth,
+                "bounds": NSStringFromRect(view.bounds), "hidden": view.isHiddenOrHasHiddenAncestor,
+                "accessibilityChildrenKVC": (view.value(forKey: "accessibilityChildren") as? [Any])?.count ?? -1,
+                "accessibilityChildrenSelector": (view.perform(NSSelectorFromString("accessibilityChildren"))?.takeUnretainedValue() as? [Any])?.count ?? -1])
+            for child in view.subviews { walk(child, depth + 1) }
+        }
+        walk(host, 0)
+        observations.append(["stage": stage, "windowVisible": window.isVisible, "windowKey": window.isKeyWindow,
+            "hostBounds": NSStringFromRect(host.bounds), "objects": objects().count, "hierarchy": hierarchy])
+        if let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            if let data = bitmap.representation(using: .png, properties: [:]) {
+                try? data.write(to: output.appendingPathComponent(stage + ".png"))
+            }
+        }
     }
     func elements() -> [NSAccessibilityProtocol] {
         var result: [NSAccessibilityProtocol] = [], visited = Set<ObjectIdentifier>()
@@ -55,7 +85,7 @@ private actor PreviewTransport {
             result.append(value)
             // SwiftUI virtual accessibility children can implement the public
             // AppKit selectors without declaring the whole formal protocol.
-            if value.responds(to: NSSelectorFromString("accessibilityChildren")), let children = value.value(forKey: "accessibilityChildren") as? [Any] {
+            if let children = readObject(value, "accessibilityChildren") as? [Any] {
                 for child in children { walk(child, depth + 1) }
             }
             if let view = object as? NSView { for child in view.subviews { walk(child, depth + 1) } }
@@ -65,12 +95,12 @@ private actor PreviewTransport {
     func texts() -> [String] {
         objects().flatMap { value in
             ["accessibilityLabel", "accessibilityValue"].compactMap { key in
-                value.responds(to: NSSelectorFromString(key)) ? value.value(forKey: key) as? String : nil
+                readObject(value, key) as? String
             }
         }
     }
     func object(_ label: String) -> NSObject? {
-        objects().first { $0.responds(to: NSSelectorFromString("accessibilityLabel")) && ($0.value(forKey: "accessibilityLabel") as? String) == label }
+        objects().first { readObject($0, "accessibilityLabel") as? String == label }
     }
     func frame(_ label: String) -> CGRect? {
         guard let value = object(label), value.responds(to: NSSelectorFromString("accessibilityFrame")) else { return nil }
@@ -79,7 +109,7 @@ private actor PreviewTransport {
     func press(_ label: String) throws {
         guard let rect = frame(label), rect.width > 0, rect.height > 0 else { throw ReadingError.invalid("Missing action frame: " + label) }
         let point = window.convertPoint(fromScreen: CGPoint(x: rect.midX, y: rect.midY))
-        let location = host.convert(point, from: nil)
+        let location = host.superview?.convert(point, from: nil) ?? point
         guard let receiver = host.hitTest(location) else { throw ReadingError.invalid("Missing action receiver") }
         observations.append(["action": label, "frame": [rect.minX, rect.minY, rect.width, rect.height], "hitReceiver": String(describing: type(of: receiver)), "input": "Own window sendEvent, never OS post"])
         for kind in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
