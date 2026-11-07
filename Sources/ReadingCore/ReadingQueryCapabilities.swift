@@ -153,6 +153,7 @@ extension ReadingQuerySession {
         guard var project else { return nil }
         let admitsAnchor: (SourceAnchor) -> Bool = anchorAdmission ?? (try? snapshot.anchorAdmitter(in: project)) ?? { _ in false }
         let admitsSavedEvidence = savedKnowledgeEvidenceAdmitter(in: project)
+        var admittedLabels = Set<String>()
         func permitted(_ evidence: [Evidence]) -> Bool {
             !evidence.isEmpty && evidence.allSatisfy(snapshot.admits)
         }
@@ -165,7 +166,7 @@ extension ReadingQuerySession {
                 value.latitude = nil; value.longitude = nil; value.locationNote = nil
                 value.aliases = value.aliases.filter { alias in local.contains { $0.quote.contains(alias) } }
                 if !local.contains(where: { $0.quote.contains(value.name) }) { value.name = value.aliases.first ?? "本段关联实体" }
-            }
+            } else { admittedLabels.insert("entity/" + original.id) }
             value.evidence = local
             return value
         }
@@ -177,11 +178,12 @@ extension ReadingQuerySession {
                 value.summary = ""; value.dateText = "时间待考"; value.startYear = nil; value.endYear = nil
                 value.placeIDs = []; value.participantIDs = []
                 if !local.contains(where: { $0.quote.contains(value.name) }) { value.name = "本段关联事件" }
-            }
+            } else { admittedLabels.insert("event/" + original.id) }
             value.evidence = local
             return value
         }
-        let visible = ReadingSpoilerProjection.Context(project: project, allowedUnitIDs: allowsFullIdentity ? nil : Set(snapshot.unitIDs))
+        var visible = ReadingSpoilerProjection.Context(project: project, allowedUnitIDs: allowsFullIdentity ? nil : Set(snapshot.unitIDs))
+        visible.admittedAnalysisLabels = admittedLabels
         project.entities = project.entities.compactMap { visible.entity($0) }
         project.events = project.events.compactMap { visible.event($0) }
         project.relations = project.relations.filter { permitted($0.evidence) && $0.evidence.allSatisfy(admitsSavedEvidence) }

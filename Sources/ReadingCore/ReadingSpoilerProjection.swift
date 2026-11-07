@@ -9,6 +9,9 @@ public enum ReadingSpoilerProjection {
         fileprivate let allowed: Set<String>?
         fileprivate let versions: ReadingKnowledgeRuntime.VersionContext
         fileprivate let userNames: Set<String>
+        // Set only by the query's exact evidence admission pass. These labels
+        // summarize already admitted analysis; they need not occur verbatim.
+        var admittedAnalysisLabels: Set<String> = []
         public init(project: BookProject, allowedUnitIDs: Set<String>?) {
             units = Dictionary(project.units.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             entities = Dictionary(project.entities.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -43,11 +46,12 @@ public enum ReadingSpoilerProjection {
             !name.isEmpty && local.contains { exact(name, in: $0.quote) }
         }
         var result = original
+        let admittedLabel = context.admittedAnalysisLabels.contains("entity/" + canonical.id)
         let userName = context.userNames.contains("entity/" + canonical.id) && original.name == canonical.name && local.count == original.evidence.count
-        result.name = userName ? original.name : (names.first ?? "本段关联对象")
-        result.aliases = original.aliases.filter { names.contains($0) }
+        result.name = userName || admittedLabel ? original.name : (names.first ?? "本段关联对象")
+        result.aliases = admittedLabel ? original.aliases : original.aliases.filter { names.contains($0) }
         result.evidence = local
-        if local.count != original.evidence.count || (!names.contains(original.name) && !userName) {
+        if local.count != original.evidence.count || (!names.contains(original.name) && !userName && !admittedLabel) {
             result.summary = ""; result.properties = [:]
             result.latitude = nil; result.longitude = nil; result.locationNote = nil
         }
@@ -73,7 +77,7 @@ public enum ReadingSpoilerProjection {
         }
         guard !local.isEmpty else { return nil }
         var result = original
-        let nameVisible = local.contains(where: { exact(original.name, in: $0.quote) }) ||
+        let nameVisible = context.admittedAnalysisLabels.contains("event/" + canonical.id) || local.contains(where: { exact(original.name, in: $0.quote) }) ||
             context.userNames.contains("event/" + canonical.id) && original.name == canonical.name && local.count == original.evidence.count
         if !nameVisible { result.name = "本段关联事件" }
         result.evidence = local
@@ -86,6 +90,7 @@ public enum ReadingSpoilerProjection {
         func visibleIdentity(_ id: String) -> Bool {
             guard complete, let value = context.entities[id],
                   let projected = entity(value, context: context) else { return false }
+            if context.admittedAnalysisLabels.contains("entity/" + id) { return true }
             return projected.evidence.contains { source in ([value.name] + value.aliases).contains { exact($0, in: source.quote) } }
         }
         result.placeIDs = original.placeIDs.filter(visibleIdentity)

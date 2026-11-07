@@ -96,7 +96,8 @@ enum ReadingProposalSchemas {
     }
     static var eventMetadata: [String: Any] {
         var fields = attribution; var eventType = id; eventType["description"] = "可省略；只能使用本书实际定义或本批新增的类型ID，不能因对象kind为event就填event。"
-        fields.merge(["eventID": id, "typeID": eventType, "kind": text(80), "parentEventID": id, "phaseOrder": integer, "extent": extent]) { _, next in next }
+        var phase = integer; phase["description"] = "只表示parentEventID下的子阶段顺序；没有parentEventID不能填。事件全线先后请用extent的narrativeStart/end，不能用phaseOrder冒充。"
+        fields.merge(["eventID": id, "typeID": eventType, "kind": text(80), "parentEventID": id, "phaseOrder": phase, "extent": extent]) { _, next in next }
         return object(fields, required: ["eventID", "kind", "sourceAnchorIDs", "assertion", "explanation"])
     }
     static var relationMetadata: [String: Any] {

@@ -14,7 +14,7 @@ public struct ReadingComponentRequest: Codable, Sendable {
         self.templateID = templateID
         self.confirmationOnly = confirmationOnly
     }
-    public var resolvedComposition: CompositionDefinition? { templateID == ReadingWorkbench.templateID ? ReadingWorkbench.definition() : composition }
+    public var resolvedComposition: CompositionDefinition? { templateID.flatMap(ReadingWorkbench.definition(for:)) ?? composition }
     public static func decode(_ data: Data) throws -> Self {
         guard data.count <= 32_768, let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(fields.keys).isSubset(of: ["componentID", "viewID", "title", "composition", "templateID", "confirmationOnly"]) else { throw ReadingError.invalid("组件请求结构无效。") }
@@ -23,7 +23,7 @@ public struct ReadingComponentRequest: Codable, Sendable {
               value.viewID.map({ !$0.isEmpty && $0.utf8.count <= 128 }) ?? true,
               value.title.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 400 }) ?? true,
               value.composition == nil || (value.componentID == "reading.composition" && value.viewID == nil) else { throw ReadingError.invalid("组件名称、标题或组合定义无效。") }
-        guard value.templateID == nil || (value.templateID == ReadingWorkbench.templateID && value.componentID == "reading.composition" && value.composition == nil && value.viewID == nil) else { throw ReadingError.invalid("工作台模板无效或与已有视图参数冲突。") }
+        guard value.templateID == nil || (ReadingWorkbench.templateIDs.contains(value.templateID!) && value.componentID == "reading.composition" && value.composition == nil && value.viewID == nil) else { throw ReadingError.invalid("工作台模板无效或与已有视图参数冲突。") }
         return value
     }
 }
@@ -52,7 +52,7 @@ extension ReadingQueryToolCatalog {
              "viewID": ["type": "string", "minLength": 1, "maxLength": 128, "description": "复用components_list返回的已有视图；不改其配置。"],
              "title": ["type": "string", "minLength": 1, "maxLength": 400],
              "confirmationOnly": ["type": "boolean", "description": "仅当用户只要求打开或切换已有资料视图、没有要求解释内容或补充整理时设true；宿主按真实结果简短确认，不再请求模型编写说明。内容问题须false。"],
-             "templateID": ["type": "string", "enum": [ReadingWorkbench.templateID], "description": "人物、关系、事件和笔记联动工作台；宿主构建布局并自动复用。componentID为reading.composition，勿同时传composition/viewID。"],
+             "templateID": ["type": "string", "enum": ReadingWorkbench.templateIDs, "description": "两个可选布局：reading-time-map（地图、时间轴与人物）、reading-workbench（人物、关系与笔记）；也可直接组合元件。勿同时传composition/viewID；displayPurpose、actualView仅为返回字段。"],
              "composition": CompositionSchema.definition], required: ["componentID"])]
     }
 }

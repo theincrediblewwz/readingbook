@@ -66,7 +66,7 @@ struct ReadingQueryHostOwner {
             }
             return try viewToolResult("success", "按当前需求选择组件；显示配置不代表已有分析。", extra: ["components": components,
                 "views": views, "totalViews": book.views.count, "nextOffset": page.offset + views.count < book.views.count ? page.offset + views.count as Any : NSNull(),
-                "templates": [["id": ReadingWorkbench.templateID, "componentID": "reading.composition", "title": ReadingWorkbench.title, "purpose": "人物/关系/相关事件/读者笔记联动，选择一个人物时一起查看；已保存的工作台自动复用。"]],
+                "templates": ReadingWorkbench.templateIDs.map { id in ["id": id, "componentID": "reading.composition", "title": ReadingWorkbench.title(for: id), "purpose": id == ReadingWorkbench.timeMapTemplateID ? "可选布局：地图、事件先后与人物详情联动，共用本书资料。" : "人物/关系/相关事件/读者笔记联动；选择一个人物时一起查看，已保存工作台复用。"] },
                 "customComponents": "只能组合现有元件，不执行代码；打开的组件沿用这次提问的原文范围，正文读取仍限本次授权。"])
         }
         let request = try ReadingComponentRequest.decode(data)
@@ -112,7 +112,7 @@ struct ReadingQueryHostOwner {
             // Repeated tool calls reuse the same declaration; a single turn may
             // not fill the sidebar with unbounded generated pages.
             guard session.createdCount < 3 else { return try viewToolResult("busy", "这次已经加入三个组件，请先使用它们。") }
-            let title = composition == nil ? descriptor.title : (request.title ?? (request.templateID != nil ? ReadingWorkbench.title : "本书专属视图"))
+            let title = composition == nil ? descriptor.title : (request.title ?? request.templateID.map { ReadingWorkbench.title(for: $0) } ?? "本书专属视图")
             let definition = ViewDefinition(id: "chat-component-" + UUID().uuidString, title: title, kind: descriptor.kind,
                 rendererID: descriptor.rendererID, scope: "current", composition: composition)
             let saved = try await repository.ensureReadingComponent(bookID: book.id, sourceHash: book.sourceHash,

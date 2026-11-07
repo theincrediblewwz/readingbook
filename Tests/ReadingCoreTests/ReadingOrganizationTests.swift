@@ -210,6 +210,68 @@ final class ReadingOrganizationTests: XCTestCase {
             }
         XCTAssertEqual(requests, 9)
     }
+    func testScopedAnalysisPreservesDerivedLabelsAfterExactEvidenceAdmission() throws {
+        var book = book(); book.units[1].text = "公瑾與孔明商議火攻。"
+        let source = Evidence(unitID: "two", quote: book.units[1].text)
+        book.entities = [.init(id: "zhou", typeID: "person", name: "周瑜", summary: "周瑜筹划火攻。", aliases: ["公瑾"], evidence: [source])]
+        book.events = [.init(id: "fire", name: "赤壁火攻的准备", summary: "两位军师议定火攻。", dateText: "第四十四回", participantIDs: ["zhou", "not-in-range"], evidence: [source])]
+        let before = try bytes(book)
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .range, in: book, context: context(.init(pageStart: 2, pageEnd: 3)))
+        let projected = try ReadingComponentProjection.project(snapshot, in: book)
+        XCTAssertEqual(projected.entities.first?.name, "周瑜")
+        XCTAssertEqual(projected.entities.first?.summary, "周瑜筹划火攻。")
+        XCTAssertEqual(projected.events.first?.name, "赤壁火攻的准备")
+        XCTAssertEqual(projected.events.first?.summary, "两位军师议定火攻。")
+        XCTAssertEqual(projected.events.first?.participantIDs, ["zhou"])
+        XCTAssertEqual(projected.events.first?.dateText, "时间待考", "未核实的日期仍沿用原保护")
+        XCTAssertEqual(try bytes(book), before)
+        XCTAssertEqual(ReadingSpoilerProjection.entity(book.entities[0], in: book, allowedUnitIDs: ["two"])?.name, "公瑾", "普通跟读投影不改变")
+    }
+    func testScopedDerivedLabelsDoNotRestoreCrossRangeFacts() throws {
+        var book = book(); book.units[1].text = "公瑾與孔明商議火攻。"
+        let local = Evidence(unitID: "two", quote: book.units[1].text), future = Evidence(unitID: "four", quote: book.units[3].text)
+        book.entities = [.init(id: "masked", typeID: "person", name: "后文身份", summary: "后章说明", aliases: ["公瑾"], evidence: [local, future]),
+            .init(id: "future", typeID: "person", name: "后章秘密", evidence: [future])]
+        book.events = [.init(id: "later", name: "后文结局", summary: "后章结果", participantIDs: ["masked", "future"], evidence: [local, future])]
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .range, in: book, context: context(.init(pageStart: 2, pageEnd: 3)))
+        let projected = try ReadingComponentProjection.project(snapshot, in: book)
+        XCTAssertEqual(projected.entities.map(\.name), ["公瑾"])
+        XCTAssertEqual(projected.entities.first?.summary, "")
+        XCTAssertEqual(projected.events.first?.name, "本段关联事件")
+        XCTAssertEqual(projected.events.first?.summary, "")
+        XCTAssertTrue(projected.events.first?.participantIDs.isEmpty == true)
+        XCTAssertEqual(book.events.first?.name, "后文结局")
+    }
+    func testTimeMapWorkbenchProjectsSharedEventsPlacesAndSelection() throws {
+        var book = book(); let source = Evidence(unitID: "two", quote: book.units[1].text)
+        book.entities = [.init(id: "place", typeID: "place", name: "火攻地点", latitude: 30, longitude: 114, evidence: [source])]
+        book.events = [.init(id: "fire", name: "赤壁火攻准备", summary: "先商议火攻", placeIDs: ["place"], evidence: [source])]
+        let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: "two", quote: book.units[1].text, in: book)
+        var temporal = TemporalKnowledgeState(); temporal.anchors = [anchor]
+        temporal.eventMetadata = [.init(eventID: "fire", extent: .init(sourceText: "本段先后", precision: .narrative, uncertainty: .exact, narrativeStart: 2), sourceAnchorIDs: [anchor.id], assertion: .explicit)]
+        book.temporalKnowledge = temporal
+        let request = try ReadingComponentRequest.decode(Data(#"{"componentID":"reading.composition","templateID":"reading-time-map"}"#.utf8))
+        let definition = try XCTUnwrap(request.resolvedComposition)
+        try CompositionRuntime.validate(definition, in: book)
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .range, in: book, context: context(.init(pageStart: 2, pageEnd: 3)))
+        let prepared = try CompositionRuntime.prepare(definition, in: book, sourceSnapshot: snapshot)
+        let result = try CompositionRuntime.project(prepared, selections: ["main": ["fire"]])
+        XCTAssertEqual(result["details"]?.items.map(\.id), ["fire"])
+        XCTAssertEqual(result["events"]?.items.first?.title, "赤壁火攻准备")
+        XCTAssertEqual(result["events"]?.items.first?.extent?.narrativeStart, 2)
+        XCTAssertTrue(result["objects"]?.mapPoints.contains { $0.id == "entity.place" && $0.targetID == "place" } == true)
+        XCTAssertEqual(Set(definition.parts.map(\.primitive)), [.map, .timeline, .objectDetail, .objectList, .relations, .markdown])
+        XCTAssertFalse(String(decoding: try bytes(definition), as: UTF8.self).contains("赤壁火攻准备"), "布局不另存知识正文")
+        XCTAssertEqual(book.events.count, 1); XCTAssertEqual(book.entities.count, 1)
+    }
+    func testTimeMapTemplateKeepsClosedRequestAndExistingTemplate() throws {
+        XCTAssertEqual(try ReadingComponentRequest.decode(Data(#"{"componentID":"reading.composition","templateID":"reading-workbench"}"#.utf8)).resolvedComposition, ReadingWorkbench.definition())
+        for raw in [#"{"componentID":"relations","templateID":"reading-time-map"}"#, #"{"componentID":"reading.composition","templateID":"reading-time-map","viewID":"x"}"#, #"{"componentID":"reading.composition","templateID":"reading-time-map","displayPurpose":"x"}"#] {
+            XCTAssertThrowsError(try ReadingComponentRequest.decode(Data(raw.utf8)))
+        }
+        let view = ViewDefinition(id: "time-map", title: ReadingWorkbench.timeMapTitle, kind: .knowledge, rendererID: "reading.composition", composition: ReadingWorkbench.definition(for: ReadingWorkbench.timeMapTemplateID))
+        XCTAssertTrue(ReadingWorkbench.isWorkbench(view)); XCTAssertTrue(ReadingWorkbench.continuationQuestion(view: view).contains("事件先后和地点"))
+    }
     func testLargeConfiguredOutputDoesNotReserveItsCeilingOnEveryToolTurn() async throws {
         let settings = ProviderSettings(model: "offline", maxRequestsPerRun: 100, maxOutputTokens: 393216, contextWindowTokens: 1048576)
         var requests = 0
