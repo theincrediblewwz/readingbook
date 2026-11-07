@@ -10,8 +10,18 @@ private struct WorkspaceCanvasExclusionRectsKey: EnvironmentKey {
 private struct WorkspaceProgressBoundsKey: EnvironmentKey {
     static let defaultValue = CGRect.zero
 }
+private struct WorkspacePageScrollKey: EnvironmentKey {
+    static let defaultValue = false
+}
 
 extension EnvironmentValues {
+    /// Embedded canvases share the composition's vertical scroll container.
+    /// Standalone canvases keep wheel panning; dragging and pinching are unchanged.
+    var workspacePageScroll: Bool {
+        get { self[WorkspacePageScrollKey.self] }
+        set { self[WorkspacePageScrollKey.self] = newValue }
+    }
+
     /// A global overlay owns input until it is dismissed. This does not change
     /// book data or the camera; it only suspends background canvas interaction.
     var workspaceCanvasBlocked: Bool {

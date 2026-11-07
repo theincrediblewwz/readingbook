@@ -10,12 +10,13 @@ struct GraphViewportInput: NSViewRepresentable {
     var enabled: Bool
     var canvasID: UUID
     var exclusions: [CGRect]
+    var prefersPageScroll = false
     var scroll: (CGSize) -> Void
     var zoom: (CGFloat, CGPoint) -> Void
 
     func makeNSView(context: Context) -> ViewportView { ViewportView() }
     func updateNSView(_ view: ViewportView, context: Context) {
-        view.configure(enabled: enabled, canvasID: canvasID, exclusions: exclusions)
+        view.configure(enabled: enabled, canvasID: canvasID, exclusions: exclusions, prefersPageScroll: prefersPageScroll)
         view.scroll = scroll; view.zoom = zoom
     }
     static func dismantleNSView(_ view: ViewportView, coordinator: ()) { view.invalidate() }
@@ -24,6 +25,7 @@ struct GraphViewportInput: NSViewRepresentable {
         private var enabled = true
         private var canvasID: UUID?
         private var exclusions: [CGRect] = []
+        private var prefersPageScroll = false
         var scroll: ((CGSize) -> Void)?
         var zoom: ((CGFloat, CGPoint) -> Void)?
         private var monitor: Any?
@@ -33,10 +35,11 @@ struct GraphViewportInput: NSViewRepresentable {
         override var isFlipped: Bool { true }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-        func configure(enabled: Bool, canvasID: UUID, exclusions: [CGRect]) {
-            if self.enabled != enabled || self.canvasID != canvasID { resetOwnership() }
+        func configure(enabled: Bool, canvasID: UUID, exclusions: [CGRect], prefersPageScroll: Bool = false) {
+            if self.enabled != enabled || self.canvasID != canvasID || self.prefersPageScroll != prefersPageScroll { resetOwnership() }
             if self.canvasID != canvasID { WorkspaceCanvasInputRegions.remove(self, id: self.canvasID) }
             self.enabled = enabled; self.canvasID = canvasID; self.exclusions = exclusions
+            self.prefersPageScroll = prefersPageScroll
             registerInputRegion()
         }
         override func viewDidMoveToWindow() {
@@ -50,7 +53,7 @@ struct GraphViewportInput: NSViewRepresentable {
             }
         }
 
-        private func route(_ event: NSEvent) -> NSEvent? {
+        func route(_ event: NSEvent) -> NSEvent? {
             guard enabled, !isHiddenOrHasHiddenAncestor,
                   let window, event.window === window, window.isKeyWindow,
                   window.attachedSheet == nil, NSApp.modalWindow == nil else {
@@ -69,7 +72,10 @@ struct GraphViewportInput: NSViewRepresentable {
             } else {
                 let accepted = wheelOwnership.accepts(phase: phase, momentum: Self.phase(event.momentumPhase), isEligible: eligible)
                 guard accepted else { return event }
-                if event.modifierFlags.contains(.command) {
+                if prefersPageScroll, CompositionPageScrollInput.isOrdinaryWheel(event),
+                   let page = enclosingScrollView {
+                    page.scrollWheel(with: event)
+                } else if event.modifierFlags.contains(.command) {
                     zoom?(exp(event.scrollingDeltaY * 0.012), point)
                 } else {
                     let multiplier: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 12

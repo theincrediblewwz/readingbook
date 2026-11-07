@@ -66,9 +66,10 @@ struct CompositionWorkspaceView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 18) {
                             if !embedded { workspaceHeader }
-                            layout(composition.rootID, in: composition, width: max(240, geometry.size.width - (embedded ? 16 : 40)))
-                        }.padding(.horizontal, embedded ? 8 : 20).padding(.top, embedded ? 8 : 92).padding(.bottom, embedded ? 8 : 28)
-                    }
+                            layout(composition.rootID, in: composition, width: max(240, geometry.size.width - (embedded ? 32 : 56)))
+                        }.padding(.leading, embedded ? 8 : 20).padding(.trailing, embedded ? 24 : 36)
+                            .padding(.top, embedded ? 8 : 92).padding(.bottom, embedded ? 8 : 28)
+                    }.scrollIndicators(.visible).environment(\.workspacePageScroll, true)
                 } else if composition != nil { ProgressView("正在准备组件…") }
                 else { fallback("这个组件尚未提供可显示的布局。原书、笔记和已保存配置都保留。") }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -702,7 +703,9 @@ private struct CompositionMap: View {
                     }
                 }
             }
+                .background(CompositionPageScrollInput())
                 .mapControls { MapCompass(); MapScaleView() }.frame(height: height).clipShape(RoundedRectangle(cornerRadius: 18))
+                .help("双指滑动浏览整页；拖动平移地图，捏合缩放地图。")
                 .padding(8).onChange(of: selected) { _, ids in
                     locate(ids)
                 }.onChange(of: points) { _, _ in

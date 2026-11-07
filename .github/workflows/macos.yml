@@ -118,6 +118,8 @@ jobs:
         run: python3 scripts/native-ui-regression/run-graph-label-reuse.py --bin-dir .build/tests/debug --tag ci-graph-label-reuse
       - name: Native map content reuse and scoped selection
         run: python3 scripts/native-ui-regression/run-map-content-reuse.py --bin-dir .build/tests/debug --tag ci-map-content-reuse
+      - name: Native composition page and canvas scroll routing
+        run: python3 scripts/native-ui-regression/run-composition-scroll.py --bin-dir .build/tests/debug --tag ci-composition-scroll
       - name: Native trajectory geometry across map content branches
         run: python3 scripts/native-ui-regression/run-map-trajectory-content.py --bin-dir .build/tests/debug --tag ci-map-trajectory-content
       - name: Rendered note mode transition regression
@@ -326,6 +328,14 @@ jobs:
           path: |
             logs/map-rendering-20261105/ci-map-content-reuse
             logs/map-rendering-20261105/ci-map-trajectory-content
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Preserve failed composition scroll evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-composition-scroll-evidence
+          path: logs/composition-scroll-20261107/ci-composition-scroll
           if-no-files-found: ignore
           retention-days: 3
       - name: Build universal app and package

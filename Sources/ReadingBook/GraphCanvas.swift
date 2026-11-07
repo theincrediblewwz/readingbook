@@ -108,6 +108,7 @@ struct GraphSurface: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var canvasHovered = false
     @Environment(\.workspaceCanvasBlocked) private var workspaceCanvasBlocked
+    @Environment(\.workspacePageScroll) private var workspacePageScroll
     @Environment(\.workspaceCanvasExclusionRects) private var workspaceCanvasExclusionRects
     @Environment(\.graphBrowserSettledFrame) private var browserSettledFrame
     @Environment(\.graphBrowserControls) private var browserControls
@@ -224,6 +225,7 @@ struct GraphSurface: View {
                     .contextMenu { if let createDocument { Button("新建笔记") { createDocument() } } }
                 GraphViewportInput(enabled: canNavigate, canvasID: canvasInputID,
                                    exclusions: workspaceExclusions + [interactionExclusion].compactMap { $0 } + localChrome,
+                                   prefersPageScroll: workspacePageScroll,
                                    scroll: { panViewport(by: $0) }, zoom: { zoomViewport(by: $0, at: $1) })
                 GraphAmbientLayer(active: ambientMotion && !reduceMotion && scenePhase == .active && canNavigate
                                   && !canvasHovered && selectedID == nil && focus == nil && items.count <= 80) { phase in

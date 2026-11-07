@@ -306,3 +306,8 @@ adjacent page. Private notes, source bytes and old history remain preserved.
 The deterministic transport uses no real model; network and original-library access
 are denied. This is separate from the bounded actual-service diagnostic recorded
 in Design/2026-11-05-search-context-reliability.md.
+# 组合页滚动路由
+
+`python3 scripts/native-ui-regression/run-composition-scroll.py --bin-dir .build/tests/debug --tag local-composition-scroll`
+
+检查实际地图/图谱输入路由如何把普通滚动交给外层页面，并保留独立图谱平移、捏合、修饰键、遮挡控件与嵌套列表的归属。事件仅在隔离进程内直接传给路由，不向系统投递；记录页检查原事件转发，实际页面位移另外用原生界面验证。网络及原书库读写被禁止。
