@@ -37,6 +37,14 @@ public actor LibraryRepository {
         var deviceNumber: UInt64?
     }
     private var documentValidationCache: [String: DocumentValidationStamp] = [:]
+    private struct FoldedPreviewEntry {
+        var document: DocumentRecord
+        var stamp: DocumentValidationStamp
+        var text: String
+        var accessed: UInt64
+    }
+    private var foldedPreviewCache: [String: FoldedPreviewEntry] = [:]
+    private var foldedPreviewClock: UInt64 = 0
     private var mathValidationCache = MathVerificationValidationCache()
     private struct SourceManifest {
         var sourceHash: String
@@ -186,18 +194,57 @@ public actor LibraryRepository {
     /// Visible collapsed rows need only a bounded prefix. This never replaces
     /// the full document read used by editing, export or AI attachment freezing.
     public func readFoldedNotePreview(bookID: String, sourceHash: String, document: DocumentRecord) throws -> String {
+        try readFoldedDocumentPreviews(bookID: bookID, sourceHash: sourceHash, documents: [document])[document.id] ?? ""
+    }
+
+    /// One owner check for a visible batch; Markdown remains the sole body source.
+    /// The repository-local LRU is display-only, bounded to 512 short strings,
+    /// and checked against both the current record and regular-file identity.
+    public func readFoldedDocumentPreviews(bookID: String, sourceHash: String, documents: [DocumentRecord]) throws -> [String: String] {
+        guard !documents.isEmpty else { return [:] }
+        guard documents.count <= 256 else { throw ReadingError.invalid("一次最多预览 256 篇笔记。") }
+        try Task.checkCancellation()
         let directory = try bookDirectory(bookID, mustExist: true)
         try recoverDocument(in: directory)
         let stored = try readProject(in: directory)
-        guard stored.sourceHash == sourceHash, stored.activeDocuments.contains(document) else {
+        let active = Dictionary(stored.activeDocuments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        guard stored.sourceHash == sourceHash, documents.allSatisfy({ active[$0.id] == $0 }) else {
             throw ReadingError.invalid("笔记或原书已变化，请重新打开列表。")
         }
+        var result: [String: String] = [:]
+        for document in documents where result[document.id] == nil {
+            try Task.checkCancellation()
+            result[document.id] = try foldedDocumentPrefix(document, bookID: bookID, sourceHash: sourceHash, in: directory)
+        }
+        return result
+    }
+
+    private func foldedDocumentPrefix(_ document: DocumentRecord, bookID: String, sourceHash: String, in directory: URL) throws -> String {
         let url = try documentURL(document, in: directory)
-        _ = try regularFileSize(url, limit: Self.documentLimit)
+        let size = try regularFileSize(url, limit: Self.documentLimit)
+        let attributes = try files.attributesOfItem(atPath: url.path)
+        guard let modified = attributes[.modificationDate] as? Date else { throw ReadingError.invalid("无法读取笔记修订时间。") }
+        let stamp = DocumentValidationStamp(size: size, modified: modified, created: attributes[.creationDate] as? Date,
+                                           fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+                                           deviceNumber: (attributes[.systemNumber] as? NSNumber)?.uint64Value)
+        let key = bookID + "|" + sourceHash + "|" + document.id
+        foldedPreviewClock &+= 1
+        if var cached = foldedPreviewCache[key], cached.document == document, cached.stamp == stamp {
+            cached.accessed = foldedPreviewClock; foldedPreviewCache[key] = cached
+            return cached.text
+        }
         let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
         var data = try handle.read(upToCount: 8192) ?? Data()
         for _ in 0..<4 {
-            if let text = String(data: data, encoding: .utf8) { return FoldedReadingPreview.make(text, title: document.title) }
+            if let text = String(data: data, encoding: .utf8) {
+                let preview = FoldedReadingPreview.make(text, title: document.title)
+                if foldedPreviewCache[key] == nil, foldedPreviewCache.count >= 512,
+                   let oldest = foldedPreviewCache.min(by: { $0.value.accessed < $1.value.accessed })?.key {
+                    foldedPreviewCache.removeValue(forKey: oldest)
+                }
+                foldedPreviewCache[key] = FoldedPreviewEntry(document: document, stamp: stamp, text: preview, accessed: foldedPreviewClock)
+                return preview
+            }
             if !data.isEmpty { data.removeLast() }
         }
         throw ReadingError.invalid("笔记预览不是有效 UTF-8；原文件保留。")

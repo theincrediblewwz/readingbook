@@ -27,6 +27,14 @@ private final class GraphRenderCache {
     var renderedEdges: [RenderedGraphLine] = []
     var motionPhase: Double?
     var motionEdges: [RenderedGraphLine] = []
+    var previewOwner: GraphDocumentPreviewOwner?
+    var previewDocuments: [String: DocumentRecord] = [:]
+    func updatePreviewOwner(book: BookProject?, revision: Int, repository: UUID, scope: UUID?) {
+        let next = book.map { GraphDocumentPreviewOwner(repository: repository, bookID: $0.id, sourceHash: $0.sourceHash, revision: revision, scope: scope) }
+        guard next != previewOwner else { return }
+        previewOwner = next
+        previewDocuments = Dictionary((book?.activeDocuments ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
     private var memorySave: Task<Void, Never>?
     func cancelMemorySave() { memorySave?.cancel(); memorySave = nil }
     func queueCameraMemory(store: AppStore, scope: String, id: String, camera: GraphCamera) {
@@ -153,6 +161,7 @@ struct GraphSurface: View {
     @State private var savingLine = false
     @State private var message = ""
     @State private var canvasInputID = UUID()
+    @State private var documentPreviews = GraphDocumentPreviewSnapshot()
     @FocusState private var focus: FocusTarget?
     private enum FocusTarget: Hashable { case node(String), port(String, PortSide), line(String) }
     private enum PortSide: Hashable { case leading, trailing }
@@ -204,6 +213,8 @@ struct GraphSurface: View {
     }
     var body: some View {
         let _ = renderCache.update(items: items, lines: lines, nodeSize: nodeSize)
+        let _ = renderCache.updatePreviewOwner(book: store.componentDataBook, revision: store.currentBookRevision,
+                                               repository: store.repository.publicationOwner, scope: store.componentDataScopeID)
         GeometryReader { geometry in
             let globalFrame = geometry.frame(in: .global)
             let workspaceExclusions = workspaceCanvasExclusionRects.filter { !$0.isNull && !$0.isInfinite && !$0.isEmpty }
@@ -214,6 +225,7 @@ struct GraphSurface: View {
             let chrome = chromeLayout(in: geometry.size)
             let localChrome = [chrome.controls, chrome.status].compactMap { $0 }
             let visibleNodes = visibleItems(in: geometry.size)
+            let previewRequest = documentPreviewRequest(for: visibleNodes)
             let visibility = visibilitySnapshot(in: geometry.size, candidates: visibleNodes, exclusions: workspaceExclusions + [interactionExclusion].compactMap { $0 } + localChrome)
             ZStack(alignment: .topLeading) {
                 Palette.canvas
@@ -284,6 +296,20 @@ struct GraphSurface: View {
             .task(id: visibility) {
                 guard !Task.isCancelled, visibility.contextID == store.readingVisibilityContextID else { return }
                 if store.renderedWorkspaceVisibility != visibility { store.renderedWorkspaceVisibility = visibility }
+            }
+            .task(id: previewRequest) {
+                guard let request = previewRequest else { documentPreviews = GraphDocumentPreviewSnapshot(); return }
+                let repository = store.repository
+                do {
+                    let texts = try await repository.readFoldedDocumentPreviews(bookID: request.owner.bookID,
+                        sourceHash: request.owner.sourceHash, documents: request.documents)
+                    guard !Task.isCancelled, renderCache.previewOwner == request.owner,
+                          store.repository.publicationOwner == request.owner.repository else { return }
+                    documentPreviews = GraphDocumentPreviewSnapshot(owner: request.owner, texts: texts)
+                } catch {
+                    guard !Task.isCancelled, renderCache.previewOwner == request.owner else { return }
+                    documentPreviews = GraphDocumentPreviewSnapshot(owner: request.owner)
+                }
             }
             .onContinuousHover { phase in
                 if case .active = phase { canvasHovered = true } else { canvasHovered = false }
@@ -405,6 +431,14 @@ struct GraphSurface: View {
             let position = camera.screen(point(item), in: size)
             return viewport.contains(position)
         }
+    }
+    private func documentPreviewRequest(for visible: [GraphItem]) -> GraphDocumentPreviewRequest? {
+        // Far zoom is spatial overview: tiny unreadable cards must not trigger
+        // hundreds of file reads. No request key contains camera coordinates.
+        guard camera.scale >= 0.45, let owner = renderCache.previewOwner else { return nil }
+        let ids = Set(visible.flatMap(\.documentIDs)).sorted().prefix(256)
+        let documents = ids.compactMap { renderCache.previewDocuments[$0] }
+        return documents.isEmpty ? nil : GraphDocumentPreviewRequest(owner: owner, documents: documents)
     }
     private func visibilitySnapshot(in size: CGSize, candidates: [GraphItem], exclusions: [CGRect]) -> ReadingVisibleObjectsSnapshot {
         let viewport = CGRect(origin: .zero, size: size)
@@ -652,6 +686,7 @@ struct GraphSurface: View {
     }
     private struct NodeReuseKey: Equatable {
         let item: GraphItem
+        let preview: String
         let ordinal: Int
         let selected: Bool
         let sourceID: String?
@@ -663,7 +698,7 @@ struct GraphSurface: View {
         let scope: String?
         let menuText: [String]
         static func == (lhs: Self, rhs: Self) -> Bool {
-            lhs.item == rhs.item && lhs.item.id.utf8.elementsEqual(rhs.item.id.utf8)
+            lhs.preview.utf8.elementsEqual(rhs.preview.utf8) && lhs.item == rhs.item && lhs.item.id.utf8.elementsEqual(rhs.item.id.utf8)
                 && lhs.item.targetID.utf8.elementsEqual(rhs.item.targetID.utf8)
                 && lhs.item.title.utf8.elementsEqual(rhs.item.title.utf8)
                 && lhs.item.subtitle.utf8.elementsEqual(rhs.item.subtitle.utf8)
@@ -681,7 +716,7 @@ struct GraphSurface: View {
             let other = renderCache.byID[line.from == item.id ? line.to : line.from]
             return [line.id, line.from, line.to, line.label, other?.title ?? "节点", String(other.map(nodeNumber) ?? 0)]
         }
-        return NodeReuseKey(item: item, ordinal: nodeNumber(item), selected: selectedPhysicalID == item.id,
+        return NodeReuseKey(item: item, preview: documentPreviews.text(for: item, owner: renderCache.previewOwner), ordinal: nodeNumber(item), selected: selectedPhysicalID == item.id,
                             sourceID: connectionFromID, targetID: connectionTargetID,
                             flags: [acceptsCanvasInput, savingPosition, savingConnection, savingLine, editingLineID != nil,
                                     move != nil, connect != nil, open != nil, inspect != nil, remove != nil,
@@ -713,7 +748,7 @@ struct GraphSurface: View {
             .onKeyPress(.return) { nodeActions.send(.activate(item.id, true)); return .handled }
             .onKeyPress(.space) { nodeActions.send(.activate(item.id, false)); return .handled }
             .contextMenu { nodeMenu(item) }
-            .accessibilityLabel("\(item.title)，\(item.subtitle)，节点 \(nodeNumber(item))")
+            .accessibilityLabel("\(item.title)，\(documentPreviews.text(for: item, owner: renderCache.previewOwner))，节点 \(nodeNumber(item))")
             .accessibilityHint(connect == nil ? "单击选中，双击打开内容。" : "双击打开；拖动卡片移动，从边缘圆点拖到另一节点连线。")
             .accessibilityAction { nodeActions.send(.activate(item.id, true)) }
             if connect != nil {
@@ -726,11 +761,11 @@ struct GraphSurface: View {
         let selected = selectedPhysicalID == item.id
         let target = connectionTargetID == item.id && connectionFromID != item.id
         return HStack(spacing: 12) {
-            Image(systemName: item.subtitle == "Markdown" ? "doc.text" : "circle.hexagongrid")
+            Image(systemName: item.documentIDs.isEmpty ? "circle.hexagongrid" : "doc.text")
                 .font(.system(size: 26, weight: .regular)).foregroundStyle(Palette.accent.opacity(0.8)).frame(width: 30)
             VStack(alignment: .leading, spacing: 5) {
-                Text(item.title).font(.system(size: 16, weight: selected ? .semibold : .medium)).foregroundStyle(Palette.ink).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                Text(item.subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                Text(item.title).font(.system(size: 16, weight: selected ? .semibold : .medium)).foregroundStyle(Palette.ink).lineLimit(item.documentIDs.isEmpty ? 2 : 1).frame(maxWidth: .infinity, alignment: .leading)
+                Text(documentPreviews.text(for: item, owner: renderCache.previewOwner)).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(2)
             }
         }.padding(16).frame(width: nodeSize.width, height: nodeSize.height)
             .background(Palette.surface.opacity(0.96), in: RoundedRectangle(cornerRadius: 15))
@@ -756,7 +791,7 @@ struct GraphSurface: View {
             .help("从这里拖到另一节点连线；也可点击后选择目标")
     }
     @ViewBuilder private func nodeMenu(_ item: GraphItem) -> some View {
-        if open != nil { Button(item.subtitle == "Markdown" ? "打开文档" : "打开内容") { nodeActions.send(.activate(item.id, true)) } }
+        if open != nil { Button(item.documentIDs.isEmpty ? "打开内容" : "打开文档") { nodeActions.send(.activate(item.id, true)) } }
         if inspect != nil { Button("查看来源与关联") { nodeActions.send(.inspect(item.targetID)) } }
         if connect != nil {
             if let source = connectionFromID, source != item.id {

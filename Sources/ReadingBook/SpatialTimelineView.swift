@@ -233,12 +233,6 @@ struct SpatialTimelineView: View {
                 timelineCard.frame(width: panelWidth, height: panelSize.height, alignment: .top)
                     .clipShape(RoundedRectangle(cornerRadius: 22))
                     .position(x: panelFrame.midX, y: panelFrame.midY)
-                    .onPreferenceChange(TimelinePanelSizeKey.self) { next in
-                        guard next.width > 0, next.height > 0,
-                              abs(next.height - measuredPanelSize.height) > 0.5 || abs(next.width - measuredPanelSize.width) > 0.5 else { return }
-                        cancelPanelDrag()
-                        measuredPanelSize = next
-                    }
                     .transition(.opacity)
                 } else {
                     ReadingDockSurface {
@@ -421,11 +415,12 @@ struct SpatialTimelineView: View {
                 ScrollView {
                     timelineContents.fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 16).padding(.bottom, 12)
-                        .background {
-                            GeometryReader { contents in
-                                Color.clear.preference(key: TimelinePanelSizeKey.self,
-                                    value: CGSize(width: panelWidth, height: contents.size.height + timelineHeaderHeight))
-                            }
+                        .onGeometryChange(for: CGSize.self) { contents in
+                            CGSize(width: panelWidth, height: contents.size.height + timelineHeaderHeight)
+                        } action: { next in
+                            guard next.width > 0, next.height > 0,
+                                  abs(next.height - measuredPanelSize.height) > 0.5 || abs(next.width - measuredPanelSize.width) > 0.5 else { return }
+                            cancelPanelDrag(); measuredPanelSize = next
                         }
                 }.scrollBounceBehavior(.basedOnSize)
                     .frame(height: max(0, panelSize.height - timelineHeaderHeight))
@@ -559,21 +554,21 @@ struct SpatialTimelineView: View {
     private func eventDetails(_ event: KnowledgeEvent) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(event.dateText + (event.placeIDs.isEmpty ? "" : " · " + event.placeIDs.map(store.objectTitle).joined(separator: "、")))
-                        .font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
-                    Text(event.name).font(.system(size: 16, weight: .semibold)).lineLimit(2).textSelection(.enabled)
-                }.frame(maxWidth: .infinity, alignment: .leading)
+                Text(event.name).font(.system(size: 16, weight: .semibold)).lineLimit(2).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 Button { collapseDetails() } label: { Image(systemName: "xmark") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("收起事件详情，保留时间范围").accessibilityLabel("收起事件详情")
             }.padding(.horizontal, 5)
             if expandedEventIsVisible {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if !event.placeIDs.isEmpty { objectLinks(event.placeIDs, title: "地点", symbol: "mappin.and.ellipse") }
-                        else { Label("地点尚未登记", systemImage: "mappin.and.ellipse").font(.caption).foregroundStyle(.secondary) }
-                        if !event.participantIDs.isEmpty { objectLinks(event.participantIDs, title: "参与者", symbol: "person.2") }
+                    VStack(alignment: .leading, spacing: 8) {
                         if !event.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { MarkdownText(markdown: event.summary) }
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 6) {
+                                objectLinks(event.placeIDs, title: "地点", symbol: "mappin.and.ellipse")
+                                objectLinks(event.participantIDs, title: "参与者", symbol: "person.2")
+                            }
+                        }.scrollIndicators(.hidden).frame(height: 44)
                         if !event.placeIDs.isEmpty, !points.contains(where: { $0.targetID == event.id }) {
                             Text("此事件还没有可定位的地点坐标；详情与原文依据仍可阅读。").font(.caption).foregroundStyle(.secondary)
                         }
@@ -592,7 +587,7 @@ struct SpatialTimelineView: View {
             if expandedEventIsVisible {
                 HStack(spacing: 12) {
                     if let evidence = event.evidence.first {
-                        Text(store.componentDataBook?.units.first(where: { $0.id == evidence.unitID })?.locator ?? "原文依据")
+                        Text([event.dateText, store.componentDataBook?.units.first(where: { $0.id == evidence.unitID })?.locator ?? "原文依据"].filter { !$0.isEmpty }.joined(separator: " · "))
                             .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                         Spacer(minLength: 0)
                         Button {
@@ -600,30 +595,26 @@ struct SpatialTimelineView: View {
                         } label: { Label("回到原句", systemImage: "book") }
                             .buttonStyle(ReadingToolbarButtonStyle()).foregroundStyle(Palette.accent)
                     } else {
-                        Text("暂未登记原文依据").font(.system(size: 13)).foregroundStyle(.secondary)
+                        Text([event.dateText, "暂未登记原文依据"].filter { !$0.isEmpty }.joined(separator: " · ")).font(.system(size: 13)).foregroundStyle(.secondary)
                     }
                 }.padding(.horizontal, 5).frame(minHeight: 44)
             }
         }
     }
     private func objectLinks(_ ids: [String], title: String, symbol: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Label(title, systemImage: symbol).font(.caption).foregroundStyle(.secondary)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 6)], alignment: .leading, spacing: 4) {
+        HStack(spacing: 6) {
                 ForEach(ids, id: \.self) { id in
                     Button {
                         store.focus(id)
                         if title == "参与者" { store.selectedTemporalEntityID = id; showsPerson = true }
                         else { inspectedObjectID = id }
                     } label: {
-                        HStack(spacing: 5) {
-                            Text(store.objectTitle(id)).lineLimit(2)
-                            Spacer(minLength: 0)
-                            Image(systemName: "arrow.up.right").font(.system(size: 10))
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }.buttonStyle(ReadingToolbarButtonStyle()).foregroundStyle(Palette.accent)
+                        Label(store.objectTitle(id), systemImage: symbol).font(.system(size: 13)).lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false).frame(minHeight: 36)
+                    }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
+                        .help(title == "参与者" ? "跟随此人物，联动时间与地图" : "查看此地点与原文依据")
+                        .accessibilityLabel(title + "：" + store.objectTitle(id))
                 }
-            }
         }
     }
     private var rangeEditor: some View {
@@ -808,11 +799,6 @@ struct SpatialTimelineView: View {
         }
     }
     private func fitTime() { store.timeFrom = bounds.lowerBound; store.timeTo = bounds.upperBound }
-}
-
-private struct TimelinePanelSizeKey: PreferenceKey {
-    static var defaultValue = CGSize.zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
 
 private struct ReadingMapScope: Equatable {

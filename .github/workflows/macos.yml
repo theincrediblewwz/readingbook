@@ -116,6 +116,8 @@ jobs:
         run: python3 scripts/native-ui-regression/run-menu-visibility.py --bin-dir .build/tests/debug --tag ci-menu-visibility
       - name: Native graph label reuse and current actions
         run: python3 scripts/native-ui-regression/run-graph-label-reuse.py --bin-dir .build/tests/debug --tag ci-graph-label-reuse
+      - name: Native graph document preview and event detail regression
+        run: python3 scripts/native-ui-regression/run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-document-previews
       - name: Native map content reuse and scoped selection
         run: python3 scripts/native-ui-regression/run-map-content-reuse.py --bin-dir .build/tests/debug --tag ci-map-content-reuse
       - name: Native composition page and canvas scroll routing
@@ -351,3 +353,12 @@ jobs:
             dist/build-info.txt
           if-no-files-found: error
           retention-days: 7
+
+      - name: Upload graph document preview failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-graph-document-preview-evidence
+          path: logs/graph-content-20261107/ci-graph-document-previews
+          if-no-files-found: ignore
+          retention-days: 3
