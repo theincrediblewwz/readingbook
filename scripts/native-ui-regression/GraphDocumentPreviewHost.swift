@@ -224,12 +224,13 @@ private actor PreviewTransport {
             guard !(current is MKMapView) else { throw ReadingError.invalid("Action frame actually hits map: " + label) }
             ancestor = current.superview
         }
-        observations.append(["action": label, "frame": [rect.minX, rect.minY, rect.width, rect.height], "hitReceiver": String(describing: type(of: receiver)), "input": "Own window sendEvent, never OS post"])
+        observations.append(["action": label, "frame": [rect.minX, rect.minY, rect.width, rect.height], "hitReceiver": String(describing: type(of: receiver)), "input": "Own application event queue, never OS post"])
         for kind in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             guard let event = NSEvent.mouseEvent(with: kind, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: kind == .leftMouseDown ? 1 : 0) else { throw ReadingError.invalid("Event") }
-            window.sendEvent(event)
+            NSApp.postEvent(event, atStart: false)
         }
+        try await Task.sleep(for: .milliseconds(30))
     }
     func waitFor(_ name: String, _ condition: @escaping () -> Bool) async throws {
         let deadline = ProcessInfo.processInfo.systemUptime + 6
@@ -248,7 +249,9 @@ private actor PreviewTransport {
         let deadline = ProcessInfo.processInfo.systemUptime + 6
         repeat {
             for web in webViews(host) {
-                if let text = try? await web.evaluateJavaScript("document.body.textContent") as? String, text.contains(firstBody) {
+                if let text = try? await web.evaluateJavaScript("document.body.textContent") as? String, text.contains(firstBody),
+                   !web.isHiddenOrHasHiddenAncestor, web.visibleRect.height >= 16,
+                   host.bounds.intersects(web.convert(web.visibleRect, to: host)) {
                     checks["eventSummaryVisible"] = true; return
                 }
             }
@@ -274,7 +277,11 @@ private actor PreviewTransport {
         throw ReadingError.invalid("Timeline did not expand through its visible button")
     }
     func show<V: View>(_ view: V) {
-        host.rootView = AnyView(view.environmentObject(store).environmentObject(ReadingTypographySettings()).environment(\.readingReduceMotion, true))
+        // cacheDisplay does not include WindowServer glass backdrops or remote
+        // WebKit layers. Use the shipped opaque accessibility surface here;
+        // inspect actual WebKit text/visibleRect directly, and glass via CUA.
+        host.rootView = AnyView(view.environmentObject(store).environmentObject(ReadingTypographySettings())
+            .environment(\.readingReduceMotion, true).environment(\.readingReduceTransparency, true))
     }
     func run() async throws {
         output = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
@@ -370,7 +377,7 @@ private actor PreviewTransport {
         try check("noModelRequests", await transport.calls == 0)
     }
     func finish(_ error: String?) throws {
-        let record: [String: Any] = ["status": error == nil ? "passed" : "failed", "error": error ?? NSNull(), "checks": checks, "checkCount": checks.count, "observations": observations, "rasterCaptureCount": rasterCaptureCount, "forcedRasterObservation": forceRaster, "realNetworkRequests": 0, "originalLibraryUsed": false, "fixture": "Actual public-domain sentence, manually bound objects and notes; not AI full-book analysis", "scope": "Unmodified product GraphSurface, DocumentGraphView, CompositionWorkspaceView and SpatialTimelineView; in-process AX or actual Vision raster/native-view geometry when SwiftUI virtual AX is absent; real window events"]
+        let record: [String: Any] = ["status": error == nil ? "passed" : "failed", "error": error ?? NSNull(), "checks": checks, "checkCount": checks.count, "observations": observations, "rasterCaptureCount": rasterCaptureCount, "forcedRasterObservation": forceRaster, "opaqueAccessibilitySurface": true, "systemPreferencesChanged": false, "realNetworkRequests": 0, "originalLibraryUsed": false, "fixture": "Actual public-domain sentence, manually bound objects and notes; not AI full-book analysis", "scope": "Unmodified product views with existing reduce-transparency environment; in-process AX or actual native raster/geometry, WebKit text and visibleRect, own AppKit event queue; glass appearance separately inspected"]
         try JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("result.json"))
     }
 }
