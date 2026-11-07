@@ -104,7 +104,19 @@ private actor PreviewTransport {
         rasterAt = now; rasterRows = []; rasterImage = nil; rasterButtons = [:]; rasterCaptureCount += 1
         guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
         host.cacheDisplay(in: host.bounds, to: bitmap)
-        guard let image = bitmap.cgImage else { return }
+        guard let original = bitmap.cgImage else { return }
+        let image: CGImage
+        // Standard CI displays can have one pixel per point. Recognizing the
+        // same 13pt Chinese glyphs at Retina-equivalent sampling avoids a
+        // demonstrated 问/间 OCR error without accepting a different string.
+        if CGFloat(original.width) < host.bounds.width * 2,
+           let context = CGContext(data: nil, width: Int(host.bounds.width * 2), height: Int(host.bounds.height * 2),
+                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            context.interpolationQuality = .high
+            context.draw(original, in: CGRect(x: 0, y: 0, width: context.width, height: context.height))
+            image = context.makeImage() ?? original
+        } else { image = original }
         rasterImage = image
         let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate
         request.recognitionLanguages = ["zh-Hans", "en-US"]; request.usesLanguageCorrection = false
