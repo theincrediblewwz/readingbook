@@ -701,7 +701,7 @@ private struct CompositionMap: View {
                         }.buttonStyle(ReadingQuietButtonStyle()).help(point.subtitle).accessibilityLabel(point.title + "，" + point.subtitle)
                     }
                 }
-            }.mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
+            }
                 .mapControls { MapCompass(); MapScaleView() }.frame(height: height).clipShape(RoundedRectangle(cornerRadius: 18))
                 .padding(8).onChange(of: selected) { _, ids in
                     locate(ids)
