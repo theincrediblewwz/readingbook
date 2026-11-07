@@ -462,6 +462,13 @@ struct SpatialTimelineView: View {
                 }
                 .help("拖动此处移动时间卡片；松手后吸附到最近的角或下方中央，Esc 取消")
                 .accessibilityLabel("时间与地图，可在选项菜单更改停靠位置")
+            if !timelineCollapsed, expandedEventIsVisible, let event = expandedEvent, let evidence = event.evidence.first {
+                Button {
+                    store.navigateToUnit(evidence.unitID); store.route = "reader"
+                } label: { Label("原句", systemImage: "book") }
+                    .buttonStyle(ReadingToolbarButtonStyle()).foregroundStyle(Palette.accent)
+                    .help("回到这条事件的原文依据").accessibilityLabel("回到原句")
+            }
             Menu {
                 Button("浏览事件清单（\(visibleEvents.count)）") { showingEvents = true }
                 Menu("时间体系") {
@@ -589,15 +596,10 @@ struct SpatialTimelineView: View {
                     if let evidence = event.evidence.first {
                         Text([event.dateText, store.componentDataBook?.units.first(where: { $0.id == evidence.unitID })?.locator ?? "原文依据"].filter { !$0.isEmpty }.joined(separator: " · "))
                             .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
-                        Spacer(minLength: 0)
-                        Button {
-                            store.navigateToUnit(evidence.unitID); store.route = "reader"
-                        } label: { Label("回到原句", systemImage: "book") }
-                            .buttonStyle(ReadingToolbarButtonStyle()).foregroundStyle(Palette.accent)
                     } else {
                         Text([event.dateText, "暂未登记原文依据"].filter { !$0.isEmpty }.joined(separator: " · ")).font(.system(size: 13)).foregroundStyle(.secondary)
                     }
-                }.padding(.horizontal, 5).frame(minHeight: 44)
+                }.padding(.horizontal, 5).frame(minHeight: 24)
             }
         }
     }

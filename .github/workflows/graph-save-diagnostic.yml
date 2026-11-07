@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           result=0
-          python3 scripts/native-ui-regression/run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-preview-raster --raster-observation || result=1
+          python3 scripts/native-ui-regression/run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-preview-raster --raster-observation --compact || result=1
           python3 scripts/native-ui-regression/run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-preview-native || result=1
           exit "$result"
       - name: Preserve native state and original result

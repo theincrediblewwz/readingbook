@@ -22,7 +22,9 @@ private actor PreviewTransport {
     var checks: [String: Bool] = [:]
     var observations: [[String: Any]] = []
     let firstBody = "王允问吕布为何长叹，吕布答自己被谗言所困。"
+    let noteTitles = ["原文提问", "人物解读", "情节理解"]
     private var forceRaster: Bool { CommandLine.arguments.contains("--raster-observation") }
+    private var compact: Bool { CommandLine.arguments.contains("--compact") }
     private var rasterRows: [(text: String, frame: CGRect)] = []
     private var rasterAt = 0.0
     private var rasterCaptureCount = 0
@@ -184,7 +186,7 @@ private actor PreviewTransport {
             if buttons.count >= 2 { return window.convertToScreen(host.convert(buttons[buttons.count - 2], to: nil)) }
         }
         refreshRaster()
-        let needle = label.hasPrefix("参与者：") ? String(label.dropFirst(4)) : label
+        let needle = label.hasPrefix("参与者：") ? String(label.dropFirst(4)) : label == "回到原句" ? "原句" : label
         if let cached = rasterButtons[label] { return cached }
         guard let image = rasterImage else { return nil }
         var sampled: [CGRect] = []
@@ -301,7 +303,7 @@ private actor PreviewTransport {
         let repository = LibraryRepository(rootURL: library)
         book = try await repository.create(book, sourceURL: source)
         for index in 0..<3 {
-            book = try await repository.saveDocument(project: book, document: .init(id: "d\(index)", title: "阅读理解\(index)", linkedIDs: ["question"], evidence: evidence), markdown: "# 阅读理解\(index)\n\n" + (index == 0 ? firstBody : "独立笔记\(index)，同一处原文的不同理解。"))
+            book = try await repository.saveDocument(project: book, document: .init(id: "d\(index)", title: noteTitles[index], linkedIDs: ["question"], evidence: evidence), markdown: "# \(noteTitles[index])\n\n" + (index == 0 ? firstBody : "独立笔记\(index)，同一处原文的不同理解。"))
             book.nodes.append(.init(id: "n\(index)", targetID: "d\(index)", x: Double(index) * 280, y: 0))
         }
         book = try await repository.save(book)
@@ -311,13 +313,22 @@ private actor PreviewTransport {
         store.libraryRootURL = library; store.repository = repository; store.books = [book]; store.bookID = book.id
         store.selectedUnitID = "u104"; store.readingScopeCurrent = false
         store.workspaceMemory = .init(bookID: book.id, sourceHash: book.sourceHash)
-        window = NSWindow(contentRect: .init(x: 80, y: 60, width: 1250, height: 820), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: .init(x: 80, y: 60, width: compact ? 1024 : 1250, height: compact ? 642 : 820), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "ReadingBook 内容摘要与时间联动 · 隔离验收"; window.isReleasedWhenClosed = false
         host = NSHostingView(rootView: AnyView(Color.clear)); window.contentView = host
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         store.route = "mindmap"; show(DocumentGraphView())
         try await waitFor("standaloneShowsSavedBody", { self.hasText(self.firstBody) })
-        try check("allThreeNodesHaveBodyHints", (0..<3).allSatisfy { index in self.nodeTexts().contains { self.comparable($0).contains("阅读理解\(index)") && self.comparable($0).contains(self.comparable(index == 0 ? self.firstBody : "独立笔记\(index)")) } })
+        // Use real words in fixture titles: the actual screenshot demonstrated
+        // that Vision reads the numeral 0 as O at every tested sampling size.
+        // Still require each individual card to show its own title and body.
+        try await waitFor("allThreeNodesHaveBodyHints", {
+            let nodes = self.nodeTexts()
+            return (0..<3).allSatisfy { index in nodes.contains {
+                self.comparable($0).contains(self.noteTitles[index]) &&
+                self.comparable($0).contains(self.comparable(index == 0 ? self.firstBody : "独立笔记\(index)"))
+            } }
+        })
         let owner = GraphDocumentPreviewOwner(repository: repository.publicationOwner, bookID: book.id, sourceHash: book.sourceHash, revision: 1, scope: nil)
         let item = GraphItem(id: "n", targetID: "d0", title: "标题", subtitle: "fallback", x: 0, y: 0, documentIDs: ["empty", "d0"])
         let snapshot = GraphDocumentPreviewSnapshot(owner: owner, texts: ["empty": "", "d0": firstBody])
@@ -332,7 +343,7 @@ private actor PreviewTransport {
         try check("otherScopeDoesNotAppear", snapshot.text(for: item, owner: changed) == "fallback")
         let doc = book.activeDocuments.first { $0.id == "d0" }!
         let content = try await repository.readDocumentSnapshot(bookID: book.id, document: doc)
-        book = try await repository.saveDocument(project: book, document: doc, markdown: "# 阅读理解0\n\n重新编辑后的正文，不显示旧预览。", expectedContentHash: content.contentHash)
+        book = try await repository.saveDocument(project: book, document: doc, markdown: "# \(noteTitles[0])\n\n重新编辑后的正文，不显示旧预览。", expectedContentHash: content.contentHash)
         store.publish(book)
         try await waitFor("sameNodeRefreshesEditedMarkdown", { self.hasText("重新编辑后的正文") })
         try check("oldBodyLeavesNativeNode", !hasText(firstBody))
@@ -360,7 +371,7 @@ private actor PreviewTransport {
         try await waitFor("sourceActionVisible", { self.frame("回到原句") != nil })
         try await press("参与者：吕布")
         try await waitFor("participantActionSelectsCanonicalPerson", { self.store.selectedTemporalEntityID == "lu" })
-        window.setContentSize(CGSize(width: 820, height: 820))
+        window.setContentSize(CGSize(width: 820, height: compact ? 642 : 820))
         try await Task.sleep(for: .milliseconds(150))
         try await expandTimelineIfNeeded()
         try await waitFor("narrowDetailsAndSourceStayInViewport", {
