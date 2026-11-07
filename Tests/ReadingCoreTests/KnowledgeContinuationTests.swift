@@ -180,4 +180,48 @@ final class KnowledgeContinuationTests: XCTestCase {
         var value = updated(book); value.sourceAnchorIDs = [anchor.id]
         XCTAssertThrowsError(try prepared(value, in: book))
     }
+    func testTemporalPreviewShowsEventDateAndGroundingWithoutOpaqueRecordJSON() throws {
+        let book = try fixture(), result = try prepared(updated(book), in: book)
+        let text = result.proposal.summary.joined(separator: "\n")
+        XCTAssertTrue(text.contains("到江陵")); XCTAssertTrue(text.contains("208年"))
+        XCTAssertTrue(text.contains("未记录")); XCTAssertTrue(text.contains("时间依据原句"))
+        XCTAssertTrue(text.contains("补充时间依据")); XCTAssertTrue(text.contains("原文明说"))
+        XCTAssertFalse(text.contains("\"eventID\"")); XCTAssertFalse(text.contains("eventMetadata"))
+        XCTAssertFalse(text.contains(book.temporalKnowledge!.anchors[0].id))
+    }
+    func testTemporalPreviewPreservesBothDateBoundsCalendarAndUncertainty() throws {
+        var book = try fixture(); book.temporalKnowledge!.eventMetadata[0].extent = time()
+        var after = book
+        after.temporalKnowledge!.eventMetadata[0].extent = .init(sourceText: "208年", calendar: "建安", start: .init(year: 12, month: 11, day: 20), end: .init(year: 12, month: 11, day: 22), precision: .day, uncertainty: .approximate, kind: .interval)
+        func preview(_ after: BookProject) throws -> String {
+            try ControlledChangeSummary.describe([.init(collection: .eventMetadata, id: "arrival", before: encoded(book.temporalKnowledge!.eventMetadata[0]), after: encoded(after.temporalKnowledge!.eventMetadata[0]))], from: book, to: after).joined(separator: "\n")
+        }
+        let text = try preview(after)
+        XCTAssertTrue(text.contains("公历208年")); XCTAssertTrue(text.contains("建安12年11月20日"))
+        XCTAssertTrue(text.contains("12年11月22日")); XCTAssertTrue(text.contains("约"))
+        after.temporalKnowledge!.eventMetadata[0].extent = .init(sourceText: "208年", calendar: "建安", end: .init(year: 13), precision: .year, uncertainty: .disputed, kind: .interval)
+        let open = try preview(after)
+        XCTAssertTrue(open.contains("建安13年")); XCTAssertTrue(open.contains("截至")); XCTAssertTrue(open.contains("有争议"))
+    }
+    func testNarrativePreviewDoesNotInventCalendarDates() throws {
+        let book = try fixture(); var value = updated(book)
+        value.extent = .init(sourceText: "第一回", precision: .narrative, uncertainty: .approximate, kind: .interval, narrativeStart: 0, narrativeEnd: 3)
+        let text = try prepared(value, in: book).proposal.summary.joined(separator: "\n")
+        XCTAssertTrue(text.contains("原文顺序0—3")); XCTAssertTrue(text.contains("第一回"))
+        XCTAssertFalse(text.contains("公历")); XCTAssertFalse(text.contains("narrative"))
+    }
+    func testTemporalPreviewIncludesEveryChangedClassificationParentPhaseAndSourceLocation() throws {
+        var book = try fixture()
+        book.types.append(.init(id: "eventtype", name: "行程事件", icon: "clock", fields: []))
+        book.events.append(.init(id: "parent", name: "南征", evidence: book.events[0].evidence))
+        let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: "two", quote: book.units[1].text, in: book)
+        book.temporalKnowledge?.anchors.append(anchor)
+        book.temporalKnowledge!.eventMetadata[0].kind = "event"
+        book.temporalKnowledge!.eventMetadata[0].assertion = .unknown
+        var value = updated(book); value.typeID = "eventtype"; value.kind = "行程"; value.assertion = .explicit
+        value.parentEventID = "parent"; value.phaseOrder = 1; value.sourceAnchorIDs.append(anchor.id)
+        let text = try prepared(value, in: book, allowed: ["one", "two"]).proposal.summary.joined(separator: "\n")
+        for expected in ["行程事件", "通用事件", "行程", "南征", "阶段顺序", "待核对", "原文明说", "第2页", "2处"] { XCTAssertTrue(text.contains(expected), expected) }
+        XCTAssertFalse(text.contains(anchor.id))
+    }
 }

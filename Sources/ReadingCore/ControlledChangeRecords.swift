@@ -153,7 +153,7 @@ enum ControlledChangeSummary {
                   let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), let text = String(data: pretty, encoding: .utf8) else { return "（无）" }
             return text // Explicit bounded JSON, not a model-written description.
         }
-        return patches.map { patch in
+        return try patches.map { patch in
             let action = patch.before == nil ? "新增" : patch.after == nil ? "移除布局" : "更新"
             switch patch.collection {
             case .nodes:
@@ -174,6 +174,8 @@ enum ControlledChangeSummary {
             case .bookSchemes:
                 guard let pending = after.bookSchemes?.pending else { return "更新书本方案状态：\(body(patch.before)) → \(body(patch.after))" }
                 return "暂存书本方案，尚未采纳或执行。类型/读书法/组件/计划/书籍分类的完整声明：\(body(try? ControlledChangeCoding.data(pending.before))) → \(body(try? ControlledChangeCoding.data(pending.proposed)))"
+            case .eventMetadata:
+                return try ControlledEventMetadataSummary.describe(patch, from: before, to: after)
             default:
                 return "\(action) \(patch.collection.rawValue) [\(patch.id)]：\(body(patch.before)) → \(body(patch.after))"
             }
