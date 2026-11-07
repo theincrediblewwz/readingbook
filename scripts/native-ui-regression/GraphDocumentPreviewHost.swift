@@ -139,11 +139,10 @@ private actor PreviewTransport {
     }
     func nodeTexts() -> [String] {
         let accessible = forceRaster ? [] : accessibilityTexts()
-        if !accessible.isEmpty { return accessible }
         refreshRaster()
         let nodes = nativeViews().compactMap { $0 as? GraphPointerBridge.PointerView }
             .filter { abs($0.bounds.width - 232) < 1 && abs($0.bounds.height - 100) < 1 && !$0.isHiddenOrHasHiddenAncestor }
-        return nodes.map { node in
+        return accessible + nodes.map { node in
             let frame = node.convert(node.bounds, to: host).insetBy(dx: -2, dy: -2)
             return rasterRows.filter { frame.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) }
                 .map(\.text).joined()
@@ -151,9 +150,8 @@ private actor PreviewTransport {
     }
     func texts() -> [String] {
         let accessible = forceRaster ? [] : accessibilityTexts()
-        if !accessible.isEmpty { return accessible }
         let groups = nodeTexts()
-        return rasterRows.map(\.text) + groups + [rasterRows.map(\.text).joined()]
+        return accessible + rasterRows.map(\.text) + groups + [rasterRows.map(\.text).joined()]
     }
     func hasText(_ text: String) -> Bool { texts().contains { comparable($0).contains(comparable(text)) } }
     func object(_ label: String) -> NSObject? {
@@ -258,6 +256,23 @@ private actor PreviewTransport {
         } while ProcessInfo.processInfo.systemUptime < deadline
         try check("eventSummaryVisible", false)
     }
+    func expandTimelineIfNeeded() async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 6
+        repeat {
+            host.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+            if timelineTrack() != nil { return }
+            if frame("展开时间卡片") != nil {
+                try await press("展开时间卡片")
+                repeat {
+                    if timelineTrack() != nil { return }
+                    try await Task.sleep(for: .milliseconds(30))
+                } while ProcessInfo.processInfo.systemUptime < deadline
+                break
+            }
+            try await Task.sleep(for: .milliseconds(30))
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        throw ReadingError.invalid("Timeline did not expand through its visible button")
+    }
     func show<V: View>(_ view: V) {
         host.rootView = AnyView(view.environmentObject(store).environmentObject(ReadingTypographySettings()).environment(\.readingReduceMotion, true))
     }
@@ -319,6 +334,7 @@ private actor PreviewTransport {
         store.route = "manual-map"; store.selectedObjectID = "question"; store.timeFrom = -4; store.timeTo = 6
         store.workspaceMemory.panels["map.timeline"] = .init(isPresented: true, collapsed: false)
         show(SpatialTimelineView())
+        try await expandTimelineIfNeeded()
         try await waitFor("eventTitleVisible", { self.hasText("王允问吕布") })
         try await waitFor("sourceActionVisible", { self.frame("回到原句") != nil })
         try await waitFor("participantsRetainDirectActions", { self.frame("参与者：吕布") != nil && self.frame("参与者：王允") != nil })
@@ -339,7 +355,7 @@ private actor PreviewTransport {
         try await waitFor("participantActionSelectsCanonicalPerson", { self.store.selectedTemporalEntityID == "lu" })
         window.setContentSize(CGSize(width: 820, height: 820))
         try await Task.sleep(for: .milliseconds(150))
-        if object("展开时间卡片") != nil || timelineTrack() == nil { try await press("展开时间卡片") }
+        try await expandTimelineIfNeeded()
         try await waitFor("narrowDetailsAndSourceStayInViewport", {
             let bounds = self.window.convertToScreen(self.host.convert(self.host.bounds, to: nil))
             return self.frame("回到原句").map { bounds.contains($0) && $0.height >= 40 } == true
