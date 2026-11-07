@@ -219,10 +219,6 @@ extension ReadingQuerySession {
         }
         return project
     }
-    mutating func recordSourceExcerpt(_ id: String, text: String) {
-        guard !text.isEmpty, !sourceExcerpts.contains(where: { $0.0 == id && $0.1.range(of: text, options: .literal) != nil }) else { return }
-        sourceExcerpts.append((id, text))
-    }
     mutating func recordReturnedEvidence(_ result: String) throws {
         guard let data = result.data(using: .utf8), let root = try? JSONSerialization.jsonObject(with: data) else { return }
         let sources = Dictionary(uniqueKeysWithValues: snapshot.sources.map { ($0.unitID, $0.text) })

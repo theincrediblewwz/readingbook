@@ -97,7 +97,7 @@ final class ReadingDiscoveryTests: XCTestCase {
         _ = try await query.execute(name: "source_read", arguments: ["id": "one", "length": 20], maximumBytes: 16000)
         _ = try await query.execute(name: "source_search", arguments: ["keywords": ["曹操"]], maximumBytes: 16000)
         XCTAssertEqual(query.sourceExcerpts.count, count)
-        XCTAssertTrue(query.hasOnlyPreloadedSources, "已完整提供的正文不能因重复返回又占一次收尾预算")
+        XCTAssertFalse(query.hasOnlyPreloadedSources, "实际读过正文后仍须严格检查引用；缓存去重不改变这项要求")
     }
     func testPartiallyReadSourceCanStillAddNewEvidenceButIdenticalReadDoesNotAccumulate() async throws {
         let book = try fixture(); var query = try session(book)

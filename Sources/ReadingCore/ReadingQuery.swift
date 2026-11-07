@@ -458,6 +458,14 @@ struct ReadingQuerySession {
     var hasOnlyPreloadedSources: Bool {
         sourceWasPreloaded && !modelRequestedSource && !sourceExcerpts.isEmpty && documentExcerpts.isEmpty && conversationExcerpts.isEmpty
     }
+    mutating func recordSourceExcerpt(_ id: String, text: String) {
+        guard !text.isEmpty else { return }
+        // Citation obligations reflect an actual read, even when the bytes
+        // were already supplied. Cache de-duplication is a separate concern.
+        modelRequestedSource = true
+        guard !sourceExcerpts.contains(where: { $0.0 == id && $0.1.range(of: text, options: .literal) != nil }) else { return }
+        sourceExcerpts.append((id, text))
+    }
     private var cache: [String: String] = [:]
     var documentHashes: [String: String] = [:]
     private var cachedBytes = 0
@@ -587,9 +595,11 @@ struct ReadingQuerySession {
 
     mutating func execute(name: String, arguments: [String: Any], maximumBytes: Int) async throws -> String {
         let before = (sourceExcerpts.count, documentExcerpts.count, conversationExcerpts.count)
+        let requestedBefore = modelRequestedSource
         let result = try await perform(name: name, arguments: arguments, maximumBytes: maximumBytes)
         guard result.utf8.count <= max(400, maximumBytes) else {
             sourceExcerpts.removeSubrange(before.0...); documentExcerpts.removeSubrange(before.1...); conversationExcerpts.removeSubrange(before.2...)
+            modelRequestedSource = requestedBefore
             return try json(["ok": false, "budgetLimited": true, "message": "本轮空间不足以返回完整结果，正文未提供给模型。"])
         }
         try recordReturnedEvidence(result)
