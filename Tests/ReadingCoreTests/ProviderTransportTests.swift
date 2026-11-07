@@ -51,6 +51,15 @@ final class ProviderTransportTests: XCTestCase {
         let result = try await ProviderClient.perform(prepared(), configuration: configuration())
         XCTAssertEqual(result.message.content, "完成"); XCTAssertEqual(result.tokenCost, 5)
     }
+    func testLengthStopExplainsOutputLimitInsteadOfImplyingUserCancellation() async {
+        FixtureProviderProtocol.chunks = [Data(#"{"choices":[{"message":{"role":"assistant","content":"不完整的提案"},"finish_reason":"length"}],"usage":{"total_tokens":20}}"#.utf8)]
+        do { _ = try await ProviderClient.perform(prepared(), configuration: configuration()); XCTFail("截断提案不能被提交") }
+        catch {
+            XCTAssertTrue(error.localizedDescription.contains("输出上限"))
+            XCTAssertTrue(error.localizedDescription.contains("结果未提交"))
+            XCTAssertFalse(error is CancellationError)
+        }
+    }
     func testAdvertisedOversizeRejectedBeforeDecode() async {
         FixtureProviderProtocol.responseHeaders = ["Content-Length": String(BoundedProviderResponse.maximumBytes + 1)]
         do { _ = try await ProviderClient.perform(prepared(), configuration: configuration()); XCTFail("超长声明应拒绝") }

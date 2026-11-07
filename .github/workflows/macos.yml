@@ -109,6 +109,8 @@ jobs:
         run: python3 scripts/native-ui-regression/run-collaboration-recovery.py --bin-dir .build/tests/debug --tag ci-collaboration-recovery
       - name: Native independent task budgets and repeated questions
         run: python3 scripts/native-ui-regression/run-task-budget.py --bin-dir .build/tests/debug --tag ci-task-budget
+      - name: Native request text and per-tool source details
+        run: python3 scripts/native-ui-regression/run-request-details.py --bin-dir .build/tests/debug --tag ci-request-details
       - name: Saved service profiles and credential association regression
         run: python3 scripts/native-ui-regression/run-service-profiles.py --bin-dir .build/tests/debug --tag ci-service-profiles
       - name: Native chat history presentation regression
@@ -195,6 +197,7 @@ jobs:
             logs/ai-collaboration-20261106/ci-collaboration-recovery
             logs/service-profiles-20261106/ci-service-profiles
             logs/ai-budget-20261106/ci-task-budget
+            logs/request-details-20261107/ci-request-details
           if-no-files-found: ignore
           retention-days: 3
       - name: Preserve failed dynamic component evidence

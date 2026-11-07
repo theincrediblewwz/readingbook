@@ -248,16 +248,21 @@ enum ReadingAnswerEngine {
                     let status = receipt?["status"] as? String
                     if receipt?["ok"] as? Bool == false || ["needs_confirmation", "busy", "unsupported", "failed"].contains(status ?? "") { session.lastComponentReceipt = nil }
                     progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count,
-                        toolSucceeded: receipt?["ok"] as? Bool != false && !["needs_confirmation", "busy", "unsupported", "failed"].contains(status ?? ""), toolStatus: status))
+                        toolSucceeded: receipt?["ok"] as? Bool != false && !["needs_confirmation", "busy", "unsupported", "failed"].contains(status ?? ""), toolStatus: status,
+                        toolTrace: progress == nil ? nil : AIToolTrace(arguments: call.function.arguments, result: result)))
                 } catch {
                     try QueryBudget.propagateControl(error)
                     session.lastComponentReceipt = nil
-                    if reportedStart { progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count, toolSucceeded: false)) }
                     let failure = String(error.localizedDescription.prefix(400))
                     toolFailures.append(failure); toolFailures = Array(toolFailures.suffix(4))
                     var receipt: [String: Any] = ["ok": false, "error": failure]
                     if call.function.name == "knowledge_changes_propose" { receipt["referenceGuide"] = ReadingProposalSchemas.referenceGuide(in: session.project ?? project) }
-                    result = String(decoding: try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys]), as: UTF8.self) }
+                    result = String(decoding: try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys]), as: UTF8.self)
+                    if reportedStart {
+                        progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count, toolSucceeded: false,
+                            toolTrace: progress == nil ? nil : AIToolTrace(arguments: call.function.arguments, result: result)))
+                    }
+                }
                 messages.append(["role": "tool", "tool_call_id": call.id, "content": result])
             }
             // Pure presentation needs no second model request to guess what the

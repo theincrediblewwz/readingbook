@@ -771,12 +771,14 @@ public actor AIReader {
                     if registry.definition(named: name)?.readOnly != true { changedTools.append(name) }
                     unresolvedErrors.remove(name)
                     if name == requiredTool { requiredSucceeded = true }
-                    progressHandler?(AIProgressEvent(.toolCompleted, toolName: name, toolIndex: callIndex + 1, toolTotal: calls.count, toolSucceeded: true, toolSummary: details.joined(separator: "\n")))
+                    progressHandler?(AIProgressEvent(.toolCompleted, toolName: name, toolIndex: callIndex + 1, toolTotal: calls.count, toolSucceeded: true, toolSummary: details.joined(separator: "\n"),
+                        toolTrace: progressHandler == nil ? nil : AIToolTrace(arguments: call.function.arguments, result: String(result.prefix(16_000)))))
                 } catch {
-                    if reportedStart { progressHandler?(AIProgressEvent(.toolCompleted, toolName: name, toolIndex: callIndex + 1, toolTotal: calls.count, toolSucceeded: false)) }
                     unresolvedErrors.insert(name)
                     result = try jsonString(["ok": false, "error": String(error.localizedDescription.prefix(1200)),
                                              "instruction": "修正此工具的参数并成功重试；未修复时不能结束。"])
+                    if reportedStart { progressHandler?(AIProgressEvent(.toolCompleted, toolName: name, toolIndex: callIndex + 1, toolTotal: calls.count, toolSucceeded: false,
+                        toolTrace: progressHandler == nil ? nil : AIToolTrace(arguments: call.function.arguments, result: String(result.prefix(16_000))))) }
                 }
                 messages.append(["role": "tool", "tool_call_id": call.id, "content": String(result.prefix(16_000))])
             }
@@ -868,8 +870,9 @@ public actor AIReader {
 
     private func performRequest(_ prepared: ProviderClient.Prepared) async throws -> ProviderClient.Result {
         let handler = progressHandler, requestID = UUID(), number = requestCount
+        let trace = handler == nil ? nil : AIRequestTrace.capture(prepared)
         currentRequestID = requestID
-        if coordinator == nil { handler?(AIProgressEvent(.waitingForResponse, requestID: requestID, requestNumber: number)) }
+        if coordinator == nil { handler?(AIProgressEvent(.waitingForResponse, requestID: requestID, requestNumber: number, requestTrace: trace)) }
         let observer: (@Sendable (ProviderStreamSnapshot) -> Void)?
         if let callback = handler {
             observer = { value in callback(AIProgressEvent(value.phase, requestID: requestID, requestNumber: number,
@@ -878,7 +881,7 @@ public actor AIReader {
         let result: ProviderClient.Result
         if let testTransport { result = try await testTransport(prepared) }
         else if let coordinator { result = try await coordinator.perform(prepared, lane: lane, run: requestRun, progress: observer, onStart: { sharedNumber in
-            handler?(AIProgressEvent(.waitingForResponse, requestID: requestID, requestNumber: sharedNumber))
+            handler?(AIProgressEvent(.waitingForResponse, requestID: requestID, requestNumber: sharedNumber, requestTrace: trace))
         }) }
         else { result = try await ProviderClient.perform(prepared, progress: observer) }
         try Task.checkCancellation()

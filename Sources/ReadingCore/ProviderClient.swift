@@ -206,7 +206,8 @@ enum ProviderClient {
         }
         guard message.refusal?.isEmpty != false else { throw ReadingError.invalid("模型拒绝本次请求，当前内容未计为已读。") }
         guard reason == "stop" || reason == "tool_calls" else {
-            let detail = reason == "length" ? "输出被截断" : "未正常结束（\(String(reason.prefix(40)))）"
+            if reason == "length" { throw ReadingError.invalid("模型输出被截断：已达到本次输出上限；这次结果未提交，已有内容保留。") }
+            let detail = "未正常结束（\(String(reason.prefix(40)))）"
             throw ReadingError.invalid("模型\(detail)，当前内容未计为已读。")
         }
         if let reported, !(0...4_194_304).contains(reported) { throw ReadingError.invalid("模型返回了无效或超出保护范围的 token 计数。") }
