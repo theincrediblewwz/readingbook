@@ -10,6 +10,8 @@
 
 后续本机SwiftPM命令带 `--cache-path /Users/wu/Code/readingbook/.build/swiftpm-cache`，模块缓存继续共用 `.build/shared-module-cache`。本轮仅将全局manifest缓存中实际输入为本项目Package.swift的91条迁回工作区，其他51条保持不变。
 
+停机验收后20:28:42正式程序再次启动，并追加1请求记录、1句译层与1锚点；原有Project值、原书和笔记完整保留，另有派生阅读文件/当前Workspace变化，非安装时的数据丢失。活动来源已询问、未确认；保持当前程序和新内容，勿为匹配旧SHA或验收时的地图route而恢复旧快照。追加证明见delivery66/post-delivery-additive-preservation.json。
+
 ---
 
 以下65及更早是历史接续快照，以顶部66为准。
