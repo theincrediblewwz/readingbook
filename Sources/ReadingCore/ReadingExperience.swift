@@ -154,6 +154,9 @@ public struct ReadingContext: Codable, Hashable, Sendable {
     /// An explicit, unit-local source click may supply its complete disposable
     /// anchor without first saving it. Native drag selections leave this nil.
     public var selectedSourceAnchor: SourceAnchor? = nil
+    /// A query-only, explicit multi-page/chapter choice. Ordinary cursor
+    /// movement and sentence selection never manufacture this permission.
+    public var queryRange: ReadingQueryRange? = nil
     public init(sourceHash: String? = nil, unitID: String? = nil, selectedAnchorID: String? = nil, selectedText: String? = nil, selectedPrefix: String? = nil, selectedSuffix: String? = nil, objectID: String? = nil, documentID: String? = nil, page: Int? = nil, startYear: Int? = nil, endYear: Int? = nil, timeFrom: Double? = nil, timeTo: Double? = nil, selectionEndPage: Int? = nil, selectedSourceAnchor: SourceAnchor? = nil) {
         self.sourceHash = sourceHash; self.unitID = unitID; self.selectedAnchorID = selectedAnchorID
         self.selectedText = selectedText; self.objectID = objectID; self.documentID = documentID; self.page = page

@@ -80,7 +80,8 @@ actor QueryMemoryFiles {
         guard let original = book, !original.chats.isEmpty else { return QueryMemoryDisplay() }
         let key = queryMemoryPreparationKey, preferences = currentQueryPreferences
         let project: BookProject
-        do { project = key.scope == .chapter ? try await ensureBookChapterOutline(project: original) : original }
+        do { project = key.scope == .chapter || (key.scope == .range && key.context.queryRange?.kind == .chapters)
+            ? try await ensureBookChapterOutline(project: original) : original }
         catch { return QueryMemoryDisplay() }
         guard !Task.isCancelled, bookID == original.id, libraryRootURL == key.root else { return QueryMemoryDisplay() }
         let worker = Task.detached(priority: .userInitiated) { () throws -> (ReadingQuerySnapshot, [ChatMessage])? in

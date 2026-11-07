@@ -6,6 +6,9 @@ import FoundationNetworking
 /// Stop while receiving, rather than buffering an unbounded body before checking its size.
 final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     static let maximumBytes = 4 * 1024 * 1024
+    /// SSE repeats protocol fields for every tiny delta. Bound that traffic
+    /// separately; the decoder still bounds the assembled payload at 4 MiB.
+    static let maximumStreamingBytes = 64 * 1024 * 1024
     static let maximumErrorBytes = 16 * 1024
     private let lock = NSLock()
     private var continuation: CheckedContinuation<(Data, URLResponse), Error>?
@@ -14,6 +17,8 @@ final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecke
     private var failureResponse: HTTPURLResponse?
     private var failureDeadline: DispatchWorkItem?
     private var data = Data()
+    private var receivedBytes = 0
+    private var consumesStream = false
     private var terminal = false
     private let onResponse: (@Sendable (HTTPURLResponse) -> Void)?
     private let onHeaders: (@Sendable (HTTPURLResponse) -> Void)?
@@ -82,12 +87,14 @@ final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecke
             if active { DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(250), execute: deadline) }
             completionHandler(active ? .allow : .cancel); return
         }
-        guard response.expectedContentLength <= Int64(Self.maximumBytes) else {
-            finish(error: ReadingError.invalid("模型响应超过 4 MiB 限制。")); completionHandler(.cancel); return
+        let consumesStream = onChunk != nil && http.mimeType?.lowercased() == "text/event-stream"
+        let maximum = consumesStream ? Self.maximumStreamingBytes : Self.maximumBytes
+        guard response.expectedContentLength <= Int64(maximum) else {
+            finish(error: ReadingError.invalid(consumesStream ? "模型流式传输超过 64 MiB 限制，当前结果未提交。" : "模型响应超过 4 MiB 限制。")); completionHandler(.cancel); return
         }
         lock.lock()
         let active = !terminal
-        if active { self.response = response }
+        if active { self.response = response; self.consumesStream = consumesStream }
         lock.unlock()
         if active { onResponse?(http) }
         completionHandler(active ? .allow : .cancel)
@@ -96,16 +103,22 @@ final class BoundedProviderResponse: NSObject, URLSessionDataDelegate, @unchecke
         lock.lock()
         guard !terminal else { lock.unlock(); return }
         let failing = failureResponse != nil
-        let maximum = failing ? Self.maximumErrorBytes : Self.maximumBytes
-        let overflow = chunk.count > maximum - data.count
+        let maximum = failing ? Self.maximumErrorBytes : consumesStream ? Self.maximumStreamingBytes : Self.maximumBytes
+        let used = failing ? data.count : receivedBytes
+        let overflow = chunk.count > maximum - used
         if failing { data.append(chunk.prefix(maximum - data.count)) }
-        else if !overflow { data.append(chunk) }
+        else if !overflow {
+            receivedBytes += chunk.count
+            // Parsed SSE is never decoded from the raw body again. Avoid
+            // retaining a second copy of all protocol envelopes in memory.
+            if !consumesStream { data.append(chunk) }
+        }
         let reachedErrorLimit = failing && data.count == Self.maximumErrorBytes
         lock.unlock()
         if failing {
             if overflow || reachedErrorLimit { finishHTTPFailure() }
         }
-        else if overflow { finish(error: ReadingError.invalid("模型响应超过 4 MiB 限制。")) }
+        else if overflow { finish(error: ReadingError.invalid(consumesStream ? "模型流式传输超过 64 MiB 限制，当前结果未提交。" : "模型响应超过 4 MiB 限制。")) }
         else { do { try onChunk?(chunk) } catch { finish(error: error) } }
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {

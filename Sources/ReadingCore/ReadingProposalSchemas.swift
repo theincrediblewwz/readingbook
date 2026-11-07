@@ -40,10 +40,18 @@ public enum ReadingProposalTools {
 enum ReadingProposalSchemas {
     static func referenceGuide(in project: BookProject) -> [String: Any] {
         let ids = Set(project.types.map(\.id)).sorted()
-        return ["knownTypeIDs": Array(ids.prefix(24)), "typesTruncated": ids.count > 24,
+        var value: [String: Any] = ["knownTypeIDs": Array(ids.prefix(24)), "typesTruncated": ids.count > 24,
                 "typeLookup": "book_schema_get(section:types)，按offset/limit分页读取完整类型。",
                 "eventMetadataTypeID": "可省略；填写时须为本书已定义或本批明确新增的类型ID。对象kind为event不代表存在名为event的类型。",
-                "newTypes": "新增类型须同时提供types与newTypeIDs；已有对象复用稳定id，不把类型名称当作ID。"]
+                "newTypes": "新增类型须同时提供types与newTypeIDs；已有对象复用稳定id，不把类型名称当作ID。",
+                "propertiesRule": "实体properties只用对应类型的fields.key，不能用中文label或自造字段；没有合适字段时写summary，properties用空对象。"]
+        var fields = project.types.prefix(24).map { ["typeID": $0.id, "keys": Array($0.fields.prefix(16).map(\.key))] as [String: Any] }
+        while true {
+            value["entityPropertyFields"] = fields
+            value["propertyFieldsPartial"] = fields.count < project.types.count || project.types.prefix(fields.count).contains { $0.fields.count > 16 }
+            if (try? JSONSerialization.data(withJSONObject: value).count) ?? Int.max <= 4000 || fields.isEmpty { return value }
+            fields.removeLast()
+        }
     }
 
     static func object(_ fields: [String: Any], required: [String]? = nil) -> [String: Any] {
@@ -55,7 +63,12 @@ enum ReadingProposalSchemas {
     static let number: [String: Any] = ["type": "number"]
     static let integer: [String: Any] = ["type": "integer"]
     static let strings: [String: Any] = ["type": "object", "additionalProperties": ["type": "string"], "maxProperties": 64]
-    static var evidence: [String: Any] { object(["unitID": id, "quote": text(32_768)]) }
+    static var evidence: [String: Any] {
+        var result = object(["unitID": id, "quote": text(32_768), "sourceRef": id], required: [])
+        result["description"] = "优先仅传已提供原文的sourceRef，由宿主填回原句；否则传unitID与逐字quote。两种形式不混用。"
+        result["oneOf"] = [["required": ["sourceRef"]], ["required": ["unitID", "quote"]]]
+        return result
+    }
     static var type: [String: Any] { object(["id": id, "name": text(400), "icon": text(128), "fields": array(object(["key": id, "label": text(400), "required": ["type": "boolean"]]))]) }
     static var entity: [String: Any] {
         object(["id": id, "typeID": id, "name": text(400), "summary": text(32_768), "properties": strings, "aliases": array(text(400)), "latitude": number, "longitude": number, "locationNote": text(), "evidence": array(evidence)],
@@ -92,7 +105,7 @@ enum ReadingProposalSchemas {
     static var provenance: [String: Any] { object(["label": text(), "url": text(), "workTitle": text(), "locator": text()], required: ["label"]) }
     static var knowledge: [String: Any] {
         object(["newTypeIDs": array(id), "newEntityIDs": array(id), "newEventIDs": array(id), "newRelationIDs": array(id), "types": array(type), "entities": array(entity), "events": array(event), "relations": array(relation),
-            "anchors": array(object(["clientID": id, "unitID": id, "quote": text(32_768), "prefix": text(1000), "suffix": text(1000)], required: ["clientID", "unitID", "quote"])),
+            "anchors": array(object(["clientID": id, "unitID": id, "quote": text(32_768), "prefix": text(1000), "suffix": text(1000), "sourceRef": id], required: ["clientID"])),
             "presences": array(presence), "participations": array(participation), "eventMetadata": array(eventMetadata), "relationMetadata": array(relationMetadata),
             "layers": array(object(["id": id, "kind": text(80), "title": text(400), "markdown": text(128_000), "sourceAnchorIDs": array(id), "sourceLabel": text(), "parallelGroupID": id, "provenance": provenance], required: ["id", "kind", "title", "markdown", "sourceAnchorIDs", "sourceLabel"])),
             "alignments": array(object(["id": id, "sourceAnchorIDs": array(id), "title": text(400), "markdown": text(128_000), "provenance": provenance, "status": text(80)], required: ["id", "sourceAnchorIDs", "title", "markdown", "status"]))], required: [])

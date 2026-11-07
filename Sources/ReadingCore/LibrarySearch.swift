@@ -86,6 +86,26 @@ public enum LibraryTextSearch {
     }
     private struct Found { let range: Range<String.Index>; let query: String }
 
+    /// Reuse the reader search's script matching and original-string mapping
+    /// for model tools. Compile terms once for the entire frozen scope.
+    struct Matcher {
+        private var canonicalizer = LibrarySearchCanonicalizer()
+        private var terms: [Term]
+        init(queries: [String]) throws {
+            var canonicalizer = LibrarySearchCanonicalizer()
+            terms = try queries.map { try LibraryTextSearch.term($0, canonicalizer: &canonicalizer) }
+            self.canonicalizer = canonicalizer
+        }
+        mutating func ranges(in text: String) throws -> [Range<String.Index>] {
+            let mapped = terms.contains(where: { !$0.canonical.isEmpty })
+                ? try LibrarySearchMappedText(text, canonicalizer: &canonicalizer) : nil
+            return try terms.compactMap { term in
+                try LibraryTextSearch.next(in: text, remaining: text.startIndex..<text.endIndex,
+                    terms: [term], mapped: mapped, canonicalizer: &canonicalizer)?.range
+            }
+        }
+    }
+
     /// Offline script/case/width equivalence over original strings. A temporary
     /// character-boundary map keeps returned quotes and UTF-16 offsets exact.
     /// Contextual ICU phrase variants supplement, but do not promise all synonyms.

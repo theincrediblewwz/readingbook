@@ -3,9 +3,9 @@ import CoreFoundation
 
 /// A query boundary, not a relevance hint. Extra notes/layout are explicit host capabilities.
 public enum ReadingQueryScope: String, Codable, CaseIterable, Hashable, Sendable {
-    case selection, page, readSoFar, chapter, book, notes
+    case selection, page, readSoFar, chapter, range, book, notes
     public var title: String {
-        switch self { case .selection: return "选中内容"; case .page: return "当前页"; case .readSoFar: return "读到这里"; case .chapter: return "当前章节"; case .book: return "全书原文"; case .notes: return "我的笔记" }
+        switch self { case .selection: return "选中内容"; case .page: return "当前页"; case .readSoFar: return "读到这里"; case .chapter: return "当前章节"; case .range: return "指定范围"; case .book: return "全书原文"; case .notes: return "我的笔记" }
     }
 }
 
@@ -216,6 +216,20 @@ public struct ReadingQuerySnapshot: Sendable {
                     canonicalTextHash: try BookImporter.sha256(Data(unit.text.utf8)))
             }
             title += " · " + chapter.title
+        case .range:
+            guard let choice = context?.queryRange else { throw ReadingError.invalid("请先选择本次提问的起止页码或章节。") }
+            let selected = try choice.resolve(in: project)
+            let byID = Dictionary(ordered.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            chapterRanges = selected.ranges
+            selectedSlices = try selected.ranges.map { range in
+                try Task.checkCancellation()
+                guard let unit = byID[range.unitID] else { throw ReadingError.invalid("所选范围的原文不存在。") }
+                let text = try range.text(in: unit)
+                return QuerySourceSlice(unitID: unit.id, locator: unit.locator, chapter: unit.chapter, text: text,
+                    textHash: try BookImporter.sha256(Data(text.utf8)), sourceRange: range,
+                    canonicalTextHash: try BookImporter.sha256(Data(unit.text.utf8)))
+            }
+            title += " · " + selected.title
         case .book: units = ordered
         case .notes:
             let active = project.activeDocuments
@@ -435,6 +449,7 @@ struct ReadingQuerySession {
     var lastComponentReceipt: String?
     var taskCreatedNodeIDs = Set<String>()
     var sourceExcerpts: [(String, String)] = []
+    var sourceReferences: [String: Evidence] = [:]
     private var sourceWasPreloaded = false
     private var modelRequestedSource = false
     var documentExcerpts: [(String, String)] = []
@@ -464,8 +479,31 @@ struct ReadingQuerySession {
     /// The reader explicitly chose this page/selection. Supply a bounded,
     /// source-labelled excerpt before asking the model, rather than relying on
     /// it to discover and call a read tool before understanding "this page".
-    /// Wide scopes and notes keep their existing on-demand capabilities.
+    /// An explicit bounded range may be supplied in full if its entire encoded
+    /// body fits. Large ranges/book/notes keep on-demand reads; there is no
+    /// arbitrary subset masquerading as the chosen range.
     mutating func initialSource(maximumBytes: Int) throws -> String? {
+        if snapshot.scope == .range {
+            guard maximumBytes >= 512 else { return nil }
+            var rows: [[String: Any]] = [], bytes = try json(["actualReadFragments": [], "hostToolReceipts": []]).utf8.count
+            for source in snapshot.sources {
+                try Task.checkCancellation()
+                guard source.text.utf8.count <= maximumBytes - bytes else { return nil }
+                var row: [String: Any] = ["kind": "unit", "id": source.unitID, "hash": source.textHash, "locator": source.locator,
+                    "text": source.text, "fragmentTruncated": false]
+                if source.text.count <= 32_768 { row["sourceRef"] = try sourceReferenceID(unitID: source.unitID, text: source.text) }
+                let added = try json(row).utf8.count + (rows.isEmpty ? 0 : 1)
+                guard added <= maximumBytes - bytes else { return nil }
+                bytes += added; rows.append(row)
+            }
+            let full = try json(["actualReadFragments": rows, "hostToolReceipts": []])
+            guard full.utf8.count <= maximumBytes else { return nil }
+            sourceExcerpts = snapshot.sources.map { ($0.unitID, $0.text) }; sourceWasPreloaded = !sourceExcerpts.isEmpty
+            for source in snapshot.sources where source.text.count <= 32_768 {
+                sourceReferences[try sourceReferenceID(unitID: source.unitID, text: source.text)] = Evidence(unitID: source.unitID, quote: source.text)
+            }
+            return full
+        }
         guard snapshot.scope == .page || snapshot.scope == .selection, maximumBytes >= 512 else { return nil }
         var candidate = self
         candidate.sourceExcerpts = snapshot.sources.prefix(32).reversed().map { ($0.unitID, $0.text) }
@@ -537,7 +575,7 @@ struct ReadingQuerySession {
         let reading: [String: Any] = ["id": string, "offset": offset, "length": ["type": "integer", "minimum": 1, "maximum": 12000], "expectedHash": string]
         return [
             tool("source_outline", "仅列当前冻结范围内原文单元索引，并非PDF书签目录；nextOffset分页。索引不代表正文已读。", paging),
-            tool("source_search", "检索当前范围原文，1至8关键词any/all；返回有界实际片段和定位，范围外无法读取。", search, ["keywords"]),
+            tool("source_search", "检索当前范围原文，自动简繁互搜，1至8关键词any/all；返回有界原文字形和定位，范围外无法读取。", search, ["keywords"]),
             tool("source_read", "按目录id/字符offset分段读取当前范围原文；选段范围只返回选段，按nextOffset续读，不增加阅读覆盖。", reading, ["id"]),
             tool("documents_list", "只列本次显式授权的笔记目录；原文范围不会自动附加笔记。目录不是正文。", paging),
             tool("documents_search", "按需检索已授权笔记全文，每批最多32篇，nextScanOffset续查后续文档，offset只在本批命中中分页；笔记不能冒充原书。", documentSearch, ["keywords"]),
@@ -571,27 +609,25 @@ struct ReadingQuerySession {
             let id = try identifier(arguments)
             guard let source = snapshot.sources.first(where: { $0.unitID == id }) else { throw invalid("原文ID不在本次冻结范围内。") }
             try checkHash(arguments, actual: source.textHash)
-            let slice = try readSlice(source.text, arguments, cap)
+            let slice = try readSlice(source.text, arguments, cap, metadata: ["ok": true, "id": id, "locator": source.locator, "hash": source.textHash, "scope": snapshot.scope.rawValue])
             if !slice.text.isEmpty { sourceExcerpts.append((id, slice.text)) }
-            return try json(["ok": true, "id": id, "locator": source.locator, "hash": source.textHash, "offset": slice.start,
-                "totalCharacters": source.text.count, "text": slice.text, "nextOffset": slice.next as Any? ?? NSNull(), "scope": snapshot.scope.rawValue])
+            return slice.result
         case "document_read":
             let id = try identifier(arguments)
             guard let document = snapshot.documents.first(where: { $0.id == id }) else { throw invalid("文档ID不在本次授权笔记范围内。") }
-            let body = try await load(document), slice = try readSlice(body, arguments, cap)
+            let body = try await load(document)
             try checkHash(arguments, actual: documentHashes[id] ?? "")
+            let slice = try readSlice(body, arguments, cap, metadata: ["ok": true, "id": id, "title": document.title, "origin": document.origin, "hash": documentHashes[id] ?? ""])
             if !slice.text.isEmpty { documentExcerpts.append((id, slice.text)) }
-            return try json(["ok": true, "id": id, "title": document.title, "origin": document.origin, "hash": documentHashes[id] ?? "",
-                "offset": slice.start, "totalCharacters": body.count, "text": slice.text, "nextOffset": slice.next as Any? ?? NSNull()])
+            return slice.result
         case "conversation_read":
             if arguments["id"] == nil { return try page(history.map { ["id": $0.id, "role": $0.role, "characters": $0.content.count] as [String: Any] }, arguments, cap) }
             let id = try identifier(arguments)
             guard let message = history.first(where: { $0.id == id }) else { throw invalid("消息不在当前会话内。") }
             try checkHash(arguments, actual: BookImporter.sha256(Data(message.content.utf8)))
-            let slice = try readSlice(message.content, arguments, cap)
+            let slice = try readSlice(message.content, arguments, cap, metadata: ["ok": true, "id": id, "role": message.role, "hash": BookImporter.sha256(Data(message.content.utf8))])
             if !slice.text.isEmpty { conversationExcerpts.append((id, slice.text)) }
-            return try json(["ok": true, "id": id, "role": message.role, "hash": BookImporter.sha256(Data(message.content.utf8)),
-                "offset": slice.start, "totalCharacters": message.content.count, "text": slice.text, "nextOffset": slice.next as Any? ?? NSNull()])
+            return slice.result
         case "source_search", "documents_search", "conversation_search":
             return try await search(name: name, arguments: arguments, cap: cap)
         default: return try await executeExtended(name: name, arguments: arguments, maximumBytes: cap)
@@ -623,34 +659,35 @@ struct ReadingQuerySession {
         let all = arguments["mode"] as? String == "all"
         var hits: [[String: Any]] = [], total = 0, failures = 0, scanned = 0
         var nextScan: Int?, scanStart = 0
-        func match(_ text: String) -> (Int, String)? {
-            let matches = terms.compactMap { text.range(of: $0, options: .caseInsensitive) }
+        var matcher = try LibraryTextSearch.Matcher(queries: terms)
+        func match(_ text: String) throws -> (Int, String)? {
+            let matches = try matcher.ranges(in: text)
             guard !matches.isEmpty, !all || matches.count == terms.count,
                   let first = matches.min(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
             let start = text.index(first.lowerBound, offsetBy: -70, limitedBy: text.startIndex) ?? text.startIndex
             let end = text.index(start, offsetBy: 320, limitedBy: text.endIndex) ?? text.endIndex
             return (text.distance(from: text.startIndex, to: start), String(text[start..<end]))
         }
-        func add(_ id: String, _ text: String, _ metadata: [String: Any]) {
-            guard let (start, snippet) = match(text) else { return }
+        func add(_ id: String, _ text: String, _ metadata: [String: Any]) throws {
+            guard let (start, snippet) = try match(text) else { return }
             defer { total += 1 }
             guard total >= offset, hits.count < limit else { return }
             var value = metadata; value["id"] = id; value["offset"] = start; value["snippet"] = snippet
             hits.append(value)
         }
         if name == "source_search" {
-            for source in snapshot.sources { try Task.checkCancellation(); add(source.unitID, source.text, ["locator": source.locator, "hash": source.textHash]) }
+            for source in snapshot.sources { try Task.checkCancellation(); try add(source.unitID, source.text, ["locator": source.locator, "hash": source.textHash]) }
         } else if name == "documents_search" {
             scanStart = try number(arguments, "scanOffset", fallback: 0, maximum: snapshot.documents.count)
             let batch = Array(snapshot.documents.dropFirst(scanStart).prefix(32))
             if scanStart + batch.count < snapshot.documents.count { nextScan = scanStart + batch.count }
             for document in batch {
                 try Task.checkCancellation()
-                do { let text = try await load(document); scanned += 1; add(document.id, text, ["title": document.title, "origin": document.origin, "hash": documentHashes[document.id] ?? ""]) }
+                do { let text = try await load(document); scanned += 1; try add(document.id, text, ["title": document.title, "origin": document.origin, "hash": documentHashes[document.id] ?? ""]) }
                 catch { try QueryBudget.propagateControl(error); failures += 1 }
             }
         } else {
-            for message in history { try Task.checkCancellation(); add(message.id, message.content, ["role": message.role, "hash": try BookImporter.sha256(Data(message.content.utf8))]) }
+            for message in history { try Task.checkCancellation(); try add(message.id, message.content, ["role": message.role, "hash": try BookImporter.sha256(Data(message.content.utf8))]) }
         }
         while !hits.isEmpty {
             if try json(["hits": hits]).utf8.count <= cap - 450 { break }
@@ -680,20 +717,33 @@ struct ReadingQuerySession {
         return try json(["ok": true, "items": selected, "total": rows.count, "nextOffset": !selected.isEmpty && offset + selected.count < rows.count ? (offset + selected.count) as Any : NSNull(),
             "budgetLimited": selected.isEmpty && offset < rows.count, "bodyProvided": false])
     }
-    private func readSlice(_ text: String, _ args: [String: Any], _ cap: Int) throws -> (text: String, start: Int, next: Int?) {
+    private func readSlice(_ text: String, _ args: [String: Any], _ cap: Int, metadata: [String: Any]) throws -> (text: String, result: String) {
         let offset = try number(args, "offset", fallback: 0, maximum: text.count)
         let length = try number(args, "length", fallback: 3000, maximum: 12000)
         guard length > 0 else { throw invalid("length须为1至12000。") }
         let start = text.index(text.startIndex, offsetBy: offset)
-        // JSON escaping can expand a byte sixfold. Reserve metadata and never slice serialized JSON.
-        let available = max(1, (cap - 600) / 6)
-        var end = start, used = 0, count = 0
-        while end < text.endIndex && count < length {
-            let next = text.index(after: end), size = text[end..<next].utf8.count
-            if used + size > available { break }; used += size; count += 1; end = next
+        let end = text.index(start, offsetBy: length, limitedBy: text.endIndex) ?? text.endIndex
+        let candidate = String(text[start..<end]), count = candidate.count, total = text.count
+        func response(_ size: Int) throws -> (text: String, result: String) {
+            let excerpt = String(candidate.prefix(size))
+            var row = metadata; row["offset"] = offset; row["totalCharacters"] = total; row["text"] = excerpt
+            row["nextOffset"] = offset + size < total ? offset + size as Any : NSNull()
+            return (excerpt, try json(row))
         }
-        guard end > start || start == text.endIndex else { throw invalid("剩余空间不足以返回完整字符，未读取。") }
-        return (String(text[start..<end]), offset, end < text.endIndex ? offset + count : nil)
+        // Measure the complete wire envelope, including metadata, escaping and
+        // nextOffset. Never shorten serialized JSON or split a grapheme.
+        let full = try response(count)
+        if full.result.utf8.count <= cap { return full }
+        var low = 0, high = count
+        while low < high {
+            try Task.checkCancellation()
+            let middle = low + (high - low + 1) / 2
+            if try response(middle).result.utf8.count <= cap { low = middle } else { high = middle - 1 }
+        }
+        guard low > 0 || start == text.endIndex else { throw invalid("剩余空间不足以返回完整字符与定位信息，未读取。") }
+        let bounded = try response(low)
+        guard bounded.result.utf8.count <= cap else { throw invalid("剩余空间不足以返回定位信息，未读取。") }
+        return bounded
     }
     func identifier(_ args: [String: Any]) throws -> String {
         guard let id = args["id"] as? String, !id.isEmpty, id.count <= 400 else { throw invalid("请提供合法ID。") }; return id

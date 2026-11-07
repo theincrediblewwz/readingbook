@@ -32,7 +32,8 @@ import ReadingCore
                 smartReadingPlanReady = false
                 queryInteractionMode = UserDefaults.standard.string(forKey: "chat-mode-" + (bookID ?? "")).flatMap(ReadingConversationMode.init(rawValue:)) ?? .reading
                 queryAnswerStyle = UserDefaults.standard.string(forKey: "chat-style-" + (bookID ?? "")).flatMap(ReadingAnswerStyle.init(rawValue:)) ?? .mentor
-                if queryScope == .selection { queryScope = .page }
+                querySourceRange = nil
+                if queryScope == .selection || queryScope == .range { queryScope = .page }
             }
         }
     }
@@ -88,6 +89,7 @@ import ReadingCore
     @Published var readingScopeCurrent = false
     @Published var lastQuestionContext = ""
     @Published var queryScope: ReadingQueryScope = .page
+    @Published var querySourceRange: ReadingQueryRange?
     /// nil means all active notes; an empty set is an explicit empty selection.
     @Published var queryDocumentIDs: Set<String>?
     /// Added only by the reader's explicit attachment controls; never inferred from visibility.
@@ -243,7 +245,7 @@ import ReadingCore
     }
     @Published var catalogOperations = 0
     @Published var libraryRootURL: URL {
-        didSet { if oldValue != libraryRootURL { readingComponentView = nil; currentBookRevision &+= 1; cancelPositionNoteForSourceChange(); readerEditUndo.clear(); positionNoteOpenID = nil; auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); questionSuggestions.reset(); queryReferencedAnswerIDs = []; companionReferencedAnswerIDs = []; positionNoteBinding = nil; queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false; queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
+        didSet { if oldValue != libraryRootURL { readingComponentView = nil; querySourceRange = nil; if queryScope == .range { queryScope = .page }; currentBookRevision &+= 1; cancelPositionNoteForSourceChange(); readerEditUndo.clear(); positionNoteOpenID = nil; auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); questionSuggestions.reset(); queryReferencedAnswerIDs = []; companionReferencedAnswerIDs = []; positionNoteBinding = nil; queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false; queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
     }
     @Published var lastTrashedProjectURL: URL?
     let storageState = StorageSettingsState()
@@ -603,7 +605,8 @@ import ReadingCore
             do {
                 try Task.checkCancellation()
                 guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { throw CancellationError() }
-                let requestProject = scope == .chapter ? try await ensureBookChapterOutline(project: current) : current
+                let requestProject = scope == .chapter || (scope == .range && context.queryRange?.kind == .chapters)
+                    ? try await ensureBookChapterOutline(project: current) : current
                 let worker = Task.detached(priority: .userInitiated) {
                     try ReadingPreparedAnswer.freeze(project: requestProject, scope: scope, context: context,
                         documentIDs: documentIDs, appendedDocumentIDs: attachedDocumentIDs,

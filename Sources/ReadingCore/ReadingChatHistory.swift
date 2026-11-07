@@ -15,7 +15,8 @@ public struct ReadingChatContext: Codable, Hashable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let saved = try values.decode(ReadingQueryScope.self, forKey: .scope)
         let policy = try values.decodeIfPresent(String.self, forKey: .rangePolicy)
-        scope = saved == .book && policy == "throughCurrentPage" ? .readSoFar : saved
+        scope = saved == .book && policy == "throughCurrentPage" ? .readSoFar
+            : saved == .selection && policy == "explicitSourceRange" ? .range : saved
         sourceHash = try values.decode(String.self, forKey: .sourceHash)
         scopeFingerprint = try values.decode(String.self, forKey: .scopeFingerprint)
         unitIDs = try values.decode([String].self, forKey: .unitIDs)
@@ -27,8 +28,9 @@ public struct ReadingChatContext: Codable, Hashable, Sendable {
         // Older installed versions can still open the library after rollback.
         // The exact frozen unit IDs/hashes remain the authority, never this
         // label. New clients recover the finer policy from an additive field.
-        try values.encode(scope == .readSoFar ? ReadingQueryScope.book : scope, forKey: .scope)
+        try values.encode(scope == .readSoFar ? ReadingQueryScope.book : scope == .range ? .selection : scope, forKey: .scope)
         if scope == .readSoFar { try values.encode("throughCurrentPage", forKey: .rangePolicy) }
+        if scope == .range { try values.encode("explicitSourceRange", forKey: .rangePolicy) }
         try values.encode(sourceHash, forKey: .sourceHash)
         try values.encode(scopeFingerprint, forKey: .scopeFingerprint)
         try values.encode(unitIDs, forKey: .unitIDs)
@@ -44,7 +46,7 @@ public struct ReadingChatContext: Codable, Hashable, Sendable {
         // fingerprint. A new question/request never invalidates its own history.
         scopeFingerprint = try Self.fingerprint(scope: snapshot.scope, sourceHash: snapshot.sourceHash,
             sources: snapshot.sources.map { ($0.unitID, $0.textHash) }, documents: snapshot.documents,
-            ranges: [.selection, .chapter].contains(snapshot.scope) ? snapshot.sources.compactMap(\.sourceRange) : nil)
+            ranges: [.selection, .chapter, .range].contains(snapshot.scope) ? snapshot.sources.compactMap(\.sourceRange) : nil)
     }
 
     fileprivate static func fingerprint(scope: ReadingQueryScope, sourceHash: String,
@@ -103,7 +105,7 @@ public enum ReadingChatHistory {
             }
             // A historic slice cannot be reconstructed from unit IDs alone.
             // Exact same-slice context is checked separately below.
-            guard context.scope != .selection else { currentVersions[context] = false; return false }
+            guard context.scope != .selection, context.scope != .range else { currentVersions[context] = false; return false }
             var sources: [(String, String)] = []
             for id in context.unitIDs {
                 guard !Task.isCancelled, let matches = unitsByID[id], matches.count == 1, let unit = matches.first else { return false }
@@ -127,7 +129,7 @@ public enum ReadingChatHistory {
                   Set(context.unitIDs).count == context.unitIDs.count, context.documentIDs.count <= 1024,
                   Set(context.documentIDs).count == context.documentIDs.count,
                   Set(context.documentIDs).isSubset(of: documents) else { return false }
-            if current.scope == .selection || current.scope == .chapter || current.scope == .notes {
+            if current.scope == .selection || current.scope == .chapter || current.scope == .range || current.scope == .notes {
                 return context.scopeFingerprint == current.scopeFingerprint
             }
             guard sameVersion(context) else { return false }

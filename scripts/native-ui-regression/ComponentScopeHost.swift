@@ -147,6 +147,16 @@ private actor ScopeTransport {
         try await ask(.readSoFar)
         try check("readSoFarIncludesWholeCurrentPage", Set(store.componentDataBook?.entities.map(\.id) ?? []) == ["liu", "guan", "zhang"])
         try check("readSoFarExcludesFuture", !store.temporalEvents.contains { $0.object.id == "event-u3" })
+        store.querySourceRange = .init(pageStart: 2, pageEnd: 3)
+        try await ask(.range, moveCursorAfterSend: true)
+        try check("explicitRangeQuestionIsFrozen", store.activeComponentView?.snapshot?.scope == .range && Set(store.activeComponentView?.snapshot?.unitIDs ?? []) == ["u2", "u2b", "u3"])
+        try check("explicitRangeObjectsAreExact", Set(store.componentDataBook?.entities.map(\.id) ?? []) == ["guan", "zhang", "cao"])
+        try check("explicitRangeTemporalEventsAreExact", Set(store.temporalEvents.map(\.object.id)) == ["event-u2", "event-u2b", "event-u3"])
+        let rangeRecords = await transport.allRecords()
+        let rangeMessages = rangeRecords.last?["messages"] as? [[String: Any]] ?? []
+        let providedSource = rangeMessages.compactMap { $0["content"] as? String }.first { $0.contains("actualReadFragments") && $0.contains("sourceRef") } ?? ""
+        try check("explicitRangeSuppliesWholeChosenTextOnce", providedSource.contains("关羽来到这里") && providedSource.contains("张飞来到这里") && providedSource.contains("曹操来到这里") && !providedSource.contains("刘备来到这里"))
+        try check("rangeCursorMoveDoesNotExpandComponent", store.selectedUnitID == "u1" && store.componentDataBook?.units.contains(where: { $0.id == "u1" }) == false)
         try await ask(.book, composition: true)
         guard let view = store.book?.views.first(where: { $0.rendererID == "reading.composition" }), let definition = view.composition,
               let snapshot = store.activeComponentView?.snapshot else { throw ReadingError.invalid("组合组件未创建。") }
@@ -181,13 +191,17 @@ private actor ScopeTransport {
         store.books = [saved]; store.bookID = saved.id; store.readingComponentView = nil
         try store.installComponentView(route: scopedRoute, snapshot: try ReadingQuerySnapshot.freeze(scope: .book, in: saved), context: nil)
         let previousRoot = store.libraryRootURL
+        store.querySourceRange = .init(pageStart: 2, pageEnd: 3); store.queryScope = .range
         store.libraryRootURL = output.appendingPathComponent("other-library")
         try check("libraryChangeClearsScope", store.readingComponentView == nil)
+        try check("libraryChangeClearsExplicitQueryRange", store.querySourceRange == nil && store.queryScope == .page)
         store.libraryRootURL = previousRoot
         var other = saved; other.id = "other-book"; store.books.append(other)
         try store.installComponentView(route: scopedRoute, snapshot: try ReadingQuerySnapshot.freeze(scope: .book, in: saved), context: nil)
+        store.querySourceRange = .init(pageStart: 2, pageEnd: 3); store.queryScope = .range
         store.bookID = other.id
         try check("bookChangeClearsScope", store.readingComponentView == nil)
+        try check("bookChangeClearsExplicitQueryRange", store.querySourceRange == nil && store.queryScope == .page)
         store.bookID = saved.id; store.selectedUnitID = "u2"; store.route = scopedRoute
         try store.installComponentView(route: scopedRoute, snapshot: try ReadingQuerySnapshot.freeze(scope: .book, in: saved), context: nil)
         if CommandLine.arguments.contains("--inspect") {

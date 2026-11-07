@@ -13,6 +13,7 @@ final class ProviderStreamDecoder: @unchecked Sendable {
     private var pending = Data()
     private var scannedBytes = 0
     private var eventData: [String] = []
+    private var eventBytes = 0
     private var content = ""
     private var reasoning = ""
     private var refusal = ""
@@ -21,11 +22,12 @@ final class ProviderStreamDecoder: @unchecked Sendable {
     private var totalTokens: Int?
     private var done = false
     private var bytes = 0
+    private(set) var retainedPayloadBytes = 0
     private(set) var snapshot = ProviderStreamSnapshot()
     var onProgress: ((ProviderStreamSnapshot) -> Void)?
 
     func append(_ chunk: Data) throws {
-        guard chunk.count <= BoundedProviderResponse.maximumBytes - bytes else { throw invalid("模型响应超过 4 MiB 限制。") }
+        guard chunk.count <= BoundedProviderResponse.maximumStreamingBytes - bytes else { throw invalid("模型流式传输超过 64 MiB 限制，当前结果未提交。") }
         bytes += chunk.count; snapshot.receivedBytes = bytes
         pending.append(chunk)
         var start = pending.startIndex
@@ -39,6 +41,7 @@ final class ProviderStreamDecoder: @unchecked Sendable {
             try consumeLine(text)
         }
         if start > pending.startIndex { pending.removeSubrange(..<start) }
+        guard pending.count <= BoundedProviderResponse.maximumBytes else { throw invalid("模型未完成的流式分片超过 4 MiB 限制。") }
         scannedBytes = pending.count
         onProgress?(snapshot)
     }
@@ -71,12 +74,17 @@ final class ProviderStreamDecoder: @unchecked Sendable {
         if line.hasPrefix(":") { return }
         if line.hasPrefix("data:") {
             let value = line.dropFirst(5)
-            eventData.append(String(value.first == " " ? value.dropFirst() : value))
+            let text = String(value.first == " " ? value.dropFirst() : value)
+            let added = text.utf8.count + (eventData.isEmpty ? 0 : 1)
+            guard added <= BoundedProviderResponse.maximumBytes - eventBytes else {
+                throw invalid("模型单个流式事件超过 4 MiB 限制。")
+            }
+            eventBytes += added; eventData.append(text)
         }
     }
     private func dispatchEvent() throws {
         guard !eventData.isEmpty else { return }
-        let text = eventData.joined(separator: "\n"); eventData.removeAll(keepingCapacity: true)
+        let text = eventData.joined(separator: "\n"); eventData.removeAll(keepingCapacity: true); eventBytes = 0
         guard !done else { throw invalid("模型完成标记后又返回了数据。") }
         if text.trimmingCharacters(in: .whitespacesAndNewlines) == "[DONE]" { done = true; return }
         guard let data = text.data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -98,15 +106,15 @@ final class ProviderStreamDecoder: @unchecked Sendable {
                 if let value = delta[key], !(value is NSNull), !(value is String) { throw invalid("模型返回了无效的文本分片。") }
             }
             if let role = delta["role"] as? String, role != "assistant" { throw invalid("模型返回了非 assistant 分片。") }
-            if let text = delta["content"] as? String { content += text; snapshot.answerCharacters += text.unicodeScalars.count; snapshot.phase = .answering }
+            if let text = delta["content"] as? String { try retain(text); content += text; snapshot.answerCharacters += text.unicodeScalars.count; snapshot.phase = .answering }
             // Preserve the existing DeepSeek replay field. Other providers'
             // reasoning/summary text is counted without inventing a message
             // field or copying opaque signatures into UI telemetry.
-            if let replay = delta["reasoning_content"] as? String { reasoning += replay }
+            if let replay = delta["reasoning_content"] as? String { try retain(replay); reasoning += replay }
             let detailText = (delta["reasoning_details"] as? [[String: Any]])?.compactMap { ($0["text"] as? String) ?? ($0["summary"] as? String) }.joined()
             let thought = (delta["reasoning_content"] as? String) ?? (delta["reasoning"] as? String) ?? detailText
             if let thought { snapshot.reasoningCharacters += thought.unicodeScalars.count; if (delta["content"] as? String)?.isEmpty != false { snapshot.phase = .reasoning } }
-            if let text = delta["refusal"] as? String { refusal += text }
+            if let text = delta["refusal"] as? String { try retain(text); refusal += text }
             if let rawCalls = delta["tool_calls"], !(rawCalls is NSNull) {
                 guard let fragments = rawCalls as? [[String: Any]] else { throw invalid("模型工具分片格式无效。") }
                 guard fragments.count <= 32 else { throw invalid("模型工具调用分片过多。") }
@@ -115,11 +123,11 @@ final class ProviderStreamDecoder: @unchecked Sendable {
                           rawIndex.doubleValue.rounded() == rawIndex.doubleValue, (0..<32).contains(rawIndex.intValue) else { throw invalid("模型工具调用分片序号无效。") }
                     let index = rawIndex.intValue
                     var call = calls[index] ?? Call()
-                    if let id = fragment["id"] as? String { call.id += id }
+                    if let id = fragment["id"] as? String { try retain(id); call.id += id }
                     if let type = fragment["type"] as? String { guard type == "function" else { throw invalid("模型工具类型无效。") }; call.type = type }
                     if let function = fragment["function"] as? [String: Any] {
-                        if let name = function["name"] as? String { call.name += name }
-                        if let arguments = function["arguments"] as? String { call.arguments += arguments }
+                        if let name = function["name"] as? String { try retain(name); call.name += name }
+                        if let arguments = function["arguments"] as? String { try retain(arguments); call.arguments += arguments }
                     }
                     guard call.id.utf8.count <= 800, call.name.utf8.count <= 800, call.arguments.utf8.count <= 512 * 1024 else { throw invalid("模型工具参数超过允许范围。") }
                     calls[index] = call
@@ -131,6 +139,11 @@ final class ProviderStreamDecoder: @unchecked Sendable {
             guard finishReason == nil || finishReason == reason else { throw invalid("模型完成标记不一致。") }
             finishReason = reason
         }
+    }
+    private func retain(_ text: String) throws {
+        let size = text.utf8.count
+        guard size <= BoundedProviderResponse.maximumBytes - retainedPayloadBytes else { throw invalid("模型实际正文、推理与工具参数合计超过 4 MiB 限制，当前结果未提交。") }
+        retainedPayloadBytes += size
     }
     private func invalid(_ message: String) -> ReadingError { .invalid(message) }
 }

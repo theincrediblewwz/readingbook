@@ -34,7 +34,8 @@ final class ReadingChatHistoryTests: XCTestCase {
                     project.documents = [DocumentRecord(id: "note", title: "已附加", evidence: [Evidence(unitID: "u1", quote: "开篇。")]),
                                          DocumentRecord(id: "private", title: "未附加")]
                     project.nodes = [CanvasNode(id: "node", targetID: "u1"), CanvasNode(id: "private-node", targetID: "u3")]
-                    let context = ReadingContext(unitID: "u1", selectedText: "开篇。", page: 1)
+                    var context = ReadingContext(unitID: "u1", selectedText: "开篇。", page: 1)
+                    if scope == .range { context.queryRange = .init(pageStart: 1, pageEnd: 2) }
                     let preferences = ReadingAnswerPreferences(interaction: mode, style: .mentor, avoidsSpoilers: avoidsSpoilers)
                     let expectedSnapshot = try ReadingQuerySnapshot.freeze(scope: scope, in: project, context: context,
                         documentIDs: scope == .notes ? ["note"] : nil,

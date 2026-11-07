@@ -8,6 +8,7 @@ import ReadingCore
     }
     private func readingQueryContext(for scope: ReadingQueryScope) -> ReadingContext {
         var context = currentReadingContext
+        context.queryRange = scope == .range ? querySourceRange : nil
         if scope != .selection {
             // Changing the chosen query scope must not mix a neighboring
             // page's focused sentence with the cursor page/notes scope.
@@ -19,7 +20,7 @@ import ReadingCore
         case .notes:
             // Notes do not inherit an unrelated source cursor or selection.
             context.unitID = nil; context.page = nil
-        case .page, .readSoFar, .chapter, .book:
+        case .page, .readSoFar, .chapter, .range, .book:
             // These controls and their preview refer to the current reading
             // cursor, never the beginning of a native drag on another page.
             context.documentID = nil; context.unitID = selectedUnitID; context.page = selectedUnit?.page
@@ -53,6 +54,9 @@ import ReadingCore
         case .page: return selectedUnit?.page.map { "当前页 · 第 \($0) 页" } ?? "当前阅读位置"
         case .readSoFar: return selectedUnit?.page.map { "从开头至第 \($0) 页（含本页）" } ?? "从开头至当前原文"
         case .chapter: return "当前章节"
+        case .range:
+            if let range = querySourceRange, range.kind == .pages, let start = range.pageStart, let end = range.pageEnd { return "第 \(start)–\(end) 页" }
+            return "指定章节范围"
         case .book: return "整本书 · \(book?.title ?? "")"
         case .notes: return queryDocumentIDs.map { "我的笔记 · 已选 \($0.count) 篇" } ?? "我的笔记 · 全部已保存笔记"
         }
@@ -62,6 +66,7 @@ import ReadingCore
         case .selection: return querySelectionText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         case .notes: return book?.activeDocuments.isEmpty == false && queryDocumentIDs?.isEmpty != true
         case .page, .readSoFar, .chapter: return selectedUnit != nil
+        case .range: return book?.units.isEmpty == false
         case .book: return book?.units.isEmpty == false
         }
     }
@@ -145,7 +150,8 @@ import ReadingCore
                 isManagingQueryMemory = false; isSummaryRequestRunning = false; queryMemoryTask = nil
             }
             do {
-                let project = key.scope == .chapter ? try await ensureBookChapterOutline(project: original) : original
+                let project = key.scope == .chapter || (key.scope == .range && key.context.queryRange?.kind == .chapters)
+                    ? try await ensureBookChapterOutline(project: original) : original
                 let worker = Task.detached(priority: .userInitiated) {
                     try ReadingPreparedAnswer.freeze(project: project, scope: key.scope, context: key.context,
                         documentIDs: key.documents, appendedDocumentIDs: key.attachments, authorizedNodeIDs: key.nodes,
@@ -191,6 +197,7 @@ struct QueryScopeControl: View {
     var compact = false
     @State private var presented = false
     @State private var owner: WorkspacePickerOwner?
+    @State private var choosingRange = false
     var body: some View {
         Button { owner = WorkspacePickerOwner(store: store); presented = true } label: {
             HStack(spacing: 5) { Label(store.queryScope.title, systemImage: icon(store.queryScope)); Image(systemName: "chevron.down").font(.system(size: 9)) }
@@ -201,11 +208,18 @@ struct QueryScopeControl: View {
                     HStack { Text("本次阅读范围").font(.system(size: 16, weight: .semibold)); Spacer()
                         Button { presented = false } label: { Image(systemName: "xmark") }.buttonStyle(ReadingToolbarButtonStyle()).help("关闭阅读范围")
                     }.padding(.horizontal, 12)
-                    ScrollView {
+                    if choosingRange {
+                        QuerySourceRangePicker { choice in
+                            guard owner?.matches(store) == true else { return }
+                            store.querySourceRange = choice; store.queryScope = .range; presented = false
+                        } cancel: { choosingRange = false }
+                    } else { ScrollView {
                         LazyVStack(alignment: .leading, spacing: 4) {
                             ForEach(ReadingQueryScope.allCases, id: \.self) { scope in
                                 Button {
-                                    guard owner?.matches(store) == true else { return }; store.queryScope = scope
+                                    guard owner?.matches(store) == true else { return }
+                                    if scope == .range { choosingRange = true; return }
+                                    store.queryScope = scope
                                     if scope != .notes { presented = false }
                                 } label: {
                                     HStack(spacing: 12) {
@@ -226,9 +240,10 @@ struct QueryScopeControl: View {
                                 }
                             }
                         }.padding(.horizontal, 8)
-                    }.frame(maxHeight: 480)
-                }.padding(10).frame(width: 370)
-            }.onChange(of: store.collectionOwnerKey) { _, _ in presented = false }
+                    }.frame(maxHeight: 480) }
+                }.padding(10).frame(width: choosingRange ? 410 : 370)
+            }.onChange(of: presented) { _, value in if !value { choosingRange = false } }
+            .onChange(of: store.collectionOwnerKey) { _, _ in presented = false }
     }
     private func detail(_ scope: ReadingQueryScope) -> String {
         switch scope {
@@ -236,6 +251,7 @@ struct QueryScopeControl: View {
         case .page: return "围绕当前页，不自动扩大到后文"
         case .readSoFar: return "允许从开头检索至当前页，包含当前整页"
         case .chapter: return "读取当前章节的完整范围"
+        case .range: return "自己选择起止页码或章节"
         case .book: return "允许检索本书的全部原文"
         case .notes: return "选择本次允许读取的已保存笔记"
         }
@@ -246,6 +262,7 @@ struct QueryScopeControl: View {
         case .page: return "doc.text"
         case .readSoFar: return "book.pages"
         case .chapter: return "book.closed"
+        case .range: return "text.page.badge.magnifyingglass"
         case .book: return "books.vertical"
         case .notes: return "square.and.pencil"
         }
