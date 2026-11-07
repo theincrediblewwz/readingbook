@@ -317,3 +317,5 @@ in Design/2026-11-05-search-context-reliability.md.
 ### 导图正文摘要与时间联动
 
 `run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-document-previews` 使用产品导图、组合导图和时间卡片，检查共享 Markdown 正文提示、编辑刷新、书库/书籍/范围归属及原文跳转。夹具是公版原文节选与人工绑定资料，不冒充模型整书分析；禁止原库读写和网络。`--inspect` 仅供本机观察，不用于 CI。
+
+无 SwiftUI 虚拟 AX 子树的 runner 使用真实窗口位图、Vision 和原生控件边界观察；`--raster-observation` 可在本机强制覆盖此路径。节点文字不从模型对象代填，按钮从实际显示区域识别再发本进程窗口点击；点到地图会失败。原文按钮仍须完整处于视口且至少40点高。专门的 `graph-save-diagnostic.yml` 可选择 `graph-document-previews`，在同一 Debug 产品上检查强制像素与正常观察两条路径；不更改系统无障碍或安全偏好。

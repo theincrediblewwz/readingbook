@@ -35,12 +35,12 @@ jobs:
             python3 scripts/native-ui-regression/run-dynamic-components.py --bin-dir .build/tests/debug --tag ci-presentation-diagnostic-$attempt || result=1
           done
           exit "$result"
-      - name: Compare native graph preview accessibility getters
+      - name: Observe native graph preview pixels and actions
         if: inputs.scenario == 'graph-document-previews'
         shell: bash
         run: |
-          python3 scripts/native-ui-regression/run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-preview-kvc --legacy-kvc-getters || true
-          python3 scripts/native-ui-regression/run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-preview-selector
+          python3 scripts/native-ui-regression/run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-preview-raster --raster-observation
+          python3 scripts/native-ui-regression/run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-preview-native
       - name: Preserve native state and original result
         if: always()
         uses: actions/upload-artifact@v7
