@@ -740,19 +740,34 @@ struct SpatialTimelineView: View {
         guard let point = points.first(where: { $0.targetID == id }) else { return }
         // Use the actual dock/size, including expanded details. A bottom card
         // leaves the point above it; a top card or side card chooses its free area.
-        let span = MKCoordinateSpan(latitudeDelta: 4, longitudeDelta: 4)
         let free = showsTimeline
             ? FloatingPanelGeometry.unobscuredMapRect(viewport: workingViewport, panel: panelFrame.offsetBy(dx: 0, dy: -topReserve)).offsetBy(dx: 0, dy: topReserve)
             : CGRect(x: 0, y: topReserve, width: viewport.width, height: workingViewport.height)
-        var center = point.coordinate
-        center.longitude -= Double(free.midX / max(1, viewport.width) - 0.5) * span.longitudeDelta
-        center.latitude += Double(free.midY / max(1, viewport.height) - 0.5) * span.latitudeDelta
+        // Degree offsets ignore MapKit's aspect-fit and the reserved chrome.
+        // Fit a Mercator rect to the same padded viewport instead, so a tall
+        // card cannot cover the marker after selection or a repeated locate.
+        let usable = CGRect(x: 0, y: topReserve, width: max(1, viewport.width - 16), height: max(1, workingViewport.height))
+        let destination = free.intersection(usable)
+        let target = destination.isNull || destination.isEmpty ? usable : destination
+        let latitude = min(85, max(-85, point.coordinate.latitude))
+        let anchor = MKMapPoint(CLLocationCoordinate2D(latitude: latitude, longitude: point.coordinate.longitude))
+        let north = MKMapPoint(CLLocationCoordinate2D(latitude: min(85, latitude + 2), longitude: point.coordinate.longitude))
+        let south = MKMapPoint(CLLocationCoordinate2D(latitude: max(-85, latitude - 2), longitude: point.coordinate.longitude))
+        let aspect = usable.width / usable.height
+        let width = max(MKMapRect.world.size.width * 4 / 360, abs(south.y - north.y) * aspect)
+        let height = width / aspect
+        let x = anchor.x - (target.midX - usable.minX) / usable.width * width
+        let y = anchor.y - (target.midY - usable.minY) / usable.height * height
+        var center = MKMapPoint(x: x + width / 2, y: y + height / 2).coordinate
         center.latitude = min(85, max(-85, center.latitude))
+        center.longitude = center.longitude.truncatingRemainder(dividingBy: 360)
         if center.longitude < -180 { center.longitude += 360 }
         if center.longitude > 180 { center.longitude -= 360 }
+        let normalized = MKMapPoint(center)
+        let rect = MKMapRect(x: normalized.x - width / 2, y: normalized.y - height / 2, width: width, height: height)
         selectionCameraCenter = center
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) {
-            camera = .region(MKCoordinateRegion(center: center, span: span))
+            camera = .rect(rect)
         }
     }
     private func beginPanelDrag() {

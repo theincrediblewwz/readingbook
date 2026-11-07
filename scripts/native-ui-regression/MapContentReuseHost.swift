@@ -114,6 +114,11 @@ private struct MapFixtureView: View {
         let y = view.bounds.height > 90 ? (view.isFlipped ? view.bounds.minY + 21 : view.bounds.maxY - 21) : view.bounds.midY
         let point = view.convert(CGPoint(x: view.bounds.midX, y: y), to: nil)
         guard host.bounds.contains(host.convert(point, from: nil)) else { throw ReadingError.invalid("Marker outside fixture") }
+        let hitPoint = host.superview?.convert(point, from: nil) ?? point
+        let hit = host.hitTest(hitPoint)
+        observations.append(["stage": "actual-hit-receiver", "insideNativeMap": hit === native || hit?.isDescendant(of: native) == true,
+            "receiver": hit.map { String(describing: type(of: $0)) } ?? "missing", "point": NSStringFromPoint(point)])
+        guard hit === native || hit?.isDescendant(of: native) == true else { throw ReadingError.invalid("Marker click is outside the interactive map or covered") }
         for (type, pressure) in [(NSEvent.EventType.leftMouseDown, Float(1)), (.leftMouseUp, Float(0))] {
             guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: pressure) else { throw ReadingError.invalid("Fixture-local event") }
             NSApp.postEvent(event, atStart: false)
@@ -205,7 +210,17 @@ private struct MapFixtureView: View {
         store.timeTo = 400; try await settle(300)
         try require("filterRestores80Markers", try annotations().count == 80)
         try require("sameNativeMapWhenCrossingAboveThreshold", ObjectIdentifier(try map()) == identity)
-        model.dark = true; try await settle(); try await click(try marker(8))
+        model.dark = true; try await settle()
+        // The previous event is deliberately located above/alongside its tall
+        // detail card. A different northern marker can then lie in reserved
+        // navigation chrome. Pan it into the clear right side before clicking;
+        // do not preselect it or substitute an action for the real native click.
+        let themedMap = try map(), themedRegion = themedMap.region
+        guard let themedCoordinate = try marker(8).annotation?.coordinate else { throw ReadingError.invalid("Theme marker missing") }
+        observations.append(["stage": "theme-click-pan-precondition", "selectedIDBeforeClick": store.selectedObjectID ?? "", "targetID": "e8"])
+        themedMap.setRegion(.init(center: .init(latitude: themedCoordinate.latitude,
+            longitude: themedCoordinate.longitude - themedRegion.span.longitudeDelta * 0.28), span: themedRegion.span), animated: false)
+        try await settle(250); try await click(try marker(8))
         try require("themeChangePreservesCurrentSelection", store.selectedObjectID == "e8")
         window.setContentSize(.init(width: 900, height: 680)); try await settle(300)
         try require("resizeKeepsAllMarkers", try annotations().count == 80)

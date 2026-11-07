@@ -42,7 +42,9 @@ import Darwin
             store.temporalAxis = "legacy"; store.timeFrom = 195; store.timeTo = 215
             store.workspaceMemory = BookWorkspaceMemory(bookID: project.id, sourceHash: project.sourceHash)
             store.updateWorkspaceMemory { $0.temporalAxis = "legacy"; $0.timeFrom = 195; $0.timeTo = 215 }
-            window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 1100, height: 760),
+            let requestedHeight = Double(ProcessInfo.processInfo.environment["HARNESS_MAP_WINDOW_HEIGHT"] ?? "760") ?? 760
+            guard (600...900).contains(requestedHeight) else { throw ReadingError.invalid("Invalid test window height") }
+            window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 1100, height: requestedHeight),
                 styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             window.title = "ReadingBook map recenter regression"
             window.contentView = CountingHost(rootView: AnyView(SpatialTimelineView().environmentObject(store)
@@ -104,6 +106,17 @@ import Darwin
                 guard let point else { throw ReadingError.invalid("Marker view missing") }
                 guard window.contentView!.bounds.contains(window.contentView!.convert(point, from: nil)) else {
                     throw ReadingError.invalid("Marker must be visible inside its test window")
+                }
+                let localPoint = host.convert(point, from: nil)
+                let hitPoint = host.superview?.convert(point, from: nil) ?? point
+                let receiver = host.hitTest(hitPoint)
+                var hierarchy = [String](), parent = receiver
+                while let value = parent { hierarchy.append(String(describing: type(of: value))); parent = value.superview }
+                clickInputs.append(["stage": "actual-hit-receiver", "insideNativeMap": receiver === map || receiver?.isDescendant(of: map) == true,
+                    "receiverHierarchy": hierarchy, "localPoint": NSStringFromPoint(localPoint),
+                    "hostBounds": NSStringFromRect(host.bounds), "mapBounds": NSStringFromRect(map.bounds), "requestedHeight": requestedHeight])
+                guard receiver === map || receiver?.isDescendant(of: map) == true else {
+                    throw ReadingError.invalid("Marker click is covered by floating content")
                 }
                 let now = ProcessInfo.processInfo.systemUptime
                 guard let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: now,

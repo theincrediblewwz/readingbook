@@ -37,6 +37,8 @@ The first CI attempt `40635956572` remains a failed run: all 144 actions finishe
 
 This controlled camera change deliberately reproduces the stale desired-position binding; it is not a hardware drag or FPS test. Separate CUA evidence on the Mac covers a physical pan/repeated click. The pre-fix product passes initial click/movement but fails `sameMarkerRecentered-0`, establishing that the new regression detects the original fault.
 
+The same 16 checks also run with `HARNESS_MAP_WINDOW_HEIGHT=660`. The click records include actual hit receivers and window/map bounds, and reject a click covered by a floating card. This compact-window counterexample exposed degree-based camera offsets placing a selected marker under the expanded time card; the product now fits projected map geometry to the unobscured padded viewport. Result deadlines and center/zoom tolerances remain unchanged.
+
 This checks programmatic state transitions and native layout. Physical-PDF cold import, pointer/selection/annotation QA, the full Core suite and installed Release validation remain separate checks.
 
 ## Physical PDF correctness mode
