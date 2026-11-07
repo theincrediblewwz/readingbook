@@ -39,6 +39,8 @@ public enum ControlledKnowledgeRuntime {
                       (changes.anchors ?? []).count, (changes.presences ?? []).count, (changes.participations ?? []).count, (changes.eventMetadata ?? []).count,
                       (changes.relationMetadata ?? []).count, (changes.layers ?? []).count, (changes.alignments ?? []).count]
         guard counts.allSatisfy({ $0 <= 128 }), counts.reduce(0, +) <= 256 else { throw ControlledChangeError.invalid("单个知识批次最多256项，每类最多128项。") }
+        let metadataIDs = (changes.eventMetadata ?? []).map(\.eventID)
+        guard Set(metadataIDs).count == metadataIDs.count else { throw ControlledChangeError.invalid("eventMetadata中每个eventID只能提交一条。") }
         func registerNew(_ ids: [String]?, records: [String], existing: Set<String>, kind: String, map: inout ControlledIdentityMap) throws {
             let new = ids ?? []
             guard Set(records).count == records.count, Set(new).count == new.count, Set(new).isSubset(of: Set(records)), Set(new).isDisjoint(with: existing) else { throw ControlledChangeError.invalid("新增 ID 清单重复、越界或试图覆盖既有对象。") }
@@ -155,7 +157,12 @@ public enum ControlledKnowledgeRuntime {
         }
         for var metadata in changes.eventMetadata ?? [] {
             metadata.eventID = identity.resolve(metadata.eventID); metadata.typeID = metadata.typeID.map(identity.resolve); metadata.parentEventID = metadata.parentEventID.map(identity.resolve)
-            metadata.sourceAnchorIDs = metadata.sourceAnchorIDs.map(identity.resolve); try appendImmutable(metadata, to: &temporal.eventMetadata)
+            metadata.sourceAnchorIDs = metadata.sourceAnchorIDs.map(identity.resolve)
+            guard !metadata.sourceAnchorIDs.isEmpty, metadata.sourceAnchorIDs.count <= 64,
+                  Set(metadata.sourceAnchorIDs).count == metadata.sourceAnchorIDs.count else {
+                throw ControlledChangeError.invalid("eventMetadata须用1–64个不重复的sourceAnchorIDs引用真实原文锚点。")
+            }
+            try enrichEventMetadata(metadata, in: &temporal.eventMetadata)
         }
         for var metadata in changes.relationMetadata ?? [] {
             metadata.id = identity.resolve(metadata.id); metadata.relationID = identity.resolve(metadata.relationID)
@@ -195,6 +202,34 @@ public enum ControlledKnowledgeRuntime {
         if let old = values.first(where: { $0.id == value.id }) {
             guard try ControlledChangeCoding.data(old) == ControlledChangeCoding.data(value) else { throw ControlledChangeError.conflict("不能改写已有知识记录：\(value.id)") }
         } else { values.append(value) }
+    }
+    /// Continue the same shared event, without replacing an established date,
+    /// classification or parent. The proposal builder still requires review
+    /// for any existing-record patch; all provenance is validated afterwards.
+    private static func enrichEventMetadata(_ value: EventTemporalMetadata, in values: inout [EventTemporalMetadata]) throws {
+        guard let index = values.firstIndex(where: { $0.eventID == value.eventID }) else { values.append(value); return }
+        var old = values[index]
+        func filling<T: Equatable>(_ before: T?, _ after: T?, field: String) throws -> T? {
+            guard before == nil || after == nil || before == after else {
+                throw ControlledChangeError.conflict("事件\(value.eventID)的\(field)与已有资料冲突；保留原值，请先核对。")
+            }
+            return before ?? after
+        }
+        old.typeID = try filling(old.typeID, value.typeID, field: "typeID")
+        old.parentEventID = try filling(old.parentEventID, value.parentEventID, field: "parentEventID")
+        old.phaseOrder = try filling(old.phaseOrder, value.phaseOrder, field: "phaseOrder")
+        old.extent = try filling(old.extent, value.extent, field: "extent")
+        guard old.kind == value.kind || old.kind == "event" || value.kind == "event" else {
+            throw ControlledChangeError.conflict("事件\(value.eventID)的kind与已有分类冲突；保留原值。")
+        }
+        if old.kind == "event" { old.kind = value.kind }
+        guard old.assertion == value.assertion || old.assertion == .unknown || value.assertion == .unknown else {
+            throw ControlledChangeError.conflict("事件\(value.eventID)的assertion与已有依据分类冲突；保留原值。")
+        }
+        if old.assertion == .unknown { old.assertion = value.assertion }
+        old.sourceAnchorIDs = union(old.sourceAnchorIDs, value.sourceAnchorIDs)
+        old.explanation = merge(old.explanation, value.explanation)
+        values[index] = old
     }
     private static func union<T: Hashable>(_ first: [T], _ second: [T]) -> [T] { var seen = Set(first); return first + second.filter { seen.insert($0).inserted } }
     private static func merge(_ first: String, _ second: String) -> String {

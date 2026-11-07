@@ -58,6 +58,7 @@ enum ReadingProposalSchemas {
         ["type": "object", "additionalProperties": false, "properties": fields, "required": required ?? fields.keys.sorted()]
     }
     static func array(_ item: [String: Any], maximum: Int = 64) -> [String: Any] { ["type": "array", "items": item, "maxItems": maximum] }
+    static func nonemptyArray(_ item: [String: Any]) -> [String: Any] { ["type": "array", "items": item, "minItems": 1, "maxItems": 64] }
     static func text(_ maximum: Int = 4000) -> [String: Any] { ["type": "string", "maxLength": maximum] }
     static let id: [String: Any] = ["type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"]
     static let number: [String: Any] = ["type": "number"]
@@ -71,21 +72,25 @@ enum ReadingProposalSchemas {
     }
     static var type: [String: Any] { object(["id": id, "name": text(400), "icon": text(128), "fields": array(object(["key": id, "label": text(400), "required": ["type": "boolean"]]))]) }
     static var entity: [String: Any] {
-        object(["id": id, "typeID": id, "name": text(400), "summary": text(32_768), "properties": strings, "aliases": array(text(400)), "latitude": number, "longitude": number, "locationNote": text(), "evidence": array(evidence)],
+        object(["id": id, "typeID": id, "name": text(400), "summary": text(32_768), "properties": strings, "aliases": array(text(400)), "latitude": number, "longitude": number, "locationNote": text(), "evidence": nonemptyArray(evidence)],
             required: ["id", "typeID", "name", "summary", "properties", "aliases", "evidence"])
     }
     static var event: [String: Any] {
         object(["id": id, "name": text(400), "summary": text(32_768), "dateText": text(), "startYear": integer, "endYear": integer,
-            "placeIDs": array(id), "participantIDs": array(id), "evidence": array(evidence)], required: ["id", "name", "summary", "dateText", "placeIDs", "participantIDs", "evidence"])
+            "placeIDs": array(id), "participantIDs": array(id), "evidence": nonemptyArray(evidence)], required: ["id", "name", "summary", "dateText", "placeIDs", "participantIDs", "evidence"])
     }
-    static var relation: [String: Any] { object(["id": id, "fromID": id, "toID": id, "label": text(400), "evidence": array(evidence)]) }
+    static var relation: [String: Any] { object(["id": id, "fromID": id, "toID": id, "label": text(400), "evidence": nonemptyArray(evidence)]) }
     static var date: [String: Any] { object(["year": integer, "month": integer, "day": integer], required: ["year"]) }
     static var extent: [String: Any] {
-        object(["sourceText": text(), "calendar": text(80), "start": date, "end": date, "precision": ["type": "string", "enum": ["unknown", "year", "month", "day", "narrative"]],
+        var source = text(); source["description"] = "逐字取自sourceAnchorIDs所指原文的时间、章回或先后语句；不能自造‘第X回（依叙事顺序）’等标签。"
+        var order = integer; order["minimum"] = 0; order["maximum"] = 1_000_000_000
+        var result = object(["sourceText": source, "calendar": text(80), "start": date, "end": date, "precision": ["type": "string", "enum": ["unknown", "year", "month", "day", "narrative"]],
             "uncertainty": ["type": "string", "enum": ["exact", "approximate", "disputed", "unknown"]], "kind": ["type": "string", "enum": ["point", "interval", "uncertainRange"]],
-            "narrativeStart": integer, "narrativeEnd": integer], required: ["sourceText", "precision", "uncertainty", "kind"])
+            "narrativeStart": order, "narrativeEnd": order], required: ["sourceText", "precision", "uncertainty", "kind"])
+        result["description"] = "narrative只表示有原文依据的叙事先后，不填历法日期；point的两端须相同，不同两端用interval。unknown不填数字边界且uncertainty=unknown。没有可靠时间依据可省略extent。"
+        return result
     }
-    static var attribution: [String: Any] { ["sourceAnchorIDs": array(id), "assertion": ["type": "string", "enum": ["explicit", "inferred", "unknown"]], "explanation": text()] }
+    static var attribution: [String: Any] { ["sourceAnchorIDs": nonemptyArray(id), "assertion": ["type": "string", "enum": ["explicit", "inferred", "unknown"]], "explanation": text()] }
     static var presence: [String: Any] {
         var fields = attribution; fields.merge(["id": id, "entityID": id, "placeID": id, "eventID": id, "extent": extent, "action": text()]) { _, next in next }
         return object(fields, required: ["id", "entityID", "extent", "action", "sourceAnchorIDs", "assertion", "explanation"])
@@ -98,7 +103,9 @@ enum ReadingProposalSchemas {
         var fields = attribution; var eventType = id; eventType["description"] = "可省略；只能使用本书实际定义或本批新增的类型ID，不能因对象kind为event就填event。"
         var phase = integer; phase["description"] = "只表示parentEventID下的子阶段顺序；没有parentEventID不能填。事件全线先后请用extent的narrativeStart/end，不能用phaseOrder冒充。"
         fields.merge(["eventID": id, "typeID": eventType, "kind": text(80), "parentEventID": id, "phaseOrder": phase, "extent": extent]) { _, next in next }
-        return object(fields, required: ["eventID", "kind", "sourceAnchorIDs", "assertion", "explanation"])
+        var result = object(fields, required: ["eventID", "kind", "sourceAnchorIDs", "assertion", "explanation"])
+        result["description"] = "复用eventID补充缺失元数据；已有extent/typeID/parentEventID/phaseOrder不覆盖。sourceAnchorIDs必须是已存在或同批anchors声明的真实锚点ID，不能为空，也不是unitID或sourceRef。已有记录的变更由宿主审阅。"
+        return result
     }
     static var relationMetadata: [String: Any] {
         var fields = attribution; fields.merge(["id": id, "relationID": id, "validity": extent]) { _, next in next }; return object(fields)
@@ -143,7 +150,7 @@ enum ReadingProposalSchemas {
                 fields[other.rawValue] = ["type": "object", "description": "可选同笔原子搭配，结构可用capabilities_list(schemaFor:\"\(other.rawValue)\")查询；仍须宿主授予该组权限。", "additionalProperties": true]
             }
             let parameters = object(["batch": object(fields, required: [group.rawValue])])
-            return ["type": "function", "function": ["name": name, "description": "提出本次具体变更批次；新建文档和挂载节点必须放同一batch，未提交提案的clientID不可跨批引用。新对象用clientID/new*IDs局部别名，已有对象用真实ID；不传grant/operationID/approval。已有笔记先读取真实expectedHash并由用户审阅diff。知识只引用本次实际读取原文。准备成功仅是预览；只有宿主回执明确applied=true才可说已保存。", "parameters": parameters]]
+            return ["type": "function", "function": ["name": name, "description": "按batch结构提出具体变更；新文档和挂载节点须同批，局部clientID不可跨批引用。已有笔记修改须真实expectedHash和宿主审阅；applied=true才表示已保存。", "parameters": parameters]]
         }
     }
 }
