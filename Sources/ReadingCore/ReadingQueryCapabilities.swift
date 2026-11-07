@@ -87,10 +87,11 @@ enum ReadingQueryToolCatalog {
             if ["documents_list", "documents_search", "document_read"].contains(name) { return !snapshot.documents.isEmpty }
             return true
         }
-        var query = paging; query["query"] = string; query["typeIDs"] = ids
+        let evidenceOption: [String: Any] = ["type": "boolean", "default": false, "description": "需要逐字核对出处时设true；默认只列资料概览与来源ID，不重复长引文。"]
+        var query = paging; query["query"] = string; query["typeIDs"] = ids; query["includeEvidence"] = evidenceOption
         var object = ["id": string]; object["expectedHash"] = string
         var relation = paging; relation["objectID"] = string
-        var event = paging; event["entityID"] = string; event["placeID"] = string
+        var event = paging; event["entityID"] = string; event["placeID"] = string; event["includeEvidence"] = evidenceOption
         let time: [String: Any] = ["type": "object", "additionalProperties": false, "properties": [
             "calendar": string, "year": ["type": "integer", "minimum": -1_000_000_000_000, "maximum": 1_000_000_000_000],
             "month": ["type": "integer", "minimum": 1, "maximum": 12], "day": ["type": "integer", "minimum": 1, "maximum": 31], "narrativeOrder": integer]]
@@ -218,6 +219,10 @@ extension ReadingQuerySession {
         }
         return project
     }
+    mutating func recordSourceExcerpt(_ id: String, text: String) {
+        guard !text.isEmpty, !sourceExcerpts.contains(where: { $0.0 == id && $0.1.range(of: text, options: .literal) != nil }) else { return }
+        sourceExcerpts.append((id, text))
+    }
     mutating func recordReturnedEvidence(_ result: String) throws {
         guard let data = result.data(using: .utf8), let root = try? JSONSerialization.jsonObject(with: data) else { return }
         let sources = Dictionary(uniqueKeysWithValues: snapshot.sources.map { ($0.unitID, $0.text) })
@@ -226,7 +231,7 @@ extension ReadingQuerySession {
             if let object = value as? [String: Any] {
                 if let id = object["unitID"] as? String, let quote = object["quote"] as? String, !quote.isEmpty,
                    let source = sources[id], let range = source.range(of: quote, options: .literal), source[range].utf8.elementsEqual(quote.utf8) {
-                    sourceExcerpts.append((id, quote))
+                    recordSourceExcerpt(id, text: quote)
                 }
                 for child in object.values { scan(child, depth: depth + 1) }
             } else if let list = value as? [Any] { for child in list { scan(child, depth: depth + 1) } }
@@ -329,18 +334,18 @@ extension ReadingQuerySession {
             let objects = try TemporalKnowledgeRuntime.objects(in: scoped, boundary: boundary).filter {
                 let named = ([$0.name, $0.summary] + $0.aliases).contains { $0.localizedCaseInsensitiveContains(query) }
                 let localMention = identityStubs.contains($0.id) && $0.evidence.contains { $0.quote.localizedCaseInsensitiveContains(query) }
-                let earlier = (reuse?.record(id: $0.id)?["summary"] as? String)?.localizedCaseInsensitiveContains(query) == true
+                let earlier = (reuse?.record(id: $0.id, includeSourceExcerpts: false)?["summary"] as? String)?.localizedCaseInsensitiveContains(query) == true
                 return (types.isEmpty || types.contains($0.typeID)) && (query.isEmpty || named || localMention || earlier)
             }
             var rows = objects.map { object -> [String: Any] in
                 var row: [String: Any] = ["id": object.id, "typeID": object.typeID, "kind": object.kind.rawValue, "name": object.name, "summary": String(object.summary.prefix(400)), "version": object.version, "identityOnly": identityStubs.contains(object.id),
                     "sourceUnitIDs": Array(Set(object.evidence.map(\.unitID))).sorted()]
-                if let saved = reuse?.record(id: object.id) { row["previouslySaved"] = saved }
+                if let saved = reuse?.record(id: object.id, includeSourceExcerpts: arguments["includeEvidence"] as? Bool == true) { row["previouslySaved"] = saved }
                 return row
             }
             let returned = Set(objects.map(\.id))
             for candidate in PluginEngine.analysisIdentityCandidates(project, allowedUnitIDs: Set(snapshot.unitIDs), occurrenceTexts: snapshot.sources.map(\.text)) where !returned.contains(candidate.id) {
-                guard types.isEmpty || types.contains(candidate.typeID), let saved = reuse?.record(id: candidate.id),
+                guard types.isEmpty || types.contains(candidate.typeID), let saved = reuse?.record(id: candidate.id, includeSourceExcerpts: arguments["includeEvidence"] as? Bool == true),
                       query.isEmpty || ([candidate.name] + candidate.aliases + [saved["summary"] as? String ?? ""]).contains(where: { $0.localizedCaseInsensitiveContains(query) }) else { continue }
                 rows.append(["id": candidate.id, "typeID": candidate.typeID, "kind": candidate.kind, "name": candidate.name, "summary": "", "identityOnly": true,
                     "sourceUnitIDs": [], "previouslySaved": saved, "notice": "当前原文出现同名/称谓，先核对是否为同一对象；旧简介不能当作本页已核实的新事实。"])
@@ -383,7 +388,7 @@ extension ReadingQuerySession {
             return try page(rows.map { try encoded($0) as? [String: Any] ?? [:] }, arguments, maximumBytes)
         case "events_query":
             let rows = try TemporalKnowledgeRuntime.events(in: scoped, entityID: arguments["entityID"] as? String, placeID: arguments["placeID"] as? String, at: timePoint(arguments), boundary: boundary)
-            return try page(rows.map { try encoded($0) as? [String: Any] ?? [:] }, arguments, maximumBytes)
+            return try page(rows.map { try eventDiscovery($0, includeEvidence: arguments["includeEvidence"] as? Bool == true) }, arguments, maximumBytes)
         case "entity_history_get":
             guard let id = arguments["entityID"] as? String else { throw invalid("缺少entityID。") }
             let result = try TemporalKnowledgeRuntime.entitySnapshot(entityID: id, in: scoped, at: timePoint(arguments), boundary: boundary)

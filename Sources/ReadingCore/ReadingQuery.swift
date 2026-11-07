@@ -610,7 +610,7 @@ struct ReadingQuerySession {
             guard let source = snapshot.sources.first(where: { $0.unitID == id }) else { throw invalid("原文ID不在本次冻结范围内。") }
             try checkHash(arguments, actual: source.textHash)
             let slice = try readSlice(source.text, arguments, cap, metadata: ["ok": true, "id": id, "locator": source.locator, "hash": source.textHash, "scope": snapshot.scope.rawValue])
-            if !slice.text.isEmpty { sourceExcerpts.append((id, slice.text)) }
+            recordSourceExcerpt(id, text: slice.text)
             return slice.result
         case "document_read":
             let id = try identifier(arguments)
@@ -694,7 +694,7 @@ struct ReadingQuerySession {
             hits.removeLast()
         }
         for hit in hits { if let id = hit["id"] as? String, let text = hit["snippet"] as? String {
-            if name == "source_search" { sourceExcerpts.append((id, text)) }
+            if name == "source_search" { recordSourceExcerpt(id, text: text) }
             else if name == "documents_search" { documentExcerpts.append((id, text)) }
             else { conversationExcerpts.append((id, text)) }
         } }

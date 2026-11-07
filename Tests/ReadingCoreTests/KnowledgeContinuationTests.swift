@@ -142,4 +142,42 @@ final class KnowledgeContinuationTests: XCTestCase {
         value = updated(book); value.sourceAnchorIDs += value.sourceAnchorIDs
         XCTAssertThrowsError(try prepared(value, in: book))
     }
+    private func lineWrappedBook(_ text: String) throws -> BookProject {
+        var book = try fixture(); book.units[0].text = text
+        book.sourceHash = try BookImporter.sha256(Data(book.units.map(\.text).joined(separator: "\n").utf8))
+        book.events[0].evidence = [.init(unitID: "one", quote: text)]
+        let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: "one", quote: text, in: book)
+        book.temporalKnowledge = .init(anchors: [anchor], eventMetadata: [.init(eventID: "arrival", kind: "行程", sourceAnchorIDs: [anchor.id], assertion: .explicit)])
+        return book
+    }
+    func testPDFLineWrappedTimeLabelResolvesToExactAnchorTextBeforeReview() throws {
+        let book = try lineWrappedBook("第一回，208\n年，曹操到江陵。"), before = try encoded(book)
+        let result = try prepared(updated(book), in: book)
+        XCTAssertTrue(result.proposal.requiresConfirmation)
+        XCTAssertEqual(result.project.temporalKnowledge?.eventMetadata[0].extent?.sourceText, "208\n年")
+        XCTAssertEqual(result.project.events[0].evidence, book.events[0].evidence)
+        XCTAssertEqual(result.project.temporalKnowledge?.anchors, book.temporalKnowledge?.anchors)
+        XCTAssertEqual(try encoded(book), before)
+        XCTAssertNoThrow(try TemporalKnowledgeRuntime.validateStoredState(in: result.project))
+    }
+    func testTimeLabelDoesNotNormalizeSpacesPunctuationOrDifferentWords() throws {
+        let book = try lineWrappedBook("第一回，208\n年，曹操到江陵。")
+        for label in ["208 年", "208，年", "209年", "二百零八年"] {
+            var value = updated(book); value.extent?.sourceText = label
+            XCTAssertThrowsError(try prepared(value, in: book), label)
+        }
+    }
+    func testAmbiguousLineWrappedTimeCannotChooseAnArbitraryOccurrence() throws {
+        let book = try lineWrappedBook("前记208\n年，后记208\r\n年。")
+        XCTAssertThrowsError(try prepared(updated(book), in: book))
+    }
+    func testTimeLabelCannotBorrowAnUnreferencedAnchorOrAUnitOutsideScope() throws {
+        var book = try lineWrappedBook("第一回，曹操到江陵。")
+        book.units[1].text = "第二回，208\n年，曹操回许都。"
+        let anchor = try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: "two", quote: book.units[1].text, in: book)
+        book.temporalKnowledge?.anchors.append(anchor)
+        XCTAssertThrowsError(try prepared(updated(book), in: book))
+        var value = updated(book); value.sourceAnchorIDs = [anchor.id]
+        XCTAssertThrowsError(try prepared(value, in: book))
+    }
 }

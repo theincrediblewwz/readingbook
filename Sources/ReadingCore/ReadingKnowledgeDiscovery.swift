@@ -1,0 +1,24 @@
+import Foundation
+
+extension ReadingQuerySession {
+    /// Discovery retains the canonical version, links and temporal semantics.
+    /// Full evidence stays available explicitly; omitted text never grants a
+    /// citation and is never removed from the shared project or its version.
+    func eventDiscovery(_ value: TemporalEventSnapshot, includeEvidence: Bool) throws -> [String: Any] {
+        if includeEvidence { return try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any] ?? [:] }
+        var compact = value
+        let evidence = compact.object.evidence
+        let fullSummary = compact.object.summary
+        compact.object.evidence = []
+        compact.object.summary = String(fullSummary.prefix(400))
+        var row = try JSONSerialization.jsonObject(with: JSONEncoder().encode(compact)) as? [String: Any] ?? [:]
+        var object = row["object"] as? [String: Any] ?? [:]
+        object.removeValue(forKey: "evidence")
+        object["evidenceOmitted"] = true
+        object["evidenceCount"] = evidence.count
+        object["sourceUnitIDs"] = Array(Set(evidence.map(\.unitID))).sorted()
+        if compact.object.summary != fullSummary { object["summaryTruncated"] = true }
+        row["object"] = object
+        return row
+    }
+}

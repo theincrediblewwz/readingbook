@@ -155,6 +155,7 @@ public enum ControlledKnowledgeRuntime {
             participation.eventID = identity.resolve(participation.eventID); participation.sourceAnchorIDs = participation.sourceAnchorIDs.map(identity.resolve)
             try appendImmutable(participation, to: &temporal.participations)
         }
+        let allAnchors = Dictionary(((project.readingExperience?.anchors ?? []) + temporal.anchors).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for var metadata in changes.eventMetadata ?? [] {
             metadata.eventID = identity.resolve(metadata.eventID); metadata.typeID = metadata.typeID.map(identity.resolve); metadata.parentEventID = metadata.parentEventID.map(identity.resolve)
             metadata.sourceAnchorIDs = metadata.sourceAnchorIDs.map(identity.resolve)
@@ -162,13 +163,20 @@ public enum ControlledKnowledgeRuntime {
                   Set(metadata.sourceAnchorIDs).count == metadata.sourceAnchorIDs.count else {
                 throw ControlledChangeError.invalid("eventMetadata须用1–64个不重复的sourceAnchorIDs引用真实原文锚点。")
             }
+            guard metadata.sourceAnchorIDs.allSatisfy({ allAnchors[$0].map { allowedUnitIDs.contains($0.unitID) } ?? false }) else {
+                throw ControlledChangeError.denied("事件时间引用了获准原文之外或不存在的锚点。")
+            }
+            if var extent = metadata.extent {
+                try ControlledChangeCoding.text(extent.sourceText, maximum: 4000, empty: true)
+                extent.sourceText = ReadingTemporalSourceText.canonical(extent.sourceText, anchors: metadata.sourceAnchorIDs.compactMap { allAnchors[$0] })
+                metadata.extent = extent
+            }
             try enrichEventMetadata(metadata, in: &temporal.eventMetadata)
         }
         for var metadata in changes.relationMetadata ?? [] {
             metadata.id = identity.resolve(metadata.id); metadata.relationID = identity.resolve(metadata.relationID)
             metadata.sourceAnchorIDs = metadata.sourceAnchorIDs.map(identity.resolve); try appendImmutable(metadata, to: &temporal.relationMetadata)
         }
-        let allAnchors = Dictionary(((project.readingExperience?.anchors ?? []) + temporal.anchors).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for ids in (changes.presences ?? []).map(\.sourceAnchorIDs) + (changes.participations ?? []).map(\.sourceAnchorIDs) + (changes.eventMetadata ?? []).map(\.sourceAnchorIDs) + (changes.relationMetadata ?? []).map(\.sourceAnchorIDs) {
             guard ids.allSatisfy({ id in allAnchors[identity.resolve(id)].map { allowedUnitIDs.contains($0.unitID) } ?? false }) else { throw ControlledChangeError.denied("新时态记录引用了获准原文之外的锚点。") }
         }

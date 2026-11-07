@@ -38,7 +38,7 @@ struct SavedKnowledgeReuse {
             allowed: Set(units.values.filter { $0.order <= cursor }.map(\.id)), slices: currentSlices, admittingEvidence: admission)
     }
 
-    func record(id: String) -> [String: Any]? {
+    func record(id: String, includeSourceExcerpts: Bool = true) -> [String: Any]? {
         func marked(_ result: [String: Any]?, kind: KnowledgeRecordKind, currentSummary: String, summary: String) -> [String: Any]? {
             guard var result else { return nil }
             if currentSummary == summary, let edit = corrections[kind.rawValue + "/" + id] {
@@ -46,8 +46,8 @@ struct SavedKnowledgeReuse {
             }
             return result
         }
-        if let original = entities[id], let value = entity(original) { return marked(record(summary: value.summary, evidence: value.evidence), kind: .entity, currentSummary: original.summary, summary: value.summary) }
-        if let original = events[id], let value = event(original) { return marked(record(summary: value.summary, evidence: value.evidence), kind: .event, currentSummary: original.summary, summary: value.summary) }
+        if let original = entities[id], let value = entity(original) { return marked(record(summary: value.summary, evidence: value.evidence, includeSourceExcerpts: includeSourceExcerpts), kind: .entity, currentSummary: original.summary, summary: value.summary) }
+        if let original = events[id], let value = event(original) { return marked(record(summary: value.summary, evidence: value.evidence, includeSourceExcerpts: includeSourceExcerpts), kind: .event, currentSummary: original.summary, summary: value.summary) }
         return nil
     }
 
@@ -80,13 +80,15 @@ struct SavedKnowledgeReuse {
         }
     }
 
-    private func record(summary: String, evidence: [Evidence]) -> [String: Any]? {
+    private func record(summary: String, evidence: [Evidence], includeSourceExcerpts: Bool) -> [String: Any]? {
         guard admits(evidence) else { return nil }
         let sourceIDs = Array(Set(evidence.map(\.unitID))).sorted()
-        return ["kind": "previously_saved", "sourceHash": sourceHash, "cursorOrder": cursorOrder,
+        var result: [String: Any] = ["kind": "previously_saved", "sourceHash": sourceHash, "cursorOrder": cursorOrder,
             "summary": String(summary.prefix(1200)),
             "sourceUnitIDs": Array(sourceIDs.prefix(64)), "sourceCount": sourceIDs.count, "sourcesTruncated": sourceIDs.count > 64 || evidence.count > 4,
-            "sources": evidence.prefix(4).map { ["sourceUnitID": $0.unitID, "excerpt": String($0.quote.prefix(240))] },
             "notice": "此前阅读保存的资料，不是本次新读原文，也不增加处理覆盖。原文有新发展才补充；没有变化就复用稳定ID与已有简介。"]
+        if includeSourceExcerpts { result["sources"] = evidence.prefix(4).map { ["sourceUnitID": $0.unitID, "excerpt": String($0.quote.prefix(240))] } }
+        else { result["sourceExcerptsOmitted"] = true; result["sourcesTruncated"] = !evidence.isEmpty }
+        return result
     }
 }
