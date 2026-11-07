@@ -166,7 +166,7 @@ extension ReadingQuerySession {
                 value.latitude = nil; value.longitude = nil; value.locationNote = nil
                 value.aliases = value.aliases.filter { alias in local.contains { $0.quote.contains(alias) } }
                 if !local.contains(where: { $0.quote.contains(value.name) }) { value.name = value.aliases.first ?? "本段关联实体" }
-            } else { admittedLabels.insert("entity/" + original.id) }
+            } else if snapshot.scope == .range { admittedLabels.insert("entity/" + original.id) }
             value.evidence = local
             return value
         }
@@ -178,7 +178,7 @@ extension ReadingQuerySession {
                 value.summary = ""; value.dateText = "时间待考"; value.startYear = nil; value.endYear = nil
                 value.placeIDs = []; value.participantIDs = []
                 if !local.contains(where: { $0.quote.contains(value.name) }) { value.name = "本段关联事件" }
-            } else { admittedLabels.insert("event/" + original.id) }
+            } else if snapshot.scope == .range { admittedLabels.insert("event/" + original.id) }
             value.evidence = local
             return value
         }
