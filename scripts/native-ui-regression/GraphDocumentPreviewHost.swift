@@ -136,6 +136,17 @@ private actor PreviewTransport {
         func walk(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(walk) }
         return walk(host)
     }
+    func visibleNativeTexts() -> [String] {
+        // SelectionOverlay is an actual NSTextField. Read its rendered value
+        // directly instead of asking OCR to distinguish 问 from 间. Require
+        // the real field to be visible in both its scroll clip and the host.
+        nativeViews().compactMap { view in
+            guard let field = view as? NSTextField, !field.isHiddenOrHasHiddenAncestor,
+                  field.visibleRect.height >= 10, field.visibleRect.width >= 10,
+                  host.bounds.intersects(field.convert(field.visibleRect, to: host)) else { return nil }
+            return field.stringValue
+        }
+    }
     func timelineTrack() -> NSView? {
         nativeViews().first { String(reflecting: type(of: $0)).contains("TimelinePointerInput.PointerView") && !$0.isHiddenOrHasHiddenAncestor }
     }
@@ -153,7 +164,7 @@ private actor PreviewTransport {
     func texts() -> [String] {
         let accessible = forceRaster ? [] : accessibilityTexts()
         let groups = nodeTexts()
-        return accessible + rasterRows.map(\.text) + groups + [rasterRows.map(\.text).joined()]
+        return accessible + visibleNativeTexts() + rasterRows.map(\.text) + groups + [rasterRows.map(\.text).joined()]
     }
     func hasText(_ text: String) -> Bool { texts().contains { comparable($0).contains(comparable(text)) } }
     func object(_ label: String) -> NSObject? {
@@ -388,7 +399,7 @@ private actor PreviewTransport {
         try check("noModelRequests", await transport.calls == 0)
     }
     func finish(_ error: String?) throws {
-        let record: [String: Any] = ["status": error == nil ? "passed" : "failed", "error": error ?? NSNull(), "checks": checks, "checkCount": checks.count, "observations": observations, "rasterCaptureCount": rasterCaptureCount, "forcedRasterObservation": forceRaster, "opaqueAccessibilitySurface": true, "systemPreferencesChanged": false, "realNetworkRequests": 0, "originalLibraryUsed": false, "fixture": "Actual public-domain sentence, manually bound objects and notes; not AI full-book analysis", "scope": "Unmodified product views with existing reduce-transparency environment; in-process AX or actual native raster/geometry, WebKit text and visibleRect, own AppKit event queue; glass appearance separately inspected"]
+        let record: [String: Any] = ["status": error == nil ? "passed" : "failed", "error": error ?? NSNull(), "checks": checks, "checkCount": checks.count, "observations": observations, "rasterCaptureCount": rasterCaptureCount, "forcedRasterObservation": forceRaster, "opaqueAccessibilitySurface": true, "systemPreferencesChanged": false, "realNetworkRequests": 0, "originalLibraryUsed": false, "fixture": "Actual public-domain sentence, manually bound objects and notes; not AI full-book analysis", "scope": "Unmodified product views with existing reduce-transparency environment; in-process AX or actual native raster/geometry, visible NSTextField values, WebKit text and visibleRect, own AppKit event queue; glass appearance separately inspected"]
         try JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("result.json"))
     }
 }
