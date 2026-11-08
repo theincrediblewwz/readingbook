@@ -1,3 +1,15 @@
+<!-- chibi-view-state-local:start -->
+本批已完成，报告 Design/2026-11-09-chibi-view-state.md，总入口 logs/chibi-view-state-20261109/final-local-delivery.json。产品0849ac8，8产品Swift；69/100 ARM64本机已更新，两次104页/便签“你好”/已有伴读正常启动退出。原库39成员，38字节同、1派生缓存JSON值同，书/笔记/分析/project字节同，偏好同，不恢复旧库。用户dirty性能文档SHA保持，未改/未提交。最新回滚 private-books/chibi-view-state-20261109/install-before-local-iteration，正式App已正常退出，勿重复安装。
+
+先离线重放上一轮real5，35要素/18事件/9行动/2视图与原文保持，0模型HTTP。跟随阅读位置有明确范围按钮，可主动恢复43—50回94单元；不静默恢复更宽范围。地图停稳后回传拥有明确书/库/版本/范围的相机、真实可见对象/路线与组合自身时间/选择，扣工作台已知卡片按钮，权限再过滤；平移9投影/8可见，日期20日99603回执通过。原生路线popover按钮不可访问，改为工作台内可关闭滚动卡后实际点出处回618页。
+
+413方法/4498独立断言（非XCTest）；viewState2原生范围46/动态48/共享49/详情43/滚动25共211项通过，自动报告所检告警零。人工最终重放60几何诊断，32负NSView记录中30为OS共享指示器-1×-1、2为标题内负宽，栈已保留；不声称全场景零告警。纯裁剪微基准0.000767ms/次中位数，只含9路线20坐标，不含MapKit/FPS，不称整体提速。
+
+下一批：首次component_show回执仍可能早于相机停稳（实际unsupported），随后读取已成功；先补打开→就绪→实际回执自动接续，再在同一冻结赤壁资料少量实模型验证，避免反复生成。随后按已选概念稿做新标记/碰撞聚合，不只缩小旧图钉。底图密度/时间轴横移与层级括号、16类性能轮转保留。故障输入、失败、版本/hash和退出前最终项目已保存，入口logs/chibi-view-state-20261109/saved-case.json；后续先读此现场，不重做同一付费生成。
+
+清理6968768→6124292KiB，回收844476KiB/约825MiB；批初6076084，净增48208KiB/约47MiB。4602非App私人文件SHA保持；结束运行库逐文件归档验SHA，重复PDF仅在规范副本同SHA后省略；结束探针和旧回滚退役，共享缓存/最新回滚/独有AI与失败记录保留。未推送GitHub、云端CI或Release，继续本地优先。
+<!-- chibi-view-state-local:end -->
+
 <!-- chibi-partial-repair-local:start -->
 本批已完成：Design/2026-11-09-chibi-partial-repair.md，总入口logs/chibi-partial-repair-20261109/final-local-delivery.json。产品07253c24，12产品Swift/2新测试；本机69/100 ARM64已替换安装，两次原书104页、便签“你好”和已有伴读启动/正常退出。39库成员保留：38字节同、1推荐缓存仅键顺序变化/JSON值同，偏好同；不恢复旧库。用户dirty性能文档SHA9b186792…563d4保持，未改未提交。最新回滚private-books/chibi-partial-repair-20261109/install-before-local-iteration；正式App已正常退出，不要重复安装。
 
