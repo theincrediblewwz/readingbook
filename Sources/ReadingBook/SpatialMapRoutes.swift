@@ -52,7 +52,10 @@ struct SpatialRouteDetails: View {
                 Text(route.placeNames.joined(separator: " → ")).font(.system(size: 15, weight: .medium))
                 Text(route.assertion == .explicit ? "原文记载的行动 · 方向示意" : "推断的行动路线 · 方向示意").font(.caption).foregroundStyle(.secondary)
                 if !route.extent.sourceText.isEmpty { Text(route.extent.sourceText).font(.subheadline) }
-                if route.extent.assertion == .inferred || route.timeMatch == .possible {
+                if route.timeMatch == .unknown {
+                    Text("这条路线的时间尚不能与所选时间比较，保留虚线供核对，不代表发生在这个区间。")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if route.extent.assertion == .inferred || route.timeMatch == .possible {
                     Text("时间为推算或待考：" + (route.extent.explanation ?? route.explanation)).font(.caption).foregroundStyle(.secondary)
                 }
                 if !route.explanation.isEmpty { Text(route.explanation).font(.subheadline) }
@@ -69,5 +72,27 @@ struct SpatialRouteDetails: View {
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
         }.frame(width: 380).frame(maxHeight: 520)
+    }
+}
+
+/// Shared by standalone and composed maps; uncertainty stays discoverable
+/// without adding another permanent explanatory paragraph to the canvas.
+struct SpatialRouteTimeNotice: View {
+    let routes: [SpatialRoute]
+    @State private var showingDetails = false
+    var body: some View {
+        let count = routes.filter { $0.timeMatch == .unknown }.count
+        if count > 0 {
+            Button { showingDetails.toggle() } label: {
+                Label("时间待定 \(count)", systemImage: "clock.badge.questionmark")
+                    .font(.system(size: 12, weight: .medium)).padding(.horizontal, 10).padding(.vertical, 7)
+                    .background(.regularMaterial, in: Capsule())
+            }.buttonStyle(ReadingQuietButtonStyle()).padding(12)
+                .help("这些虚线路线的时间未定，或与当前时间轴不可比较；点击查看说明")
+                .popover(isPresented: $showingDetails) {
+                    Text("保留这些路线供你核对；它们不代表已落在所选时间内。只有先后顺序、日期未明或历法不同的记录都可能出现在这里。点击路线可查看原文依据。")
+                        .font(.subheadline).padding(18).frame(width: 290)
+                }
+        }
     }
 }

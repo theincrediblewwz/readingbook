@@ -55,13 +55,18 @@ public enum SpatialKnowledgeRuntime {
         let records = try window.map { try TemporalKnowledgeRuntime.relations(in: project, within: $0, boundary: boundary) }
             ?? TemporalKnowledgeRuntime.relations(in: project, at: point, boundary: boundary)
         let locations = Set(project.temporalKnowledge?.profile?.locationTypeIDs ?? []).union(["place", "location"])
-        var result: [SpatialRoute] = []
+        let filteringTime = point != nil || window != nil
+        var result: [SpatialRoute] = [], undated: [SpatialRoute] = []
         for record in records {
             try Task.checkCancellation()
             guard let metadata = record.metadata, let spatial = metadata.spatial,
                   actorID.map({ spatial.actorIDs.contains($0) }) ?? true,
                   eventIDs.map({ allowed in spatial.eventID.map { allowed.contains($0) } ?? false }) ?? true else { continue }
-            if (point != nil || window != nil) && record.match == .unknown { continue }
+            // Incomparable/unknown dates are not outside the chosen period.
+            // Keep them visibly uncertain, consistently with timeline events.
+            // An associated event is not permission to borrow its date.
+            let unresolved = filteringTime && record.match == .unknown
+            if unresolved && undated.count == limit { continue }
             let ids = [record.relation.fromID] + spatial.viaPlaceIDs + [record.relation.toID]
             guard spatial.referenceIDs.allSatisfy({ byID[$0] != nil }),
                   relevantObjectIDs.map({ !$0.isDisjoint(with: ids + spatial.actorIDs + [spatial.eventID].compactMap { $0 }) }) ?? true else { continue }
@@ -80,15 +85,17 @@ public enum SpatialKnowledgeRuntime {
                     if !evidence.contains(item) { evidence.append(item) }
                 }
             }
-            result.append(SpatialRoute(id: metadata.id, relationID: record.relation.id, eventID: spatial.eventID,
+            let route = SpatialRoute(id: metadata.id, relationID: record.relation.id, eventID: spatial.eventID,
                 title: record.relation.label, kind: spatial.kind, actorIDs: spatial.actorIDs,
                 actorNames: spatial.actorIDs.compactMap { byID[$0]?.name }, placeIDs: ids, placeNames: places.map(\.name),
                 coordinates: coordinates, assertion: metadata.assertion, timeMatch: record.match,
                 extent: metadata.validity, explanation: metadata.explanation, evidence: evidence,
-                locationNotes: places.map { $0.locationNote ?? "现代地理参考位置" }))
+                locationNotes: places.map { $0.locationNote ?? "现代地理参考位置" })
+            if unresolved { undated.append(route) } else { result.append(route) }
             if result.count == limit { break }
         }
-        return result
+        // Unresolved routes cannot crowd known matching routes out of the cap.
+        return result + undated.prefix(limit - result.count)
     }
 }
 

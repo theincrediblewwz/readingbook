@@ -109,7 +109,33 @@ final class BattleMapWorkbenchTests: XCTestCase {
     func testUnknownTimeRoutesNeverPretendToMatchChosenPeriod() throws {
         var book = try fixture(); book.temporalKnowledge!.relationMetadata[0].validity = .init()
         XCTAssertEqual(try SpatialKnowledgeRuntime.routes(in: book).count, 2)
-        XCTAssertTrue(try SpatialKnowledgeRuntime.routes(in: book, at: .narrative(1)).isEmpty)
+        let routes = try SpatialKnowledgeRuntime.routes(in: book, at: .narrative(1))
+        XCTAssertEqual(routes.count, 2)
+        XCTAssertTrue(routes.allSatisfy { $0.timeMatch == .unknown && $0.isUncertain })
+    }
+    func testUnknownDatesStayVisibleButOutsideDatesDoNotAndNoEventDateIsBorrowed() throws {
+        var book = try fixture()
+        book.temporalKnowledge!.relationMetadata[0].validity = .init(sourceText: "", precision: .narrative, uncertainty: .exact, narrativeStart: 0, narrativeDomain: "source-order")
+        let original = try encoded(book)
+        let routes = try SpatialKnowledgeRuntime.routes(in: book, at: .date(.init(year: 12, month: 11, day: 20), calendar: "建安"))
+        XCTAssertEqual(routes.map(\.relationID), ["attack"])
+        let route = try XCTUnwrap(routes.first)
+        XCTAssertEqual(route.timeMatch, .unknown); XCTAssertNil(route.extent.start)
+        XCTAssertEqual(route.extent.narrativeStart, 0); XCTAssertTrue(route.isUncertain)
+        XCTAssertEqual(route.eventID, "fire", "关联同一事件仍不等于有同一个日期")
+        let ordered = try SpatialKnowledgeRuntime.routes(in: book, at: .ordered(0, domain: "source-order"))
+        XCTAssertEqual(ordered.map(\.relationID), ["attack", "withdraw"])
+        XCTAssertEqual(ordered.first?.timeMatch, .matches); XCTAssertEqual(ordered.last?.timeMatch, .unknown)
+        XCTAssertEqual(try encoded(book), original)
+    }
+    func testKnownMatchesTakePriorityOverEarlierUnknownRoutesUnderDisplayLimit() throws {
+        var book = try fixture(); book.temporalKnowledge!.relationMetadata[0].validity = .init()
+        let window = TemporalQueryWindow.date(from: .init(year: 12, month: 11, day: 21), to: .init(year: 12, month: 11, day: 21), calendar: "建安")
+        let routes = try SpatialKnowledgeRuntime.routes(in: book, within: window, limit: 1)
+        XCTAssertEqual(routes.map(\.relationID), ["withdraw"]); XCTAssertEqual(routes.first?.timeMatch, .possible)
+        XCTAssertEqual(try SpatialKnowledgeRuntime.routes(in: book, limit: 1).map(\.relationID), ["attack"], "全时段不改变已有排序")
+        let otherCalendar = try SpatialKnowledgeRuntime.routes(in: book, at: .date(.init(year: 12), calendar: "另一历法"))
+        XCTAssertEqual(otherCalendar.count, 2); XCTAssertTrue(otherCalendar.allSatisfy { $0.timeMatch == .unknown })
     }
     func testActorEventAndObjectFiltersRemainIndependent() throws {
         let book = try fixture()

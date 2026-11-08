@@ -749,6 +749,7 @@ private struct CompositionMap: View {
                 .background(CompositionPageScrollInput())
                 .mapControls { MapCompass(); MapScaleView() }.frame(height: height).clipShape(RoundedRectangle(cornerRadius: 18))
                 .help("双指滑动浏览整页；拖动平移地图，捏合缩放地图。")
+                .overlay(alignment: .topLeading) { SpatialRouteTimeNotice(routes: routes) }
                 .padding(8).onChange(of: selected) { _, ids in
                     locate(ids)
                 }.onChange(of: points) { _, _ in

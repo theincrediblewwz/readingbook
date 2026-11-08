@@ -873,6 +873,7 @@ private struct ReadingMapRenderer: View, Equatable {
             }
         }
         .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
+        .overlay(alignment: .topLeading) { SpatialRouteTimeNotice(routes: routes) }
     }
 }
 

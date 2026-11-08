@@ -535,17 +535,7 @@ struct ReadingQuerySession {
     /// Repack only genuinely supplied text for a standalone final request.
     /// Dropped/truncated fragments lose their citation permission as well.
     mutating func finalEvidence(maximumBytes: Int) throws -> String? {
-        var receipts: [[String: Any]] = []
-        for value in hostReceipts.suffix(4) {
-            guard let original = try? JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any] else { continue }
-            var summary: [String: Any] = [:]
-            for key in ["status", "message", "summary", "proposalID", "digest", "operationID", "applied", "replayed"] {
-                if let string = original[key] as? String { summary[key] = String(string.prefix(300)) }
-                else if let values = original[key] as? [String] { summary[key] = values.prefix(4).map { String($0.prefix(120)) } }
-                else if let number = original[key] as? NSNumber { summary[key] = number }
-            }
-            if !summary.isEmpty { receipts.append(summary) }
-        }
+        var receipts = closingHostReceiptSummaries()
         while !receipts.isEmpty {
             if try json(["hostToolReceipts": receipts, "actualReadFragments": []]).utf8.count <= maximumBytes { break }
             receipts.removeFirst()

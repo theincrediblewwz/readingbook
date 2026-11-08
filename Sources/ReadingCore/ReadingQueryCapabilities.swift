@@ -276,7 +276,7 @@ extension ReadingQuerySession {
             try Task.checkCancellation()
             let checked = try hostResult(returned)
             let result = name == "component_show" ? try await componentReceiptWithActualView(checked, maximumBytes: maximumBytes) : checked
-            hostReceipts.append(result)
+            try recordHostReceipt(result, tool: name)
             if name == "component_show" { lastComponentReceipt = result }
             return result
         }
@@ -287,7 +287,7 @@ extension ReadingQuerySession {
             try validateViewArguments(arguments)
             let returned = try await hostTools.performViewAction(name, data)
             try Task.checkCancellation()
-            let result = try hostResult(returned); hostReceipts.append(result); return result
+            let result = try hostResult(returned); try recordHostReceipt(result, tool: name); return result
         }
         if ReadingQueryToolCatalog.proposalNames.contains(name), let proposalAccess, proposalAccess.proposalTools.contains(name) {
             guard maximumBytes >= 4000 else { return try json(["ok": false, "budgetLimited": true, "message": "没有足够空间返回保存/提案回执，未调用宿主。"] ) }
@@ -295,7 +295,7 @@ extension ReadingQuerySession {
             let resolved = try resolveTemporalSourceSpans(in: resolveSourceReferences(in: data))
             try validateProposal(name: name, data: resolved)
             let returned = try await proposalAccess.prepare(name, resolved)
-            let result = try hostResult(returned); hostReceipts.append(result)
+            let result = try hostResult(returned); try recordHostReceipt(result, tool: name)
             if let refresh = proposalAccess.currentProject {
                 guard let fresh = try await refresh(), fresh.id == snapshot.bookID, fresh.sourceHash == snapshot.sourceHash,
                       let prior = project, fresh.units.count == prior.units.count,
