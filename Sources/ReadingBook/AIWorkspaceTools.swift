@@ -22,10 +22,18 @@ struct WorkspaceAICommand: Equatable {
         let visible = renderedWorkspaceVisibility.flatMap {
             $0.rendererID == route && $0.contextID == readingVisibilityContextID ? $0 : nil
         }
+        let composition = route == "reading.composition" || book.views.first { $0.id == route }?.rendererID == "reading.composition"
+        var context = queryReadingContext
+        if composition {
+            // Composition clocks and selection live in their renderer. A
+            // standalone view's old global clock is not their actual state.
+            // Until an owned composition snapshot is published, report unknown.
+            context.timeFrom = nil; context.timeTo = nil; context.startYear = nil; context.endYear = nil
+        }
         return ReadingWorkspaceSnapshot(bookID: book.id, sourceHash: book.sourceHash, rendererID: route,
-            selectedObjectIDs: selectedObjectID.map { [$0] } ?? [], context: queryReadingContext,
-            visibleObjects: visible, selectedNodeIDs: visible == nil ? [] : renderedSelectedNodeIDs, timeAxis: temporalAxis,
-            timeFrom: timeFrom, timeTo: timeTo, currentTime: timeCursor)
+            selectedObjectIDs: composition ? [] : selectedObjectID.map { [$0] } ?? [], context: context,
+            visibleObjects: visible, selectedNodeIDs: visible == nil ? [] : renderedSelectedNodeIDs, timeAxis: composition ? nil : temporalAxis,
+            timeFrom: composition ? nil : timeFrom, timeTo: composition ? nil : timeTo, currentTime: composition ? nil : timeCursor)
     }
     func readingViewToolAccess(bookID expectedBookID: String, sourceHash: String, runID: UUID? = nil,
                                grant: ControlledWriteGrant? = nil, snapshot: ReadingQuerySnapshot? = nil,

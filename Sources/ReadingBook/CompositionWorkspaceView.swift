@@ -23,6 +23,7 @@ struct CompositionWorkspaceView: View {
     @State private var clocks: [String: CompositionClock] = [:]
     @State private var collapsed = Set<String>()
     @State private var tabs: [String: String] = [:]
+    @State private var canvasAnchors: [String: CGPoint] = [:]
     @State private var issue: String?
     @State private var validatedComposition: CompositionDefinition?
     @State private var validatedBookID: String?
@@ -64,13 +65,16 @@ struct CompositionWorkspaceView: View {
                 else if store.book == nil { fallback("请先从书库打开一本书，再查看这个组合。") }
                 else if let composition, validatedComposition == composition, validatedBookID == store.bookID,
                         let displayedOwner, matches(displayedOwner, store: store) {
-                    ScrollView {
+                    if !embedded, composition.canvasMapPart != nil {
+                        canvas(composition, size: CGSize(width: geometry.size.width, height: max(1, geometry.size.height - 80)))
+                            .padding(.top, 72).padding(.bottom, 8)
+                    } else { ScrollView {
                         VStack(alignment: .leading, spacing: 18) {
                             if !embedded { workspaceHeader }
                             layout(composition.rootID, in: composition, width: max(240, geometry.size.width - (embedded ? 32 : 56)))
                         }.padding(.leading, embedded ? 8 : 20).padding(.trailing, embedded ? 24 : 36)
                             .padding(.top, embedded ? 8 : 92).padding(.bottom, embedded ? 8 : 28)
-                    }.scrollIndicators(.visible).environment(\.workspacePageScroll, true)
+                    }.scrollIndicators(.visible).environment(\.workspacePageScroll, true) }
                 } else if composition != nil { ProgressView("正在准备组件…") }
                 else { fallback("这个组件尚未提供可显示的布局。原书、笔记和已保存配置都保留。") }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -130,7 +134,7 @@ struct CompositionWorkspaceView: View {
     }
 
     private func reset() {
-        clearPrepared(); selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; refresh()
+        clearPrepared(); selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; canvasAnchors = [:]; refresh()
     }
     private func clearPrepared() { preparedInput = nil; preparedOwner = nil }
     private func cancelRefresh() {
@@ -256,16 +260,77 @@ struct CompositionWorkspaceView: View {
         }
     }
 
-    private func layout(_ id: String, in composition: CompositionDefinition, width: CGFloat) -> AnyView {
+    private func canvas(_ composition: CompositionDefinition, size: CGSize) -> some View {
+        let root = composition.layout.first { $0.id == composition.rootID }!
+        let mapPart = composition.canvasMapPart!
+        let cards = Array(root.children.dropFirst())
+        let fixed = cards.compactMap { id -> CGRect? in
+            guard let node = composition.layout.first(where: { $0.id == id }), node.presentation != .contextual else { return nil }
+            return canvasFrame(node, in: composition, size: size)
+        }
+        return ZStack(alignment: .topLeading) {
+            if let projection = projections[mapPart.sourceID] {
+                compositionMap(mapPart, projection: projection, height: size.height, canvas: true)
+                    .accessibilityIdentifier("composition-map-canvas")
+            }
+            ForEach(cards, id: \.self) { id in
+                if let node = composition.layout.first(where: { $0.id == id }), canvasCardIsVisible(node, in: composition) {
+                    let frame = canvasFrame(node, in: composition, size: size, avoiding: fixed)
+                    ScrollView {
+                        layout(id, in: composition, width: frame.width, floating: true,
+                            dismiss: node.presentation == .contextual ? { dismiss(node, in: composition) } : nil)
+                    }.scrollIndicators(.visible).frame(width: frame.width, height: frame.height)
+                        .clipShape(RoundedRectangle(cornerRadius: 24))
+                        .shadow(color: .black.opacity(0.13), radius: 18, y: 6)
+                        .position(x: frame.midX, y: frame.midY)
+                        .accessibilityIdentifier("composition-floating-" + id)
+                }
+            }
+            HStack(spacing: 6) {
+                Button { selections = [:]; canvasAnchors = [:]; clocks = [:] } label: {
+                    Image(systemName: "arrow.counterclockwise").frame(width: 44, height: 44)
+                }.buttonStyle(ReadingQuietButtonStyle()).help("取消选择和时间筛选，显示本范围全部资料")
+                    .accessibilityLabel("显示全部内容")
+                Button { store.route = "reader" } label: { Label("原文", systemImage: "book").frame(minHeight: 44).padding(.horizontal, 8) }
+                    .buttonStyle(ReadingQuietButtonStyle()).help("回到当前阅读位置")
+            }.padding(4).readingGlass(radius: 28).padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        }.frame(width: size.width, height: size.height).clipped()
+            .environment(\.workspacePageScroll, false)
+    }
+    private func canvasCardIsVisible(_ node: CompositionLayoutNode, in composition: CompositionDefinition) -> Bool {
+        guard node.presentation == .contextual else { return true }
+        return composition.parts(inLayout: node.id).contains { part in
+            let ids = selections[part.selectionGroup] ?? []
+            return projections[part.sourceID]?.items.contains { ids.contains($0.objectID ?? $0.documentID ?? $0.id) } == true
+        }
+    }
+    private func canvasFrame(_ node: CompositionLayoutNode, in composition: CompositionDefinition, size: CGSize, avoiding: [CGRect] = []) -> CGRect {
+        let parts = composition.parts(inLayout: node.id)
+        let isCollapsed = parts.count == 1 && collapsed.contains(parts[0].id)
+        let timeline = parts.count == 1 && parts[0].primitive == .timeline
+        let desired = CGSize(width: min(node.presentation == .contextual ? 430 : 680, max(260, size.width * (node.fraction ?? 0.4))),
+            height: isCollapsed ? 60 : min(timeline ? 280 : 480, size.height * (timeline ? 0.46 : 0.72)))
+        if node.presentation == .contextual {
+            let anchor = parts.compactMap { canvasAnchors[$0.selectionGroup] }.first
+            return CompositionCanvasLayout.contextual(size: desired, near: anchor, in: size, avoiding: avoiding)
+        }
+        return CompositionCanvasLayout.docked(size: desired, in: size, dock: node.dock ?? .bottomLeading)
+    }
+    private func dismiss(_ node: CompositionLayoutNode, in composition: CompositionDefinition) {
+        for part in composition.parts(inLayout: node.id) { selections[part.selectionGroup] = []; canvasAnchors[part.selectionGroup] = nil }
+    }
+
+    private func layout(_ id: String, in composition: CompositionDefinition, width: CGFloat, floating: Bool = false, dismiss: (() -> Void)? = nil) -> AnyView {
         guard let node = composition.layout.first(where: { $0.id == id }) else { return AnyView(EmptyView()) }
         let children = node.children
         switch node.kind {
         case .part:
             guard let part = composition.parts.first(where: { $0.id == node.partID }) else { return AnyView(EmptyView()) }
-            return AnyView(partCard(part, width: width))
+            return AnyView(partCard(part, width: width, floating: floating, dismiss: dismiss))
         case .column:
             return AnyView(VStack(alignment: .leading, spacing: 18) {
-                ForEach(children, id: \.self) { layout($0, in: composition, width: width) }
+                ForEach(children, id: \.self) { layout($0, in: composition, width: width, floating: floating, dismiss: dismiss) }
             })
         case .row:
             let available = max(1, width - CGFloat(max(0, children.count - 1)) * 18)
@@ -273,13 +338,13 @@ struct CompositionWorkspaceView: View {
             let total = max(0.001, weights.reduce(0, +))
             if width < 740 || weights.contains(where: { available * CGFloat($0 / total) < 260 }) {
                 return AnyView(VStack(alignment: .leading, spacing: 18) {
-                    ForEach(children, id: \.self) { layout($0, in: composition, width: width) }
+                    ForEach(children, id: \.self) { layout($0, in: composition, width: width, floating: floating, dismiss: dismiss) }
                 })
             }
             return AnyView(HStack(alignment: .top, spacing: 18) {
                 ForEach(Array(children.enumerated()), id: \.element) { index, child in
                     let childWidth = available * CGFloat(weights[index] / total)
-                    layout(child, in: composition, width: childWidth).frame(width: childWidth)
+                    layout(child, in: composition, width: childWidth, floating: floating, dismiss: dismiss).frame(width: childWidth)
                 }
             })
         case .tabs:
@@ -294,21 +359,27 @@ struct CompositionWorkspaceView: View {
                         }
                     }.padding(5)
                 }.readingGlass(radius: 20)
-                if let selected { layout(selected, in: composition, width: width) }
+                if let selected { layout(selected, in: composition, width: width, floating: floating, dismiss: dismiss) }
             })
         case .overlay:
             // The first child owns the canvas. Later children float over it;
             // a compact window stacks them rather than hiding the canvas.
             if width < 740 {
-                return AnyView(VStack(spacing: 18) { ForEach(children, id: \.self) { layout($0, in: composition, width: width) } })
+                return AnyView(VStack(spacing: 18) { ForEach(children, id: \.self) { child in
+                    if let node = composition.layout.first(where: { $0.id == child }), canvasCardIsVisible(node, in: composition) {
+                        layout(child, in: composition, width: width)
+                    }
+                } })
             }
             return AnyView(ZStack {
                 if let first = children.first { layout(first, in: composition, width: width) }
                 ForEach(Array(children.dropFirst()), id: \.self) { child in
+                    if let node = composition.layout.first(where: { $0.id == child }), canvasCardIsVisible(node, in: composition) {
                     let dock = composition.layout.first { $0.id == child }?.dock ?? .bottomTrailing
                     layout(child, in: composition, width: min(350, width * 0.4))
                         .frame(width: min(350, width * 0.4)).padding(16)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment(dock))
+                    }
                 }
             }.frame(minHeight: 440))
         }
@@ -355,7 +426,7 @@ struct CompositionWorkspaceView: View {
         case .table: return "tablecells"
         }
     }
-    private func partCard(_ part: CompositionPart, width: CGFloat) -> some View {
+    private func partCard(_ part: CompositionPart, width: CGFloat, floating: Bool = false, dismiss: (() -> Void)? = nil) -> some View {
         let projection = projections[part.sourceID]
         let source = baseline[part.sourceID]
         return VStack(alignment: .leading, spacing: 0) {
@@ -364,17 +435,18 @@ struct CompositionWorkspaceView: View {
                 Text(title(part)).font(.system(size: 16, weight: .semibold)).lineLimit(2)
                 Spacer(minLength: 4)
                 Button {
+                    if let dismiss { dismiss(); return }
                     withAnimation(ReadingMotion.animation(reduce: reduceMotion)) {
                         if collapsed.contains(part.id) { collapsed.remove(part.id) } else { collapsed.insert(part.id) }
                     }
-                } label: { Image(systemName: collapsed.contains(part.id) ? "plus" : "minus").frame(width: 48, height: 48) }
-                    .buttonStyle(ReadingQuietButtonStyle()).contentShape(Rectangle()).help(collapsed.contains(part.id) ? "展开\(title(part))" : "收起\(title(part))")
-                    .accessibilityLabel(collapsed.contains(part.id) ? "展开\(title(part))" : "收起\(title(part))")
+                } label: { Image(systemName: dismiss != nil ? "xmark" : collapsed.contains(part.id) ? "plus" : "minus").frame(width: 48, height: 48) }
+                    .buttonStyle(ReadingQuietButtonStyle()).contentShape(Rectangle()).help(dismiss != nil ? "关闭详情，或点击地图空白处收起" : collapsed.contains(part.id) ? "展开\(title(part))" : "收起\(title(part))")
+                    .accessibilityLabel(dismiss != nil ? "关闭\(title(part))" : collapsed.contains(part.id) ? "展开\(title(part))" : "收起\(title(part))")
             }.padding(.leading, 18).padding(.trailing, 6).frame(minHeight: 60)
             if !collapsed.contains(part.id) {
                 Divider().opacity(0.4)
                 if let projection {
-                    primitive(part, projection: projection, baseline: source ?? projection, width: width)
+                    primitive(part, projection: projection, baseline: source ?? projection, width: width, floating: floating)
                     if projection.partial, projection.items.count < projection.total {
                         Text("当前显示 \(projection.items.count) 项，共 \(projection.total) 项。")
                             .font(.caption).foregroundStyle(.secondary).padding(14)
@@ -387,7 +459,7 @@ struct CompositionWorkspaceView: View {
         }.frame(maxWidth: .infinity, alignment: .topLeading).readingGlass(radius: 24)
     }
 
-    @ViewBuilder private func primitive(_ part: CompositionPart, projection: CompositionProjection, baseline: CompositionProjection, width: CGFloat) -> some View {
+    @ViewBuilder private func primitive(_ part: CompositionPart, projection: CompositionProjection, baseline: CompositionProjection, width: CGFloat, floating: Bool = false) -> some View {
         let selected = selections[part.selectionGroup] ?? []
         switch part.primitive {
         case .objectList:
@@ -401,7 +473,20 @@ struct CompositionWorkspaceView: View {
         case .markdown:
             CompositionMarkdown(items: projection.items, selected: selected)
         case .map:
-            VStack(alignment: .leading, spacing: 8) {
+            compositionMap(part, projection: projection, height: embedded ? 220 : 420)
+        case .timeline:
+            CompositionTimeline(items: baseline.items, selected: selected,
+                clock: Binding(get: { clocks[part.timeGroup] ?? CompositionClock() }, set: { clocks[part.timeGroup] = $0 }), compact: floating,
+                select: { select($0, group: part.selectionGroup) })
+        case .relations, .documentGraph:
+            CompositionGraph(partID: part.id, viewID: definition?.id ?? "composition", projection: projection,
+                selected: selected, documents: part.primitive == .documentGraph, width: width,
+                select: { select($0, group: part.selectionGroup) }, deselect: { selections[part.selectionGroup] = [] })
+        }
+    }
+    private func compositionMap(_ part: CompositionPart, projection: CompositionProjection, height: CGFloat, canvas: Bool = false) -> some View {
+            VStack(alignment: .leading, spacing: canvas ? 0 : 8) {
+                if !canvas {
                 if clocks[part.timeGroup]?.window != nil {
                     Picker("人物位置", selection: Binding(get: { clocks[part.timeGroup]?.mapMode ?? .instant }, set: { mode in
                         var clock = clocks[part.timeGroup] ?? CompositionClock(); clock.mapMode = mode; clocks[part.timeGroup] = clock
@@ -410,23 +495,30 @@ struct CompositionWorkspaceView: View {
                         Text("这段时间的已知足迹").tag(CompositionMapTimeMode.windowFootprints)
                     }.pickerStyle(.menu).padding(.horizontal, 16).frame(minHeight: 48)
                 }
-                CompositionMap(points: projection.mapPoints, routes: projection.mapRoutes, selected: selected, height: embedded ? 220 : 420) { select($0, group: part.selectionGroup) }
+                }
+                CompositionMap(points: projection.mapPoints, routes: projection.mapRoutes, selected: selections[part.selectionGroup] ?? [], height: height, canvas: canvas,
+                    select: { select($0, group: part.selectionGroup) },
+                    deselect: { selections[part.selectionGroup] = []; canvasAnchors[part.selectionGroup] = nil },
+                    selectedLocation: { if canvasAnchors[part.selectionGroup] != $0 { canvasAnchors[part.selectionGroup] = $0 } })
+                if !canvas {
                 Text(clocks[part.timeGroup]?.mapMode == .windowFootprints && clocks[part.timeGroup]?.window != nil
                      ? "人物仅显示所选区间内时间明确、有独立原文出处的足迹；时间待考的记录不作确定位置。"
                      : clocks[part.timeGroup]?.point != nil
                          ? "人物仅显示光标时刻有独立出处的位置；固定地点的坐标不代表人物曾经到访。"
                          : "全时段显示有独立出处的人物出现记录；固定地点的坐标不代表人物曾经到访。")
                     .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.bottom, 12)
+                }
             }
-        case .timeline:
-            CompositionTimeline(items: baseline.items, selected: selected,
-                clock: Binding(get: { clocks[part.timeGroup] ?? CompositionClock() }, set: { clocks[part.timeGroup] = $0 }),
-                select: { select($0, group: part.selectionGroup) })
-        case .relations, .documentGraph:
-            CompositionGraph(partID: part.id, viewID: definition?.id ?? "composition", projection: projection,
-                selected: selected, documents: part.primitive == .documentGraph, width: width,
-                select: { select($0, group: part.selectionGroup) }, deselect: { selections[part.selectionGroup] = [] })
-        }
+                .overlay(alignment: .bottomTrailing) {
+                    if canvas, clocks[part.timeGroup]?.window != nil {
+                        Picker("人物位置", selection: Binding(get: { clocks[part.timeGroup]?.mapMode ?? .instant }, set: { mode in
+                            var clock = clocks[part.timeGroup] ?? CompositionClock(); clock.mapMode = mode; clocks[part.timeGroup] = clock
+                        })) {
+                            Text("此刻位置").tag(CompositionMapTimeMode.instant)
+                            Text("这段时间的已知足迹").tag(CompositionMapTimeMode.windowFootprints)
+                        }.pickerStyle(.menu).padding(10).readingGlass(radius: 20).padding(.trailing, 12).padding(.bottom, 54)
+                    }
+                }
     }
 }
 
@@ -726,17 +818,24 @@ private struct CompositionMap: View {
     let routes: [SpatialRoute]
     let selected: Set<String>
     var height: CGFloat = 420
+    var canvas = false
     var select: (String) -> Void
+    var deselect: () -> Void = {}
+    var selectedLocation: (CGPoint?) -> Void = { _ in }
     @State private var camera: MapCameraPosition = .automatic
     @State private var inspectedRoute: SpatialRoute?
     var body: some View {
         if points.isEmpty && routes.isEmpty { CompositionEmptyState(text: "当前范围和时间没有已确认的位置。人物仅显示有出处的出现地点。", icon: "map") }
         else {
+            GeometryReader { geometry in MapReader { proxy in
             Map(position: $camera) {
                 SpatialMapRoutes(routes: routes, inspected: $inspectedRoute, selectEvent: select)
                 ForEach(points) { point in
                     Annotation(point.title, coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)) {
-                        Button { select(point.targetID) } label: {
+                        Button {
+                            selectedLocation(canvas ? proxy.convert(CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude), to: .local) : nil)
+                            select(point.targetID)
+                        } label: {
                             Image(systemName: point.kind == "presence" ? "person.fill" : "mappin")
                                 .font(.system(size: 17, weight: .semibold)).foregroundStyle(selected.contains(point.targetID) ? Color.white : Palette.accent)
                                 .frame(width: 48, height: 48).background(selected.contains(point.targetID) ? Palette.accent : Palette.paper, in: Circle())
@@ -747,16 +846,40 @@ private struct CompositionMap: View {
             }
                 .popover(item: $inspectedRoute) { SpatialRouteDetails(route: $0) }
                 .background(CompositionPageScrollInput())
-                .mapControls { MapCompass(); MapScaleView() }.frame(height: height).clipShape(RoundedRectangle(cornerRadius: 18))
-                .help("双指滑动浏览整页；拖动平移地图，捏合缩放地图。")
+                .mapControls { MapCompass(); MapScaleView() }.frame(height: height).clipShape(RoundedRectangle(cornerRadius: canvas ? 0 : 18))
+                .help(canvas ? "拖动或双指平移地图，捏合缩放；点标记看详情，点空白收起。" : "双指滑动浏览整页；拖动平移地图，捏合缩放地图。")
                 .overlay(alignment: .topLeading) { SpatialRouteTimeNotice(routes: routes) }
-                .padding(8).onChange(of: selected) { _, ids in
-                    locate(ids)
+                .simultaneousGesture(SpatialTapGesture().onEnded { tap in
+                    guard canvas, !selected.isEmpty else { return }
+                    // Native annotation buttons keep their own click. Only a
+                    // tap away from all annotation targets is canvas dismissal.
+                    let anchors = points.compactMap { proxy.convert(CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude), to: .local) }
+                    let routeAnchors = routes.compactMap { $0.coordinates.dropFirst().first }.compactMap { proxy.convert($0.mapCoordinate, to: .local) }
+                    guard !anchors.contains(where: { hypot($0.x - tap.location.x, $0.y - tap.location.y) < 40 }),
+                          !routeAnchors.contains(where: { hypot($0.x - tap.location.x, $0.y - tap.location.y) < 90 }) else { return }
+                    inspectedRoute = nil; selectedLocation(nil); deselect()
+                })
+                .onMapCameraChange(frequency: .continuous) { _ in
+                    if canvas { reportLocation(using: proxy) }
+                }
+                .onChange(of: selected) { _, ids in
+                    if canvas {
+                        reportLocation(using: proxy)
+                        if let point = screenPoint(ids, using: proxy), CGRect(origin: .zero, size: geometry.size).contains(point) {
+                            // Selecting a visible marker keeps the map still.
+                        } else if !ids.isEmpty { locate(ids) }
+                    } else { locate(ids) }
                 }.onChange(of: points) { _, _ in
                     if !camera.positionedByUser { if selected.isEmpty { camera = .automatic } else { locate(selected) } }
                 }
+            } }.frame(height: height).padding(canvas ? 0 : 8)
         }
     }
+    private func screenPoint(_ ids: Set<String>, using proxy: MapProxy) -> CGPoint? {
+        guard let point = points.first(where: { ids.contains($0.targetID) }) else { return nil }
+        return proxy.convert(CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude), to: .local)
+    }
+    private func reportLocation(using proxy: MapProxy) { selectedLocation(screenPoint(selected, using: proxy)) }
     private func locate(_ ids: Set<String>) {
         if let point = points.first(where: { ids.contains($0.targetID) }) {
             camera = .region(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude), span: MKCoordinateSpan(latitudeDelta: 3, longitudeDelta: 3)))
@@ -783,6 +906,7 @@ private struct CompositionTimeline: View {
     let items: [CompositionItem]
     let selected: Set<String>
     @Binding var clock: CompositionClock
+    var compact = false
     var select: (String) -> Void
     private var axes: [String] { TemporalAxis.available(items.compactMap(\.extent)) }
     private var axis: String { clock.axis.flatMap { axes.contains($0) ? $0 : nil } ?? axes.first ?? "" }
@@ -818,7 +942,7 @@ private struct CompositionTimeline: View {
                     events: events, selectedID: selected.sorted().first, select: select,
                     cursor: Binding(get: { cursor }, set: { update(cursor: $0) }), label: label)
                 Text("两端筛选事件和行动箭头；光标查看人物此时的位置。").font(.caption).foregroundStyle(.secondary)
-                if let item = items.first(where: { selected.contains($0.objectID ?? $0.id) }) {
+                if !compact, let item = items.first(where: { selected.contains($0.objectID ?? $0.id) }) {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(item.title).font(.system(size: 17, weight: .medium))
                         if let extent = item.extent, !extent.sourceText.isEmpty {

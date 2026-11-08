@@ -3,13 +3,13 @@ import Foundation
 /// A closed, declarative view request. It never contains executable code or
 /// knowledge edits; the host resolves the renderer from its actual registry.
 public struct ReadingComponentRequest: Codable, Sendable {
-    public let componentID: String
+    public let componentID: String?
     public let viewID: String?
     public let title: String?
     public let composition: CompositionDefinition?
     public let templateID: String?
     public let confirmationOnly: Bool?
-    public init(componentID: String, viewID: String? = nil, title: String? = nil, composition: CompositionDefinition? = nil, templateID: String? = nil, confirmationOnly: Bool? = nil) {
+    public init(componentID: String? = nil, viewID: String? = nil, title: String? = nil, composition: CompositionDefinition? = nil, templateID: String? = nil, confirmationOnly: Bool? = nil) {
         self.componentID = componentID; self.viewID = viewID; self.title = title; self.composition = composition
         self.templateID = templateID
         self.confirmationOnly = confirmationOnly
@@ -19,7 +19,8 @@ public struct ReadingComponentRequest: Codable, Sendable {
         guard data.count <= 32_768, let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(fields.keys).isSubset(of: ["componentID", "viewID", "title", "composition", "templateID", "confirmationOnly"]) else { throw ReadingError.invalid("组件请求结构无效。") }
         let value = try JSONDecoder().decode(Self.self, from: data)
-        guard !value.componentID.isEmpty, value.componentID.utf8.count <= 128,
+        guard value.componentID != nil || value.viewID != nil,
+              value.componentID.map({ !$0.isEmpty && $0.utf8.count <= 128 }) ?? true,
               value.viewID.map({ !$0.isEmpty && $0.utf8.count <= 128 }) ?? true,
               value.title.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 400 }) ?? true,
               value.composition == nil || (value.componentID == "reading.composition" && value.viewID == nil) else { throw ReadingError.invalid("组件名称、标题或组合定义无效。") }
@@ -48,12 +49,12 @@ extension ReadingQueryToolCatalog {
         [function("components_list", "发现宿主实际安装的组件和用途，并分页返回本书已有视图。应先发现再选组件，不凭空猜ID；不返回书中内容。",
             ["offset": ["type": "integer", "minimum": 0, "maximum": 128], "limit": ["type": "integer", "minimum": 1, "maximum": 8]]),
          function("component_show", "按用户当前需求复用或加入一个组件并打开。仅保存新增的视图配置，不新增分析、不覆盖已有布局或正文。自定义组件使用受限组合声明，不能执行代码。结果以真实宿主回执为准。",
-            ["componentID": ["type": "string", "minLength": 1, "maxLength": 128],
-             "viewID": ["type": "string", "minLength": 1, "maxLength": 128, "description": "复用components_list返回的已有视图；不改其配置。"],
+            ["componentID": ["type": "string", "minLength": 1, "maxLength": 128, "description": "新建时填目录中的组件种类id，例如reading.composition；不是已保存视图的id。"],
+             "viewID": ["type": "string", "minLength": 1, "maxLength": 128, "description": "打开已保存视图只需此项：填components_list返回的views.id，宿主自动识别组件种类，不改配置。新建才填componentID。"],
              "title": ["type": "string", "minLength": 1, "maxLength": 400],
              "confirmationOnly": ["type": "boolean", "description": "仅当用户只要求打开或切换已有资料视图、没有要求解释内容或补充整理时设true；宿主按真实结果简短确认，不再请求模型编写说明。内容问题须false。"],
              "templateID": ["type": "string", "enum": ReadingWorkbench.templateIDs, "description": "两个可选布局：reading-time-map（地图、时间轴与人物）、reading-workbench（人物、关系与笔记）；也可直接组合元件。勿同时传composition/viewID；displayPurpose、actualView仅为返回字段。"],
-             "composition": CompositionSchema.definition], required: ["componentID"])]
+             "composition": CompositionSchema.definition], required: [])]
     }
 }
 

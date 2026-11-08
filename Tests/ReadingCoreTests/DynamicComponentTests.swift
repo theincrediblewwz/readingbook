@@ -184,6 +184,17 @@ final class DynamicComponentTests: XCTestCase {
         let invalid = ReadingComponentRequest(componentID: "relations", composition: composition())
         XCTAssertThrowsError(try ReadingComponentRequest.decode(JSONEncoder().encode(invalid)))
     }
+    func testSavedViewOpeningNeedsOnlyItsStableViewID() throws {
+        let saved = try ReadingComponentRequest.decode(Data(#"{"viewID":"my-saved-map","confirmationOnly":true}"#.utf8))
+        XCTAssertNil(saved.componentID); XCTAssertEqual(saved.viewID, "my-saved-map")
+        XCTAssertEqual(try JSONDecoder().decode(ReadingComponentRequest.self, from: JSONEncoder().encode(saved)).viewID, saved.viewID)
+        let old = try ReadingComponentRequest.decode(Data(#"{"componentID":"reading.composition","viewID":"my-saved-map"}"#.utf8))
+        XCTAssertEqual(old.componentID, "reading.composition"); XCTAssertEqual(old.viewID, saved.viewID)
+        for raw in [#"{}"#, #"{"title":"没有目标"}"#, #"{"viewID":""}"#,
+                    #"{"componentID":"","viewID":"existing"}"#, #"{"viewID":"existing","templateID":"reading-time-map"}"#] {
+            XCTAssertThrowsError(try ReadingComponentRequest.decode(Data(raw.utf8)))
+        }
+    }
     func testComponentToolReservesBudgetAndRejectsUnknownTypeBeforeCallingHost() async throws {
         let project = project(), snapshot = try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: .init(unitID: "u1"))
         let host = ReadingHostToolAccess(viewActions: ["component_show"], performViewAction: { _, _ in XCTFail("must not execute"); return Data() })

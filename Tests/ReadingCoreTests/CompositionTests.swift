@@ -97,6 +97,132 @@ final class CompositionTests: XCTestCase {
         XCTAssertThrowsError(try CompositionRuntime.validate(value, in: book))
     }
 
+    func testCanvasPresentationIsGenericRoundTripsAndDoesNotStoreFacts() throws {
+        let book = try fixture()
+        var value = try XCTUnwrap(ReadingWorkbench.definition(for: ReadingWorkbench.timeMapTemplateID))
+        try CompositionRuntime.validate(value, in: book)
+        XCTAssertEqual(value.canvasMapPart?.primitive, .map)
+        XCTAssertEqual(value.parts(inLayout: "detail-tabs").map(\.primitive), [.objectDetail, .objectList, .relations, .markdown])
+        let before = try JSONEncoder().encode(book)
+        let decoded = try JSONDecoder().decode(CompositionDefinition.self, from: JSONEncoder().encode(value))
+        XCTAssertEqual(decoded, value); XCTAssertEqual(Set([decoded, value]).count, 1)
+        let empty = try CompositionRuntime.project(value, in: book)
+        XCTAssertEqual(empty["details"]?.items.count, 0)
+        let selected = try CompositionRuntime.project(value, in: book, selections: ["main": ["cao"]])
+        XCTAssertEqual(selected["details"]?.items.first?.objectID, "cao")
+        XCTAssertEqual(try JSONEncoder().encode(book).count, before.count)
+        // Layout can put a list over a map without any historical/battle name.
+        value.parts = [.init(id: "surface", primitive: .map, sourceID: "all"), .init(id: "card", primitive: .objectList, sourceID: "all")]
+        value.sources = [.init(id: "all", collection: .objects, scope: .book)]
+        value.layout = [.init(id: "root", kind: .overlay, children: ["background", "foreground"]),
+            .init(id: "background", kind: .part, partID: "surface"),
+            .init(id: "foreground", kind: .part, partID: "card", dock: .topLeading, presentation: .contextual)]
+        XCTAssertNoThrow(try CompositionRuntime.validate(value, in: book))
+        XCTAssertEqual(value.canvasMapPart?.id, "surface")
+    }
+    func testContextualPresentationOnlyBelongsToAnOverlayCard() throws {
+        let book = try fixture()
+        let valid = try XCTUnwrap(ReadingWorkbench.definition(for: ReadingWorkbench.timeMapTemplateID))
+        for target in ["root", "map-frame", "detail-frame"] {
+            var value = valid
+            value.layout[value.layout.firstIndex { $0.id == target }!].presentation = .contextual
+            XCTAssertThrowsError(try CompositionRuntime.validate(value, in: book), target)
+        }
+        var value = valid
+        value.layout[value.layout.firstIndex { $0.id == "root" }!].kind = .column
+        XCTAssertThrowsError(try CompositionRuntime.validate(value, in: book))
+        value = valid
+        value.layout[value.layout.firstIndex { $0.id == "detail-tabs" }!].presentation = nil
+        XCTAssertNoThrow(try CompositionRuntime.validate(value, in: book), "旧布局没有新字段仍可读")
+        XCTAssertEqual(value.canvasMapPart?.id, "map")
+    }
+    func testFloatingCardsStayWithinViewportAndAvoidTimelineWhenRoomExists() throws {
+        for viewport in [CGSize(width: 1320, height: 780), CGSize(width: 800, height: 580), CGSize(width: 360, height: 480), .zero] {
+            for dock in FloatingPanelDock.allCases {
+                let frame = CompositionCanvasLayout.docked(size: CGSize(width: 600, height: 280), in: viewport, dock: dock)
+                XCTAssertTrue(frame.minX >= 0 && frame.minY >= 0)
+                XCTAssertTrue(frame.width.isFinite && frame.height.isFinite)
+                XCTAssertLessThanOrEqual(frame.maxX, max(1, viewport.width))
+                XCTAssertLessThanOrEqual(frame.maxY, max(1, viewport.height))
+                for point in [CGPoint.zero, CGPoint(x: 790, y: 570), CGPoint(x: -100, y: -100), CGPoint(x: CGFloat.infinity, y: CGFloat.nan)] {
+                    let detail = CompositionCanvasLayout.contextual(size: CGSize(width: 410, height: 430), near: point, in: viewport, avoiding: [frame])
+                    XCTAssertTrue(detail.minX >= 0 && detail.minY >= 0)
+                    XCTAssertLessThanOrEqual(detail.maxX, max(1, viewport.width))
+                    XCTAssertLessThanOrEqual(detail.maxY, max(1, viewport.height))
+                }
+            }
+        }
+        let size = CGSize(width: 1320, height: 780)
+        let timeline = CompositionCanvasLayout.docked(size: CGSize(width: 600, height: 280), in: size, dock: .bottomLeading)
+        let detail = CompositionCanvasLayout.contextual(size: CGSize(width: 400, height: 450), near: CGPoint(x: 720, y: 350), in: size, avoiding: [timeline])
+        XCTAssertTrue(detail.intersection(timeline).isNull || detail.intersection(timeline).isEmpty)
+        XCTAssertFalse(detail.contains(CGPoint(x: 720, y: 350)), "卡片不盖住选中的标记")
+    }
+    func testLayoutFeedbackListsIndependentIDGroupAndUnusedSourceMistakesTogether() throws {
+        var value = try XCTUnwrap(ReadingWorkbench.definition(for: ReadingWorkbench.timeMapTemplateID))
+        value.parts[2].timeGroup = "a-different-clock"
+        value.parts[3].columns = [.init(field: "name")]
+        value.sources.append(.init(id: "unused", collection: .relations))
+        value.layout[0].children[0] = "map"
+        do {
+            try CompositionRuntime.validate(value, in: fixture()); XCTFail("不猜布局、不自动删除字段")
+        } catch let error as ReadingCompositionError {
+            let paths = error.issues.map(\.path)
+            XCTAssertTrue(paths.contains("parts[2].timeGroup"))
+            XCTAssertTrue(paths.contains("parts[3].columns"))
+            XCTAssertTrue(paths.contains("sources[5]"))
+            XCTAssertTrue(paths.contains("layout[0].children[0]"))
+            XCTAssertLessThanOrEqual(paths.count, 32)
+        }
+    }
+    func testModelCanRepairLayoutFromStructuredFeedbackBeforeHostNavigation() async throws {
+        actor Counter { var value = 0; func add() { value += 1 } }
+        let book = try fixture(), valid = try XCTUnwrap(ReadingWorkbench.definition(for: ReadingWorkbench.timeMapTemplateID))
+        var invalid = valid; invalid.parts[2].timeGroup = "wrong"; invalid.layout[0].children[0] = "map"
+        var requests = 0
+        let hostCalls = Counter()
+        let host = ReadingHostToolAccess(viewActions: ["component_show"], performViewAction: { _, _ in
+            await hostCalls.add()
+            return Data(#"{"ok":true,"status":"success","opened":true,"analysisCreated":false,"rendererID":"reading.composition","viewID":"opened"}"#.utf8)
+        })
+        _ = try await ReadingAnswerEngine.run(question: "把资料做成地图工作台", project: book,
+            settings: .init(model: "offline", maxOutputTokens: 512, contextWindowTokens: 128_000), documents: [:],
+            context: .init(unitID: "u1"), scope: .page, history: [], memory: nil, memoryEnabled: false,
+            documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 3, hostTools: host,
+            preferences: .init(interaction: .functional)) { messages, _, _, _ in
+                requests += 1
+                if requests == 2 {
+                    let feedback = messages.last?["content"] as? String ?? ""
+                    XCTAssertTrue(feedback.contains("compositionIssues")); XCTAssertTrue(feedback.contains("parts[2].timeGroup"))
+                    XCTAssertTrue(feedback.contains("layout[0].children[0]"))
+                    let count = await hostCalls.value; XCTAssertEqual(count, 0)
+                }
+                if requests <= 2 {
+                    let args = String(decoding: try JSONEncoder().encode(ReadingComponentRequest(componentID: "reading.composition", composition: requests == 1 ? invalid : valid)), as: UTF8.self)
+                    return .init(message: .init(role: "assistant", content: nil, refusal: nil,
+                        tool_calls: [.init(id: "show-\(requests)", type: "function", function: .init(name: "component_show", arguments: args))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 20)
+                }
+                return .init(message: .init(role: "assistant", content: "工作台已打开。", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 20)
+            }
+        let count = await hostCalls.value
+        XCTAssertEqual(requests, 3); XCTAssertEqual(count, 1)
+    }
+    func testContextualCardNeedsAReachableSelectorButAllowsIndependentSelectionGroups() throws {
+        let book = try fixture()
+        var value = try XCTUnwrap(ReadingWorkbench.definition(for: ReadingWorkbench.timeMapTemplateID))
+        let consumer = value.sources.firstIndex { $0.id == "details" }!
+        value.sources[consumer].selectionGroup = "unreachable"
+        value.parts[value.parts.firstIndex { $0.id == "detail" }!].selectionGroup = "unreachable"
+        do { try CompositionRuntime.validate(value, in: book); XCTFail("不能保存永远打不开的情境卡") }
+        catch let error as ReadingCompositionError {
+            XCTAssertTrue(error.issues.contains { $0.path == "layout[3].presentation" && $0.reason.contains("unreachable") })
+        }
+        // A separate, always-visible selector makes the independent group usable.
+        value.sources[0].selectionGroup = "unreachable"
+        for index in value.parts.indices where value.parts[index].sourceID == "objects" { value.parts[index].selectionGroup = "unreachable" }
+        XCTAssertNoThrow(try CompositionRuntime.validate(value, in: book), "不强制所有元件只有一个联动组")
+    }
+
     func testCurrentScopeUsesExactSelectionAndIdentityWithoutFutureSummary() throws {
         let book = try fixture()
         let value = definition([CompositionDataSource(id: "all", collection: .objects), CompositionDataSource(id: "quotes", collection: .evidence)], primitives: [.objectList, .sourceExcerpt])

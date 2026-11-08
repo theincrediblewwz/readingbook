@@ -40,7 +40,7 @@ public enum ReadingWorkbench {
         ]
         return .init(sources: sources, parts: parts, layout: layout, rootID: "root")
     }()
-    private static let timeMapTemplate: CompositionDefinition = {
+    private static let legacyTimeMapTemplate: CompositionDefinition = {
         let sources: [CompositionDataSource] = [
             .init(id: "objects", collection: .objects, scope: .book, limit: 200),
             .init(id: "events", collection: .events, scope: .book, sort: .time, limit: 200),
@@ -69,8 +69,22 @@ public enum ReadingWorkbench {
         ]
         return .init(sources: sources, parts: parts, layout: layout, rootID: "root")
     }()
+    private static let timeMapTemplate: CompositionDefinition = {
+        var value = legacyTimeMapTemplate
+        value.layout = [
+            .init(id: "root", kind: .overlay, children: ["map-frame", "timeline-frame", "detail-tabs"]),
+            .init(id: "map-frame", kind: .part, partID: "map"),
+            .init(id: "timeline-frame", kind: .part, partID: "timeline", fraction: 0.48, dock: .bottomLeading),
+            .init(id: "detail-tabs", kind: .tabs, children: ["detail-frame", "people-frame", "graph-frame", "notes-frame"], fraction: 0.32, presentation: .contextual),
+            .init(id: "detail-frame", kind: .part, partID: "detail"),
+            .init(id: "people-frame", kind: .part, partID: "people"),
+            .init(id: "graph-frame", kind: .part, partID: "graph"),
+            .init(id: "notes-frame", kind: .part, partID: "notes")
+        ]
+        return value
+    }()
     public static func isWorkbench(_ view: ViewDefinition?) -> Bool {
-        view?.rendererID == "reading.composition" && (view?.composition == definition() || view?.composition == timeMapTemplate)
+        view?.rendererID == "reading.composition" && (view?.composition == definition() || view?.composition == timeMapTemplate || view?.composition == legacyTimeMapTemplate)
     }
     public static func continuationQuestion(view: ViewDefinition) -> String {
         "继续整理“\(view.title)”（已有视图ID：\(view.id)）。先查看已保存的资料与本次范围内的处理缺口，只补充缺少的人物关系、事件先后和地点；复用已有对象ID及这个工作台，保留我的修正与笔记，不重复生成已有介绍。每条新增结论带原文出处，推断和位置不确定性要说清楚，不编造日期或路线。"

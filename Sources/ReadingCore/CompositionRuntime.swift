@@ -35,6 +35,8 @@ public enum CompositionRuntime {
         let sources = Dictionary(uniqueKeysWithValues: definition.sources.map { ($0.id, $0) })
         let parts = Dictionary(uniqueKeysWithValues: definition.parts.map { ($0.id, $0) })
         let layouts = Dictionary(uniqueKeysWithValues: definition.layout.map { ($0.id, $0) })
+        let repair = repairIssues(definition)
+        if !repair.isEmpty { throw ReadingCompositionError(issues: repair) }
         let types = Set(project.types.map(\.id)).union(["event", "document"])
         let declaredFields = Set(project.types.flatMap { $0.fields.map(\.key) })
         for source in definition.sources {
@@ -110,6 +112,10 @@ public enum CompositionRuntime {
             }
         }
         var visited = Set<String>()
+        for node in definition.layout where node.presentation != nil {
+            guard let parent = parents[node.id].flatMap({ layouts[$0] }), parent.kind == .overlay,
+                  parent.children.first != node.id else { throw invalid("浮层显示方式只能用于overlay主画布之后的卡片。") }
+        }
         func walk(_ id: String, depth: Int) throws {
             guard depth <= 6, visited.insert(id).inserted, let node = layouts[id] else { throw invalid("组合布局存在环或层数超过6层。") }
             for child in node.children { try walk(child, depth: depth + 1) }

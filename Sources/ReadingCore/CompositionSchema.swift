@@ -22,12 +22,13 @@ public enum CompositionSchema {
             "filters": array(filter, maximum: 8), "sort": enumeration(["name", "sourceOrder", "time"]),
             "limit": ["type": "integer", "minimum": 1, "maximum": 200],
             "traversal": traversal.merging(["description": "仅relation=neighbors可用。按已保存关系名称和方向展开，先遵守来源与时间范围；省略沿用旧一跳。类型和属性筛选只限制结果，隐藏中间对象不生成跨节点直连。"], uniquingKeysWith: { _, new in new })], required: ["id", "collection"])
-        let part = object(["id": id, "primitive": enumeration(CompositionPrimitive.allCases.map(\.rawValue)), "sourceID": id,
+        let part = object(["id": id, "primitive": enumeration(CompositionPrimitive.allCases.map(\.rawValue)).merging(["description": "object.detail含摘要、字段、原文依据及跳转；source.excerpt仅展示原文；选择联动的元件共用selectionGroup，时间筛选共用timeGroup。"], uniquingKeysWith: { _, new in new }), "sourceID": id,
             "title": text, "selectionGroup": id, "timeGroup": id,
             "columns": array(column, minimum: 1, maximum: 8)], required: ["id", "primitive", "sourceID"])
-        let node = object(["id": id, "kind": enumeration(["row", "column", "tabs", "overlay", "part"]), "children": array(id, maximum: 8),
+        let node = object(["id": id, "kind": enumeration(["row", "column", "tabs", "overlay", "part"]).merging(["description": "overlay按children顺序叠放：首项为主画布，其后为浮动卡片；首项是geo.map时地图铺满可用空间。每个元件各有kind=part的布局节点，children引用layout.id，partID引用parts.id。"], uniquingKeysWith: { _, new in new }), "children": array(id, maximum: 8),
             "partID": id, "fraction": ["type": "number", "minimum": 0.1, "maximum": 0.9],
-            "dock": enumeration(FloatingPanelDock.allCases.map(\.rawValue))], required: ["id", "kind"])
+            "dock": enumeration(FloatingPanelDock.allCases.map(\.rawValue)),
+            "presentation": enumeration(["docked", "contextual"]).merging(["description": "仅overlay浮层：docked常驻停靠，contextual在本层联动组选中对象时就近出现，点击画布空白收起；省略沿用常驻。fraction控制卡片宽度比例。"], uniquingKeysWith: { _, new in new })], required: ["id", "kind"])
         return object(["version": ["type": "integer", "enum": [1]], "sources": array(source, minimum: 1, maximum: 12),
             "parts": array(part, minimum: 1, maximum: 24), "layout": array(node, minimum: 1, maximum: 48), "rootID": id],
             required: ["sources", "parts", "layout", "rootID"])

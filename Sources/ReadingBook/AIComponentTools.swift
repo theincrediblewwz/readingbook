@@ -70,7 +70,12 @@ struct ReadingQueryHostOwner {
                 "customComponents": "只能组合现有元件，不执行代码；打开的组件沿用这次提问的原文范围，正文读取仍限本次授权。"])
         }
         let request = try ReadingComponentRequest.decode(data)
-        guard name == "component_show", request.componentID != "book.scheme", let descriptor = registry.component(id: request.componentID) else {
+        let savedView = request.viewID.flatMap { id in enabledViews.first { $0.id == id && $0.configuration?["presentation"] != "inline" } }
+        // A saved view already owns its renderer. The model need not repeat a
+        // second, different kind of ID to open it. An explicit mismatch remains
+        // an error, rather than silently opening another component.
+        let componentID = request.componentID ?? savedView.flatMap { registry.component(for: $0)?.id }
+        guard name == "component_show", let componentID, componentID != "book.scheme", let descriptor = registry.component(id: componentID) else {
             return try viewToolResult("unsupported", "这个组件没有安装，请从组件目录选择。")
         }
         guard !editorDirty, positionNoteRequest == nil, positionNoteBinding == nil else {
@@ -82,8 +87,8 @@ struct ReadingQueryHostOwner {
         let route: String
         var created = false
         let composition = request.resolvedComposition
-        if let viewID = request.viewID {
-            guard let view = enabledViews.first(where: { $0.id == viewID && $0.configuration?["presentation"] != "inline" }),
+        if request.viewID != nil {
+            guard let view = savedView,
                   descriptor.requiresDefinition ? view.rendererID == descriptor.id : registry.equivalent(view, descriptor) else {
                 return try viewToolResult("unsupported", "本书没有这个已启用的组件视图；没有改动配置。")
             }

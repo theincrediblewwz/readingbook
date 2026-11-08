@@ -16,6 +16,8 @@ public enum CompositionPrimitive: String, Codable, CaseIterable, Sendable {
     case table = "object.table"
 }
 public enum CompositionLayoutKind: String, Codable, Sendable { case row, column, tabs, overlay, part }
+/// Layout-only behavior; shared facts stay in the same canonical collections.
+public enum CompositionLayoutPresentation: String, Codable, Sendable { case docked, contextual }
 
 public struct CompositionFilter: Codable, Hashable, Sendable {
     public var field: String
@@ -129,15 +131,17 @@ public struct CompositionLayoutNode: Codable, Hashable, Identifiable, Sendable {
     public var partID: String?
     public var fraction: Double?
     public var dock: FloatingPanelDock?
-    public init(id: String, kind: CompositionLayoutKind, children: [String] = [], partID: String? = nil, fraction: Double? = nil, dock: FloatingPanelDock? = nil) {
-        self.id = id; self.kind = kind; self.children = children; self.partID = partID; self.fraction = fraction; self.dock = dock
+    public var presentation: CompositionLayoutPresentation?
+    public init(id: String, kind: CompositionLayoutKind, children: [String] = [], partID: String? = nil, fraction: Double? = nil, dock: FloatingPanelDock? = nil, presentation: CompositionLayoutPresentation? = nil) {
+        self.id = id; self.kind = kind; self.children = children; self.partID = partID; self.fraction = fraction; self.dock = dock; self.presentation = presentation
     }
-    private enum CodingKeys: String, CodingKey, CaseIterable { case id, kind, children, partID, fraction, dock }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, kind, children, partID, fraction, dock, presentation }
     public init(from decoder: Decoder) throws {
         try compositionKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id); kind = try c.decode(CompositionLayoutKind.self, forKey: .kind); children = try c.decodeIfPresent([String].self, forKey: .children) ?? []
         partID = try c.decodeIfPresent(String.self, forKey: .partID); fraction = try c.decodeIfPresent(Double.self, forKey: .fraction)
+        presentation = try c.decodeIfPresent(CompositionLayoutPresentation.self, forKey: .presentation)
         if let raw = try c.decodeIfPresent(String.self, forKey: .dock) {
             guard let value = FloatingPanelDock(rawValue: raw) else { throw ReadingError.invalid("未知组合面板停靠位置。") }; dock = value
         } else { dock = nil }
@@ -146,12 +150,14 @@ public struct CompositionLayoutNode: Codable, Hashable, Identifiable, Sendable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id); try c.encode(kind, forKey: .kind); try c.encode(children, forKey: .children)
         try c.encodeIfPresent(partID, forKey: .partID); try c.encodeIfPresent(fraction, forKey: .fraction); try c.encodeIfPresent(dock?.rawValue, forKey: .dock)
+        try c.encodeIfPresent(presentation, forKey: .presentation)
     }
     public static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.id == rhs.id && lhs.kind == rhs.kind && lhs.children == rhs.children && lhs.partID == rhs.partID && lhs.fraction == rhs.fraction && lhs.dock?.rawValue == rhs.dock?.rawValue
+        lhs.id == rhs.id && lhs.kind == rhs.kind && lhs.children == rhs.children && lhs.partID == rhs.partID && lhs.fraction == rhs.fraction && lhs.dock?.rawValue == rhs.dock?.rawValue && lhs.presentation == rhs.presentation
     }
     public func hash(into hasher: inout Hasher) {
         hasher.combine(id); hasher.combine(kind); hasher.combine(children); hasher.combine(partID); hasher.combine(fraction); hasher.combine(dock?.rawValue)
+        hasher.combine(presentation)
     }
 }
 

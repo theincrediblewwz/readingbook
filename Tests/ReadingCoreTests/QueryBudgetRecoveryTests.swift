@@ -66,6 +66,29 @@ final class QueryBudgetRecoveryTests: XCTestCase {
         }
         XCTAssertEqual(requests, 2)
     }
+    func testClosingEvidenceTrimKeepsCumulativeReadingCountsWithoutRestoringCitationPermission() async throws {
+        let units = (1...60).map { number in SourceUnit(id: "u\(number)", order: number - 1, chapter: "卷", page: number,
+            text: "第\(number)段原文。" + String(repeating: "曹操与周瑜交战。", count: 50)) }
+        var book = BookProject(title: "范围计数", originalName: "range.txt", sourceHash: "range", units: units)
+        PluginEngine.seed(&book)
+        var context = ReadingContext(unitID: "u2")
+        context.queryRange = .init(pageStart: 1, pageEnd: 60)
+        var calls = 0
+        let result = try await ReadingAnswerEngine.run(question: "核对范围", project: book,
+            settings: .init(model: "offline", maxOutputTokens: 512, contextWindowTokens: 512_000), documents: [:],
+            context: context, scope: .range, history: [],
+            memory: nil, memoryEnabled: false, documentIDs: nil, loader: nil, operationLimit: 512_000, remainingRequests: 2) { messages, _, _, final in
+                calls += 1
+                if !final { return self.call("source_read", #"{"id":"u2"}"#) }
+                let text = messages.compactMap { $0["content"] as? String }.joined(separator: "\n")
+                XCTAssertTrue(text.contains("累计已向模型提供原文60/60单元"))
+                XCTAssertFalse(text.contains("第1段原文"), "收尾仍受实际正文大小上限约束")
+                return self.answer("第二段记载曹操与周瑜交战。[unit:u2]")
+            }
+        XCTAssertEqual(calls, 2); XCTAssertEqual(result.diagnostics.sourceReadIDs.count, 60)
+        XCTAssertTrue(result.diagnostics.disclosure.contains("累计提供原文60/60"))
+        XCTAssertEqual(result.message.evidence.map(\.unitID), ["u2"])
+    }
     func testKnowledgeSchemaProvidesActualTypeReferencesWithoutInventingEventType() async throws {
         let project = book(), snapshot = try ReadingQuerySnapshot.freeze(scope: .page, in: project, context: .init(unitID: "u1", page: 1))
         let proposals = ReadingProposalToolAccess(proposalTools: ["knowledge_changes_propose"], prepare: { _, _ in Data("{}".utf8) })

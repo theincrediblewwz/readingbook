@@ -155,6 +155,12 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
         await transport.configure("composition")
         try await ask("把人物列表和原文放在一起看吧。")
         try check("customCompositionCreatedAndOpened", store.book?.views.count == 2 && store.book?.views.last?.rendererID == "reading.composition" && store.route == store.book?.views.last?.id)
+        let priorSelected = store.selectedObjectID
+        store.selectedObjectID = "stale-reader-selection"
+        let compositionState = store.makeReadingWorkspaceSnapshot()
+        store.selectedObjectID = priorSelected
+        try check("compositionDoesNotReportAnotherViewsClock", compositionState?.timeAxis == nil && compositionState?.timeFrom == nil && compositionState?.timeTo == nil && compositionState?.currentTime == nil && compositionState?.context?.timeFrom == nil && compositionState?.context?.timeTo == nil)
+        try check("compositionDoesNotReportAnotherViewsSelection", compositionState?.selectedObjectIDs.isEmpty == true)
         try await ask("再打开刚才的人物原文对照。")
         try check("identicalCompositionReused", store.book?.views.count == 2)
         let before = store.book!, access = store.readingViewToolAccess(bookID: fixture.id, sourceHash: fixture.sourceHash)
@@ -191,6 +197,12 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
         store.requestedWorkspaceRoute = relationRoute
         let duplicate = try await store.performReadingComponentAction("component_show", data: Data(#"{"componentID":"relations"}"#.utf8), owner: componentOwner, session: ReadingComponentToolSession())
         try check("samePendingPresentationCleared", String(decoding: duplicate, as: UTF8.self).contains("\"opened\":true") && store.requestedWorkspaceRoute == nil && store.route == relationRoute)
+        let viewOnly = try await store.performReadingComponentAction("component_show", data: JSONSerialization.data(withJSONObject: ["viewID": relationRoute]), owner: componentOwner, session: ReadingComponentToolSession())
+        try check("savedViewIDAloneOpensOwnedRenderer", String(decoding: viewOnly, as: UTF8.self).contains("\"opened\":true") && store.route == relationRoute)
+        let mismatched = try await store.performReadingComponentAction("component_show", data: JSONSerialization.data(withJSONObject: ["componentID": "cards", "viewID": relationRoute]), owner: componentOwner, session: ReadingComponentToolSession())
+        try check("savedViewExplicitRendererMismatchRejected", String(decoding: mismatched, as: UTF8.self).contains("\"status\":\"unsupported\"") && store.route == relationRoute)
+        let absent = try await store.performReadingComponentAction("component_show", data: Data(#"{"viewID":"not-a-saved-view"}"#.utf8), owner: componentOwner, session: ReadingComponentToolSession())
+        try check("absentSavedViewNeverCreatesAnotherComponent", String(decoding: absent, as: UTF8.self).contains("\"status\":\"unsupported\"") && store.route == relationRoute && store.book?.views == before.views)
         store.requestedWorkspaceRoute = "reader"
         let pending = try await store.performReadingComponentAction("component_show", data: Data(#"{"componentID":"relations"}"#.utf8), owner: componentOwner, session: ReadingComponentToolSession())
         try check("differentPendingNavigationPreserved", String(decoding: pending, as: UTF8.self).contains("\"status\":\"busy\"") && store.requestedWorkspaceRoute == "reader")

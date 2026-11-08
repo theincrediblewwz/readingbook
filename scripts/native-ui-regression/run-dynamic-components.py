@@ -48,6 +48,8 @@ checks=record.get('checks',{})
 expected.update(['pendingIntentSurvivesWorkspaceRemount','bookChangeClearsQueuedComponentIntent'])
 expected.add('repeatedShowDoesNotRepublishBook')
 expected.add('nativeDSMLCompatibilityUsesOneToolRound')
+expected.update(['savedViewIDAloneOpensOwnedRenderer','savedViewExplicitRendererMismatchRejected','absentSavedViewNeverCreatesAnotherComponent'])
+expected.update(['compositionDoesNotReportAnotherViewsClock','compositionDoesNotReportAnotherViewsSelection'])
 expected.update(['activePositionNoteDraftNotNavigatedOrDiscarded','activePositionBindingNotNavigated'])
 expected.update(['repeatedShowDoesNotRenavigate','samePendingPresentationCleared','differentPendingNavigationPreserved',
     'managementOverlayReallyClosedBeforeSuccess','notesForegroundReallyPresented','removedWorkspacePresentationNotReused'])
