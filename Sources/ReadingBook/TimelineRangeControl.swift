@@ -88,15 +88,19 @@ struct TimelineRangeControl: View {
                         .overlay {
                             // Window-space movement remains stable while this
                             // capsule follows the cursor along the same axis.
-                            GraphPointerBridge(enabled: true, movable: true, resetID: pointerEpoch,
+                            GraphPointerBridge(enabled: upper > lower, movable: upper > lower, resetID: pointerEpoch,
                                 click: { _ in }, drag: { delta, ended in
                                     moveCursor(cursor, by: delta.width, ended: ended, mapping: mapping)
                                 }, cancel: { cursorOrigin = nil; cursorMapping = nil })
                         }
                         .accessibilityRepresentation {
-                            Slider(value: cursor, in: lower...max(lower, upper), step: 1) { Text("当前时间") }
-                                .accessibilityValue(label(cursor.wrappedValue))
-                        }.help("拖动当前时间；人物卡、地图与关系同步更新")
+                            if upper - lower >= 1 {
+                                Slider(value: cursor, in: lower...upper, step: 1) { Text("当前时间") }
+                                    .accessibilityValue(label(cursor.wrappedValue))
+                            } else {
+                                Text(text).accessibilityLabel("当前时间").accessibilityValue(text)
+                            }
+                        }.help(upper > lower ? "拖动当前时间；人物卡、地图与关系同步更新" : "当前范围只有这一个时间点")
                         .position(x: labelX, y: 79)
                 }
             }
@@ -134,11 +138,15 @@ struct TimelineRangeControl: View {
             .onKeyPress(.rightArrow) { adjust(endpoint, by: 1); return .handled }
             .help("\(isLower ? "起点" : "终点")：\(label(current))；可拖动或使用方向键")
             .accessibilityRepresentation {
-                Slider(value: Binding(get: { endpoint == .lower ? lower : upper }, set: {
-                    cancelInteraction(); set(endpoint, to: $0)
-                }), in: bounds, step: 1) {
-                    Text(isLower ? "时间范围起点" : "时间范围终点")
-                }.accessibilityValue(label(current))
+                if bounds.upperBound - bounds.lowerBound >= 1 {
+                    Slider(value: Binding(get: { endpoint == .lower ? lower : upper }, set: {
+                        cancelInteraction(); set(endpoint, to: $0)
+                    }), in: bounds, step: 1) {
+                        Text(isLower ? "时间范围起点" : "时间范围终点")
+                    }.accessibilityValue(label(current))
+                } else {
+                    Text(label(current)).accessibilityLabel(isLower ? "时间范围起点" : "时间范围终点").accessibilityValue(label(current))
+                }
             }.position(x: position, y: thumbY(endpoint, crowded: crowded))
     }
 

@@ -170,6 +170,26 @@ private struct MapFixtureView: View {
         try VNImageRequestHandler(cgImage: image).perform([request])
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
     }
+    func verifyNarrowTimeAxes() async throws {
+        let probe = NSWindow(contentRect: .init(x: 120, y: 120, width: 640, height: 190), styleMask: [.titled], backing: .buffered, defer: false)
+        probe.isReleasedWhenClosed = false
+        defer { probe.orderOut(nil); window.makeKeyAndOrderFront(nil) }
+        for (lower, upper, range) in [(99603.0, 99603.0, 99603.0...99604.0),
+                                       (99603.0, 99603.0, 99603.0...99603.0), (0.0, 0.25, 0.0...1.0)] {
+            let content = NSHostingView(rootView: TimelineRangeControl(lower: .constant(lower), upper: .constant(upper), bounds: range,
+                events: [], selectedID: nil, select: { _ in }, cursor: .constant(lower)))
+            probe.contentView = content; probe.orderFront(nil); try await settle(80)
+            content.layoutSubtreeIfNeeded()
+            // Force the same accessibility representation used by VoiceOver
+            // and the real single-day UI action that previously trapped.
+            let labels = labelStrings(content)
+            guard labels.contains("当前时间"), content.bounds.width > 0, content.bounds.height > 0 else {
+                throw ReadingError.invalid("单时间点的实际原生时间轴没有显示当前时间")
+            }
+            observations.append(["stage": "narrow-time-axis", "lower": lower, "upper": upper,
+                "axisLower": range.lowerBound, "axisUpper": range.upperBound, "currentTimeAXPresent": true])
+        }
+    }
     func run() async throws {
         output = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
         guard output.path.hasPrefix(FileManager.default.currentDirectoryPath + "/logs/"), Bundle.main.bundleIdentifier != "org.readingbook.app" else { throw ReadingError.invalid("Isolation") }
@@ -181,6 +201,7 @@ private struct MapFixtureView: View {
         window.title = "ReadingBook 地图内容复用 · 隔离回归"; window.isReleasedWhenClosed = false
         host = NSHostingView(rootView: MapFixtureView(model: model, store: store)); window.contentView = host
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); try await settle(650)
+        try await verifyNarrowTimeAxes(); try await settle(160)
         let identity = ObjectIdentifier(try map())
         try require("isolatedLibrary", store.libraryRootURL.standardizedFileURL == root.standardizedFileURL)
         try require("all80NativeMarkersPresent", try annotations().count == 80)
