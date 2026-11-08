@@ -154,7 +154,7 @@ private actor ScopeTransport {
         try check("explicitRangeTemporalEventsAreExact", Set(store.temporalEvents.map(\.object.id)) == ["event-u2", "event-u2b", "event-u3"])
         let rangeRecords = await transport.allRecords()
         let rangeMessages = rangeRecords.last?["messages"] as? [[String: Any]] ?? []
-        let providedSource = rangeMessages.compactMap { $0["content"] as? String }.first { $0.contains("actualReadFragments") && $0.contains("sourceRef") } ?? ""
+        let providedSource = rangeMessages.compactMap { $0["content"] as? String }.first { $0.contains("【原文 [unit:") } ?? ""
         try check("explicitRangeSuppliesWholeChosenTextOnce", providedSource.contains("关羽来到这里") && providedSource.contains("张飞来到这里") && providedSource.contains("曹操来到这里") && !providedSource.contains("刘备来到这里"))
         try check("rangeCursorMoveDoesNotExpandComponent", store.selectedUnitID == "u1" && store.componentDataBook?.units.contains(where: { $0.id == "u1" }) == false)
         try await ask(.book, composition: true)
@@ -174,6 +174,33 @@ private actor ScopeTransport {
         try check("leavingComponentRestoresReaderBoundary", store.readingComponentView == nil && store.temporalBoundary.allowedUnitIDs?.contains("u3") == false)
         store.route = scopedRoute
         try check("ordinaryReopenUsesExistingReaderPolicy", store.activeComponentView == nil && store.temporalBoundary.allowedUnitIDs?.contains("u3") == false)
+        store.timeFrom = 12; store.timeTo = 18; store.timeCursor = 15
+        store.renderedCompositionState = nil
+        try check("compositionNeverAdoptsStandaloneClock", store.makeReadingWorkspaceSnapshot()?.timeFrom == nil)
+        store.renderedCompositionState = .init(contextID: store.readingVisibilityContextID, selectedIDs: ["liu"],
+            maps: [.init(partID: "map", latitude: 30, longitude: 110, latitudeDelta: 3, longitudeDelta: 3,
+                objectIDs: ["liu"], visibleRouteIDs: [], projectedRouteIDs: [])],
+            clocks: [.init(groupID: "main", axis: "gregorian", from: 1, to: 2, current: 1.5)])
+        let rendered = store.makeReadingWorkspaceSnapshot()
+        try check("compositionReportsOwnClockAndSelection", rendered?.timeFrom == 1 && rendered?.currentTime == 1.5 && rendered?.selectedObjectIDs == ["liu"])
+        try check("compositionReportsOwnedMapViewport", rendered?.visibleObjects?.objectIDs == ["liu"] && rendered?.mapViewports?.first?.partID == "map")
+        store.publish(try await repository.save(store.book!))
+        try check("compositionRejectsOldPublicationViewport", store.makeReadingWorkspaceSnapshot()?.mapViewports == nil && store.makeReadingWorkspaceSnapshot()?.selectedObjectIDs == [])
+        store.renderedCompositionState = nil
+        try check("ordinaryReopenExplainsReaderBoundary", store.componentSourceControlTitle == "跟随阅读位置")
+        try check("previousSourceChoiceHasNoProjection", store.restorableComponentSource?.snapshot.scope == .book)
+        store.restoreComponentSource()
+        try check("explicitRestoreReturnsFrozenSource", store.activeComponentView?.snapshot?.scope == .book && store.componentDataBook?.entities.contains { $0.id == "cao" } == true)
+        store.followReaderComponentSource()
+        try check("followReaderDoesNotEraseLastChoice", store.activeComponentView == nil && store.restorableComponentSource != nil && store.temporalBoundary.allowedUnitIDs?.contains("u3") == false)
+        let lastChoice = store.lastReadingComponentSource
+        store.route = "reader"
+        try check("sourceChoiceCannotApplyToAnotherRoute", store.restorableComponentSource == nil)
+        store.route = scopedRoute
+        var wrongChoice = store.book!; wrongChoice.sourceHash = "different-source"; store.books = [wrongChoice]
+        store.restoreComponentSource()
+        try check("changedSourceCannotRestoreOldChoice", store.restorableComponentSource == nil && store.activeComponentView == nil)
+        store.books = [saved]; store.lastReadingComponentSource = lastChoice
         let page = try ReadingQuerySnapshot.freeze(scope: .page, in: store.book!, context: .init(unitID: "u2", page: 2))
         try store.installComponentView(route: scopedRoute, snapshot: page, context: .init(unitID: "u2", page: 2))
         var updated = store.book!
@@ -193,14 +220,14 @@ private actor ScopeTransport {
         let previousRoot = store.libraryRootURL
         store.querySourceRange = .init(pageStart: 2, pageEnd: 3); store.queryScope = .range
         store.libraryRootURL = output.appendingPathComponent("other-library")
-        try check("libraryChangeClearsScope", store.readingComponentView == nil)
+        try check("libraryChangeClearsScope", store.readingComponentView == nil && store.lastReadingComponentSource == nil)
         try check("libraryChangeClearsExplicitQueryRange", store.querySourceRange == nil && store.queryScope == .page)
         store.libraryRootURL = previousRoot
         var other = saved; other.id = "other-book"; store.books.append(other)
         try store.installComponentView(route: scopedRoute, snapshot: try ReadingQuerySnapshot.freeze(scope: .book, in: saved), context: nil)
         store.querySourceRange = .init(pageStart: 2, pageEnd: 3); store.queryScope = .range
         store.bookID = other.id
-        try check("bookChangeClearsScope", store.readingComponentView == nil)
+        try check("bookChangeClearsScope", store.readingComponentView == nil && store.lastReadingComponentSource == nil)
         try check("bookChangeClearsExplicitQueryRange", store.querySourceRange == nil && store.queryScope == .page)
         store.bookID = saved.id; store.selectedUnitID = "u2"; store.route = scopedRoute
         try store.installComponentView(route: scopedRoute, snapshot: try ReadingQuerySnapshot.freeze(scope: .book, in: saved), context: nil)

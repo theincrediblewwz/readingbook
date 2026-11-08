@@ -36,11 +36,15 @@ public struct ReadingWorkspaceSnapshot: Codable, Hashable, Sendable {
     public var timeFrom: Double?
     public var timeTo: Double?
     public var currentTime: Double?
-    public init(bookID: String, sourceHash: String, rendererID: String? = nil, selectedObjectIDs: [String] = [], context: ReadingContext? = nil, visibleObjects: ReadingVisibleObjectsSnapshot? = nil, selectedNodeIDs: [String] = [], timeAxis: String? = nil, timeFrom: Double? = nil, timeTo: Double? = nil, currentTime: Double? = nil) {
+    public var mapViewports: [ReadingMapViewport]?
+    public var timeWindows: [ReadingViewTimeWindow]?
+    public var sourceScopeTitle: String?
+    public init(bookID: String, sourceHash: String, rendererID: String? = nil, selectedObjectIDs: [String] = [], context: ReadingContext? = nil, visibleObjects: ReadingVisibleObjectsSnapshot? = nil, selectedNodeIDs: [String] = [], timeAxis: String? = nil, timeFrom: Double? = nil, timeTo: Double? = nil, currentTime: Double? = nil, mapViewports: [ReadingMapViewport]? = nil, timeWindows: [ReadingViewTimeWindow]? = nil, sourceScopeTitle: String? = nil) {
         self.bookID = bookID; self.sourceHash = sourceHash; self.rendererID = rendererID; self.selectedObjectIDs = selectedObjectIDs
         self.context = context; self.visibleObjects = visibleObjects
         self.selectedNodeIDs = selectedNodeIDs
         self.timeAxis = timeAxis; self.timeFrom = timeFrom; self.timeTo = timeTo; self.currentTime = currentTime
+        self.mapViewports = mapViewports; self.timeWindows = timeWindows; self.sourceScopeTitle = sourceScopeTitle
     }
 }
 public struct ReadingHostToolAccess: Sendable {
@@ -422,6 +426,9 @@ extension ReadingQuerySession {
                 "selectedNodeIDs": workspace.selectedNodeIDs.filter { admitsNode($0, admitted: admitted, project: project) },
                 "context": ["page": workspace.context?.page as Any? ?? NSNull(), "timeFrom": workspace.context?.timeFrom as Any? ?? NSNull(), "timeTo": workspace.context?.timeTo as Any? ?? NSNull()],
                 "timeAxis": workspace.timeAxis as Any? ?? NSNull(), "timeFrom": workspace.timeFrom as Any? ?? NSNull(), "timeTo": workspace.timeTo as Any? ?? NSNull(), "currentTime": workspace.currentTime as Any? ?? NSNull(),
+                "sourceScope": workspace.sourceScopeTitle as Any? ?? NSNull(),
+                "mapViewports": try admittedMapViewports(workspace, scoped: scoped, boundary: boundary),
+                "timeWindows": try (workspace.timeWindows ?? []).map { try encoded($0) },
                 "note": "宿主界面状态仅用于定位，不是原书事实；范围外对象已隐藏。"])
         case "visible_objects_list":
             guard let workspace, let visible = workspace.visibleObjects else { return try json(["ok": false, "status": "unsupported", "message": "当前渲染器未接入真实可见对象快照；没有从项目数据猜测。"] ) }
@@ -547,7 +554,10 @@ extension ReadingQuerySession {
                         } + visible.nodeIDs.filter { admitsNode($0, admitted: admitted, project: project) }.map { ["nodeID": $0] }
                         actual = ["status": "success", "rendererID": route, "items": Array(rows.prefix(24)),
                             "partial": visible.partial || rows.count > 24 || rows.count < visible.objectIDs.count + visible.nodeIDs.count || (visible.connections?.count ?? 0) > 24,
-                            "note": "只描述当前画布可见且本轮获准的项目；浮窗遮挡、未分享笔记、范围外内容已排除，不能据此断言整个工作台没有资料或某节点没有关系。"]
+                            "note": "只描述当前画布可见且本轮获准的项目；渲染器已知的遮挡、未分享笔记、范围外内容已排除，不能据此断言整个工作台没有资料或某节点没有关系。"]
+                        actual["mapViewports"] = try admittedMapViewports(workspace, scoped: scoped, boundary: boundary)
+                        actual["sourceScope"] = workspace.sourceScopeTitle as Any? ?? NSNull()
+                        actual["timeWindows"] = try (workspace.timeWindows ?? []).map { try encoded($0) }
                         actual["connections"] = Array((visible.connections ?? []).filter { admitted.contains($0.fromID) && admitted.contains($0.toID) }.prefix(24)).map {
                             ["fromID": $0.fromID, "toID": $0.toID, "label": String($0.label.prefix(80))]
                         }
@@ -564,9 +574,28 @@ extension ReadingQuerySession {
         guard data.count <= min(16_000, maximumBytes) else { return receipt }
         return String(decoding: data, as: UTF8.self)
     }
+    private func admittedMapViewports(_ value: ReadingWorkspaceSnapshot, scoped: BookProject, boundary: KnowledgeReadBoundary) throws -> [[String: Any]] {
+        guard let maps = value.mapViewports, !maps.isEmpty else { return [] }
+        let objects = try TemporalKnowledgeRuntime.objectIDs(in: scoped, boundary: boundary)
+        let relations = Set(try TemporalKnowledgeRuntime.relations(in: scoped, boundary: boundary).map { $0.relation.id })
+        return maps.map { map in
+            let points = Array(Set(map.objectIDs).intersection(objects)).sorted()
+            let projected = Set(map.projectedRouteIDs).intersection(relations)
+            let visible = Array(Set(map.visibleRouteIDs).intersection(projected)).sorted()
+            return ["partID": map.partID, "camera": ["latitude": map.latitude, "longitude": map.longitude,
+                "latitudeDelta": map.latitudeDelta, "longitudeDelta": map.longitudeDelta],
+                "visibleObjectIDs": Array(points.prefix(24)), "visibleRouteIDs": Array(visible.prefix(24)),
+                "visibleRouteCount": visible.count, "projectedRouteCount": projected.count,
+                "partial": points.count > 24 || visible.count > 24,
+                "note": "相机停稳后的区域，扣除工作台内已知的卡片和按钮；不包含其他应用窗口的遮挡。投影路线不一定在屏幕内。"]
+        }
+    }
     private func validateWorkspace(_ value: ReadingWorkspaceSnapshot) throws {
         guard value.bookID == snapshot.bookID, value.sourceHash == snapshot.sourceHash, value.selectedObjectIDs.count <= 1024,
-              value.selectedNodeIDs.count <= 1024, (value.visibleObjects?.objectIDs.count ?? 0) <= 10_000,
+              value.selectedNodeIDs.count <= 1024,
+              (value.mapViewports?.count ?? 0) <= 8, (value.mapViewports ?? []).allSatisfy(\.isValid),
+              (value.timeWindows?.count ?? 0) <= 32, (value.timeWindows ?? []).allSatisfy(\.isValid),
+              (value.sourceScopeTitle?.utf8.count ?? 0) <= 4096, (value.visibleObjects?.objectIDs.count ?? 0) <= 10_000,
               (value.visibleObjects?.nodeIDs.count ?? 0) <= 10_000,
               (value.visibleObjects?.connections?.count ?? 0) <= 10_000,
               [value.timeFrom, value.timeTo, value.currentTime].compactMap({ $0 }).allSatisfy({ $0.isFinite && abs($0) <= 1_000_000_000_000 }) else { throw invalid("界面快照属于其他书或超过界限。") }
