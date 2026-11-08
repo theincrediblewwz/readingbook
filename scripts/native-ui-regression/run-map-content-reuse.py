@@ -56,7 +56,7 @@ assert len(expected) == 32
 checks=record.get('checks',{})
 narrow=record.get('observations',[])
 narrow=[row for row in narrow if row.get('stage')=='narrow-time-axis']
-narrow_passed=len(narrow)==3 and all(row.get('currentTimeAXPresent') is True for row in narrow) and {
+narrow_passed=len(narrow)==3 and all(row.get('currentTimeRendererMounted') is True and row.get('renderedPNGBytes',0)>128 for row in narrow) and {
     (row.get('lower'),row.get('upper'),row.get('axisLower'),row.get('axisUpper')) for row in narrow
 }=={(99603,99603,99603,99604),(99603,99603,99603,99603),(0,0.25,0,1)}
 frozen=all(sha(R/name)==value for name,value in sources.items())

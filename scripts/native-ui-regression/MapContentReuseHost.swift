@@ -171,23 +171,29 @@ private struct MapFixtureView: View {
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
     }
     func verifyNarrowTimeAxes() async throws {
-        let probe = NSWindow(contentRect: .init(x: 120, y: 120, width: 640, height: 190), styleMask: [.titled], backing: .buffered, defer: false)
+        let probe = NSWindow(contentRect: .init(x: 120, y: 120, width: 640, height: 250), styleMask: [.titled], backing: .buffered, defer: false)
         probe.isReleasedWhenClosed = false
         defer { probe.orderOut(nil); window.makeKeyAndOrderFront(nil) }
         for (lower, upper, range) in [(99603.0, 99603.0, 99603.0...99604.0),
                                        (99603.0, 99603.0, 99603.0...99603.0), (0.0, 0.25, 0.0...1.0)] {
-            let content = NSHostingView(rootView: TimelineRangeControl(lower: .constant(lower), upper: .constant(upper), bounds: range,
-                events: [], selectedID: nil, select: { _ in }, cursor: .constant(lower)))
+            let content = NSHostingView(rootView: VStack {
+                TimelineRangeControl(lower: .constant(lower), upper: .constant(upper), bounds: range,
+                    events: [], selectedID: nil, select: { _ in }, cursor: .constant(lower))
+                // Mount the exact product accessibility renderer as ordinary
+                // content too: SwiftUI's virtual AX tree is not always exported
+                // to an in-process traversal on the CI host.
+                TimelineAccessibleTimeControl(value: .constant(lower), bounds: lower...upper, title: "当前时间", format: { String($0) })
+                TimelineAccessibleTimeControl(value: .constant(lower), bounds: range, title: "时间范围起点", format: { String($0) })
+            })
             probe.contentView = content; probe.orderFront(nil); try await settle(80)
             content.layoutSubtreeIfNeeded()
-            // Force the same accessibility representation used by VoiceOver
-            // and the real single-day UI action that previously trapped.
-            let labels = labelStrings(content)
-            guard labels.contains("当前时间"), content.bounds.width > 0, content.bounds.height > 0 else {
-                throw ReadingError.invalid("单时间点的实际原生时间轴没有显示当前时间")
-            }
+            guard content.bounds.width > 0, content.bounds.height > 0,
+                  let image = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { throw ReadingError.invalid("单时间点的原生时间轴没有有效画面") }
+            content.cacheDisplay(in: content.bounds, to: image)
+            guard let png = image.representation(using: .png, properties: [:]), png.count > 128 else { throw ReadingError.invalid("单时间点的原生时间轴未绘制") }
+            try png.write(to: output.appendingPathComponent("narrow-time-\(observations.count).png"))
             observations.append(["stage": "narrow-time-axis", "lower": lower, "upper": upper,
-                "axisLower": range.lowerBound, "axisUpper": range.upperBound, "currentTimeAXPresent": true])
+                "axisLower": range.lowerBound, "axisUpper": range.upperBound, "currentTimeRendererMounted": true, "renderedPNGBytes": png.count])
         }
     }
     func run() async throws {

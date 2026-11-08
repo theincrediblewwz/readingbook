@@ -2,6 +2,23 @@ import SwiftUI
 import AppKit
 import ReadingCore
 
+/// SwiftUI's stepped Slider traps when the interval is shorter than one step.
+/// Keep a single-point query exact and expose its value without a fake range.
+struct TimelineAccessibleTimeControl: View {
+    var value: Binding<Double>
+    let bounds: ClosedRange<Double>
+    let title: String
+    var format: (Double) -> String
+    var body: some View {
+        if bounds.upperBound - bounds.lowerBound >= 1 {
+            Slider(value: value, in: bounds, step: 1) { Text(title) }
+                .accessibilityValue(format(value.wrappedValue))
+        } else {
+            Text(format(value.wrappedValue)).accessibilityLabel(title).accessibilityValue(format(value.wrappedValue))
+        }
+    }
+}
+
 /// One time axis, two independent endpoints. Event dots share that same axis.
 struct TimelineRangeControl: View {
     @Binding var lower: Double
@@ -94,12 +111,7 @@ struct TimelineRangeControl: View {
                                 }, cancel: { cursorOrigin = nil; cursorMapping = nil })
                         }
                         .accessibilityRepresentation {
-                            if upper - lower >= 1 {
-                                Slider(value: cursor, in: lower...upper, step: 1) { Text("当前时间") }
-                                    .accessibilityValue(label(cursor.wrappedValue))
-                            } else {
-                                Text(text).accessibilityLabel("当前时间").accessibilityValue(text)
-                            }
+                            TimelineAccessibleTimeControl(value: cursor, bounds: lower...max(lower, upper), title: "当前时间", format: label)
                         }.help(upper > lower ? "拖动当前时间；人物卡、地图与关系同步更新" : "当前范围只有这一个时间点")
                         .position(x: labelX, y: 79)
                 }
@@ -138,15 +150,9 @@ struct TimelineRangeControl: View {
             .onKeyPress(.rightArrow) { adjust(endpoint, by: 1); return .handled }
             .help("\(isLower ? "起点" : "终点")：\(label(current))；可拖动或使用方向键")
             .accessibilityRepresentation {
-                if bounds.upperBound - bounds.lowerBound >= 1 {
-                    Slider(value: Binding(get: { endpoint == .lower ? lower : upper }, set: {
-                        cancelInteraction(); set(endpoint, to: $0)
-                    }), in: bounds, step: 1) {
-                        Text(isLower ? "时间范围起点" : "时间范围终点")
-                    }.accessibilityValue(label(current))
-                } else {
-                    Text(label(current)).accessibilityLabel(isLower ? "时间范围起点" : "时间范围终点").accessibilityValue(label(current))
-                }
+                TimelineAccessibleTimeControl(value: Binding(get: { endpoint == .lower ? lower : upper }, set: {
+                    cancelInteraction(); set(endpoint, to: $0)
+                }), bounds: bounds, title: isLower ? "时间范围起点" : "时间范围终点", format: label)
             }.position(x: position, y: thumbY(endpoint, crowded: crowded))
     }
 
