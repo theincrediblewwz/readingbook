@@ -6,8 +6,11 @@ enum ControlledKnowledgeSummary {
         let decoder = JSONDecoder(), old = try patch.before.map { try decoder.decode(KnowledgeEntity.self, from: $0) }, new = try patch.after.map { try decoder.decode(KnowledgeEntity.self, from: $0) }
         var lines = ["资料：" + (new?.name ?? old?.name ?? "实体")]
         if old?.name != new?.name { lines.append("名称：\(old?.name ?? "无") → \(new?.name ?? "移除")") }
-        if old?.summary != new?.summary { lines.append("简介：\(old?.summary ?? "未记录")\n→ \(new?.summary ?? "移除")") }
-        if old?.aliases != new?.aliases { lines.append("其他称呼：\((old?.aliases ?? []).joined(separator: "、")) → \((new?.aliases ?? []).joined(separator: "、"))") }
+        if let change = textChange("简介", before: old?.summary, after: new?.summary) { lines.append(change) }
+        if old?.aliases != new?.aliases {
+            let previous = (old?.aliases ?? []).joined(separator: "、"), next = (new?.aliases ?? []).joined(separator: "、")
+            lines.append("其他称呼：\(previous.isEmpty ? "无" : previous) → \(next.isEmpty ? "无" : next)")
+        }
         let keys = Set((old?.properties ?? [:]).keys).union((new?.properties ?? [:]).keys).sorted()
         let typeID = new?.typeID ?? old?.typeID
         let fields = after.types.first { $0.id == typeID }?.fields ?? before.types.first { $0.id == typeID }?.fields ?? []
@@ -19,13 +22,27 @@ enum ControlledKnowledgeSummary {
             return String(format: "%.5f, %.5f", lat, lon)
         }
         if old?.latitude != new?.latitude || old?.longitude != new?.longitude { lines.append("参考坐标（纬度、经度）：" + position(old) + " → " + position(new)) }
-        if old?.locationNote != new?.locationNote { lines.append("位置说明：\(old?.locationNote ?? "未记录")\n→ \(new?.locationNote ?? "移除")") }
+        if let change = textChange("位置说明", before: old?.locationNote, after: new?.locationNote) { lines.append(change) }
         if old?.evidence != new?.evidence {
             let units = Dictionary(after.units.map { ($0.id, $0.locator) }, uniquingKeysWith: { first, _ in first })
             let locations = Set((new?.evidence ?? []).compactMap { units[$0.unitID] }).sorted()
             lines.append("原文依据：\(old?.evidence.count ?? 0)处 → \(new?.evidence.count ?? 0)处" + (locations.isEmpty ? "" : "（" + locations.joined(separator: "、") + "）"))
         }
-        return lines.joined(separator: "\n")
+        return lines.joined(separator: "\n\n")
+    }
+    /// Existing descriptions are retained by additive writes; show only the added text once.
+    private static func textChange(_ label: String, before: String?, after: String?) -> String? {
+        guard before != after else { return nil }
+        if let before, !before.isEmpty, let after, after.hasPrefix(before) {
+            var addition = String(after.dropFirst(before.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            while addition == before || addition.hasPrefix(before + "\n") {
+                addition = String(addition.dropFirst(before.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return addition.isEmpty ? nil : label + "补充：" + addition
+        }
+        guard let after, !after.isEmpty else { return label + "：移除已有内容" }
+        guard let before, !before.isEmpty else { return label + "：" + after }
+        return label + "：" + before + "\n→ " + after
     }
     static func spatial(_ patch: ControlledRecordPatch, from before: BookProject, to after: BookProject) throws -> String? {
         let decoder = JSONDecoder(), old = try patch.before.map { try decoder.decode(RelationTemporalMetadata.self, from: $0) }, new = try patch.after.map { try decoder.decode(RelationTemporalMetadata.self, from: $0) }

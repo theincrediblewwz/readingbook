@@ -27,7 +27,7 @@ import ReadingCore
                 readerEditUndo.clear()
                 questionSuggestions.reset()
                 queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false
-                queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil
+                queryDisclosure = ""; lastQuestionContext = ""; queryRetryQuestion = nil; queryAwaitingReview = false
                 queryAllowsOrganizing = false; renderedWorkspaceVisibility = nil; renderedSelectedNodeIDs = []
                 smartReadingPlanReady = false
                 queryInteractionMode = UserDefaults.standard.string(forKey: "chat-mode-" + (bookID ?? "")).flatMap(ReadingConversationMode.init(rawValue:)) ?? .reading
@@ -117,6 +117,7 @@ import ReadingCore
     var queryMemoryTask: Task<Void, Never>?
     @Published var pendingAIHistoryWrites = 0
     @Published var queryRetryQuestion: String?
+    @Published var queryAwaitingReview = false
     @Published var queryAllowsOrganizing = false
     @Published var queryInteractionMode: ReadingConversationMode = .reading {
         didSet { if let bookID { UserDefaults.standard.set(queryInteractionMode.rawValue, forKey: "chat-mode-" + bookID) } }
@@ -588,7 +589,7 @@ import ReadingCore
         queryRunID = requestRunID
         isQueryBusy = true
         questionSuggestions.cancelActive()
-        lastQuestionContext = queryScopePreview; queryDisclosure = "正在准备阅读内容…"; queryRetryQuestion = nil
+        lastQuestionContext = queryScopePreview; queryDisclosure = "正在准备阅读内容…"; queryRetryQuestion = nil; queryAwaitingReview = false
         let previousChangeIDs = Set(current.controlledChanges?.receipts.map(\.operationID) ?? [])
         queryTask = Task {
             let aiRunID = await beginQueryProgress(title: "与书对话", settings: requestSettings)
@@ -660,6 +661,7 @@ import ReadingCore
                 if memoryEnabled { await saveQueryMemory(answer.memory, for: snapshot, preferences: preferences, root: requestRoot) }
                 if answer.diagnostics.awaitingReview {
                     queryRetryQuestion = question
+                    queryAwaitingReview = true
                     activity = "修改已准备，审阅后可以继续整理。"
                 } else if !isSmartReadingRunning { activity = "回答已生成，可以选一段记入笔记。" }
             } catch {
@@ -667,6 +669,7 @@ import ReadingCore
                 finishAIProgress(aiRunID, error: cancelled ? CancellationError() : error)
                 guard queryRunID == requestRunID, bookID == current.id, libraryRootURL == requestRoot else { return }
                 queryRetryQuestion = question
+                queryAwaitingReview = false
                 if cancelled { queryDisclosure = "已停止回答，已发送的问题保留。" }
                 else { errorMessage = error.localizedDescription }
                 let saved = book?.id == current.id ? (book?.controlledChanges?.receipts.filter { !previousChangeIDs.contains($0.operationID) && $0.undoneAt == nil }.count ?? 0) : 0

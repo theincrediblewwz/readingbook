@@ -143,7 +143,7 @@ private actor WorkbenchTransport {
         try check("continuationQueryStarted", store.isQueryBusy)
         try await wait { !self.store.isQueryBusy }
         let pausedRequestCount = await transport.count()
-        try check("continuationQueryCompleted", store.queryRetryQuestion == question && store.errorMessage == nil && pausedRequestCount == callsBeforeEdit + 6)
+        try check("continuationQueryCompleted", store.queryAwaitingReview && store.queryRetryQuestion == question && store.errorMessage == nil && pausedRequestCount == callsBeforeEdit + 6)
         try check("existingRecordSupplementWaitsForReview", store.pendingCurrentBookChanges.count == 1 && !store.book!.entities.contains { $0.name == "张飞" })
         guard let pending = store.pendingCurrentBookChanges.first else { throw ReadingError.invalid("缺少新增证据的审阅提案。") }
         let reviewed = await store.applyAIChange(pending)

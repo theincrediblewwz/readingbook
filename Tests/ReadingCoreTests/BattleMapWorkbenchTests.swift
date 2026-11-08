@@ -185,11 +185,18 @@ final class BattleMapWorkbenchTests: XCTestCase {
     }
     func testPositionReviewNamesCoordinatesAndChangesWithoutEscapedOriginalPages() throws {
         var book = try fixture(); book.entities[2].latitude = nil; book.entities[2].longitude = nil
+        book.entities[2].summary = "已有地点说明"
+        book.entities[2].locationNote = "已有位置说明"
         var entity = book.entities[2]; entity.latitude = 29.81; entity.longitude = 113.61; entity.locationNote = "现代参考，非精确古战场"
+        entity.summary = "已有地点说明\n\n新增原文背景"
         let value = try prepare(.init(entities: [entity]), in: book)
         let summary = value.proposal.summary.joined(separator: "\n")
         XCTAssertTrue(summary.contains("南岸")); XCTAssertTrue(summary.contains("未记录 → 29.81000, 113.61000"))
         XCTAssertTrue(summary.contains("现代参考，非精确古战场")); XCTAssertFalse(summary.contains("\"unitID\"")); XCTAssertFalse(summary.contains("\"evidence\""))
+        XCTAssertTrue(summary.contains("简介补充：新增原文背景")); XCTAssertFalse(summary.contains("已有地点说明"))
+        entity.summary = "已有地点说明但带上新信息"
+        let extended = try prepare(.init(entities: [entity]), in: book).proposal.summary.joined(separator: "\n")
+        XCTAssertTrue(extended.contains("简介补充：已有地点说明但带上新信息"))
         XCTAssertTrue(value.proposal.requiresConfirmation)
     }
     func testRouteReviewShowsNamedDirectionActorsAndSeparateTimeInference() throws {

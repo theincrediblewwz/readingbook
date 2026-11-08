@@ -89,6 +89,12 @@ struct PendingAIChange: Identifiable {
         pendingAIChanges.removeAll { $0.id == pending.id }
         if !pendingAIChanges.contains(where: { $0.grant.id == pending.grant.id }) { await repository.revokeChangeGrant(pending.grant.id) }
         await recordQueryHostOperation(status: "discarded", bookID: pending.proposal.bookID, proposal: pending.proposal)
+        if pendingCurrentBookChanges.isEmpty && queryAwaitingReview { queryAwaitingReview = false; queryRetryQuestion = nil }
+    }
+    func continueReviewedQuery() {
+        guard queryAwaitingReview, pendingCurrentBookChanges.isEmpty, !isBusy,
+              canStartQuery, queryInteractionMode == .functional, let question = queryRetryQuestion else { return }
+        ask(question, allowsOrganizing: true)
     }
     func undoLatestAIChange() async {
         guard !isBusy, let bookID, let change = latestAIChange else { return }
@@ -124,7 +130,7 @@ struct AIChangeReview: View {
                     ForEach(store.pendingCurrentBookChanges) { pending in
                         VStack(alignment: .leading, spacing: 14) {
                             Text("这次将改变什么").font(.title3.weight(.semibold))
-                            ForEach(Array(pending.proposal.summary.enumerated()), id: \.offset) { _, text in Text(text).font(.callout) }
+                            ForEach(Array(pending.proposal.summary.enumerated()), id: \.offset) { _, text in Text(text).font(.callout).textSelection(.enabled) }
                             ForEach(pending.proposal.documents, id: \.documentID) { document in
                                 VStack(alignment: .leading, spacing: 10) {
                                     Text(document.title).font(.headline)
@@ -145,7 +151,7 @@ struct AIChangeReview: View {
                     }
                 }.padding(20)
             }
-            Text("应用前重新检查原书、项目版本和笔记 hash。冲突会停止，不覆盖后来的编辑。")
+            Text("保存前会检查是否有新的改动；发生冲突时停止，保留原书和已有内容。")
                 .font(.caption).foregroundStyle(.secondary).padding(16)
         }.background(Palette.canvas).frame(minWidth: 620, idealWidth: 800, minHeight: 500, idealHeight: 680)
     }

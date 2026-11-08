@@ -382,6 +382,13 @@ private struct BookChatComposer: View {
                     Label("审阅 \(store.pendingCurrentBookChanges.count) 项待确认修改", systemImage: "doc.text.magnifyingglass")
                         .font(.system(size: 15)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent).disabled(store.isBusy)
+            } else if store.queryAwaitingReview {
+                Button(action: store.continueReviewedQuery) {
+                    Label("继续这次整理", systemImage: "arrow.right.circle")
+                        .font(.system(size: 15)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
+                    .disabled(store.isBusy || !store.canStartQuery || store.queryInteractionMode != .functional)
+                    .help("点击后在当前范围继续刚才的问题，复用已应用的修改。")
             }
         }.padding(embedded ? 10 : 16).modifier(ChatComposerSurface(embedded: embedded)).frame(maxWidth: 900).padding(.horizontal, embedded ? 12 : 24).padding(.bottom, embedded ? 10 : 22)
             .popover(item: $composerPopover) { page in

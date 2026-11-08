@@ -20,7 +20,7 @@ struct SpatialMapRoutes: MapContent {
                         if let id = route.eventID { selectEvent(id) }
                     } label: {
                         HStack(spacing: 5) {
-                            Image(systemName: route.isUncertain ? "arrow.up.right.dashed" : "arrow.up.right")
+                            Image(systemName: "arrow.up.right")
                             if routes.count <= 12 || inspected?.id == route.id { Text(route.title).lineLimit(1) }
                         }.font(.system(size: 12, weight: .medium)).foregroundStyle(color)
                             .padding(.horizontal, 10).padding(.vertical, 7)
