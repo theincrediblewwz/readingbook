@@ -42,26 +42,32 @@ public struct TemporalExtent: Codable, Hashable, Sendable {
     public var kind: TemporalExtentKind
     public var narrativeStart: Int?
     public var narrativeEnd: Int?
+    /// Comparable narrative numbers must name the same scale. Nil retains the
+    /// legacy payload; source-order uses actual SourceUnit.order, not chapters.
+    public var narrativeDomain: String? = nil
     /// Evidence for the time itself; nil preserves older records without migration.
     public var assertion: KnowledgeAssertion?
     public var explanation: String?
-    public init(sourceText: String = "", calendar: String? = nil, start: TemporalDate? = nil, end: TemporalDate? = nil, precision: TemporalPrecision = .unknown, uncertainty: TemporalUncertainty = .unknown, kind: TemporalExtentKind = .point, narrativeStart: Int? = nil, narrativeEnd: Int? = nil, assertion: KnowledgeAssertion? = nil, explanation: String? = nil) {
+    public init(sourceText: String = "", calendar: String? = nil, start: TemporalDate? = nil, end: TemporalDate? = nil, precision: TemporalPrecision = .unknown, uncertainty: TemporalUncertainty = .unknown, kind: TemporalExtentKind = .point, narrativeStart: Int? = nil, narrativeEnd: Int? = nil, assertion: KnowledgeAssertion? = nil, explanation: String? = nil, narrativeDomain: String? = nil) {
         self.sourceText = sourceText; self.calendar = calendar; self.start = start; self.end = end
         self.precision = precision; self.uncertainty = uncertainty; self.kind = kind
         self.narrativeStart = narrativeStart; self.narrativeEnd = narrativeEnd
         self.assertion = assertion; self.explanation = explanation
+        self.narrativeDomain = narrativeDomain
     }
 }
 
 public enum TemporalQueryPoint: Hashable, Sendable {
     case date(TemporalDate, calendar: String)
     case narrative(Int)
+    case ordered(Int, domain: String)
 }
 /// A transient inclusive filter. Nil endpoints are open bounds; at least one
 /// endpoint is required. It does not change any persisted temporal assertion.
 public enum TemporalQueryWindow: Hashable, Sendable {
     case date(from: TemporalDate?, to: TemporalDate?, calendar: String)
     case narrative(from: Int?, to: Int?)
+    case ordered(from: Int?, to: Int?, domain: String)
 }
 public enum TemporalMatch: String, Codable, Hashable, Sendable { case matches, possible, unknown, outside }
 
@@ -367,8 +373,12 @@ public enum TemporalKnowledgeRuntime {
     public static func match(_ extent: TemporalExtent, at point: TemporalQueryPoint?) -> TemporalMatch {
         guard let point else { return extent.precision == .unknown ? .unknown : (extent.uncertainty == .exact ? .matches : .possible) }
         switch point {
+        case .ordered(let value, let domain):
+            guard domain == extent.narrativeDomain else { return .unknown }
+            var comparable = extent; comparable.narrativeDomain = nil
+            return match(comparable, at: .narrative(value))
         case .narrative(let value):
-            guard let start = extent.narrativeStart else { return .unknown }
+            guard extent.narrativeDomain == nil, let start = extent.narrativeStart else { return .unknown }
             if value < start { return .outside }
             if let end = extent.narrativeEnd {
                 if value > end { return .outside }
@@ -474,6 +484,9 @@ public enum TemporalKnowledgeRuntime {
         switch point {
         case .date(let date, let calendar): try validateDate(date, calendar: calendar); try text(calendar, maximum: 80)
         case .narrative(let order): guard (0...1_000_000_000).contains(order) else { throw invalid("叙事位置超出范围。") }
+        case .ordered(let order, let domain):
+            try text(domain, maximum: 80)
+            guard (0...1_000_000_000).contains(order) else { throw invalid("叙事位置超出范围。") }
         case nil: break
         }
     }
@@ -517,6 +530,13 @@ public extension TemporalKnowledgeRuntime {
                 resolvedAnchorIDs.insert(id)
             }
             try text(explanation, maximum: 4000, allowEmpty: assertion == .explicit)
+            if let extent, extent.narrativeDomain == "source-order" {
+                let orders = Set(ids.compactMap { anchors[$0].flatMap { units[$0.unitID]?.order } })
+                guard extent.narrativeStart.map(orders.contains) == true,
+                      extent.narrativeEnd.map(orders.contains) ?? true else {
+                    throw invalid("原文顺序必须使用sourceAnchorIDs对应原文的order；不能填写章回数或自拟阶段号。当前可用order：\(orders.sorted().map(String.init).joined(separator: "、"))。")
+                }
+            }
             if let label = extent?.sourceText, !label.isEmpty {
                 guard ids.contains(where: { anchors[$0]?.quote.range(of: label, options: .literal) != nil }) else {
                     let sources = Set(ids.compactMap { anchors[$0]?.unitID }).sorted().joined(separator: "、")
@@ -592,6 +612,10 @@ public extension TemporalKnowledgeRuntime {
         if let explanation = extent.explanation { try text(explanation, maximum: 4000, allowEmpty: extent.assertion != .inferred) }
         if extent.assertion == .inferred { try text(extent.explanation ?? "", maximum: 4000) }
         if let calendar = extent.calendar { try text(calendar, maximum: 80) }
+        if let domain = extent.narrativeDomain {
+            try text(domain, maximum: 80)
+            guard extent.precision == .narrative else { throw invalid("叙事基准仅用于叙事顺序，不替代日期历法。") }
+        }
         if extent.precision != .unknown { try text(extent.sourceText, maximum: 4000) }
         for date in [extent.start, extent.end].compactMap({ $0 }) { try validateDate(date, calendar: extent.calendar) }
         if let start = extent.start, let end = extent.end, dateKey(start, upper: false) > dateKey(end, upper: true) { throw invalid("时间范围的结束早于开始。") }
@@ -665,6 +689,9 @@ public extension TemporalKnowledgeRuntime {
 extension TemporalKnowledgeRuntime {
     public static func validate(window: TemporalQueryWindow) throws {
         switch window {
+        case .ordered(let from, let to, let domain):
+            try text(domain, maximum: 80)
+            try validate(window: .narrative(from: from, to: to))
         case .date(let from, let to, let calendar):
             try text(calendar, maximum: 80)
             guard from != nil || to != nil else { throw invalid("查询时期至少需要一个日期边界。") }
@@ -693,8 +720,12 @@ extension TemporalKnowledgeRuntime {
 
     private static func windowMatch(_ extent: TemporalExtent, within window: TemporalQueryWindow) -> TemporalMatch {
         switch window {
+        case .ordered(let from, let to, let domain):
+            guard domain == extent.narrativeDomain else { return .unknown }
+            var comparable = extent; comparable.narrativeDomain = nil
+            return windowMatch(comparable, within: .narrative(from: from, to: to))
         case .narrative(let from, let to):
-            guard extent.precision == .narrative, let lower = extent.narrativeStart else { return .unknown }
+            guard extent.narrativeDomain == nil, extent.precision == .narrative, let lower = extent.narrativeStart else { return .unknown }
             let upper = extent.narrativeEnd ?? (extent.kind == .interval ? nil : lower)
             if let to, to < lower { return .outside }
             if let from, let upper, from > upper { return .outside }
@@ -727,8 +758,12 @@ extension TemporalKnowledgeRuntime {
         let participantMatch = assertedMatch(participant, assertion: assertion, within: window)
         if eventMatch == .outside || participantMatch == .outside { return .outside }
         switch window {
+        case .ordered(let from, let to, let domain):
+            guard event.narrativeDomain == domain, participant.narrativeDomain == domain else { return .unknown }
+            var a = event, b = participant; a.narrativeDomain = nil; b.narrativeDomain = nil
+            return jointWindowMatch(a, b, assertion: assertion, within: .narrative(from: from, to: to))
         case .narrative(let from, let to):
-            guard event.precision == .narrative, participant.precision == .narrative,
+            guard event.narrativeDomain == nil, participant.narrativeDomain == nil, event.precision == .narrative, participant.precision == .narrative,
                   let eventStart = event.narrativeStart, let participantStart = participant.narrativeStart else { return .unknown }
             let starts: [Int?] = [eventStart, participantStart, from]
             let ends = [event.narrativeEnd ?? (event.kind == .interval ? nil : eventStart),

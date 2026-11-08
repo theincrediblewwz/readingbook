@@ -118,6 +118,8 @@ import ReadingCore
     @Published var pendingAIHistoryWrites = 0
     @Published var queryRetryQuestion: String?
     @Published var queryAwaitingReview = false
+    var queryReviewContinuation: QueryReviewContinuation?
+    var queryActiveGrantID: String?
     @Published var queryAllowsOrganizing = false
     @Published var queryInteractionMode: ReadingConversationMode = .reading {
         didSet { if let bookID { UserDefaults.standard.set(queryInteractionMode.rawValue, forKey: "chat-mode-" + bookID) } }
@@ -207,6 +209,14 @@ import ReadingCore
     var isBusy: Bool {
         get { isExclusiveBusy || isSmartReadingRunning || isQueryBusy || isCompanionGenerating }
         set { isExclusiveBusy = newValue }
+    }
+    /// A suspended query is not writing while the reader reviews its proposal.
+    /// Other AI lanes and manual transactions retain the existing exclusion.
+    var canProcessAIReview: Bool {
+        guard !isExclusiveBusy, !isSmartReadingRunning, !isCompanionGenerating else { return false }
+        if !isQueryBusy { return true }
+        guard queryAwaitingReview, let waiting = queryReviewContinuation, let run = queryRunID else { return false }
+        return waiting.runID == run
     }
     @Published var isSavingDocument = false
     @Published var isExportingProject = false
@@ -596,7 +606,8 @@ import ReadingCore
             var writeGrant: ControlledWriteGrant?
             defer {
                 finishAIProgress(aiRunID)
-                if queryRunID == requestRunID { isQueryBusy = false; queryTask = nil; queryRunID = nil }
+                cancelQueryReviewWait(runID: requestRunID)
+                if queryRunID == requestRunID { isQueryBusy = false; queryTask = nil; queryRunID = nil; queryActiveGrantID = nil; queryAwaitingReview = false }
             }
             defer {
                 if let grant = writeGrant, !pendingAIChanges.contains(where: { $0.grant.id == grant.id }) {
@@ -636,8 +647,9 @@ import ReadingCore
                     writeGrant = try await repository.issueChangeGrant(bookID: current.id, permissions: [.knowledge, .graph, .documents, .bookScheme],
                         allowedUnitIDs: Set(snapshot.unitIDs), editableDocumentIDs: Set(snapshot.documentIDs), requiresReceipts: false,
                         reason: "读者选择本次整理；原问题ID：\(sentMessage.id)；摘要：" + String(question.prefix(500)))
+                    queryActiveGrantID = writeGrant?.id
                 }
-                let proposalTools = writeGrant.map { readingProposalAccess(grant: $0, snapshot: snapshot) }
+                let proposalTools = writeGrant.map { readingProposalAccess(grant: $0, snapshot: snapshot, runID: requestRunID) }
                 let viewTools = readingViewToolAccess(bookID: current.id, sourceHash: current.sourceHash,
                     runID: requestRunID, grant: writeGrant, snapshot: snapshot, context: context)
                 await queryReader.resetBudget()

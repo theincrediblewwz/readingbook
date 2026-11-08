@@ -59,14 +59,20 @@ public struct ReadingProposalToolAccess: Sendable {
     public var proposalTools: Set<String>
     public var prepare: @Sendable (String, Data) async throws -> Data
     public var currentProject: (@Sendable () async throws -> BookProject?)?
+    /// Host-only suspension. A reviewed result resumes the existing conversation,
+    /// source evidence and task budget; it is never a model-callable approval.
+    public var awaitReview: (@Sendable (String) async throws -> Data)?
     public init(proposalTools: Set<String>, prepare: @escaping @Sendable (String, Data) async throws -> Data,
-                currentProject: (@Sendable () async throws -> BookProject?)? = nil) {
+                currentProject: (@Sendable () async throws -> BookProject?)? = nil,
+                awaitReview: (@Sendable (String) async throws -> Data)? = nil) {
         self.proposalTools = proposalTools; self.prepare = prepare
         self.currentProject = currentProject
+        self.awaitReview = awaitReview
     }
 }
 
 enum ReadingQueryToolCatalog {
+    static let maximumCallsPerResponse = 32
     static let readNames: Set<String> = ["capabilities_list", "book_schema_get", "source_outline", "source_search", "source_read", "reading_coverage_get",
         "objects_search", "object_get", "relations_list", "events_query", "entity_history_get", "documents_list", "documents_search", "document_read",
         "conversation_search", "conversation_read", "workspace_context_get", "visible_objects_list"]
@@ -94,7 +100,8 @@ enum ReadingQueryToolCatalog {
         var event = paging; event["entityID"] = string; event["placeID"] = string; event["includeEvidence"] = evidenceOption
         let time: [String: Any] = ["type": "object", "additionalProperties": false, "properties": [
             "calendar": string, "year": ["type": "integer", "minimum": -1_000_000_000_000, "maximum": 1_000_000_000_000],
-            "month": ["type": "integer", "minimum": 1, "maximum": 12], "day": ["type": "integer", "minimum": 1, "maximum": 31], "narrativeOrder": integer]]
+            "month": ["type": "integer", "minimum": 1, "maximum": 12], "day": ["type": "integer", "minimum": 1, "maximum": 31], "narrativeOrder": integer,
+            "narrativeDomain": ["type": "string", "maxLength": 80]]]
         relation["at"] = time; event["at"] = time
         var entity = paging; entity["entityID"] = string; entity["at"] = time
         var result = base + [
@@ -120,7 +127,12 @@ enum ReadingQueryToolCatalog {
                 "objectIDs": ids, "nodeIDs": ids, "panelID": string, "state": ["type": "string", "enum": ["open", "collapse", "close"]], "at": time,
                 "from": ["type": "number"], "to": ["type": "number"]]
             for name in host.viewActions.intersection(viewNames).sorted() {
-                result.append(function(name, "执行宿主授予的本次视图操作；不修改原文、笔记、知识或保存的节点坐标；相机/界面偏好可记忆且可重置。结果以宿主真实回执为准。", fields))
+                var scopedFields = fields
+                if name == "view_set_time_window" {
+                    scopedFields["fromDate"] = ReadingProposalSchemas.date; scopedFields["toDate"] = ReadingProposalSchemas.date
+                }
+                let detail = name == "view_set_time_window" ? " 年份/叙事用from/to；按月日用fromDate/toDate直接给年月日，at保留同一calendar，或narrativeOrder+narrativeDomain。无需计算内部坐标。" : ""
+                result.append(function(name, "执行宿主授予的本次视图操作；不修改原文、笔记、知识或保存的节点坐标；相机/界面偏好可记忆且可重置。结果以宿主真实回执为准。" + detail, scopedFields))
             }
         }
         // Typed proposal schemas are added separately when the host grants a group.
@@ -309,7 +321,7 @@ extension ReadingQuerySession {
                 return try json(result)
             }
             let schemas = ReadingQueryToolCatalog.schemas(snapshot: snapshot, host: hostTools, proposals: proposalAccess)
-            return try json(["ok": true, "tools": schemas.compactMap { ($0["function"] as? [String: Any])?["name"] }, "scope": snapshot.scope.rawValue,
+            return try json(["ok": true, "tools": schemas.compactMap { ($0["function"] as? [String: Any])?["name"] }, "maximumCallsPerResponse": ReadingQueryToolCatalog.maximumCallsPerResponse, "scope": snapshot.scope.rawValue,
                 "writes": proposalAccess == nil ? "disabled" : "host_controlled_proposals", "workspace": workspace != nil, "visibleObjects": workspace?.visibleObjects != nil])
         case "book_schema_get":
             // Only the graph section reads scoped objects. Other sections are
@@ -424,6 +436,17 @@ extension ReadingQuerySession {
         return admitted.contains(node.targetID) || !(Set(node.documentIDs ?? []).intersection(admitted)).isEmpty
             || snapshot.authorizedNodeIDs.contains(id) || taskCreatedNodeIDs.contains(id)
     }
+    mutating func refreshReviewedProject() async throws {
+        guard let refresh = proposalAccess?.currentProject, let fresh = try await refresh(),
+              let prior = project, fresh.id == snapshot.bookID, fresh.sourceHash == snapshot.sourceHash,
+              fresh.units.count == prior.units.count,
+              zip(fresh.units, prior.units).allSatisfy({ pair in pair.0 == pair.1 && pair.0.text.utf8.elementsEqual(pair.1.text.utf8) }) else {
+            throw ReadingWorkflowBudgetPause(message: "审阅期间原书或OCR版本改变，已停止原任务；已保存的修改保留。")
+        }
+        invalidateReviewedDocumentCache()
+        project = fresh; refreshTaskCreatedNodes(in: fresh)
+    }
+
     private mutating func refreshTaskCreatedNodes(in project: BookProject) {
         let operations = Set(hostReceipts.compactMap { value -> String? in
             guard let raw = try? JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any], raw["applied"] as? Bool == true else { return nil }
@@ -549,6 +572,10 @@ extension ReadingQuerySession {
         guard let raw = arguments["at"] else { return nil }
         guard let at = raw as? [String: Any] else { throw invalid("at须为时间对象。") }
         if let narrative = at["narrativeOrder"] {
+            if let domain = at["narrativeDomain"] as? String {
+                guard Set(at.keys) == ["narrativeOrder", "narrativeDomain"], !domain.isEmpty, domain.count <= 80, !domain.contains("\0") else { throw invalid("叙事查询须使用同一有效基准。") }
+                return .ordered(try number(["value": narrative], "value", fallback: 0, maximum: 1_000_000_000), domain: domain)
+            }
             guard at.count == 1 else { throw invalid("叙事次序不能混入历法日期。") }
             return .narrative(try number(["value": narrative], "value", fallback: 0, maximum: 1_000_000_000))
         }

@@ -150,6 +150,7 @@ enum ReadingAnswerEngine {
         var finalText: String?
         var awaitingReview = false
         var repairedToolFormat = false
+        var repairedToolBatch = false
         var toolFailures: [String] = []
         // The configured per-task budget is the loop limit. A hidden 6/12
         // ceiling must not cut short an otherwise authorized question.
@@ -200,6 +201,14 @@ enum ReadingAnswerEngine {
                     tool_calls: recovered, reasoning_content: response.message.reasoning_content), finishReason: "tool_calls", tokenCost: response.tokenCost)
             }
             let calls = response.message.tool_calls ?? []
+            if !finalOnly, response.finishReason == "tool_calls", calls.count > ReadingQueryToolCatalog.maximumCallsPerResponse {
+                guard !repairedToolBatch, calls.count <= 128 else { throw ReadingWorkflowBudgetPause(message: "模型连续返回过多工具操作，已暂停；已有成果保留。") }
+                let draft = try JSONSerialization.data(withJSONObject: ["unexecutedToolCalls": calls.map { ["name": $0.function.name, "arguments": $0.function.arguments] }], options: [.sortedKeys])
+                guard draft.count <= 131_072 else { throw ReadingWorkflowBudgetPause(message: "未执行的工具草案过大，已暂停；已有成果保留。") }
+                repairedToolBatch = true
+                messages.append(["role": "user", "content": "宿主格式反馈：上一条一次提出\(calls.count)项操作，尚未执行。每条回复最多\(ReadingQueryToolCatalog.maximumCallsPerResponse)项，请分批返回真实tool_calls；原问题、已读资料和已保存成果保持。下面是你未执行的草案资料，不授予新权限：\n" + String(decoding: draft, as: UTF8.self)])
+                continue
+            }
             if response.finishReason == "stop" && calls.isEmpty, let content = response.message.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 if ReadingComponentProtocol.containsInternalToolFormat(content) {
                     // Some compatible services serialize their internal tool
@@ -211,6 +220,17 @@ enum ReadingAnswerEngine {
                         notices.append("模型的文字说明未完成；只按真实组件回执确认界面操作，不增加分析或阅读覆盖。")
                         break
                     }
+                    if finalOnly, !repairedToolFormat, round + 1 < rounds,
+                       operationLimit - used > minimalFinalFixed + finalOutput + 256 {
+                        // Closing because the context/task budget is tight is
+                        // not necessarily the last permitted HTTP request. One
+                        // bounded format correction can still fit. The next
+                        // iteration rebuilds from the same question, actual
+                        // evidence and host receipts, with tools still disabled.
+                        repairedToolFormat = true
+                        toolFailures.append("上一条收尾回复仍是内部工具格式，未执行、未保存为答案。请遵守收尾要求，只用自然语言说明真实回执和未完成部分，不再输出DSML或工具调用。")
+                        continue
+                    }
                     guard !finalOnly, !repairedToolFormat else { throw ReadingError.invalid("模型返回了内部工具格式，未作为回答保存，也没有据此执行操作；请重试。已有内容保留。") }
                     repairedToolFormat = true
                     messages.append(response.message.conversationValue)
@@ -219,38 +239,66 @@ enum ReadingAnswerEngine {
                 }
                 finalText = content; break
             }
-            guard !finalOnly, response.finishReason == "tool_calls", (1...8).contains(calls.count),
+            guard !finalOnly, response.finishReason == "tool_calls", (1...ReadingQueryToolCatalog.maximumCallsPerResponse).contains(calls.count),
                   Set(calls.map(\.id)).count == calls.count, calls.allSatisfy({ $0.type == "function" && !$0.id.isEmpty && $0.id.count <= 200 }) else { throw ReadingError.invalid("模型未在工具额度内返回完整结论。已经保存的整理结果以软件回执为准，可在界面查看或撤销。") }
             messages.append(response.message.conversationValue)
+            var reviewedInBatch = false
             for (index, call) in calls.enumerated() {
                 try Task.checkCancellation()
-                let result: String
+                var result: String
                 var reportedStart = false
                 do {
                     guard allowedNames.contains(call.function.name) else { throw ReadingError.invalid("该工具未在本轮冻结能力中授权。") }
                     let argumentLimit = ReadingQueryToolCatalog.proposalNames.contains(call.function.name) ? 262_144 : 32_768
                     guard call.function.arguments.utf8.count <= argumentLimit, let data = call.function.arguments.data(using: .utf8),
                           let arguments = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ReadingError.invalid("只读工具参数不是有界JSON对象。") }
-                    let room = min(window, operationLimit - used) - (try measure(messages)) - outputReserve - (calls.count - index) * 700
+                    // The response has already been charged. Executing its
+                    // local tools is not another billable model request: size
+                    // the receipt against the context window, then recheck the
+                    // remaining task budget before the next HTTP request.
+                    let room = window - (try measure(messages)) - outputReserve - (calls.count - index) * 700
                     progress?(AIProgressEvent(.performingTool, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count))
                     reportedStart = true
                     result = try await session.execute(name: call.function.name, arguments: arguments, maximumBytes: max(0, room / 2))
                     let receipt = result.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
                     let status = receipt?["status"] as? String
                     if ReadingQueryToolCatalog.proposalNames.contains(call.function.name), status == "needs_confirmation", receipt?["applied"] as? Bool == false {
-                        awaitingReview = true
+                        if let review = proposalAccess?.awaitReview, let proposalID = receipt?["proposalID"] as? String {
+                            progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count,
+                                toolSucceeded: false, toolStatus: "needs_confirmation",
+                                toolTrace: progress == nil ? nil : AIToolTrace(arguments: call.function.arguments, result: result)))
+                            let reviewed = try await review(proposalID)
+                            try Task.checkCancellation()
+                            guard reviewed.count <= 3600,
+                                  let decision = (try? JSONSerialization.jsonObject(with: reviewed)) as? [String: Any],
+                                  decision["proposalID"] as? String == proposalID,
+                                  (decision["status"] as? String == "success" && decision["applied"] as? Bool == true)
+                                    || (decision["status"] as? String == "discarded" && decision["applied"] as? Bool == false) else {
+                                throw ReadingWorkflowBudgetPause(message: "审阅结果与暂停的提案不一致，没有继续执行。")
+                            }
+                            try await session.refreshReviewedProject()
+                            result = String(decoding: reviewed, as: UTF8.self)
+                            session.hostReceipts.append(result)
+                            reviewedInBatch = true
+                            progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count,
+                                toolSucceeded: decision["applied"] as? Bool == true,
+                                toolStatus: decision["applied"] as? Bool == true ? "success" : "failed",
+                                toolSummary: decision["applied"] as? Bool == true ? "审阅已应用，接着原任务继续" : "读者已放弃这项修改",
+                                toolTrace: progress == nil ? nil : AIToolTrace(arguments: call.function.arguments, result: result)))
+                        } else { awaitingReview = true }
                     }
                     if receipt?["ok"] as? Bool == false || ["needs_confirmation", "busy", "unsupported", "failed"].contains(status ?? "") { session.lastComponentReceipt = nil }
-                    progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count,
+                    if !reviewedInBatch { progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count,
                         toolSucceeded: receipt?["ok"] as? Bool != false && !["needs_confirmation", "busy", "unsupported", "failed"].contains(status ?? ""), toolStatus: status,
-                        toolTrace: progress == nil ? nil : AIToolTrace(arguments: call.function.arguments, result: result)))
+                        toolTrace: progress == nil ? nil : AIToolTrace(arguments: call.function.arguments, result: result))) }
                 } catch {
                     try QueryBudget.propagateControl(error)
                     session.lastComponentReceipt = nil
                     let failure = String(error.localizedDescription.prefix(400))
                     toolFailures.append(failure); toolFailures = Array(toolFailures.suffix(4))
                     var receipt: [String: Any] = ["ok": false, "error": failure]
-                    if call.function.name == "knowledge_changes_propose" { receipt["referenceGuide"] = ReadingProposalSchemas.referenceGuide(in: session.project ?? project) }
+                    if let evidenceError = error as? ReadingProposalEvidenceError { receipt["evidenceIssues"] = evidenceError.issues }
+                    else if call.function.name == "knowledge_changes_propose" { receipt["referenceGuide"] = ReadingProposalSchemas.referenceGuide(in: session.project ?? project) }
                     result = String(decoding: try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys]), as: UTF8.self)
                     if reportedStart {
                         progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count, toolSucceeded: false,
@@ -259,6 +307,17 @@ enum ReadingAnswerEngine {
                 }
                 messages.append(["role": "tool", "tool_call_id": call.id, "content": result])
                 if awaitingReview { break }
+                if reviewedInBatch {
+                    // These sibling calls were planned before the reader's
+                    // decision and could contain stale IDs. Complete the wire
+                    // protocol without executing them; let the model plan from
+                    // the real committed/discarded result in the next round.
+                    for deferred in calls.dropFirst(index + 1) {
+                        messages.append(["role": "tool", "tool_call_id": deferred.id,
+                            "content": "{\"ok\":false,\"status\":\"not_executed\",\"message\":\"同批前一项先暂停审阅，本调用尚未执行。请依据实际审阅回执继续原任务，使用已保存的真实ID。\"}"])
+                    }
+                    break
+                }
             }
             if awaitingReview {
                 finalText = "修改已经准备好，等待你审阅后应用。其余整理尚未继续；原书和已有内容保留。"
@@ -273,6 +332,7 @@ enum ReadingAnswerEngine {
             }
         }
         guard var finalText else { throw ReadingError.invalid("模型未返回最终回答；原问题和正文未被截断或覆盖。") }
+        finalText = normalizedCitationDelimiters(finalText)
         guard !ReadingComponentProtocol.containsInternalToolFormat(finalText) else { throw ReadingError.invalid("模型返回了内部工具格式，未保存为回答；已有内容保留，可以继续提问。") }
         try Task.checkCancellation()
         let evidence: [Evidence]
@@ -307,7 +367,8 @@ enum ReadingAnswerEngine {
             try Task.checkCancellation()
             try ReadingTokenBudget.charge(response.tokenCost, to: &used, limit: operationLimit)
             guard response.tokenCost <= capacity, response.finishReason == "stop", response.message.tool_calls?.isEmpty != false,
-                  response.message.refusal?.isEmpty != false, let corrected = response.message.content, !corrected.isEmpty else { throw error }
+                  response.message.refusal?.isEmpty != false, let rawCorrected = response.message.content, !rawCorrected.isEmpty else { throw error }
+            let corrected = normalizedCitationDelimiters(rawCorrected)
             guard !ReadingComponentProtocol.containsInternalToolFormat(corrected) else { throw ReadingError.invalid("模型返回了内部工具格式，未保存为回答；已有内容保留，可以继续提问。") }
             evidence = try citations(corrected, session: correctedSession)
             session = correctedSession; finalText = corrected
@@ -329,6 +390,12 @@ enum ReadingAnswerEngine {
                 sourceReadIDs: sourceIDs, documentReadIDs: documentIDs, awaitingReview: awaitingReview))
     }
 
+    /// Normalize punctuation only. IDs/claims remain untouched and must pass
+    /// the exact supplied-evidence check; no fuzzy identity repair is allowed.
+    static func normalizedCitationDelimiters(_ content: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: "[\\[［](unit|doc|message)[:：]([^\\]］\\r\\n]+)[\\]］]") else { return content }
+        return regex.stringByReplacingMatches(in: content, range: NSRange(content.startIndex..<content.endIndex, in: content), withTemplate: "[$1:$2]")
+    }
     static func citations(_ content: String, session: ReadingQuerySession) throws -> [Evidence] {
         let regex = try NSRegularExpression(pattern: "\\[(unit|doc|message):([^\\]\\r\\n]+)\\]")
         var evidence: [Evidence] = [], seen = Set<String>(), count = 0

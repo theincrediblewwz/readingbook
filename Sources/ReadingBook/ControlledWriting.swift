@@ -12,11 +12,18 @@ struct PendingAIChange: Identifiable {
     var latestAIChange: ControlledChangeReceipt? {
         book?.controlledChanges?.receipts.last { $0.undoneAt == nil && $0.originBookID == bookID }
     }
-    func readingProposalAccess(grant: ControlledWriteGrant, snapshot: ReadingQuerySnapshot) -> ReadingProposalToolAccess {
-        ReadingProposalToolAccess(proposalTools: ["knowledge_changes_propose", "graph_changes_propose", "document_changes_propose", "book_scheme_propose"], prepare: { [weak self] name, data in
+    func readingProposalAccess(grant: ControlledWriteGrant, snapshot: ReadingQuerySnapshot, runID: UUID? = nil) -> ReadingProposalToolAccess {
+        let review: (@Sendable (String) async throws -> Data)?
+        if let id = runID {
+            review = { @Sendable [weak self] proposalID in
+                guard let self else { throw CancellationError() }
+                return try await self.waitForQueryReview(proposalID: proposalID, grant: grant, snapshot: snapshot, runID: id)
+            }
+        } else { review = nil }
+        return ReadingProposalToolAccess(proposalTools: ["knowledge_changes_propose", "graph_changes_propose", "document_changes_propose", "book_scheme_propose"], prepare: { [weak self] name, data in
             guard let self else { throw CancellationError() }
             return try await self.prepareReadingProposal(name, data: data, grant: grant, snapshot: snapshot)
-        }, currentProject: { [weak self] in await self?.book })
+        }, currentProject: { [weak self] in await self?.book }, awaitReview: review)
     }
     func prepareReadingProposal(_ name: String, data: Data, grant: ControlledWriteGrant, snapshot: ReadingQuerySnapshot) async throws -> Data {
         try Task.checkCancellation()
@@ -68,7 +75,8 @@ struct PendingAIChange: Identifiable {
         return data
     }
     func applyAIChange(_ pending: PendingAIChange) async -> Bool {
-        guard !isBusy, bookID == pending.proposal.bookID else { return false }
+        guard canProcessAIReview, bookID == pending.proposal.bookID,
+              !isQueryBusy || queryReviewContinuation?.proposalID == pending.id else { return false }
         guard !editorDirty else { errorMessage = "请先保存或放弃当前笔记草稿，再应用 AI 修改。"; return false }
         isBusy = true; isCommittingLocalWrite = true
         defer { isBusy = false; isCommittingLocalWrite = false }
@@ -76,22 +84,28 @@ struct PendingAIChange: Identifiable {
             let approval = try await repository.approveChanges(proposalID: pending.proposal.id, digest: pending.proposal.digest)
             let committed = try await repository.commitChanges(proposalID: pending.proposal.id, grant: pending.grant, approval: approval)
             publish(committed.project); pendingAIChanges.removeAll { $0.id == pending.id }
-            if !pendingAIChanges.contains(where: { $0.grant.id == pending.grant.id }) { await repository.revokeChangeGrant(pending.grant.id) }
+            if queryActiveGrantID != pending.grant.id && !pendingAIChanges.contains(where: { $0.grant.id == pending.grant.id }) { await repository.revokeChangeGrant(pending.grant.id) }
             await recordQueryHostOperation(status: "applied", bookID: pending.proposal.bookID, proposal: pending.proposal, receipt: committed.receipt)
+            recordQueryReviewResult(proposalID: pending.id, data: try changeToolReceipt(status: "success", applied: true, proposal: pending.proposal, receipt: committed.receipt, replayed: committed.replayed))
             if let document = book?.activeDocuments.first(where: { $0.id == selectedDocumentID }), pending.proposal.documents.contains(where: { $0.documentID == document.id }) { await openDocument(document) }
             activity = "审阅的修改已应用；原版本可通过本次撤销恢复。"; return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
     func discardAIChange(_ pending: PendingAIChange) async {
-        guard !isBusy, bookID == pending.proposal.bookID else { return }
+        guard canProcessAIReview, bookID == pending.proposal.bookID,
+              !isQueryBusy || queryReviewContinuation?.proposalID == pending.id else { return }
         isBusy = true; isCommittingLocalWrite = true
         defer { isBusy = false; isCommittingLocalWrite = false }
         pendingAIChanges.removeAll { $0.id == pending.id }
-        if !pendingAIChanges.contains(where: { $0.grant.id == pending.grant.id }) { await repository.revokeChangeGrant(pending.grant.id) }
+        if queryActiveGrantID != pending.grant.id && !pendingAIChanges.contains(where: { $0.grant.id == pending.grant.id }) { await repository.revokeChangeGrant(pending.grant.id) }
         await recordQueryHostOperation(status: "discarded", bookID: pending.proposal.bookID, proposal: pending.proposal)
-        if pendingCurrentBookChanges.isEmpty && queryAwaitingReview { queryAwaitingReview = false; queryRetryQuestion = nil }
+        let decision: [String: Any] = ["ok": false, "status": "discarded", "applied": false, "proposalID": pending.id,
+            "message": "读者已放弃这项提案，未保存这些改动。可继续原问题的其他工作，不要重新提交同一项。"]
+        if let data = try? JSONSerialization.data(withJSONObject: decision, options: [.sortedKeys]) { recordQueryReviewResult(proposalID: pending.id, data: data) }
+        if pendingCurrentBookChanges.isEmpty && queryAwaitingReview && queryReviewContinuation == nil { queryAwaitingReview = false; queryRetryQuestion = nil }
     }
     func continueReviewedQuery() {
+        if queryReviewContinuation != nil { resumeQueryReview(); return }
         guard queryAwaitingReview, pendingCurrentBookChanges.isEmpty, !isBusy,
               canStartQuery, queryInteractionMode == .functional, let question = queryRetryQuestion else { return }
         ask(question, allowsOrganizing: true)
@@ -146,7 +160,7 @@ struct AIChangeReview: View {
                                 Button("放弃这次提案", role: .destructive) { Task { await store.discardAIChange(pending); if store.pendingCurrentBookChanges.isEmpty { close() } } }.buttonStyle(ReadingToolbarButtonStyle())
                                 Spacer()
                                 Button("应用这次修改") { Task { if await store.applyAIChange(pending), store.pendingCurrentBookChanges.isEmpty { close() } } }.buttonStyle(.borderedProminent).controlSize(.large)
-                            }.disabled(store.isBusy)
+                            }.disabled(!store.canProcessAIReview || (store.isQueryBusy && store.queryReviewContinuation?.proposalID != pending.id))
                         }.padding(20).readingGlass(radius: 20)
                     }
                 }.padding(20)

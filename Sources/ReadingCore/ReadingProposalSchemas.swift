@@ -87,8 +87,10 @@ enum ReadingProposalSchemas {
         var order = integer; order["minimum"] = 0; order["maximum"] = 1_000_000_000
         var result = object(["sourceText": source, "calendar": calendar, "start": date, "end": date, "precision": ["type": "string", "enum": ["unknown", "year", "month", "day", "narrative"]],
             "uncertainty": ["type": "string", "enum": ["exact", "approximate", "disputed", "unknown"]], "kind": ["type": "string", "enum": ["point", "interval", "uncertainRange"]],
-            "narrativeStart": order, "narrativeEnd": order, "assertion": attribution["assertion"]!, "explanation": text()], required: ["sourceText", "precision", "uncertainty", "kind", "assertion", "explanation"])
-        result["description"] = "narrative只表示有原文依据的叙事先后，不填历法日期；point的两端须相同，不同两端用interval。unknown不填数字边界且uncertainty=unknown。没有可靠时间依据可省略extent。extent.assertion单独标时间依据：数字日期是推算时用inferred并在extent.explanation说明推算链；事件本身可以仍是explicit。"
+            "narrativeStart": order, "narrativeEnd": order,
+            "narrativeDomain": ["type": "string", "maxLength": 80, "description": "叙事序号的共同基准。优先source-order，此时narrativeStart/end使用已提供原文的order，且须对应sourceAnchorIDs。章回号、自拟阶段号不能混为原文order；确需独立刻度须分别命名，不能混排。"],
+            "assertion": attribution["assertion"]!, "explanation": text()], required: ["sourceText", "precision", "uncertainty", "kind", "assertion", "explanation"])
+        result["description"] = "narrative保留原文先后与时刻原词（如将近三更、天色微明），指定narrativeDomain，不虚构日期或现代钟点。point两端相同，不同两端用interval。unknown不填数字边界且uncertainty=unknown。无可靠依据可省略extent。推算日期用extent.assertion=inferred并说明推算链，事件本身仍可explicit。"
         return result
     }
     static var attribution: [String: Any] { ["sourceAnchorIDs": nonemptyArray(id), "assertion": ["type": "string", "enum": ["explicit", "inferred", "unknown"]], "explanation": text()] }
@@ -217,13 +219,28 @@ extension ReadingQuerySession {
                 return supplied.1[range].utf8.elementsEqual(quote.utf8)
             }
         }
-        func scan(_ value: Any) throws {
+        var issues: [[String: String]] = []
+        func scan(_ value: Any, path: String) {
             if let object = value as? [String: Any] {
-                if let id = object["unitID"] as? String, let quote = object["quote"] as? String, !read(id, quote) { throw invalid("提案引用了本次未实际提供的原文；请先在授权范围内读取对应片段。") }
-                for child in object.values { try scan(child) }
-            } else if let rows = value as? [Any] { for child in rows { try scan(child) } }
+                if let id = object["unitID"] as? String, let quote = object["quote"] as? String, !read(id, quote), issues.count < 4 {
+                    var issue = ["path": String(path.prefix(240)), "unitID": String(id.prefix(200)), "quotePreview": String(quote.prefix(120)),
+                        "reason": "引文不是这个已提供单元的逐字片段；不要把改写或其他页的文字放在这里。"]
+                    let matches = Set(sourceExcerpts.filter { SourceTextLiteral.contains(quote, in: $0.1) }.map { $0.0 })
+                    if matches.count == 1, let actual = matches.first {
+                        issue["matchingSuppliedUnitID"] = actual
+                        issue["reason"] = "同样的文字在另一个本次已提供的原文单元中；请核对其内容与ID。"
+                        if let ref = sourceReferences.first(where: { $0.value.unitID == actual })?.key { issue["matchingSuppliedSourceRef"] = ref }
+                    } else if let ref = sourceReferences.first(where: { $0.value.unitID == id })?.key {
+                        issue["suppliedUnitSourceRef"] = ref
+                        issue["reason"] = "这个单元已提供，但手写引文不逐字匹配；请核对原文，或用该sourceRef引用实际全文，不要补写原句。"
+                    }
+                    issues.append(issue)
+                }
+                for key in object.keys.sorted() { scan(object[key]!, path: path + "." + key) }
+            } else if let rows = value as? [Any] { for (index, child) in rows.enumerated() { scan(child, path: path + "[\(index)]") } }
         }
-        try scan(JSONSerialization.jsonObject(with: data))
+        scan(try JSONSerialization.jsonObject(with: data), path: "$")
+        if !issues.isEmpty { throw ReadingProposalEvidenceError(issues: issues) }
         if let knowledge = batch.knowledge {
             let proposed = Set((knowledge.anchors ?? []).map(\.clientID))
             let anchors = (project.readingExperience?.anchors ?? []) + (project.temporalKnowledge?.anchors ?? [])

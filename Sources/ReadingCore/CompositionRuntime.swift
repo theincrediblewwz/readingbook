@@ -230,7 +230,7 @@ public enum CompositionRuntime {
                 case .time:
                     func key(_ item: CompositionItem) -> (String, Double, String) {
                         guard let extent = item.extent else { return ("~", .greatestFiniteMagnitude, item.id) }
-                        let axis = extent.calendar.map { "calendar-day:" + $0 } ?? "narrative"
+                        let axis = extent.calendar.map { "calendar-day:" + $0 } ?? extent.narrativeDomain.map { "narrative-domain:" + $0 } ?? "narrative"
                         return (axis, TemporalAxis(axis).value(extent) ?? .greatestFiniteMagnitude, item.id)
                     }
                     return key(lhs) < key(rhs)

@@ -29,6 +29,7 @@ struct CompositionWorkspaceView: View {
     @State private var refreshTask: Task<Void, Never>?
     @State private var refreshGeneration: UInt64 = 0
     @State private var isActive = false
+    @State private var pendingTimeCommand: WorkspaceAICommand?
 
     private struct RefreshOwner: Equatable, Sendable {
         let libraryRoot: String
@@ -56,7 +57,7 @@ struct CompositionWorkspaceView: View {
     private var mapModes: [String: CompositionMapTimeMode] { clocks.mapValues(\.mapMode) }
     private var readingContext: ReadingContext { contextOverride ?? (embedded ? store.currentReadingContext : store.componentReadingContext) }
 
-    var body: some View {
+    private var workspaceContent: some View {
         GeometryReader { geometry in
             Group {
                 if let issue { fallback(issue) }
@@ -73,15 +74,22 @@ struct CompositionWorkspaceView: View {
                 } else if composition != nil { ProgressView("正在准备组件…") }
                 else { fallback("这个组件尚未提供可显示的布局。原书、笔记和已保存配置都保留。") }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.background(embedded ? Color.clear : Palette.canvas).readingTextContext(.knowledge)
+        }
+    }
+    private var sourceObservedContent: some View {
+        workspaceContent.background(embedded ? Color.clear : Palette.canvas).readingTextContext(.knowledge)
             .task { isActive = true; refresh() }
-            .onDisappear { isActive = false; cancelRefresh(); clearPrepared() }
+            .onDisappear { isActive = false; cancelRefresh(); clearPrepared(); pendingTimeCommand = nil }
+            .onChange(of: store.workspaceAICommand) { _, command in receiveTimeCommand(command) }
             .onChange(of: store.currentBookRevision) { _, _ in refresh() }
             .onChange(of: store.book?.publicationStamp) { _, _ in refresh() }
             .onChange(of: store.book?.sourceHash) { _, _ in refresh() }
             .onChange(of: store.selectedUnitID) { _, _ in refresh() }
             .onChange(of: store.book?.temporalKnowledge?.profile?.avoidsSpoilers) { _, _ in refresh() }
             .onChange(of: store.currentReadingContext) { _, _ in refresh() }
+    }
+    var body: some View {
+        sourceObservedContent
             .onChange(of: store.componentDataScopeID) { _, _ in refresh() }
             .onChange(of: contextOverride) { _, _ in reset() }
             .onChange(of: currentScope) { _, _ in reset() }
@@ -127,6 +135,35 @@ struct CompositionWorkspaceView: View {
     private func clearPrepared() { preparedInput = nil; preparedOwner = nil }
     private func cancelRefresh() {
         refreshTask?.cancel(); refreshTask = nil; refreshGeneration &+= 1
+    }
+    private func receiveTimeCommand(_ command: WorkspaceAICommand?) {
+        guard let command, command.name == "view_set_time_window", let window = command.timeWindow,
+              isActive, !embedded, definition?.id == store.route, !store.hasWorkspaceAuxiliary,
+              let composition, let owner = displayedOwner, matches(owner, store: store) else { return }
+        let groups = Set(composition.sources.compactMap { source -> String? in
+            let extents = baseline[source.id]?.items.compactMap(\.extent) ?? []
+            return TemporalAxis.available(extents).contains(window.axis) ? source.timeGroup : nil
+        })
+        guard !groups.isEmpty else {
+            store.acknowledgeViewCommand(command, status: "unsupported", message: "当前组合没有本次时间体系的数据；未改变筛选。")
+            return
+        }
+        pendingTimeCommand = command
+        for group in groups {
+            clocks[group] = CompositionClock(axis: window.axis, lower: window.from, upper: window.to,
+                cursor: window.cursor, mapMode: clocks[group]?.mapMode ?? .instant)
+        }
+        refresh(includeBaseline: false, retainingContent: true)
+    }
+    private func finishTimeCommand(error: String? = nil) {
+        guard let command = pendingTimeCommand else { return }
+        pendingTimeCommand = nil
+        guard store.workspaceAICommand?.id == command.id, isActive, !embedded, definition?.id == store.route else { return }
+        if let error { store.acknowledgeViewCommand(command, status: "conflict", message: "组合时间筛选未完成：" + error) }
+        else if let window = command.timeWindow {
+            store.temporalAxis = window.axis; store.timeFrom = window.from; store.timeTo = window.to; store.timeCursor = window.cursor
+            store.acknowledgeViewCommand(command, message: "组合内同一时间基准的地图与时间轴已完成筛选；原始资料未改写。")
+        }
     }
     private func matches(_ owner: RefreshOwner, store: AppStore) -> Bool {
         guard let book = store.book, store.libraryRootURL.path == owner.libraryRoot,
@@ -196,6 +233,7 @@ struct CompositionWorkspaceView: View {
                 preparedInput = result.prepared; preparedOwner = owner; displayedOwner = owner
                 baseline = result.baseline; baselineSelection = selection; baselineOwner = owner; projections = result.projections
                 validatedComposition = composition; validatedBookID = book.id; issue = nil; refreshTask = nil
+                finishTimeCommand()
             } catch is CancellationError {
                 if refreshGeneration == generation { refreshTask = nil }
             } catch {
@@ -204,6 +242,7 @@ struct CompositionWorkspaceView: View {
                 displayedOwner = nil
                 projections = [:]; baseline = [:]; baselineSelection = nil; baselineOwner = nil; validatedComposition = nil; validatedBookID = nil
                 issue = error.localizedDescription; refreshTask = nil
+                finishTimeCommand(error: error.localizedDescription)
             }
         }
     }

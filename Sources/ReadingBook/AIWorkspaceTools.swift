@@ -7,6 +7,7 @@ struct WorkspaceAICommand: Equatable {
     let id = UUID()
     let name: String
     let arguments: Data
+    var timeWindow: TemporalViewWindow? = nil
 }
 
 @MainActor extension AppStore {
@@ -36,7 +37,7 @@ struct WorkspaceAICommand: Equatable {
             if ["components_list", "component_show"].contains(name) {
                 return try await self.performReadingComponentAction(name, data: data, owner: owner, session: session)
             }
-            return try await self.performReadingViewAction(name, data: data, expectedBookID: expectedBookID, sourceHash: sourceHash, owner: owner)
+            return try await self.performReadingViewAction(name, data: data, expectedBookID: expectedBookID, sourceHash: sourceHash, owner: owner, querySnapshot: snapshot)
         }, readWorkspace: { [weak self] in
             guard let self, await owner.matches(self) else { throw CancellationError() }
             return await self.makeReadingWorkspaceSnapshot()
@@ -49,7 +50,7 @@ struct WorkspaceAICommand: Equatable {
     func acknowledgeViewCommand(_ command: WorkspaceAICommand, status: String = "success", message: String) {
         workspaceAIResponses[command.id] = try? viewToolResult(status, message)
     }
-    func performReadingViewAction(_ name: String, data: Data, expectedBookID: String, sourceHash: String, owner: ReadingQueryHostOwner? = nil) async throws -> Data {
+    func performReadingViewAction(_ name: String, data: Data, expectedBookID: String, sourceHash: String, owner: ReadingQueryHostOwner? = nil, querySnapshot: ReadingQuerySnapshot? = nil) async throws -> Data {
         guard owner?.matches(self) ?? !Task.isCancelled else { throw CancellationError() }
         guard let book, book.id == expectedBookID, book.sourceHash == sourceHash else { return try viewToolResult("conflict", "当前书籍已改变。") }
         guard NSEvent.pressedMouseButtons == 0, !isSavingDocument, !isCommittingLocalWrite else { return try viewToolResult("busy", "读者正在操作，未抢占界面。") }
@@ -84,24 +85,35 @@ struct WorkspaceAICommand: Equatable {
             guard let id = args["objectID"] as? String, book.entities.contains(where: { $0.id == id }) || book.events.contains(where: { $0.id == id }) else { return try viewToolResult("unsupported", "对象不存在。") }
             focus(id); return try viewToolResult("success", "已选中共享对象。", extra: ["objectID": id])
         }
+        var resolvedWindow: TemporalViewWindow?
         if name == "view_set_time_window" {
-            func number(_ value: Any?) -> Double? {
-                guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue.isFinite else { return nil }
-                return number.doubleValue
+            let axes: [String]
+            if let querySnapshot {
+                let state = book.temporalKnowledge
+                let anchors = Dictionary(((book.readingExperience?.anchors ?? []) + (state?.anchors ?? [])).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                func admitted(_ ids: [String]) -> Bool {
+                    !ids.isEmpty && ids.allSatisfy { id in anchors[id].map { querySnapshot.admits(Evidence(unitID: $0.unitID, quote: $0.quote)) } ?? false }
+                }
+                var extents: [TemporalExtent] = []
+                for presence in state?.presences ?? [] where admitted(presence.sourceAnchorIDs) { extents.append(presence.extent) }
+                for participation in state?.participations ?? [] where admitted(participation.sourceAnchorIDs) { if let extent = participation.extent { extents.append(extent) } }
+                for event in state?.eventMetadata ?? [] where admitted(event.sourceAnchorIDs) { if let extent = event.extent { extents.append(extent) } }
+                for relation in state?.relationMetadata ?? [] where admitted(relation.sourceAnchorIDs) { extents.append(relation.validity) }
+                axes = TemporalAxis.available(extents)
+            } else { axes = availableTemporalAxes }
+            let window = try TemporalViewWindow(arguments: data, availableAxes: axes)
+            if enabledViews.first(where: { $0.id == route })?.composition != nil {
+                resolvedWindow = window
+            } else {
+                guard enabledViews.contains(where: { $0.id == route && ($0.kind == .map || $0.kind == .timeline) }), !hasWorkspaceAuxiliary else {
+                    return try viewToolResult("unsupported", "请先打开地图、时间轴或组合工作台，再设置其时间范围。")
+                }
+                temporalAxis = window.axis; timeFrom = window.from; timeTo = window.to; timeCursor = window.cursor
+                return try viewToolResult("success", "时间窗已同步。", extra: ["axis": window.axis, "from": window.from, "to": window.to, "current": window.cursor])
             }
-            guard let from = number(args["from"]), let to = number(args["to"]),
-                  from.isFinite, to.isFinite, abs(from) <= 1e9, abs(to) <= 1e9, from <= to,
-                  let at = args["at"] as? [String: Any] else { throw ReadingError.invalid("请提供完整时间窗和时间体系。") }
-            let axis: String, cursor: Double
-            if Set(at.keys) == ["narrativeOrder"], let order = number(at["narrativeOrder"]), order.rounded() == order, abs(order) <= 1e9, hasNarrativeTime { axis = "narrative"; cursor = order }
-            else if Set(at.keys) == ["calendar", "year"], let calendar = at["calendar"] as? String, let year = number(at["year"]), year.rounded() == year, abs(year) <= 1e9, temporalCalendars.contains(calendar) { axis = "calendar:" + calendar; cursor = year }
-            else { return try viewToolResult("unsupported", "该时间体系尚无可用数据。") }
-            guard at["month"] == nil, at["day"] == nil else { return try viewToolResult("unsupported", "当前时间轴按年或叙事位置浏览，未把日精度降格冒充。") }
-            guard cursor >= from, cursor <= to else { throw ReadingError.invalid("当前时间不在窗口内。") }
-            temporalAxis = axis; timeFrom = from; timeTo = to; timeCursor = cursor
-            return try viewToolResult("success", "时间窗已同步。", extra: ["axis": axis, "from": from, "to": to, "current": cursor])
         }
-        let command = WorkspaceAICommand(name: name, arguments: data)
+
+        let command = WorkspaceAICommand(name: name, arguments: data, timeWindow: resolvedWindow)
         workspaceAICommand = command
         defer { workspaceAIResponses[command.id] = nil; if workspaceAICommand?.id == command.id { workspaceAICommand = nil } }
         for _ in 0..<50 {

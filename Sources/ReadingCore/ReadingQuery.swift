@@ -451,6 +451,7 @@ struct ReadingQuerySession {
     var taskCreatedNodeIDs = Set<String>()
     var sourceExcerpts: [(String, String)] = []
     var sourceReferences: [String: Evidence] = [:]
+    private var toolReferencedSourceIDs = Set<String>()
     private var sourceWasPreloaded = false
     private var modelRequestedSource = false
     var documentExcerpts: [(String, String)] = []
@@ -464,12 +465,19 @@ struct ReadingQuerySession {
         // Citation obligations reflect an actual read, even when the bytes
         // were already supplied. Cache de-duplication is a separate concern.
         modelRequestedSource = true
+        toolReferencedSourceIDs.insert(id)
         guard !sourceExcerpts.contains(where: { $0.0 == id && $0.1.range(of: text, options: .literal) != nil }) else { return }
         sourceExcerpts.append((id, text))
     }
     private var cache: [String: String] = [:]
     var documentHashes: [String: String] = [:]
     private var cachedBytes = 0
+
+    mutating func invalidateReviewedDocumentCache() {
+        // Keep hashes/excerpts: a changed note must fail the existing revision
+        // check, rather than silently returning a pre-review cached body.
+        cache.removeAll(keepingCapacity: true); cachedBytes = 0
+    }
 
     init(snapshot: ReadingQuerySnapshot, history: [ChatMessage], loader: ReadingDocumentLoader?, providedDocuments: [String: String],
          project: BookProject? = nil, workspace: ReadingWorkspaceSnapshot? = nil, hostTools: ReadingHostToolAccess? = nil, proposalAccess: ReadingProposalToolAccess? = nil,
@@ -494,12 +502,14 @@ struct ReadingQuerySession {
     mutating func initialSource(maximumBytes: Int) throws -> String? {
         if snapshot.scope == .range {
             guard maximumBytes >= 512 else { return nil }
+            let sourceOrders = Dictionary((project?.units ?? []).map { ($0.id, $0.order) }, uniquingKeysWith: { first, _ in first })
             var rows: [[String: Any]] = [], bytes = try json(["actualReadFragments": [], "hostToolReceipts": []]).utf8.count
             for source in snapshot.sources {
                 try Task.checkCancellation()
                 guard source.text.utf8.count <= maximumBytes - bytes else { return nil }
                 var row: [String: Any] = ["kind": "unit", "id": source.unitID, "hash": source.textHash, "locator": source.locator,
-                    "text": source.text, "fragmentTruncated": false]
+                    "text": source.text, "fragmentTruncated": false, "citation": "[unit:\(source.unitID)]"]
+                if let order = sourceOrders[source.unitID] { row["order"] = order }
                 if source.text.count <= 32_768 { row["sourceRef"] = try sourceReferenceID(unitID: source.unitID, text: source.text) }
                 let added = try json(row).utf8.count + (rows.isEmpty ? 0 : 1)
                 guard added <= maximumBytes - bytes else { return nil }
@@ -543,9 +553,13 @@ struct ReadingQuerySession {
         var rows: [[String: Any]] = []
         var sources: [(String, String)] = [], documents: [(String, String)] = [], conversation: [(String, String)] = []
         var seen = Set<String>()
-        let all = sourceExcerpts.reversed().map { ("unit", $0.0, $0.1) }
+        let recentSources = Array(sourceExcerpts.reversed())
+        let prioritizedSources = recentSources.filter { toolReferencedSourceIDs.contains($0.0) }
+            + recentSources.filter { !toolReferencedSourceIDs.contains($0.0) }
+        let all = prioritizedSources.map { ("unit", $0.0, $0.1) }
             + documentExcerpts.reversed().map { ("doc", $0.0, $0.1) }
             + conversationExcerpts.reversed().map { ("message", $0.0, $0.1) }
+        let sourceOrders = Dictionary((project?.units ?? []).map { ($0.id, $0.order) }, uniquingKeysWith: { first, _ in first })
         for (kind, id, text) in all {
             try Task.checkCancellation()
             guard seen.insert(kind + ":" + id + ":" + text).inserted else { continue }
@@ -555,7 +569,11 @@ struct ReadingQuerySession {
             else if kind == "doc" { hash = documentHashes[id] ?? "" }
             else if let message = history.first(where: { $0.id == id }) { hash = try BookImporter.sha256(Data(message.content.utf8)) }
             else { hash = "" }
-            func row(_ length: Int) -> [String: Any] { ["kind": kind, "id": id, "hash": hash, "text": String(text.prefix(length)), "fragmentTruncated": length < text.count] }
+            func row(_ length: Int) -> [String: Any] {
+                var value: [String: Any] = ["kind": kind, "id": id, "hash": hash, "text": String(text.prefix(length)), "fragmentTruncated": length < text.count, "citation": "[\(kind):\(id)]"]
+                if kind == "unit", let order = sourceOrders[id] { value["order"] = order }
+                return value
+            }
             while low < high {
                 let middle = low + (high - low + 1) / 2
                 if try json(payload(rows + [row(middle)])).utf8.count <= maximumBytes { low = middle } else { high = middle - 1 }
@@ -620,7 +638,7 @@ struct ReadingQuerySession {
             let id = try identifier(arguments)
             guard let source = snapshot.sources.first(where: { $0.unitID == id }) else { throw invalid("原文ID不在本次冻结范围内。") }
             try checkHash(arguments, actual: source.textHash)
-            let slice = try readSlice(source.text, arguments, cap, metadata: ["ok": true, "id": id, "locator": source.locator, "hash": source.textHash, "scope": snapshot.scope.rawValue])
+            let slice = try readSlice(source.text, arguments, cap, metadata: ["ok": true, "id": id, "citation": "[unit:\(id)]", "locator": source.locator, "hash": source.textHash, "scope": snapshot.scope.rawValue])
             recordSourceExcerpt(id, text: slice.text)
             return slice.result
         case "document_read":

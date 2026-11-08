@@ -2,6 +2,11 @@ import Foundation
 import XCTest
 @testable import ReadingCore
 
+private actor LocalProposalCounter {
+    var count = 0
+    func submit() -> Data { count += 1; return Data(#"{"ok":true,"status":"success","applied":true,"operationID":"local-budget-receipt"}"#.utf8) }
+}
+
 final class QueryBudgetRecoveryTests: XCTestCase {
     private func book() -> BookProject {
         var value = BookProject(title: "合成读本", originalName: "book.txt", sourceHash: "fixture", units: [.init(id: "u1", order: 0, chapter: "一", page: 1, text: "刘备与关羽同行。")])
@@ -105,4 +110,130 @@ final class QueryBudgetRecoveryTests: XCTestCase {
         }
         XCTAssertEqual(count, 3); XCTAssertEqual(result.message.evidence.count, 1)
     }
+    func testAlreadyPaidResponseCanExecuteLocalProposalBeforeBudgetedFinalAnswer() async throws {
+        let submitted = LocalProposalCounter()
+        let proposals = ReadingProposalToolAccess(proposalTools: ["knowledge_changes_propose"], prepare: { _, _ in await submitted.submit() })
+        var requests = 0
+        let result = try await ReadingAnswerEngine.run(question: "整理刘备", project: book(), settings: .init(model: "offline", maxOutputTokens: 512, contextWindowTokens: 128_000),
+            documents: [:], context: .init(unitID: "u1", page: 1), scope: .page, history: [], memory: nil, memoryEnabled: false,
+            documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 3, proposalAccess: proposals, preferences: .init(interaction: .functional)) { messages, _, limit, final in
+                requests += 1
+                if requests == 1 {
+                    XCTAssertFalse(final)
+                    let response = self.call("knowledge_changes_propose", #"{"batch":{"knowledge":{"newEntityIDs":["liu"],"entities":[{"id":"liu","typeID":"person","name":"刘备","summary":"","properties":{},"aliases":[],"evidence":[{"unitID":"u1","quote":"刘备与关羽同行。"}]}]}}}"#)
+                    return .init(message: response.message, finishReason: response.finishReason, tokenCost: limit - 1)
+                }
+                XCTAssertTrue(final)
+                XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("local-budget-receipt") == true })
+                return self.answer("已按回执保存整理。[unit:u1]")
+            }
+        let count = await submitted.count
+        XCTAssertEqual(count, 1); XCTAssertEqual(requests, 2)
+        XCTAssertEqual(result.diagnostics.toolCalls, 1); XCTAssertEqual(result.message.evidence.map(\.unitID), ["u1"])
+    }
+    func testUsageBeyondGrantedLimitStillStopsBeforeLocalWrite() async throws {
+        let submitted = LocalProposalCounter()
+        let proposals = ReadingProposalToolAccess(proposalTools: ["knowledge_changes_propose"], prepare: { _, _ in await submitted.submit() })
+        do {
+            _ = try await ReadingAnswerEngine.run(question: "整理刘备", project: book(), settings: .init(model: "offline", maxOutputTokens: 512, contextWindowTokens: 128_000),
+                documents: [:], context: .init(unitID: "u1", page: 1), scope: .page, history: [], memory: nil, memoryEnabled: false,
+                documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 3, proposalAccess: proposals, preferences: .init(interaction: .functional)) { _, _, limit, _ in
+                    let response = self.call("knowledge_changes_propose", #"{"batch":{"knowledge":{}}}"#)
+                    return .init(message: response.message, finishReason: response.finishReason, tokenCost: limit + 1)
+                }
+            XCTFail("Over-budget response executed")
+        } catch { }
+        let count = await submitted.count; XCTAssertEqual(count, 0)
+    }
+
+    private func readBatch(_ count: Int) -> ProviderClient.Result {
+        .init(message: .init(role: "assistant", content: nil, refusal: nil, tool_calls: (0..<count).map { index in
+            .init(id: "read-\(index)", type: "function", function: .init(name: "source_read", arguments: #"{"id":"u1"}"#))
+        }, reasoning_content: nil), finishReason: "tool_calls", tokenCost: 20)
+    }
+    func testTenValidReadCallsDoNotAbortTheWholeQuestion() async throws {
+        var requests = 0
+        let result = try await ReadingAnswerEngine.run(question: "核对人物资料", project: book(), settings: .init(model: "offline", maxOutputTokens: 512, contextWindowTokens: 128_000),
+            documents: [:], context: .init(unitID: "u1", page: 1), scope: .page, history: [], memory: nil, memoryEnabled: false,
+            documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 3) { messages, _, _, _ in
+                requests += 1
+                if requests == 1 { return self.readBatch(10) }
+                XCTAssertEqual(messages.filter { $0["role"] as? String == "tool" }.count, 10)
+                return self.answer("刘备与关羽同行。[unit:u1]")
+            }
+        XCTAssertEqual(requests, 2); XCTAssertEqual(result.diagnostics.toolCalls, 10)
+    }
+    func testOversizedBatchGetsOneSpecificFeedbackWithoutExecutingOrLosingDraft() async throws {
+        var requests = 0
+        let result = try await ReadingAnswerEngine.run(question: "核对人物资料", project: book(), settings: .init(model: "offline", maxOutputTokens: 512, contextWindowTokens: 128_000),
+            documents: [:], context: .init(unitID: "u1", page: 1), scope: .page, history: [], memory: nil, memoryEnabled: false,
+            documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 4) { messages, _, _, _ in
+                requests += 1
+                if requests == 1 { return self.readBatch(33) }
+                if requests == 2 {
+                    XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("unexecutedToolCalls") == true })
+                    XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("最多32项") == true })
+                    XCTAssertFalse(messages.contains { $0["role"] as? String == "tool" })
+                    return self.readBatch(1)
+                }
+                return self.answer("刘备与关羽同行。[unit:u1]")
+            }
+        XCTAssertEqual(requests, 3); XCTAssertEqual(result.diagnostics.toolCalls, 1)
+    }
+    func testRepeatedOversizedBatchStopsWithoutExecutingOrExtendingRequestLimit() async throws {
+        var requests = 0
+        do {
+            _ = try await ReadingAnswerEngine.run(question: "核对人物资料", project: book(), settings: .init(model: "offline", maxOutputTokens: 512, contextWindowTokens: 128_000),
+                documents: [:], context: .init(unitID: "u1", page: 1), scope: .page, history: [], memory: nil, memoryEnabled: false,
+                documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 4) { _, _, _, _ in requests += 1; return self.readBatch(33) }
+            XCTFail("Repeated oversized calls continued")
+        } catch { XCTAssertTrue(error is ReadingWorkflowBudgetPause) }
+        XCTAssertEqual(requests, 2)
+    }
+
+    func testBudgetClosingFormatGetsOneRepairWithQuestionEvidenceAndSavedReceipt() async throws {
+        let submitted = LocalProposalCounter()
+        let proposals = ReadingProposalToolAccess(proposalTools: ["knowledge_changes_propose"], prepare: { _, _ in await submitted.submit() })
+        var requests = 0
+        let question = "整理刘备，保留我的原问题"
+        let result = try await ReadingAnswerEngine.run(question: question, project: book(), settings: .init(model: "deepseek-flash", maxOutputTokens: 512, contextWindowTokens: 128_000),
+            documents: [:], context: .init(unitID: "u1", page: 1), scope: .page, history: [], memory: nil, memoryEnabled: false,
+            documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 4, proposalAccess: proposals, preferences: .init(interaction: .functional)) { messages, _, limit, final in
+                requests += 1
+                if requests == 1 {
+                    let response = self.call("knowledge_changes_propose", #"{"batch":{"knowledge":{}}}"#)
+                    return .init(message: response.message, finishReason: response.finishReason, tokenCost: limit - 1)
+                }
+                XCTAssertTrue(final)
+                if requests == 2 { return self.answer("<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name=\"components_list\"></｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>") }
+                XCTAssertEqual(messages.filter { $0["content"] as? String == question }.count, 1)
+                let text = messages.compactMap { $0["content"] as? String }.joined(separator: "\n")
+                XCTAssertTrue(text.contains("上一条收尾回复仍是内部工具格式"))
+                XCTAssertTrue(text.contains("local-budget-receipt"))
+                XCTAssertTrue(text.contains("刘备与关羽同行"))
+                return self.answer("资料已保存，地图尚未完成。[unit:u1]")
+            }
+        let count = await submitted.count
+        XCTAssertEqual(requests, 3); XCTAssertEqual(count, 1)
+        XCTAssertEqual(result.message.evidence.map(\.unitID), ["u1"])
+    }
+
+    func testBudgetClosingRepeatedInternalFormatDoesNotLoopOrExecuteIt() async throws {
+        var requests = 0
+        do {
+            _ = try await ReadingAnswerEngine.run(question: "核对原文", project: book(), settings: .init(model: "deepseek-flash", maxOutputTokens: 512, contextWindowTokens: 128_000),
+                documents: [:], context: .init(unitID: "u1", page: 1), scope: .page, history: [], memory: nil, memoryEnabled: false,
+                documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 5) { _, _, limit, final in
+                    requests += 1
+                    if !final {
+                        let response = self.call("source_read", #"{"id":"u1"}"#)
+                        return .init(message: response.message, finishReason: response.finishReason, tokenCost: limit - 1)
+                    }
+                    return self.answer("<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name=\"components_list\"></｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>")
+                }
+            XCTFail("重复格式错误没有暂停")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("工具格式")) }
+        XCTAssertEqual(requests, 3, "只纠正一次，不提高任务额度或执行文本里的工具意图")
+    }
+
 }

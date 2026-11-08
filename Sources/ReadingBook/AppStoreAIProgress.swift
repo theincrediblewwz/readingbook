@@ -137,7 +137,7 @@ struct AIProgressPresentationState: Equatable {
             if toolSteps.count > 300 { toolSteps.removeFirst(toolSteps.count - 300) }
         } else if event.phase == .toolCompleted {
             let requiresReview = event.toolStatus == "needs_confirmation"
-            if let index = toolSteps.lastIndex(where: { ($0.requestID == requestID && $0.requestNumber == number) && $0.title == Self.toolTitle(event.toolName) && $0.succeeded == nil && !$0.requiresReview }) {
+            if let index = toolSteps.lastIndex(where: { ($0.requestID == requestID && $0.requestNumber == number) && $0.title == Self.toolTitle(event.toolName) && $0.succeeded == nil && (!$0.requiresReview || !requiresReview) }) {
                 toolSteps[index].requiresReview = requiresReview; toolSteps[index].summary = event.toolSummary ?? ""
                 toolSteps[index].trace = event.toolTrace
                 if !requiresReview { toolSteps[index].succeeded = event.toolSucceeded == true }

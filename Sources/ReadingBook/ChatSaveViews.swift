@@ -381,14 +381,14 @@ private struct BookChatComposer: View {
                 Button(action: onReviewChanges) {
                     Label("审阅 \(store.pendingCurrentBookChanges.count) 项待确认修改", systemImage: "doc.text.magnifyingglass")
                         .font(.system(size: 15)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent).disabled(store.isBusy)
+                }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent).disabled(!store.canProcessAIReview)
             } else if store.queryAwaitingReview {
                 Button(action: store.continueReviewedQuery) {
                     Label("继续这次整理", systemImage: "arrow.right.circle")
                         .font(.system(size: 15)).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
-                    .disabled(store.isBusy || !store.canStartQuery || store.queryInteractionMode != .functional)
-                    .help("点击后在当前范围继续刚才的问题，复用已应用的修改。")
+                    .disabled(!store.canContinueReviewedQuery)
+                    .help("从暂停处接着整理，保留已经看过的原文和工具结果，不重发原问题。")
             }
         }.padding(embedded ? 10 : 16).modifier(ChatComposerSurface(embedded: embedded)).frame(maxWidth: 900).padding(.horizontal, embedded ? 12 : 24).padding(.bottom, embedded ? 10 : 22)
             .popover(item: $composerPopover) { page in

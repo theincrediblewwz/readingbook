@@ -141,13 +141,31 @@ private actor WorkbenchTransport {
         let question = store.queryComposerDraft.text; store.queryComposerDraft.text = ""
         store.ask(question, allowsOrganizing: true)
         try check("continuationQueryStarted", store.isQueryBusy)
-        try await wait { !self.store.isQueryBusy }
+        try await wait { self.store.queryAwaitingReview && !self.store.pendingCurrentBookChanges.isEmpty }
         let pausedRequestCount = await transport.count()
-        try check("continuationQueryCompleted", store.queryAwaitingReview && store.queryRetryQuestion == question && store.errorMessage == nil && pausedRequestCount == callsBeforeEdit + 6)
+        try check("continuationQueryCompleted", store.queryAwaitingReview && store.isQueryBusy && store.queryRetryQuestion == nil && store.errorMessage == nil && pausedRequestCount == callsBeforeEdit + 6)
         try check("existingRecordSupplementWaitsForReview", store.pendingCurrentBookChanges.count == 1 && !store.book!.entities.contains { $0.name == "张飞" })
         guard let pending = store.pendingCurrentBookChanges.first else { throw ReadingError.invalid("缺少新增证据的审阅提案。") }
+        try await Task.sleep(for: .milliseconds(200))
+        let stillPaused = await transport.count()
+        try check("reviewPauseSendsNoFurtherRequests", stillPaused == pausedRequestCount && store.isQueryBusy)
+        let originalRun = store.queryRunID
         let reviewed = await store.applyAIChange(pending)
         try check("reviewedSupplementActuallyCommits", reviewed && store.pendingCurrentBookChanges.isEmpty)
+        let afterReview = await transport.count()
+        try check("reviewApplyDoesNotAutomaticallySend", afterReview == pausedRequestCount && store.canContinueReviewedQuery)
+        store.continueReviewedQuery()
+        try check("reviewContinueKeepsOriginalTask", store.queryRunID == originalRun && store.isQueryBusy)
+        try await wait { !self.store.isQueryBusy }
+        try check("reviewContinueFinishesOriginalTask", store.queryRetryQuestion == nil && !store.queryAwaitingReview && store.errorMessage == nil)
+        let continuedRecords = await transport.allRecords()
+        let lastMessages = continuedRecords.last?["messages"] as? [[String: Any]] ?? []
+        try check("reviewContinueKeepsOriginalQuestion", lastMessages.filter { $0["content"] as? String == question }.count == 1)
+        try check("reviewContinueRetainsActualHostReceipt", lastMessages.contains { row in
+            guard row["role"] as? String == "tool", let content = row["content"] as? String,
+                  let bytes = content.data(using: .utf8), let result = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { return false }
+            return result["applied"] as? Bool == true && result["proposalID"] as? String == pending.id
+        })
         try check("continuationActuallyAddedKnowledge", store.book!.entities.contains { $0.name == "张飞" } && store.book!.events.contains { $0.name == "重逢" })
         try check("continuationKeepsSameWorkbench", store.book!.views.count == 1 && store.route == view.id)
         try check("continuedRangeStopsBeforeFuturePage", store.activeComponentView?.snapshot?.unitIDs == ["u1", "u2"] && store.componentDataBook?.entities.contains { $0.id == "cao" } == false)
@@ -162,12 +180,64 @@ private actor WorkbenchTransport {
         try check("modelReceivesCorrectionBasis", String(decoding: serialized, as: UTF8.self).contains("readerCorrection") && String(decoding: serialized, as: UTF8.self).contains("我的理解"))
         try serialized.write(to: output.appendingPathComponent("offline-model-requests.json"))
         try JSONEncoder().encode(loaded).write(to: output.appendingPathComponent("final-fixture.json"))
+        try await timeWindowBridgeChecks(repository: repository)
         if CommandLine.arguments.contains("--inspect") {
             store.readingCompanionVisible = false
             try Data("ready".utf8).write(to: output.appendingPathComponent("inspection-ready"))
             while !FileManager.default.fileExists(atPath: output.appendingPathComponent("end-inspection").path) { try await Task.sleep(nanoseconds: 100_000_000) }
         }
         window.close()
+    }
+    /// Cross the real AppStore -> mounted composition -> background projection
+    /// -> acknowledgement bridge; Core-only date arithmetic cannot prove this.
+    func timeWindowBridgeChecks(repository: LibraryRepository) async throws {
+        let texts = ["建安十二年十一月二十日，甲军出发。", "建安十二年十一月二十一日，乙军到达。"]
+        var book = BookProject(title: "时间窗桥接 · 隔离合成书", originalName: "time.txt", sourceHash: "fixture", units: texts.enumerated().map {
+            .init(id: "t\($0.offset)", order: $0.offset, chapter: "合成段落", page: $0.offset + 1, text: $0.element)
+        })
+        PluginEngine.seed(&book)
+        let source = output.appendingPathComponent("time.txt"), bytes = Data(texts.joined(separator: "\n").utf8)
+        book.sourceHash = try BookImporter.sha256(bytes); try bytes.write(to: source)
+        let anchors = try book.units.map { try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: $0.id, quote: $0.text, in: book) }
+        book.events = book.units.enumerated().map { index, unit in
+            .init(id: "event\(index)", name: index == 0 ? "合成出发" : "合成到达", evidence: [.init(unitID: unit.id, quote: unit.text)])
+        }
+        let dates = (20...21).map { day in TemporalExtent(sourceText: texts[day - 20], calendar: "建安", start: .init(year: 12, month: 11, day: day), precision: .day, uncertainty: .exact) }
+        book.temporalKnowledge = .init(anchors: anchors, eventMetadata: [
+            .init(eventID: "event0", extent: dates[0], sourceAnchorIDs: [anchors[0].id], assertion: .explicit),
+            .init(eventID: "event1", extent: dates[1], sourceAnchorIDs: [anchors[1].id], assertion: .explicit)])
+        let sourceDefinition = CompositionDataSource(id: "events", collection: .events, scope: .book, sort: .time)
+        let definition = CompositionDefinition(sources: [sourceDefinition], parts: [.init(id: "map", primitive: .map, sourceID: "events"), .init(id: "axis", primitive: .timeline, sourceID: "events")],
+            layout: [.init(id: "m", kind: .part, partID: "map"), .init(id: "t", kind: .part, partID: "axis"), .init(id: "root", kind: .column, children: ["m", "t"])], rootID: "root")
+        var view = ViewDefinition(id: "time-bridge", title: "合成时间联动", kind: .knowledge)
+        view.rendererID = "reading.composition"; view.composition = definition; book.views = [view]
+        book = try await repository.create(book, sourceURL: source)
+        store.readingCompanionVisible = false; store.publish(book); store.bookID = book.id; store.selectedUnitID = "t1"; store.route = view.id
+        try await wait { self.store.renderedComponentPresentation?.matches(self.store, route: view.id) == true }
+        try check("timeBridgeCompositionMounted", store.enabledViews.first(where: { $0.id == store.route })?.composition == definition)
+        let requestsBefore = await transport.count()
+        let arguments: [String: Any] = ["at": ["calendar": "建安", "year": 12, "month": 11, "day": 20], "fromDate": ["year": 12, "month": 11, "day": 20], "toDate": ["year": 12, "month": 11, "day": 20]]
+        let data = try JSONSerialization.data(withJSONObject: arguments)
+        let response = try await store.performReadingViewAction("view_set_time_window", data: data, expectedBookID: book.id, sourceHash: book.sourceHash)
+        let receipt = try JSONSerialization.jsonObject(with: response) as? [String: Any]
+        try check("timeBridgeActualProjectionAcknowledged", receipt?["status"] as? String == "success" && (receipt?["message"] as? String)?.contains("已完成筛选") == true)
+        let axis = TemporalAxis("calendar-day:建安"), expected = axis.value(dates[0])!
+        try check("timeBridgeDateCoordinatesPublishedAfterAck", store.temporalAxis == "calendar-day:建安" && store.timeFrom == expected && store.timeTo == expected && store.timeCursor == expected)
+        let window = axis.window(from: store.timeFrom, to: store.timeTo)!
+        let filtered = try CompositionRuntime.project(definition, in: book, windows: [sourceDefinition.timeGroup: window])
+        try check("timeBridgeWindowSelectsOneSharedEvent", filtered["events"]?.items.map(\.id) == ["event0"])
+        let conflict = try await store.performReadingViewAction("view_set_time_window", data: data, expectedBookID: "other-book", sourceHash: book.sourceHash)
+        try check("timeBridgeRejectsStaleBook", (try JSONSerialization.jsonObject(with: conflict) as? [String: Any])?["status"] as? String == "conflict")
+        do {
+            let bad = try JSONSerialization.data(withJSONObject: ["at": ["narrativeOrder": 0, "narrativeDomain": "chapter"], "from": 0, "to": 1])
+            _ = try await store.performReadingViewAction("view_set_time_window", data: bad, expectedBookID: book.id, sourceHash: book.sourceHash)
+            try check("timeBridgeRejectsUnavailableDomain", false)
+        } catch { try check("timeBridgeRejectsUnavailableDomain", error.localizedDescription.contains("尚无可用数据")) }
+        try check("timeBridgeRejectedCommandsKeepClock", store.temporalAxis == axis.id && store.timeFrom == expected && store.timeTo == expected)
+        try check("timeBridgeSharedDataAndSourcePreserved", store.book?.events == book.events && store.book?.temporalKnowledge == book.temporalKnowledge && (try Data(contentsOf: source)) == bytes)
+        let requestsAfter = await transport.count()
+        try check("timeBridgeDoesNotRequestModel", requestsBefore == requestsAfter)
+        try JSONSerialization.data(withJSONObject: ["response": receipt ?? [:], "axis": store.temporalAxis, "from": store.timeFrom, "to": store.timeTo, "current": store.timeCursor, "filteredEventIDs": filtered["events"]?.items.map(\.id) ?? []], options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("time-bridge.json"))
     }
     func finish(_ error: Error?) async throws {
         let records = await transport.allRecords()

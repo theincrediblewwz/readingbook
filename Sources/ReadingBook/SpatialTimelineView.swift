@@ -475,8 +475,7 @@ struct SpatialTimelineView: View {
                 Button("浏览事件清单（\(visibleEvents.count)）") { showingEvents = true }
                 Menu("时间体系") {
                     Button("原书纪年标签（历法未统一）") { selectAxis("legacy") }
-                    ForEach(store.availableTemporalAxes.filter { $0 != "narrative" }, id: \.self) { axis in Button(TemporalAxis(axis).title) { selectAxis(axis) } }
-                    if store.hasNarrativeTime { Button("叙事顺序") { selectAxis("narrative") } }
+                    ForEach(store.availableTemporalAxes, id: \.self) { axis in Button(TemporalAxis(axis).title) { selectAxis(axis) } }
                 }
                 Toggle("显示出现次序虚线", isOn: $showsFootprintSequence).disabled(store.selectedTemporalEntityID == nil || !temporalMode)
                 Text("虚线连接有出处的出现点，不代表真实路线。")
