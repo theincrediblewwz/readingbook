@@ -191,7 +191,7 @@ struct CompositionWorkspaceView: View {
     }
     private func refresh(includeBaseline: Bool = true, retainingContent: Bool = false) {
         cancelRefresh()
-        if !embedded { store.renderedCompositionState = nil }
+        if !embedded { publishPreparation(.pending) }
         guard isActive else { return }
         guard let book = store.book, let composition else {
             clearPrepared(); displayedOwner = nil
@@ -250,11 +250,17 @@ struct CompositionWorkspaceView: View {
                 displayedOwner = nil
                 projections = [:]; baseline = [:]; baselineSelection = nil; baselineOwner = nil; validatedComposition = nil; validatedBookID = nil
                 issue = error.localizedDescription; refreshTask = nil
+                publishPreparation(.failed)
                 finishTimeCommand(error: error.localizedDescription)
             }
         }
     }
-    private func publishMap(_ value: ReadingMapViewport?, partID: String, generation: UInt64) {
+    private func publishPreparation(_ status: ReadingWorkspaceObservationStatus) {
+        guard !embedded, isActive, definition?.id == store.route else { return }
+        guard composition?.parts.contains(where: { $0.primitive == .map }) == true else { store.renderedCompositionState = nil; return }
+        store.renderedCompositionState = .init(contextID: store.readingVisibilityContextID, selectedIDs: [], maps: [], clocks: [], observationStatus: status)
+    }
+    private func publishMap(_ value: ReadingMapViewport?, status: ReadingWorkspaceObservationStatus, partID: String, generation: UInt64) {
         guard !embedded, isActive, definition?.id == store.route, refreshTask == nil, generation == viewportGeneration,
               let owner = displayedOwner, matches(owner, store: store) else { return }
         if let value { mapViewports[partID] = value } else { mapViewports[partID] = nil }
@@ -266,7 +272,8 @@ struct CompositionWorkspaceView: View {
         }
         store.renderedCompositionState = RenderedCompositionState(contextID: store.readingVisibilityContextID,
             selectedIDs: Array(Set(selections.values.flatMap { $0 })).sorted(),
-            maps: mapViewports.keys.sorted().compactMap { mapViewports[$0] }, clocks: windows)
+            maps: mapViewports.keys.sorted().compactMap { mapViewports[$0] }, clocks: windows,
+            observationStatus: status == .empty && !mapViewports.isEmpty ? .ready : status)
     }
     private func select(_ id: String, group: String) {
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) {
@@ -519,7 +526,7 @@ struct CompositionWorkspaceView: View {
                 }
                 }
                 let routes = part.routeSourceID.flatMap { projections[$0]?.mapRoutes } ?? projection.mapRoutes
-                CompositionMap(partID: part.id, visibilityGeneration: viewportGeneration, occlusions: occlusions, reportViewport: { publishMap($0, partID: part.id, generation: viewportGeneration) },
+                CompositionMap(partID: part.id, visibilityGeneration: viewportGeneration, occlusions: occlusions, reportViewport: { publishMap($0, status: $1, partID: part.id, generation: viewportGeneration) },
                     points: projection.mapPoints, routes: routes, selected: selections[part.selectionGroup] ?? [], height: height, canvas: canvas,
                     select: { select($0, group: part.selectionGroup) },
                     deselect: { selections[part.selectionGroup] = []; canvasAnchors[part.selectionGroup] = nil },
@@ -843,7 +850,7 @@ private struct CompositionMap: View {
     let partID: String
     let visibilityGeneration: UInt64
     let occlusions: [CGRect]
-    var reportViewport: (ReadingMapViewport?) -> Void
+    var reportViewport: (ReadingMapViewport?, ReadingWorkspaceObservationStatus) -> Void
     let points: [CompositionMapPoint]
     let routes: [SpatialRoute]
     let selected: Set<String>
@@ -857,7 +864,7 @@ private struct CompositionMap: View {
     @State private var cameraRegion: MKCoordinateRegion?
     @State private var moving = false
     var body: some View {
-        if points.isEmpty && routes.isEmpty { CompositionEmptyState(text: "当前范围和时间没有已确认的位置。人物仅显示有出处的出现地点。", icon: "map").onAppear { reportViewport(nil) } }
+        if points.isEmpty && routes.isEmpty { CompositionEmptyState(text: "当前范围和时间没有已确认的位置。人物仅显示有出处的出现地点。", icon: "map").task(id: visibilityGeneration) { reportViewport(nil, .empty) } }
         else {
             GeometryReader { geometry in MapReader { proxy in
             Map(position: $camera) {
@@ -891,7 +898,7 @@ private struct CompositionMap: View {
                     inspectedRoute = nil; selectedLocation(nil); deselect()
                 })
                 .onMapCameraChange(frequency: .continuous) { _ in
-                    if !moving { moving = true; reportViewport(nil) }
+                    if !moving { moving = true; reportViewport(nil, .pending) }
                     if canvas { reportLocation(using: proxy) }
                 }
                 .onMapCameraChange(frequency: .onEnd) { context in
@@ -935,7 +942,8 @@ private struct CompositionMap: View {
         }
     }
     private func publishViewport(using proxy: MapProxy, geometry: GeometryProxy) {
-        guard !moving, !workspaceBlocked, inspectedRoute == nil, let region = cameraRegion else { reportViewport(nil); return }
+        guard !workspaceBlocked, inspectedRoute == nil else { reportViewport(nil, .obscured); return }
+        guard !moving, let region = cameraRegion else { reportViewport(nil, .pending); return }
         let viewport = CGRect(origin: .zero, size: geometry.size)
         let origin = geometry.frame(in: .global).origin
         let exclusions = occlusions + workspaceExclusions.map { $0.offsetBy(dx: -origin.x, dy: -origin.y) }
@@ -951,7 +959,7 @@ private struct CompositionMap: View {
         }.map(\.relationID)
         reportViewport(ReadingMapViewport(partID: partID, latitude: region.center.latitude, longitude: region.center.longitude,
             latitudeDelta: region.span.latitudeDelta, longitudeDelta: region.span.longitudeDelta,
-            objectIDs: Array(Set(objects)).sorted(), visibleRouteIDs: Array(Set(visibleRoutes)).sorted(), projectedRouteIDs: Array(Set(routes.map(\.relationID))).sorted()))
+            objectIDs: Array(Set(objects)).sorted(), visibleRouteIDs: Array(Set(visibleRoutes)).sorted(), projectedRouteIDs: Array(Set(routes.map(\.relationID))).sorted()), .ready)
     }
     private func screenPoint(_ ids: Set<String>, using proxy: MapProxy) -> CGPoint? {
         guard let point = points.first(where: { ids.contains($0.targetID) }) else { return nil }

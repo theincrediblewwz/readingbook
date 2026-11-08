@@ -133,4 +133,82 @@ final class ReadingToolPresentationTests: XCTestCase {
         XCTAssertTrue(receipt.contains("\"status\":\"success\"")); XCTAssertFalse(receipt.contains("needs_confirmation"))
         XCTAssertEqual(sent.count, 2)
     }
+    func testClosingKeepsBoundedActualMapCountsScopeAndTimeInsteadOfOnlyOpened() throws {
+        var session = try session()
+        let observation: [String: Any] = ["status":"success", "rendererID":"map", "sourceScope":"本次第43–50回", "partial":true,
+            "items":Array(repeating:["name":String(repeating:"不应复制的大文本",count:1000)],count:100),
+            "mapViewports":[["partID":"main","projectedRouteCount":9,"visibleRouteCount":8,"partial":false,
+                             "visibleRouteIDs":Array(repeating:"不要保留的大数组",count:1000)]],
+            "timeFilterApplied":true,"timeWindows":[["groupID":"main","axis":"narrative","from":1,"to":4,"current":3]]]
+        try session.recordHostReceipt(try session.json(["status":"success","opened":true,"viewID":"map","actualView":observation]),tool:"component_show")
+        let packed = try XCTUnwrap(session.finalEvidence(maximumBytes:2400)), final = try object(packed)
+        let receipts = try XCTUnwrap(final["hostToolReceipts"] as? [[String:Any]])
+        let actual = try XCTUnwrap(receipts.last?["actualView"] as? [String:Any])
+        XCTAssertEqual(actual["status"] as? String,"success");XCTAssertEqual(actual["sourceScope"] as? String,"本次第43–50回")
+        let map = try XCTUnwrap((actual["mapViewports"] as? [[String:Any]])?.first)
+        XCTAssertEqual(map["projectedRouteCount"] as? Int,9);XCTAssertEqual(map["visibleRouteCount"] as? Int,8)
+        XCTAssertEqual(actual["timeFilterApplied"] as? Bool,true)
+        XCTAssertEqual((actual["timeWindows"] as? [[String:Any]])?.first?["current"] as? Int,3)
+        XCTAssertNil(actual["items"]);XCTAssertNil(map["visibleRouteIDs"]);XCTAssertLessThanOrEqual(packed.utf8.count,2400)
+    }
+    func testClosingLatestPendingObservationSupersedesEarlierReadyMap() throws {
+        var session = try session()
+        try session.recordHostReceipt(#"{"status":"success","opened":true,"viewID":"map","actualView":{"status":"success","mapViewports":[{"projectedRouteCount":9,"visibleRouteCount":8}]}}"#,tool:"component_show")
+        try session.recordHostReceipt(#"{"rendererID":"map","observationStatus":"pending","timeFilterApplied":false,"mapViewports":[],"timeWindows":[]}"#,tool:"workspace_context_get")
+        let receipts = session.closingHostReceiptSummaries()
+        XCTAssertEqual(receipts.count,2);XCTAssertNil(receipts.first?["actualView"])
+        let actual = try XCTUnwrap(receipts.last?["actualView"] as? [String:Any])
+        XCTAssertEqual(actual["observationStatus"] as? String,"pending")
+        XCTAssertEqual(actual["timeFilterApplied"] as? Bool,false)
+        XCTAssertEqual((actual["mapViewports"] as? [[String:Any]])?.count,0)
+        XCTAssertFalse(try session.json(receipts).contains("visibleRouteCount"))
+    }
+    func testBudgetClosingModelActuallyReceivesOpenedCanvasReceipt() async throws {
+        let book=book(),requests=ToolPresentationRequests()
+        let workspace=ReadingWorkspaceSnapshot(bookID:book.id,sourceHash:book.sourceHash,rendererID:"map",
+            visibleObjects:.init(rendererID:"map",objectIDs:["gai"]),mapViewports:[.init(partID:"main",latitude:30,longitude:110,
+                latitudeDelta:2,longitudeDelta:3,objectIDs:["gai"],visibleRouteIDs:[],projectedRouteIDs:[])],observationStatus:.ready)
+        let host=ReadingHostToolAccess(viewActions:["component_show"],performViewAction:{_,_ in
+            Data(#"{"ok":true,"status":"success","opened":true,"viewID":"map"}"#.utf8)
+        },readWorkspaceAfterOpening:{_ in workspace})
+        _ = try await ReadingAnswerEngine.run(question:"打开已有地图并核对实际画面",project:book,
+            settings:.init(model:"offline",maxOutputTokens:512,contextWindowTokens:128_000),documents:[:],context:.init(unitID:"u1",page:1),
+            scope:.page,history:[],memory:nil,memoryEnabled:false,documentIDs:nil,loader:nil,operationLimit:128_000,remainingRequests:2,
+            hostTools:host,preferences:.init(interaction:.functional)) { messages,_,_,_ in
+                let count=try await requests.record(messages)
+                if count==1 {
+                    return .init(message:.init(role:"assistant",content:nil,refusal:nil,tool_calls:[.init(id:"show",type:"function",
+                        function:.init(name:"component_show",arguments:#"{"viewID":"map","confirmationOnly":false}"#))],reasoning_content:nil),finishReason:"tool_calls",tokenCost:10)
+                }
+                return .init(message:.init(role:"assistant",content:"已打开，当前全时段，没有行动路线。",refusal:nil,tool_calls:nil,reasoning_content:nil),finishReason:"stop",tokenCost:10)
+            }
+        let sent=await requests.values
+        let messages=try XCTUnwrap(JSONSerialization.jsonObject(with:try XCTUnwrap(sent.last)) as? [[String:Any]])
+        let summary=try XCTUnwrap(messages.compactMap{$0["content"] as? String}.first{$0.contains("软件回执（非正文）")})
+        XCTAssertTrue(summary.contains("actualView"));XCTAssertTrue(summary.contains("projectedRouteCount"))
+        XCTAssertTrue(summary.contains("visibleRouteCount"));XCTAssertTrue(summary.contains("timeFilterApplied"))
+        XCTAssertTrue(summary.contains("\"status\":\"success\""));XCTAssertEqual(sent.count,2)
+    }
+    func testReadingModeDoesNotAcquireNewWorkspaceObservationCapability() async throws {
+        let book=book(),requests=ToolPresentationRequests(),observations=ToolPresentationRequests()
+        let value=ReadingWorkspaceSnapshot(bookID:book.id,sourceHash:book.sourceHash,rendererID:"map",
+            visibleObjects:.init(rendererID:"map",objectIDs:["gai"]),observationStatus:.ready)
+        let host=ReadingHostToolAccess(viewActions:["component_show"],performViewAction:{_,_ in
+            Data(#"{"ok":true,"status":"success","opened":true,"viewID":"map"}"#.utf8)
+        },readWorkspace:{_ = try await observations.record([["kind":"read"]]);return value},
+          readWorkspaceAfterOpening:{_ in _ = try await observations.record([["kind":"settle"]]);return value})
+        _ = try await ReadingAnswerEngine.run(question:"打开已有地图",project:book,
+            settings:.init(model:"offline",maxOutputTokens:512,contextWindowTokens:128_000),documents:[:],context:.init(unitID:"u1",page:1),
+            scope:.page,history:[],memory:nil,memoryEnabled:false,documentIDs:nil,loader:nil,operationLimit:128_000,remainingRequests:2,
+            hostTools:host,preferences:.init(interaction:.reading)) { messages,_,_,_ in
+                let count=try await requests.record(messages)
+                if count==1 {
+                    return .init(message:.init(role:"assistant",content:nil,refusal:nil,tool_calls:[.init(id:"show",type:"function",
+                        function:.init(name:"component_show",arguments:#"{"viewID":"map","confirmationOnly":false}"#))],reasoning_content:nil),finishReason:"tool_calls",tokenCost:10)
+                }
+                return .init(message:.init(role:"assistant",content:"已打开地图。",refusal:nil,tool_calls:nil,reasoning_content:nil),finishReason:"stop",tokenCost:10)
+            }
+        let seen=await observations.values
+        XCTAssertTrue(seen.isEmpty)
+    }
 }

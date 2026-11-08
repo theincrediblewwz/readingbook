@@ -636,6 +636,7 @@ struct ReadingQuerySession {
             return try json(["ok": false, "budgetLimited": true, "message": "本轮空间不足以返回完整结果，正文未提供给模型。"])
         }
         try recordReturnedEvidence(result)
+        if name == "workspace_context_get" { try recordHostReceipt(result, tool: name) }
         if sourceExcerpts.count > before.0 { modelRequestedSource = true }
         return result
     }

@@ -77,6 +77,73 @@ private actor ScopeTransport {
         try await wait { !self.store.isQueryBusy }
         guard store.queryRetryQuestion == nil, store.errorMessage == nil else { throw ReadingError.invalid(store.errorMessage ?? store.queryRetryQuestion ?? "提问失败") }
     }
+    /// Exercise the production wait against a separate, unmounted store so a
+    /// synthetic readiness signal cannot race the real canvas in this host.
+    func checkWorkspaceSettlement() async throws {
+        let fixture = AppStore(sharedAIRequests: AIRequestCoordinator(transport: { _ in throw CancellationError() }))
+        var book = store.book!
+        book.id = "settlement-fixture"
+        let route = "settlement-map"
+        book.views.append(.init(id: route, title: "就绪回执", kind: .knowledge, rendererID: "reading.composition",
+            composition: ReadingWorkbench.definition(for: ReadingWorkbench.timeMapTemplateID)))
+        fixture.libraryRootURL = output.appendingPathComponent("settlement-library")
+        fixture.books = [book]; fixture.bookID = book.id; fixture.selectedUnitID = "u2"; fixture.route = route
+        let owner = ReadingQueryHostOwner(root: fixture.libraryRootURL, bookID: book.id, sourceHash: book.sourceHash, runID: nil)
+        func reset() {
+            fixture.bookID = book.id; fixture.books = [book]; fixture.selectedUnitID = "u2"; fixture.route = route
+            fixture.renderedComponentPresentation = .init(mountID: UUID(), root: fixture.libraryRootURL, bookID: book.id,
+                sourceHash: book.sourceHash, route: route, unobscured: true)
+            fixture.renderedCompositionState = .init(contextID: fixture.readingVisibilityContextID, selectedIDs: [], maps: [], clocks: [], observationStatus: .pending)
+        }
+        reset()
+        let ready = Task { @MainActor in
+            try await Task.sleep(for: .milliseconds(60))
+            fixture.renderedCompositionState = .init(contextID: fixture.readingVisibilityContextID, selectedIDs: [], maps: [], clocks: [], observationStatus: .ready)
+        }
+        let started = ContinuousClock.now
+        let settled = try await fixture.readSettledWorkspaceAfterOpening(route, owner: owner)
+        try await ready.value
+        try check("openWaitUsesRendererReadySignal", settled?.observationStatus == .ready && started.duration(to: .now) < .seconds(1))
+        try check("openWaitDoesNotNavigateOrPersist", fixture.route == route && fixture.book?.views == book.views && fixture.book?.chats.map(\.id) == book.chats.map(\.id))
+        reset()
+        let pendingStart = ContinuousClock.now
+        let pending = try await fixture.readSettledWorkspaceAfterOpening(route, owner: owner)
+        let duration = pendingStart.duration(to: .now)
+        try check("openWaitHasBoundedPendingDeadline", pending?.observationStatus == .pending && duration >= .milliseconds(900) && duration < .seconds(3))
+        reset()
+        fixture.renderedCompositionState = .init(contextID: fixture.readingVisibilityContextID, selectedIDs: [], maps: [], clocks: [], observationStatus: .empty)
+        let empty = try await fixture.readSettledWorkspaceAfterOpening(route, owner: owner)
+        try check("openWaitReturnsExplicitEmpty", empty?.observationStatus == .empty && empty?.visibleObjects?.objectIDs == [])
+        reset()
+        let cursor = Task { @MainActor in try await Task.sleep(for: .milliseconds(40)); fixture.selectedUnitID = "u1" }
+        let moved = try await fixture.readSettledWorkspaceAfterOpening(route, owner: owner)
+        try await cursor.value
+        try check("openWaitRejectsChangedReaderCursor", moved == nil && fixture.selectedUnitID == "u1")
+        reset()
+        let changed = Task { @MainActor in
+            try await Task.sleep(for: .milliseconds(40))
+            try fixture.installComponentView(route: route, snapshot: ReadingQuerySnapshot.freeze(scope: .page, in: book,
+                context: .init(unitID: "u1", page: 1)), context: .init(unitID: "u1", page: 1))
+        }
+        let rescoped = try await fixture.readSettledWorkspaceAfterOpening(route, owner: owner)
+        try await changed.value
+        try check("openWaitRejectsChangedSourceScope", rescoped == nil && fixture.activeComponentView?.snapshot?.scope == .page)
+        reset()
+        let departure = Task { @MainActor in try await Task.sleep(for: .milliseconds(40)); fixture.bookID = "different-book" }
+        var ownerCancelled = false
+        do { _ = try await fixture.readSettledWorkspaceAfterOpening(route, owner: owner) } catch is CancellationError { ownerCancelled = true }
+        try await departure.value
+        try check("openWaitCancelsAfterBookSwitch", ownerCancelled)
+        reset()
+        let cancelled = Task { @MainActor in try await fixture.readSettledWorkspaceAfterOpening(route, owner: owner) }
+        try await Task.sleep(for: .milliseconds(40)); cancelled.cancel()
+        var taskCancelled = false
+        do { _ = try await cancelled.value } catch is CancellationError { taskCancelled = true }
+        try check("openWaitHonorsRequestCancellation", taskCancelled)
+        reset(); fixture.showingSettings = true
+        let covered = try await fixture.readSettledWorkspaceAfterOpening(route, owner: owner)
+        try check("openWaitRejectsCoveredWorkspace", covered == nil)
+    }
     func run() async throws {
         output = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
         guard output.path.hasPrefix(FileManager.default.currentDirectoryPath + "/logs/"), Bundle.main.bundleIdentifier != "org.readingbook.app" else { throw ReadingError.invalid("只能使用隔离书库。") }
@@ -231,6 +298,7 @@ private actor ScopeTransport {
         try check("bookChangeClearsExplicitQueryRange", store.querySourceRange == nil && store.queryScope == .page)
         store.bookID = saved.id; store.selectedUnitID = "u2"; store.route = scopedRoute
         try store.installComponentView(route: scopedRoute, snapshot: try ReadingQuerySnapshot.freeze(scope: .book, in: saved), context: nil)
+        try await checkWorkspaceSettlement()
         if CommandLine.arguments.contains("--inspect") {
             try Data("ready".utf8).write(to: output.appendingPathComponent("inspection-ready"))
             while !FileManager.default.fileExists(atPath: output.appendingPathComponent("end-inspection").path) { try await Task.sleep(nanoseconds: 100_000_000) }

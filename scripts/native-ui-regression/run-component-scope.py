@@ -48,6 +48,7 @@ expected=set('fullBookQuestionScopePreserved fullBookOpensFutureObjects fullBook
 expected.update('explicitRangeQuestionIsFrozen explicitRangeObjectsAreExact explicitRangeTemporalEventsAreExact explicitRangeSuppliesWholeChosenTextOnce rangeCursorMoveDoesNotExpandComponent libraryChangeClearsExplicitQueryRange bookChangeClearsExplicitQueryRange'.split())
 expected.update('ordinaryReopenExplainsReaderBoundary previousSourceChoiceHasNoProjection explicitRestoreReturnsFrozenSource followReaderDoesNotEraseLastChoice sourceChoiceCannotApplyToAnotherRoute changedSourceCannotRestoreOldChoice'.split())
 expected.update('compositionNeverAdoptsStandaloneClock compositionReportsOwnClockAndSelection compositionReportsOwnedMapViewport compositionRejectsOldPublicationViewport'.split())
+expected.update('openWaitUsesRendererReadySignal openWaitDoesNotNavigateOrPersist openWaitHasBoundedPendingDeadline openWaitReturnsExplicitEmpty openWaitRejectsChangedReaderCursor openWaitRejectsChangedSourceScope openWaitCancelsAfterBookSwitch openWaitHonorsRequestCancellation openWaitRejectsCoveredWorkspace'.split())
 checks=record.get('checks',{})
 frozen=all(sha(R/name)==value for name,value in sources.items())
 passed=code==0 and unified.returncode==0 and record.get('status')=='passed' and set(checks)==expected and all(v is True for v in checks.values()) and frozen and not any(warnings.values()) and record.get('realNetworkRequests')==0 and record.get('originalLibraryUsed') is False

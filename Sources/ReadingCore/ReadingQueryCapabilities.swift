@@ -24,6 +24,10 @@ public struct ReadingVisibleObjectsSnapshot: Codable, Hashable, Sendable {
         self.connections = connections
     }
 }
+public enum ReadingWorkspaceObservationStatus: String, Codable, Hashable, Sendable {
+    case pending, ready, empty, obscured, failed, unsupported
+    public var permitsVisibility: Bool { self == .ready || self == .empty }
+}
 public struct ReadingWorkspaceSnapshot: Codable, Hashable, Sendable {
     public var bookID: String
     public var sourceHash: String
@@ -39,22 +43,29 @@ public struct ReadingWorkspaceSnapshot: Codable, Hashable, Sendable {
     public var mapViewports: [ReadingMapViewport]?
     public var timeWindows: [ReadingViewTimeWindow]?
     public var sourceScopeTitle: String?
-    public init(bookID: String, sourceHash: String, rendererID: String? = nil, selectedObjectIDs: [String] = [], context: ReadingContext? = nil, visibleObjects: ReadingVisibleObjectsSnapshot? = nil, selectedNodeIDs: [String] = [], timeAxis: String? = nil, timeFrom: Double? = nil, timeTo: Double? = nil, currentTime: Double? = nil, mapViewports: [ReadingMapViewport]? = nil, timeWindows: [ReadingViewTimeWindow]? = nil, sourceScopeTitle: String? = nil) {
+    public var observationStatus: ReadingWorkspaceObservationStatus?
+    public init(bookID: String, sourceHash: String, rendererID: String? = nil, selectedObjectIDs: [String] = [], context: ReadingContext? = nil, visibleObjects: ReadingVisibleObjectsSnapshot? = nil, selectedNodeIDs: [String] = [], timeAxis: String? = nil, timeFrom: Double? = nil, timeTo: Double? = nil, currentTime: Double? = nil, mapViewports: [ReadingMapViewport]? = nil, timeWindows: [ReadingViewTimeWindow]? = nil, sourceScopeTitle: String? = nil, observationStatus: ReadingWorkspaceObservationStatus? = nil) {
         self.bookID = bookID; self.sourceHash = sourceHash; self.rendererID = rendererID; self.selectedObjectIDs = selectedObjectIDs
         self.context = context; self.visibleObjects = visibleObjects
         self.selectedNodeIDs = selectedNodeIDs
         self.timeAxis = timeAxis; self.timeFrom = timeFrom; self.timeTo = timeTo; self.currentTime = currentTime
         self.mapViewports = mapViewports; self.timeWindows = timeWindows; self.sourceScopeTitle = sourceScopeTitle
+        self.observationStatus = observationStatus
     }
 }
 public struct ReadingHostToolAccess: Sendable {
     public var viewActions: Set<String>
     public var performViewAction: @Sendable (String, Data) async throws -> Data
     public var readWorkspace: (@Sendable () async throws -> ReadingWorkspaceSnapshot?)?
+    /// Optional, bounded local settlement after opening. It never calls a model
+    /// or changes the reader's navigation to obtain an observation.
+    public var readWorkspaceAfterOpening: (@Sendable (String) async throws -> ReadingWorkspaceSnapshot?)?
     public init(viewActions: Set<String>, performViewAction: @escaping @Sendable (String, Data) async throws -> Data,
-                readWorkspace: (@Sendable () async throws -> ReadingWorkspaceSnapshot?)? = nil) {
+                readWorkspace: (@Sendable () async throws -> ReadingWorkspaceSnapshot?)? = nil,
+                readWorkspaceAfterOpening: (@Sendable (String) async throws -> ReadingWorkspaceSnapshot?)? = nil) {
         self.viewActions = viewActions; self.performViewAction = performViewAction
         self.readWorkspace = readWorkspace
+        self.readWorkspaceAfterOpening = readWorkspaceAfterOpening
     }
 }
 /// The host prepares previews and may commit explicitly authorized new content.
@@ -426,12 +437,18 @@ extension ReadingQuerySession {
                 "selectedNodeIDs": workspace.selectedNodeIDs.filter { admitsNode($0, admitted: admitted, project: project) },
                 "context": ["page": workspace.context?.page as Any? ?? NSNull(), "timeFrom": workspace.context?.timeFrom as Any? ?? NSNull(), "timeTo": workspace.context?.timeTo as Any? ?? NSNull()],
                 "timeAxis": workspace.timeAxis as Any? ?? NSNull(), "timeFrom": workspace.timeFrom as Any? ?? NSNull(), "timeTo": workspace.timeTo as Any? ?? NSNull(), "currentTime": workspace.currentTime as Any? ?? NSNull(),
+                "observationStatus": workspace.observationStatus?.rawValue as Any? ?? NSNull(),
+                "timeFilterApplied": !(workspace.timeWindows ?? []).isEmpty || workspace.timeFrom != nil || workspace.timeTo != nil,
                 "sourceScope": workspace.sourceScopeTitle as Any? ?? NSNull(),
                 "mapViewports": try admittedMapViewports(workspace, scoped: scoped, boundary: boundary),
                 "timeWindows": try (workspace.timeWindows ?? []).map { try encoded($0) },
                 "note": "宿主界面状态仅用于定位，不是原书事实；范围外对象已隐藏。"])
         case "visible_objects_list":
-            guard let workspace, let visible = workspace.visibleObjects else { return try json(["ok": false, "status": "unsupported", "message": "当前渲染器未接入真实可见对象快照；没有从项目数据猜测。"] ) }
+            guard let workspace, workspace.observationStatus?.permitsVisibility ?? true, let visible = workspace.visibleObjects else {
+                var result = unavailableActualView(workspace?.observationStatus)
+                result["ok"] = false
+                return try json(result)
+            }
             try validateWorkspace(workspace)
             let admitted = (try TemporalKnowledgeRuntime.objectIDs(in: scoped, boundary: boundary)).union(snapshot.documentIDs)
             var rows = visible.objectIDs.filter(admitted.contains).map { ["objectID": $0, "rendererID": visible.rendererID, "partial": visible.partial] as [String: Any] }
@@ -535,13 +552,17 @@ extension ReadingQuerySession {
         guard var result = try JSONSerialization.jsonObject(with: Data(receipt.utf8)) as? [String: Any],
               result["ok"] as? Bool == true, result["opened"] as? Bool == true,
               let route = result["viewID"] as? String else { return receipt }
-        var actual: [String: Any] = ["status": "unsupported", "note": "尚未取得当前渲染器的可见快照；不表示画布为空，也不表示某人物孤立。"]
-        if let refresh = hostTools?.readWorkspace {
+        var actual = unavailableActualView(nil)
+        if hostTools?.readWorkspaceAfterOpening != nil || hostTools?.readWorkspace != nil {
             do {
-                workspace = try await refresh(); try Task.checkCancellation()
+                if let settle = hostTools?.readWorkspaceAfterOpening { workspace = try await settle(route) }
+                else if let refresh = hostTools?.readWorkspace { workspace = try await refresh() }
+                try Task.checkCancellation()
                 if let workspace, workspace.rendererID == route {
                     try validateWorkspace(workspace)
-                    if let visible = workspace.visibleObjects, visible.rendererID == route, let project {
+                    actual = unavailableActualView(workspace.observationStatus)
+                    if workspace.observationStatus?.permitsVisibility ?? true,
+                       let visible = workspace.visibleObjects, visible.rendererID == route, let project {
                         let scoped = scopedKnowledgeProject() ?? project
                         let boundary = KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs))
                         let objects = try TemporalKnowledgeRuntime.objects(in: scoped, boundary: boundary)
@@ -552,12 +573,14 @@ extension ReadingQuerySession {
                             if let object = byID[id] { row["kind"] = object.kind.rawValue; row["name"] = String(object.name.prefix(80)) }
                             return row
                         } + visible.nodeIDs.filter { admitsNode($0, admitted: admitted, project: project) }.map { ["nodeID": $0] }
-                        actual = ["status": "success", "rendererID": route, "items": Array(rows.prefix(24)),
+                        actual = ["status": workspace.observationStatus == .empty ? "empty" : "success", "rendererID": route, "items": Array(rows.prefix(24)),
                             "partial": visible.partial || rows.count > 24 || rows.count < visible.objectIDs.count + visible.nodeIDs.count || (visible.connections?.count ?? 0) > 24,
                             "note": "只描述当前画布可见且本轮获准的项目；渲染器已知的遮挡、未分享笔记、范围外内容已排除，不能据此断言整个工作台没有资料或某节点没有关系。"]
                         actual["mapViewports"] = try admittedMapViewports(workspace, scoped: scoped, boundary: boundary)
                         actual["sourceScope"] = workspace.sourceScopeTitle as Any? ?? NSNull()
                         actual["timeWindows"] = try (workspace.timeWindows ?? []).map { try encoded($0) }
+                        actual["timeFilterApplied"] = !(workspace.timeWindows ?? []).isEmpty || workspace.timeFrom != nil || workspace.timeTo != nil
+                        if workspace.observationStatus == .empty { actual["note"] = "当前地图范围的投影没有点或路线；不代表本书或其他组件没有资料。" }
                         actual["connections"] = Array((visible.connections ?? []).filter { admitted.contains($0.fromID) && admitted.contains($0.toID) }.prefix(24)).map {
                             ["fromID": $0.fromID, "toID": $0.toID, "label": String($0.label.prefix(80))]
                         }
@@ -574,8 +597,16 @@ extension ReadingQuerySession {
         guard data.count <= min(16_000, maximumBytes) else { return receipt }
         return String(decoding: data, as: UTF8.self)
     }
+    private func unavailableActualView(_ status: ReadingWorkspaceObservationStatus?) -> [String: Any] {
+        switch status {
+        case .pending: return ["status": "pending", "note": "组件已打开，当前画面还在准备。无需重新打开或生成资料；稍后可读取workspace_context_get，不能据此判断画布为空。"]
+        case .obscured: return ["status": "obscured", "note": "当前画面被界面遮挡，未使用旧快照；不表示资料为空。"]
+        case .failed: return ["status": "failed", "note": "组件画面未能完成准备，请查看界面提示；已有资料保留，没有用项目成员数冒充可见结果。"]
+        default: return ["status": "unsupported", "note": "尚未取得当前渲染器的可见快照；不表示画布为空，也不表示某人物孤立。"]
+        }
+    }
     private func admittedMapViewports(_ value: ReadingWorkspaceSnapshot, scoped: BookProject, boundary: KnowledgeReadBoundary) throws -> [[String: Any]] {
-        guard let maps = value.mapViewports, !maps.isEmpty else { return [] }
+        guard value.observationStatus?.permitsVisibility ?? true, let maps = value.mapViewports, !maps.isEmpty else { return [] }
         let objects = try TemporalKnowledgeRuntime.objectIDs(in: scoped, boundary: boundary)
         let relations = Set(try TemporalKnowledgeRuntime.relations(in: scoped, boundary: boundary).map { $0.relation.id })
         return maps.map { map in
@@ -599,6 +630,12 @@ extension ReadingQuerySession {
               (value.visibleObjects?.nodeIDs.count ?? 0) <= 10_000,
               (value.visibleObjects?.connections?.count ?? 0) <= 10_000,
               [value.timeFrom, value.timeTo, value.currentTime].compactMap({ $0 }).allSatisfy({ $0.isFinite && abs($0) <= 1_000_000_000_000 }) else { throw invalid("界面快照属于其他书或超过界限。") }
+        if value.observationStatus == .empty {
+            guard let visible = value.visibleObjects, visible.objectIDs.isEmpty, visible.nodeIDs.isEmpty,
+                  (value.mapViewports ?? []).allSatisfy({ $0.objectIDs.isEmpty && $0.visibleRouteIDs.isEmpty && $0.projectedRouteIDs.isEmpty }) else {
+                throw invalid("空画面回执与渲染器提供的可见数据不一致。")
+            }
+        }
     }
     private func timePoint(_ arguments: [String: Any]) throws -> TemporalQueryPoint? {
         guard let raw = arguments["at"] else { return nil }

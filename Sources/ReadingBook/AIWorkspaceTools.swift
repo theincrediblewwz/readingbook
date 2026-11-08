@@ -15,7 +15,7 @@ struct WorkspaceAICommand: Equatable {
     /// route. A late canvas task must not describe a previous book or range.
     var readingVisibilityContextID: String {
         [libraryRootURL.path, bookID ?? "", book?.sourceHash ?? "", String(currentBookRevision),
-         componentDataScopeID?.uuidString ?? "", route].joined(separator: "\u{1f}")
+         componentDataScopeID?.uuidString ?? "", selectedUnitID ?? "", String(readingScopeCurrent), route].joined(separator: "\u{1f}")
     }
     func makeReadingWorkspaceSnapshot() -> ReadingWorkspaceSnapshot? {
         guard let book else { return nil }
@@ -24,10 +24,13 @@ struct WorkspaceAICommand: Equatable {
         }
         let composition = route == "reading.composition" || book.views.first { $0.id == route }?.rendererID == "reading.composition"
         let rendered = composition ? renderedCompositionState.flatMap { $0.contextID == readingVisibilityContextID ? $0 : nil } : nil
-        if let rendered, !rendered.maps.isEmpty {
+        let observationStatus: ReadingWorkspaceObservationStatus? = composition ? rendered?.observationStatus
+            ?? (visible != nil ? .ready : book.views.first { $0.id == route }?.composition?.parts.contains { $0.primitive == .map } == true ? .pending : .unsupported) : nil
+        if let rendered, !rendered.maps.isEmpty || observationStatus == .empty {
             visible = ReadingVisibleObjectsSnapshot(rendererID: route, objectIDs: Array(Set(rendered.maps.flatMap(\.objectIDs))).sorted(), partial: true,
                 description: "组合地图停稳后的可见标记，已扣除悬浮卡片；不代表工作台全部资料。", contextID: readingVisibilityContextID)
         }
+        if composition, observationStatus?.permitsVisibility == false { visible = nil }
         let clock = rendered?.clocks.count == 1 ? rendered?.clocks.first : nil
         var context = queryReadingContext
         if composition {
@@ -40,7 +43,7 @@ struct WorkspaceAICommand: Equatable {
             selectedObjectIDs: composition ? rendered?.selectedIDs ?? [] : selectedObjectID.map { [$0] } ?? [], context: context,
             visibleObjects: visible, selectedNodeIDs: visible == nil ? [] : renderedSelectedNodeIDs, timeAxis: composition ? clock?.axis : temporalAxis,
             timeFrom: composition ? clock?.from : timeFrom, timeTo: composition ? clock?.to : timeTo, currentTime: composition ? clock?.current : timeCursor,
-            mapViewports: rendered?.maps, timeWindows: rendered?.clocks, sourceScopeTitle: composition ? componentSourceControlTitle : nil)
+            mapViewports: observationStatus?.permitsVisibility == false ? nil : rendered?.maps, timeWindows: rendered?.clocks, sourceScopeTitle: composition ? componentSourceControlTitle : nil, observationStatus: observationStatus)
     }
     func readingViewToolAccess(bookID expectedBookID: String, sourceHash: String, runID: UUID? = nil,
                                grant: ControlledWriteGrant? = nil, snapshot: ReadingQuerySnapshot? = nil,
@@ -56,7 +59,28 @@ struct WorkspaceAICommand: Equatable {
         }, readWorkspace: { [weak self] in
             guard let self, await owner.matches(self) else { throw CancellationError() }
             return await self.makeReadingWorkspaceSnapshot()
+        }, readWorkspaceAfterOpening: { [weak self] route in
+            guard let self, await owner.matches(self) else { throw CancellationError() }
+            return try await self.readSettledWorkspaceAfterOpening(route, owner: owner)
         })
+    }
+    /// Poll only a tiny renderer-owned readiness flag, not book projections or
+    /// source text. This local wait adds no HTTP request or extra model turn.
+    func readSettledWorkspaceAfterOpening(_ expectedRoute: String, owner: ReadingQueryHostOwner) async throws -> ReadingWorkspaceSnapshot? {
+        let contextID = readingVisibilityContextID
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while true {
+            try Task.checkCancellation()
+            guard owner.matches(self) else { throw CancellationError() }
+            guard route == expectedRoute, readingVisibilityContextID == contextID,
+                  renderedComponentPresentation?.matches(self, route: expectedRoute) == true else { return nil }
+            let composedMap = book?.views.first { $0.id == expectedRoute }?.composition?.parts.contains { $0.primitive == .map } == true
+            let state = renderedCompositionState.flatMap { $0.contextID == contextID ? $0 : nil }
+            if !composedMap || state?.observationStatus != nil && state?.observationStatus != .pending || ContinuousClock.now >= deadline {
+                return makeReadingWorkspaceSnapshot()
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
     }
     func viewToolResult(_ status: String, _ message: String, extra: [String: Any] = [:]) throws -> Data {
         var result = extra; result["status"] = status; result["message"] = message; result["ok"] = status == "success"

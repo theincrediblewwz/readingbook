@@ -7,4 +7,5 @@ struct RenderedCompositionState {
     let selectedIDs: [String]
     let maps: [ReadingMapViewport]
     let clocks: [ReadingViewTimeWindow]
+    var observationStatus: ReadingWorkspaceObservationStatus = .ready
 }

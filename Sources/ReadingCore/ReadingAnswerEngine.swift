@@ -18,7 +18,10 @@ enum ReadingAnswerEngine {
         let functional = preferences.interaction == .functional
         let permittedHost = hostTools.map { host -> ReadingHostToolAccess in
             var value = host
-            if !functional { value.viewActions.formIntersection(ReadingQueryToolCatalog.componentNames); value.readWorkspace = nil }
+            if !functional {
+                value.viewActions.formIntersection(ReadingQueryToolCatalog.componentNames)
+                value.readWorkspace = nil; value.readWorkspaceAfterOpening = nil
+            }
             return value
         }
         let snapshot = try prepared?.snapshot ?? ReadingQuerySnapshot.freeze(scope: scope ?? (context?.documentID == nil ? .book : .notes), in: project, context: context,
