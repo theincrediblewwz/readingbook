@@ -1,0 +1,61 @@
+{
+  "tool": "built-in image_gen",
+  "displayOrder": [
+    "01.png",
+    "02.png",
+    "03.png"
+  ],
+  "selected": "User combined direction",
+  "notHistoricalReconstruction": true,
+  "images": [
+    {
+      "file": "Design/2026-11-08-battle-map-display/01.png",
+      "sha256": "a92600ae0a309e47d2894c049f8fe61e5d589f78ac1f97fc2e1cbdfa1c1a409e",
+      "width": 1487,
+      "height": 1058,
+      "originalGeneratedFile": "/Users/wu/.codex/generated_images/01a18077-5cba-7f00-9dc1-0222e4ba9d8d/exec-1d194ccf-0ab0-4fa9-91e5-bc24c7b4a46b.png",
+      "copiedToWorkspace": true
+    },
+    {
+      "file": "Design/2026-11-08-battle-map-display/02.png",
+      "sha256": "e59e9c7614fedf631f9bcf315a0619870ec40857f5df02d996b0a43bc9071e02",
+      "width": 1487,
+      "height": 1058,
+      "originalGeneratedFile": "/Users/wu/.codex/generated_images/01a18077-5cba-7f00-9dc1-0222e4ba9d8d/exec-98fc1222-0915-4cf5-9c37-97c709cd240a.png",
+      "copiedToWorkspace": true
+    },
+    {
+      "file": "Design/2026-11-08-battle-map-display/03.png",
+      "sha256": "f966ede10920be8e215e0c330e1824cfa725745ca2a14c26cc3c2dd44a5b0cae",
+      "width": 1487,
+      "height": 1058,
+      "originalGeneratedFile": "/Users/wu/.codex/generated_images/01a18077-5cba-7f00-9dc1-0222e4ba9d8d/exec-dc1314c8-ce50-4530-a4c0-d009f4c4ff55.png",
+      "copiedToWorkspace": true
+    }
+  ],
+  "userSelection": {
+    "legend": "left, like 01 and 02",
+    "timeline": "bottom",
+    "details": "floating card on selected point",
+    "routeAndUI": "01",
+    "regionAndSymbols": "02",
+    "materialPolicy": "Battle, fire, marching, withdrawal and other semantics are independently selectable composable materials/plugins; AI freely combines catalogue assets; no fixed battle template."
+  },
+  "combinedImage": {
+    "file": "Design/2026-11-08-battle-map-display/04-融合稿.png",
+    "sha256": "a525c8d06e1e81b39712f5a68479ab831212a7f2d352452fa1687781547616dc",
+    "source": "/Users/wu/.codex/generated_images/01a18077-5cba-7f00-9dc1-0222e4ba9d8d/exec-547a2b82-518a-4ab8-9e27-07dee5b8b0b8.png",
+    "reflectsUserSelectedCombination": true,
+    "shownToUser": true
+  },
+  "latestTimeAxisRevision": {
+    "file": "Design/2026-11-08-battle-map-display/05-时间轴融合稿.png",
+    "sha256": "95a74acefdc62762be9eecfd00c60381267f4a7e708f7ba7927d0290b90e9b6e",
+    "source": "/Users/wu/.codex/generated_images/01a18077-5cba-7f00-9dc1-0222e4ba9d8d/exec-b71d0ed4-30ea-49b0-8e7c-abfcd9f2231e.png",
+    "notImplementedProductUI": true,
+    "sharedDataFirst": true,
+    "stageLabelsSecondary": true
+  },
+  "workspaceRelocationComplete": true,
+  "onlyTheseFiveTemporaryDuplicatesRemoved": true
+}
