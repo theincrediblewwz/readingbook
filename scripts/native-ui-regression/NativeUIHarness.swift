@@ -953,11 +953,16 @@ struct PanelHarnessRoot: View {
             }
             let clip = scroll.contentView, originalClipOrigin = clip.bounds.origin
             var observedPredecessorDestination = false
+            func isActualLegacyBoundary() -> Bool {
+                guard let current = initial.2.currentPage, let destination = initial.2.currentDestination,
+                      let page = destination.page else { return false }
+                return initialDocument.index(for: current) == 3 && initialDocument.index(for: page) == 2
+                    && destination.point.y < page.bounds(for: initial.2.displayBox).minY
+                    && controller.page == 4 && store.selectedUnit?.page == 4
+            }
             for offset in [0.0, -0.25, -0.5, -1.0, -2.0, -4.0, -8.0, -16.0, -32.0, -64.0,
                            0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0] {
-                if let current = initial.2.currentPage, let destination = initial.2.currentDestination?.page,
-                   initialDocument.index(for: current) == 3 && initialDocument.index(for: destination) == 2,
-                   controller.page == 4 && store.selectedUnit?.page == 4 {
+                if isActualLegacyBoundary() {
                     observedPredecessorDestination = true; break
                 }
                 clip.scroll(to: NSPoint(x: originalClipOrigin.x, y: originalClipOrigin.y + offset))
@@ -969,10 +974,7 @@ struct PanelHarnessRoot: View {
                 states[states.count - 1]["requestedClipOffsetY"] = offset
                 writeJSON("boundary-observations.json", ["states": states])
             }
-            if let current = initial.2.currentPage, let destination = initial.2.currentDestination?.page {
-                observedPredecessorDestination = initialDocument.index(for: current) == 3 && initialDocument.index(for: destination) == 2
-                    && controller.page == 4 && store.selectedUnit?.page == 4
-            }
+            observedPredecessorDestination = isActualLegacyBoundary()
             try pdfRequire(observedPredecessorDestination, "Fixture did not exercise a real current-page-four/destination-page-three boundary")
             snapshot("at-real-cross-page-boundary", page: 4)
             assertions["realNativeCurrentPageFourDestinationPageThreeObserved"] = true
