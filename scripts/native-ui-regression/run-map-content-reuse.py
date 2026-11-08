@@ -54,8 +54,14 @@ expected = {
 } | {prefix+'-'+str(cycle) for cycle in range(3) for prefix in ['nativePanApplied', 'sameMarkerRecenters', 'sameMarkerZoomRestored']}
 assert len(expected) == 32
 checks=record.get('checks',{})
+narrow=record.get('observations',[])
+narrow=[row for row in narrow if row.get('stage')=='narrow-time-axis']
+narrow_passed=len(narrow)==3 and all(row.get('currentTimeAXPresent') is True for row in narrow) and {
+    (row.get('lower'),row.get('upper'),row.get('axisLower'),row.get('axisUpper')) for row in narrow
+}=={(99603,99603,99603,99604),(99603,99603,99603,99603),(0,0.25,0,1)}
 frozen=all(sha(R/name)==value for name,value in sources.items())
-passed=code==0 and unified.returncode==0 and record.get('status')=='passed' and set(checks)==expected and all(v is True for v in checks.values()) and frozen and not any(warnings.values()) and record.get('realNetworkRequests')==0 and record.get('originalLibraryUsed') is False
+passed=code==0 and unified.returncode==0 and record.get('status')=='passed' and set(checks)==expected and all(v is True for v in checks.values()) and narrow_passed and frozen and not any(warnings.values()) and record.get('realNetworkRequests')==0 and record.get('originalLibraryUsed') is False
+record['narrowTimelineCases']=len(narrow);record['narrowTimelinePassed']=narrow_passed
 report=dict(probe='map-content-reuse',status='passed' if passed else 'failed',passed=passed,checkCount=len(checks),expectedCheckNames=sorted(expected),exitCode=code,unifiedLogReturnCode=unified.returncode,runtimeWarnings=warnings,sourceStillFrozen=frozen,sourceSHA256=sources,record=record,realNetworkRequests=0,buildResourceFallbackDenied=True,outboundNetworkDenied=True,originalLibraryReadAndWriteDenied=True,productionNativeMap=True)
 (out/'report.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))
 raise SystemExit(0 if passed else 1)
