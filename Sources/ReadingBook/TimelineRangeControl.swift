@@ -84,7 +84,7 @@ struct TimelineRangeControl: View {
                 }.allowsHitTesting(false).accessibilityHidden(true)
                 thumb(.lower, at: startX, crowded: abs(startX - endX) < 24)
                 thumb(.upper, at: endX, crowded: abs(startX - endX) < 24)
-                ForEach(0...4, id: \.self) { index in
+                ForEach(visibleLabelIndices(mapping), id: \.self) { index in
                     let year = bounds.lowerBound + mapping.span * Double(index) / 4
                     Text(label(year.rounded()))
                         .font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary)
@@ -134,6 +134,23 @@ struct TimelineRangeControl: View {
             }
             .onExitCommand { cancelInteraction() }
             .onDisappear { cancelInteraction(); focused = nil }
+    }
+
+    /// Keep the five tick marks, but only label those that fit. Calendar labels
+    /// are wider than years; shrinking a floating card must not stack the dates.
+    private func visibleLabelIndices(_ mapping: AxisMapping) -> [Int] {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        let rects = (0...4).map { index -> CGRect in
+            let value = bounds.lowerBound + mapping.span * Double(index) / 4
+            let width = ceil((label(value.rounded()) as NSString).size(withAttributes: [.font: font]).width)
+            let x = inset + mapping.width * CGFloat(index) / 4
+            return CGRect(x: index == 0 ? x : index == 4 ? x - width : x - width / 2, y: 0, width: width, height: 20)
+        }
+        var chosen = [0]
+        for index in [4, 2, 1, 3] where chosen.allSatisfy({ rects[$0].insetBy(dx: -6, dy: 0).intersection(rects[index]).isNull }) {
+            chosen.append(index)
+        }
+        return chosen.sorted()
     }
 
     private func thumb(_ endpoint: Endpoint, at position: CGFloat, crowded: Bool) -> some View {

@@ -264,7 +264,8 @@ struct CompositionWorkspaceView: View {
         let root = composition.layout.first { $0.id == composition.rootID }!
         let mapPart = composition.canvasMapPart!
         let cards = Array(root.children.dropFirst())
-        let fixed = cards.compactMap { id -> CGRect? in
+        let controls = CGRect(x: max(12, size.width - 170), y: 12, width: min(158, size.width), height: 52)
+        let fixed = [controls] + cards.compactMap { id -> CGRect? in
             guard let node = composition.layout.first(where: { $0.id == id }), node.presentation != .contextual else { return nil }
             return canvasFrame(node, in: composition, size: size)
         }
@@ -309,7 +310,7 @@ struct CompositionWorkspaceView: View {
         let parts = composition.parts(inLayout: node.id)
         let isCollapsed = parts.count == 1 && collapsed.contains(parts[0].id)
         let timeline = parts.count == 1 && parts[0].primitive == .timeline
-        let desired = CGSize(width: min(node.presentation == .contextual ? 430 : 680, max(260, size.width * (node.fraction ?? 0.4))),
+        let desired = CGSize(width: min(node.presentation == .contextual ? 430 : 680, max(timeline ? 520 : 260, size.width * (node.fraction ?? 0.4))),
             height: isCollapsed ? 60 : min(timeline ? 280 : 480, size.height * (timeline ? 0.46 : 0.72)))
         if node.presentation == .contextual {
             let anchor = parts.compactMap { canvasAnchors[$0.selectionGroup] }.first
