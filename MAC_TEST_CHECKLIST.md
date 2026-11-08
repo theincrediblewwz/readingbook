@@ -1,3 +1,13 @@
+<!-- chibi-core-local:start -->
+> 当前接续（2026-11-08，本地优先）：请求窗口/引用反馈本地候选通过，安装与原书验收正在收尾。Design/2026-11-08-chibi-core-workbench.md 为本批简明说明；logs/chibi-core-workbench-20261108 为证据。19 产品 Swift；build4、core4 的 328 方法/3632 standalone 断言、chibiMonitor2 的36项、chibiCore3 的47项通过，不冒充本机 XCTest。两组自动原生五类零告警；人工详情30、real3另36条几何诊断保留，未归属。
+
+新增独立请求窗口与实际公开回复；进度底部入口、对话行内状态/暂停。源码与测试冻结一致，2MiB 收发/工具文字合计；不存认证头/私有思考，不改书库结构。混填引用、拼错 ID、依据冲突给具体反馈，不自动修改旧数据。已提交19条原文出处实际复用16、净增3；真实地图路线仍未完成。两轮17HTTP/1410340已报告token，之后未追加真实重试。
+
+用户最新要求框架灵活、解释后多轮讨论：已有类型字段/分类修订当前过硬，尚未放开；正文JSON包装已量化，143802B/正文115516B/包装28286B，干净文本样例仅离线保存，未改协议。下一批先讨论这些机制及核心成果早保存、剩余计划恢复，再选定地图交互与16类轮转。不要只继续收费重试，也不要把模型声称保存当实际新地图。
+
+用户 dirty 性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，不编辑/提交；原书库保持，不从隔离库或旧快照恢复。先频繁本机迭代，到完整阶段再GitHub，别为小改动启动云端CI。收尾信息以同批最终交付记录为准。
+<!-- chibi-core-local:end -->
+
 <!-- time-review-local:start -->
 > 当前接续（2026-11-08，本地优先）：已更新本机安装，原书两次正常启动/退出通过。详细结果见 Design/2026-11-08-time-review-continuation.md；总入口 logs/time-review-continuation-20261108/final-local-delivery.json。用户 dirty 性能文档 SHA 9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4 未改、未提交。
 

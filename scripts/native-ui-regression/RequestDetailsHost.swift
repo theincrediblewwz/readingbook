@@ -106,6 +106,10 @@ private actor TraceTransport {
         try check("returnedSourceWasSentToNextRequest", input.contains(project.units[1].text))
         try check("headersAreNotExposed", !input.contains("LOCAL_ONLY_HEADER_KEY") && !input.contains("Authorization"))
         try check("privateReasoningIsNotExposed", !input.contains("PRIVATE_REASONING"))
+        try check("everyRequestHasPublicResponse", state.requests.allSatisfy { $0.response != nil })
+        try check("responseToolsRemainSeparateFromExecution", state.requests[0].response?.toolCalls.count == 2 && state.toolSteps.filter { $0.requestID == state.requests[0].id }.count == 2)
+        try check("actualFinalReplyIsRetained", state.requests.last?.response?.content?.text == store.book?.chats.last?.content)
+        try check("responseDoesNotExposePrivateReasoning", !String(reflecting: state.requests.compactMap(\.response)).contains("PRIVATE_REASONING"))
         let stored = try await repository.loadAll().first!
         let encoded = String(decoding: try JSONEncoder().encode(stored.aiRequestHistory), as: UTF8.self)
         try check("durableHistoryStillStoresOnlyMetadata", !encoded.contains("火攻") && !encoded.contains("华容道") && !encoded.contains("trace"))
@@ -115,20 +119,25 @@ private actor TraceTransport {
         let largePrepared = try ProviderClient.prepare(messages: (0..<4).map { ["role": "user", "content": String(repeating: "字", count: 22_000) + String($0)] }, tools: [],
             settings: .init(model: "offline", maxOutputTokens: 1000, contextWindowTokens: 1_000_000), apiKey: "", remainingTokens: 1_000_000)
         let trace = try require(AIRequestTrace.capture(largePrepared))
-        for number in 1...12 { large.apply(.init(.waitingForResponse, requestID: UUID(), requestNumber: number, requestTrace: trace)) }
-        try check("requestTextHasBoundedRetention", large.requests.reduce(0) { $0 + ($1.trace?.retainedBytes ?? 0) } <= 2 * 1024 * 1024)
+        let response = AIResponseTrace.capture(.init(message: .init(role: "assistant", content: String(repeating: "公开返回", count: 20000), refusal: nil, tool_calls: nil, reasoning_content: "PRIVATE_REASONING"), finishReason: "stop", tokenCost: 10))
+        for number in 1...12 {
+            let id = UUID()
+            large.apply(.init(.waitingForResponse, requestID: id, requestNumber: number, requestTrace: trace))
+            large.apply(.init(.requestCompleted, requestID: id, requestNumber: number, responseTrace: response))
+        }
+        try check("requestTextHasBoundedRetention", large.requests.reduce(0) { $0 + ($1.trace?.retainedBytes ?? 0) + ($1.response?.retainedBytes ?? 0) } <= 2 * 1024 * 1024)
         try check("evictionKeepsRequestNumbers", large.requests.map(\.number) == Array(1...12) && large.requests.contains { $0.traceExpired })
         let tool = AIToolTrace(arguments: "{}", result: "{\"text\":\"" + String(repeating: "原文", count: 4500) + "\",\"locator\":\"测试页\"}")
         for _ in 0..<48 {
             large.apply(.init(.performingTool, toolName: "source_read"))
             large.apply(.init(.toolCompleted, toolName: "source_read", toolSucceeded: true, toolTrace: tool))
         }
-        try check("combinedToolAndRequestTextIsBounded", large.requests.reduce(0) { $0 + ($1.trace?.retainedBytes ?? 0) } + large.toolSteps.reduce(0) { $0 + ($1.trace?.retainedBytes ?? 0) } <= 2 * 1024 * 1024)
+        try check("combinedToolAndRequestTextIsBounded", large.requests.reduce(0) { $0 + ($1.trace?.retainedBytes ?? 0) + ($1.response?.retainedBytes ?? 0) } + large.toolSteps.reduce(0) { $0 + ($1.trace?.retainedBytes ?? 0) } <= 2 * 1024 * 1024)
         try check("toolTextEvictionKeepsEveryOperationStatus", large.toolSteps.count == 48 && large.completedTools == 48 && large.toolSteps.contains { $0.traceExpired })
         try check("readNamesAreSpecific", AIProgressPresentationState.toolTitle("capabilities_list") == "查看可用功能与参数" && AIProgressPresentationState.toolTitle("objects_search") == "查找已保存的要素")
-        try await press("展开第 1 次请求")
-        try await wait { self.hasText("发给模型的文字") }
-        try check("requestDetailsCanExpandThroughActualInput", hasText("发给模型的文字"))
+        try await press("查看第 1 次请求")
+        try await wait { self.hasText("2 项操作请求") }
+        try check("requestDetailsCanExpandThroughActualInput", hasText("发送给 AI") && hasText("2 项操作请求"))
         try await press("展开阅读原文片段")
         try await wait { self.hasText(project.units[0].text) }
         try check("sourceToolCanExpandThroughActualInput", hasText(project.units[0].text))
@@ -136,13 +145,28 @@ private actor TraceTransport {
         try await press("收起阅读原文片段")
         try await wait { !self.hasText(project.units[0].text) }
         try check("sourceRowCanCollapseAgain", !hasText(project.units[0].text))
-        try await press("展开发给模型的文字")
+        try await press("展开发送给 AI")
         try await wait { self.visibleButtons("问题与已分享资料").count == 2 }
         try check("requestInputCanExpandThroughActualInput", visibleButtons("问题与已分享资料").count == 2)
         try await press("展开问题与已分享资料", occurrence: 1)
         try await wait { self.hasText("请解释这段中的行动先后。") }
         try check("actualQuestionTextIsRendered", hasText("请解释这段中的行动先后。"))
-        try await press("收起发给模型的文字")
+        try await press("收起发送给 AI")
+        try await press("查看第 3 次请求")
+        try await press("展开AI 返回")
+        try await wait { self.hasText("未找到的页面没有加入结论") }
+        try check("publicReplyCanExpandThroughActualInput", hasText("未找到的页面没有加入结论"))
+        let ownerFrame = window.frame
+        store.showAIRequestHistory(store.queryProgressState)
+        try await wait { NSApp.windows.contains { $0.title == "请求记录与详情" && $0.isVisible && $0 !== self.window } }
+        let separate = try require(NSApp.windows.first { $0.title == "请求记录与详情" && $0.isVisible && $0 !== self.window })
+        try check("detailsUsesIndependentModelessWindow", separate !== window && window.attachedSheet == nil)
+        try check("openingDetailsPreservesOwnerFrame", window.frame == ownerFrame)
+        separate.setFrameOrigin(NSPoint(x: separate.frame.minX + 20, y: separate.frame.minY + 10))
+        try check("movingDetailsPreservesOwnerFrame", window.frame == ownerFrame)
+        store.requestHistoryWindow?.close()
+        try await wait { self.store.requestHistoryWindow == nil }
+        try check("closingDetailsKeepsTaskAndAnswer", store.queryProgressState.value == state && store.book?.chats.last?.role == "assistant")
         try write(status: "passed")
         if CommandLine.arguments.contains("--inspect") {
             while !FileManager.default.fileExists(atPath: output.appendingPathComponent("finish").path) { try await Task.sleep(for: .milliseconds(100)) }
@@ -217,7 +241,7 @@ private actor TraceTransport {
         // no product state or expected body text supplies the hit location.
         for view in objects().compactMap({ $0 as? NSView }) where !view.isHiddenOrHasHiddenAncestor
                 && String(describing: type(of: view)).contains("FocusRing")
-                && view.bounds.height >= 28 && view.bounds.height <= 44 && view.bounds.width > 200 {
+                && view.bounds.height >= 28 && view.bounds.height <= 80 && view.bounds.width > 100 {
             let frame = view.convert(view.bounds, to: host)
             guard host.bounds.contains(frame), view.visibleRect.height >= view.bounds.height - 1,
                   !frames.contains(frame) else { continue }
@@ -266,7 +290,8 @@ private actor TraceTransport {
             if matches.indices.contains(occurrence), matches[occurrence].responds(to: NSSelectorFromString("accessibilityFrame")),
                let rect = (matches[occurrence].value(forKey: "accessibilityFrame") as? NSValue)?.rectValue,
                rect.width > 0, rect.height > 0 { ready = rect; break }
-            let title = label.hasPrefix("展开") || label.hasPrefix("收起") ? String(label.dropFirst(2)) : label
+            var title = label.hasPrefix("展开") || label.hasPrefix("收起") ? String(label.dropFirst(2)) : label
+            if label.hasPrefix("查看第 "), label.hasSuffix(" 次请求") { title = "请求 " + label.replacingOccurrences(of: "查看第 ", with: "").replacingOccurrences(of: " 次请求", with: "") }
             let frames = visibleButtons(title)
             if frames.indices.contains(occurrence) { ready = window.convertToScreen(host.convert(frames[occurrence], to: nil)); break }
             try await Task.sleep(for: .milliseconds(30))

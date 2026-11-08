@@ -21,18 +21,19 @@ public struct AIProgressEvent: Equatable, Sendable {
     public var toolStatus: String?
     public var toolSummary: String?
     public var requestTrace: AIRequestTrace?
+    public var responseTrace: AIResponseTrace?
     public var toolTrace: AIToolTrace?
 
     public init(_ phase: AIProgressPhase, requestID: UUID? = nil, requestNumber: Int? = nil,
                 reasoningCharacters: Int? = nil, answerCharacters: Int? = nil, receivedBytes: Int? = nil,
                 toolName: String? = nil, toolIndex: Int? = nil, toolTotal: Int? = nil, toolSucceeded: Bool? = nil, toolStatus: String? = nil, toolSummary: String? = nil,
-                requestTrace: AIRequestTrace? = nil, toolTrace: AIToolTrace? = nil) {
+                requestTrace: AIRequestTrace? = nil, responseTrace: AIResponseTrace? = nil, toolTrace: AIToolTrace? = nil) {
         self.phase = phase; self.requestID = requestID; self.requestNumber = requestNumber
         self.reasoningCharacters = reasoningCharacters; self.answerCharacters = answerCharacters; self.receivedBytes = receivedBytes
         self.toolName = toolName.map { String($0.prefix(80)) }; self.toolIndex = toolIndex; self.toolTotal = toolTotal
         self.toolSucceeded = toolSucceeded
         self.toolSummary = toolSummary.map { String($0.prefix(1200)) }
-        self.requestTrace = requestTrace; self.toolTrace = toolTrace
+        self.requestTrace = requestTrace; self.responseTrace = responseTrace; self.toolTrace = toolTrace
         self.toolStatus = toolStatus.flatMap { ["success", "failed", "needs_confirmation", "busy", "unsupported"].contains($0) ? $0 : nil }
     }
 }

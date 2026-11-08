@@ -67,7 +67,17 @@ enum ReadingProposalSchemas {
     static var evidence: [String: Any] {
         var result = object(["unitID": id, "quote": text(32_768), "sourceRef": id], required: [])
         result["description"] = "优先仅传已提供原文的sourceRef，由宿主填回原句；否则传unitID与逐字quote。两种形式不混用。"
-        result["oneOf"] = [["required": ["sourceRef"]], ["required": ["unitID", "quote"]]]
+        result["oneOf"] = sourceReferenceAlternatives
+        return result
+    }
+    private static var sourceReferenceAlternatives: [[String: Any]] {
+        [["required": ["sourceRef"], "not": ["anyOf": ["unitID", "quote", "prefix", "suffix"].map { ["required": [$0]] }]],
+         ["required": ["unitID", "quote"], "not": ["required": ["sourceRef"]]]]
+    }
+    static var sourceAnchor: [String: Any] {
+        var result = object(["clientID": id, "unitID": id, "quote": text(32_768), "prefix": text(1000), "suffix": text(1000), "sourceRef": id], required: ["clientID"])
+        result["description"] = "出处表单二选一：优先只填clientID和本次已提供的sourceRef，不填unitID/quote/prefix/suffix；或填clientID、真实unitID和逐字quote，可选prefix/suffix，此时不填sourceRef。不要把所有字段都填满。"
+        result["oneOf"] = sourceReferenceAlternatives
         return result
     }
     static var type: [String: Any] { object(["id": id, "name": text(400), "icon": text(128), "fields": array(object(["key": id, "label": text(400), "required": ["type": "boolean"]]))]) }
@@ -119,7 +129,7 @@ enum ReadingProposalSchemas {
     static var provenance: [String: Any] { object(["label": text(), "url": text(), "workTitle": text(), "locator": text()], required: ["label"]) }
     static var knowledge: [String: Any] {
         object(["newTypeIDs": array(id), "newEntityIDs": array(id), "newEventIDs": array(id), "newRelationIDs": array(id), "types": array(type), "entities": array(entity), "events": array(event), "relations": array(relation),
-            "anchors": array(object(["clientID": id, "unitID": id, "quote": text(32_768), "prefix": text(1000), "suffix": text(1000), "sourceRef": id], required: ["clientID"])),
+            "anchors": array(sourceAnchor),
             "presences": array(presence), "participations": array(participation), "eventMetadata": array(eventMetadata), "relationMetadata": array(relationMetadata),
             "layers": array(object(["id": id, "kind": text(80), "title": text(400), "markdown": text(128_000), "sourceAnchorIDs": array(id), "sourceLabel": text(), "parallelGroupID": id, "provenance": provenance], required: ["id", "kind", "title", "markdown", "sourceAnchorIDs", "sourceLabel"])),
             "alignments": array(object(["id": id, "sourceAnchorIDs": array(id), "title": text(400), "markdown": text(128_000), "provenance": provenance, "status": text(80)], required: ["id", "sourceAnchorIDs", "title", "markdown", "status"]))], required: [])
@@ -169,6 +179,56 @@ extension ReadingQuerySession {
         let newObjects = Set((batch.knowledge?.newEntityIDs ?? []) + (batch.knowledge?.newEventIDs ?? []) + (batch.documents?.create ?? []).map(\.clientID))
         let targets = admitted.union(newObjects)
         let known = Set(project.entities.map(\.id) + project.events.map(\.id) + project.documents.map(\.id))
+        let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        let root = raw["batch"] == nil ? "$" : "$.batch"
+        func groupPath(_ group: String) -> String { raw["batch"] != nil || raw[group] != nil ? root + "." + group : root }
+        var references: [(path: String, id: String)] = []
+        func add(_ id: String?, _ path: String) { if let id { references.append((path, id)) } }
+        func addList(_ ids: [String], _ path: String) { for (index, id) in ids.enumerated() { add(id, path + "[\(index)]") } }
+        if let k = batch.knowledge {
+            let p = groupPath("knowledge")
+            for (i, v) in (k.entities ?? []).enumerated() { add(v.id, p + ".entities[\(i)].id") }
+            for (i, v) in (k.events ?? []).enumerated() {
+                let path = p + ".events[\(i)]"
+                add(v.id, path + ".id"); addList(v.placeIDs, path + ".placeIDs"); addList(v.participantIDs, path + ".participantIDs")
+            }
+            for (i, v) in (k.relations ?? []).enumerated() { add(v.fromID, p + ".relations[\(i)].fromID"); add(v.toID, p + ".relations[\(i)].toID") }
+            for (i, v) in (k.presences ?? []).enumerated() {
+                let path = p + ".presences[\(i)]"
+                add(v.entityID, path + ".entityID"); add(v.placeID, path + ".placeID"); add(v.eventID, path + ".eventID")
+            }
+            for (i, v) in (k.participations ?? []).enumerated() { add(v.entityID, p + ".participations[\(i)].entityID"); add(v.eventID, p + ".participations[\(i)].eventID") }
+            for (i, v) in (k.eventMetadata ?? []).enumerated() { add(v.eventID, p + ".eventMetadata[\(i)].eventID"); add(v.parentEventID, p + ".eventMetadata[\(i)].parentEventID") }
+            for (i, v) in (k.relationMetadata ?? []).enumerated() {
+                guard let spatial = v.spatial else { continue }
+                let path = p + ".relationMetadata[\(i)].spatial"
+                add(spatial.eventID, path + ".eventID"); addList(spatial.actorIDs, path + ".actorIDs"); addList(spatial.viaPlaceIDs, path + ".viaPlaceIDs")
+            }
+        }
+        for (i, v) in (batch.documents?.create ?? []).enumerated() { addList(v.linkedIDs ?? [], groupPath("documents") + ".create[\(i)].linkedIDs") }
+        for (i, v) in (batch.graph?.createNodes ?? []).enumerated() {
+            let path = groupPath("graph") + ".createNodes[\(i)]"
+            add(v.targetID, path + ".targetID"); addList(v.documentIDs ?? [], path + ".documentIDs")
+        }
+        for (i, v) in (batch.graph?.attachments ?? []).enumerated() { addList(v.documentIDs, groupPath("graph") + ".attachments[\(i)].documentIDs") }
+        let identities = scoped.entities.map { ReadingProposalReferenceError.Candidate(id: $0.id, name: String($0.name.prefix(40)), kind: "entity") }
+            + scoped.events.map { .init(id: $0.id, name: String($0.name.prefix(40)), kind: "event") }
+            + project.documents.filter { snapshot.documentIDs.contains($0.id) }.map { .init(id: $0.id, name: String($0.title.prefix(40)), kind: "document") }
+        try ReadingProposalReferenceError.check(references, allowed: targets, known: known, identities: identities)
+        if let metadata = batch.knowledge?.eventMetadata {
+            let previous = Dictionary((scoped.temporalKnowledge?.eventMetadata ?? []).map { ($0.eventID, $0) }, uniquingKeysWith: { first, _ in first })
+            var conflicts: [[String: String]] = []
+            for (index, value) in metadata.enumerated() {
+                guard let old = previous[value.eventID], old.assertion != value.assertion,
+                      old.assertion != .unknown, value.assertion != .unknown else { continue }
+                if conflicts.count < 4 {
+                    conflicts.append(["path": groupPath("knowledge") + ".eventMetadata[\(index)].assertion", "eventID": value.eventID,
+                        "currentValue": old.assertion.rawValue, "proposedValue": value.assertion.rawValue,
+                        "reason": "这是事件本身已有的依据分类，应保持currentValue。若只是时间先后的推算，请放到extent.assertion与extent.explanation中，不能据此改写事件整体的assertion。"])
+                }
+            }
+            if !conflicts.isEmpty { throw ReadingProposalMetadataError(issues: conflicts) }
+        }
         func requireTargets(_ ids: [String]) throws {
             let undeclared = Set(ids).subtracting(targets).subtracting(known).sorted()
             guard undeclared.isEmpty else { throw invalid("以下ID既不是已有对象，也未在本批声明为新增：" + undeclared.prefix(8).joined(separator: "、") + "。新增实体须列newEntityIDs，新增事件须列newEventIDs，并提供对应记录；不要切换原文范围。") }

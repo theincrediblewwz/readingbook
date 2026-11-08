@@ -885,7 +885,8 @@ public actor AIReader {
         }) }
         else { result = try await ProviderClient.perform(prepared, progress: observer) }
         try Task.checkCancellation()
-        handler?(AIProgressEvent(.requestCompleted, requestID: requestID, requestNumber: number))
+        handler?(AIProgressEvent(.requestCompleted, requestID: requestID, requestNumber: number,
+            responseTrace: handler == nil ? nil : AIResponseTrace.capture(result)))
         return result
     }
 

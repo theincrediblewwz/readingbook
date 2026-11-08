@@ -55,6 +55,7 @@ struct AIProgressPresentationState: Equatable {
         var output = 0
         var bytes = 0
         var trace: AIRequestTrace?
+        var response: AIResponseTrace?
         var traceExpired = false
     }
     var requests: [Request] = []
@@ -130,6 +131,7 @@ struct AIProgressPresentationState: Equatable {
             if let count = event.answerCharacters { requests[index].output = max(requests[index].output, count) }
             if let count = event.receivedBytes { requests[index].bytes = max(requests[index].bytes, count) }
             if event.phase == .requestCompleted { requests[index].finishedAt = Date() }
+            if let response = event.responseTrace { requests[index].response = response }
         }
         if event.phase == .performingTool {
             toolName = event.toolName; toolIndex = event.toolIndex; toolTotal = event.toolTotal
@@ -144,16 +146,16 @@ struct AIProgressPresentationState: Equatable {
             }
             if !requiresReview { if event.toolSucceeded == true { completedTools += 1 } else { failedTools += 1 } }
         }
-        if event.requestTrace != nil || event.toolTrace != nil { trimTraceText() }
+        if event.requestTrace != nil || event.responseTrace != nil || event.toolTrace != nil { trimTraceText() }
     }
     /// Keep detail text separate from durable books and bounded to 2 MiB per
     /// lane. Eviction removes text, never the request counts or success status.
     private mutating func trimTraceText() {
-        var bytes = requests.reduce(0) { $0 + ($1.trace?.retainedBytes ?? 0) }
+        var bytes = requests.reduce(0) { $0 + ($1.trace?.retainedBytes ?? 0) + ($1.response?.retainedBytes ?? 0) }
             + toolSteps.reduce(0) { $0 + ($1.trace?.retainedBytes ?? 0) }
         for index in requests.indices where bytes > 2 * 1024 * 1024 {
-            guard let trace = requests[index].trace else { continue }
-            bytes -= trace.retainedBytes; requests[index].trace = nil; requests[index].traceExpired = true
+            bytes -= (requests[index].trace?.retainedBytes ?? 0) + (requests[index].response?.retainedBytes ?? 0)
+            requests[index].trace = nil; requests[index].response = nil; requests[index].traceExpired = true
         }
         for index in toolSteps.indices where bytes > 2 * 1024 * 1024 {
             guard let trace = toolSteps[index].trace else { continue }
@@ -170,6 +172,9 @@ struct AIProgressPresentationState: Equatable {
         case "capabilities_list": return "查看可用功能与参数"
         case "book_schema_get": return "查看本书数据类型"
         case "objects_search", "object_get": return "查找已保存的要素"
+        case "events_query": return "查看已保存事件"
+        case "relations_list": return "核对已保存关系"
+        case "entity_history_get": return "查看人物与事件经过"
         case "reading_coverage_get": return "检查已有阅读进度"
         case "analysis_outline": return "查看已有分析目录"
         case "analysis_read": return "阅读已有分析"
@@ -365,8 +370,9 @@ fileprivate final class AIWorkerProgressRelay: @unchecked Sendable {
 struct AIProgressStatusView: View {
     @ObservedObject var state: AIProgressObservableState
     var compact = false
+    var showsDetailsButton = true
     @Environment(\.readingReduceMotion) private var reduceMotion
-    @State private var showingDetails = false
+    @EnvironmentObject private var store: AppStore
     private var progress: AIProgressPresentationState { state.value }
     var body: some View {
         if let started = progress.startedAt {
@@ -399,166 +405,35 @@ struct AIProgressStatusView: View {
                                 Text("本批操作 \(index)/\(total)")
                             } else if progress.completedTools > 0 { Text("\(progress.completedTools) 项操作通过") }
                         }.font(.system(size: 11)).foregroundStyle(.secondary)
-                        ForEach(Array(progress.toolSteps.suffix(3))) { step in
-                            HStack(spacing: 7) {
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(progress.toolSteps) { step in
+                            Button { store.showAIRequestHistory(state) } label: { HStack(spacing: 8) {
                                 Image(systemName: step.requiresReview ? "clock" : step.succeeded == nil ? "circle.dotted" : step.succeeded == true ? "checkmark.circle.fill" : "exclamationmark.circle")
                                     .foregroundStyle(step.succeeded == false ? Palette.copper : Palette.accent)
-                                Button(step.title) { showingDetails = true }.buttonStyle(ReadingQuietButtonStyle()).font(.system(size: 12)).lineLimit(1)
-                                if step.requiresReview { Text("审阅后应用").font(.system(size: 11)).foregroundStyle(.secondary) }
-                            }
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(step.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                    if step.requiresReview { Text("审阅后应用").font(.system(size: 11)).foregroundStyle(.secondary) }
+                                    else if !step.summary.isEmpty { Text(step.summary).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
+                                    else if let fragment = step.trace?.fragments.first { Text(fragment.title).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
+                                }
+                                Spacer(minLength: 4)
+                            }.frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle()) }
+                                .buttonStyle(ReadingQuietButtonStyle()).help("查看这项操作的实际请求与返回")
+                        }
                         }
                     }
-                    Button { showingDetails = true } label: { Label("请求记录与详情", systemImage: "clock.arrow.circlepath").font(.system(size: 12)) }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent).frame(minHeight: 30)
+                    if showsDetailsButton {
+                        Button { store.showAIRequestHistory(state) } label: { Label("请求记录与详情", systemImage: "clock.arrow.circlepath").font(.system(size: 12)) }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent).frame(minHeight: 30)
+                    }
                 }.font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading)
             }
-            .sheet(isPresented: $showingDetails) { AIRequestHistoryView(state: state) }
-        }
-    }
-}
-
-struct AIRequestHistoryView: View {
-    @EnvironmentObject private var store: AppStore
-    @Environment(\.dismiss) private var dismiss
-    @ObservedObject var state: AIProgressObservableState
-    @State private var savedRequests: [AIRequestHistoryRecord] = []
-    private var currentRequests: [AIProgressPresentationState.Request] {
-        state.value.bookID == store.bookID ? state.value.requests : []
-    }
-    private var representedRequestIDs: Set<String> {
-        Set(currentRequests.map { $0.id.uuidString }).union(savedRequests.map(\.id))
-    }
-    private var otherOperations: [ToolAudit] {
-        let represented = representedRequestIDs
-        return Array((store.book?.audit ?? []).filter { $0.requestID.map { !represented.contains($0) } ?? true }.suffix(200).reversed())
-    }
-    private func requestStatus(_ request: AIProgressPresentationState.Request) -> String {
-        if request.finishedAt != nil { return "模型已返回" }
-        if state.value.isRunning { return "进行中" }
-        return state.value.status == .paused ? "已停止，未返回" : "未完成"
-    }
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Label("请求记录", systemImage: "clock.arrow.circlepath").font(.system(size: 17, weight: .semibold))
-                Spacer()
-                Image(systemName: "info.circle").foregroundStyle(.secondary)
-                    .help("展开请求可看实际发送的文字，展开操作可看软件实际返回的原文。文字只保留在当前窗口的有界内存中；不保存密钥、认证头、图片数据或模型思考原文。以前的请求仅保留时间与操作记录。")
-                DockIconButton(title: "关闭请求记录", icon: "xmark") { dismiss() }
-            }.padding(.horizontal, 20).frame(height: 56)
-            Divider().opacity(0.4)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    if currentRequests.isEmpty && savedRequests.isEmpty && (store.book?.audit.isEmpty ?? true) {
-                        EmptyState(title: "还没有请求记录", detail: "分析或提问后，可在这里查看过程与结果。", icon: "clock.arrow.circlepath")
-                            .frame(minHeight: 260)
-                    }
-                    if !state.value.failureMessage.isEmpty, state.value.bookID == store.bookID {
-                        Text(state.value.failureMessage).font(.system(size: 13)).foregroundStyle(Palette.copper)
-                            .textSelection(.enabled)
-                    }
-                    ForEach(currentRequests.reversed()) { request in
-                        AITraceDisclosure(title: "第 \(request.number) 次请求", subtitle: requestStatus(request)) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("思考 \(request.reasoning) · 输出 \(request.output) 字符").font(.system(size: 12)).foregroundStyle(.secondary)
-                                if let trace = request.trace {
-                                    AITraceDisclosure(title: "发给模型的文字", subtitle: "\(trace.messages.count) 条") {
-                                        ForEach(trace.messages) { message in
-                                            AITraceDisclosure(title: traceRole(message.role), subtitle: String(message.content.text.prefix(35)).replacingOccurrences(of: "\n", with: " ")) {
-                                                AITraceTextView(content: message.content)
-                                            }
-                                        }
-                                        if trace.omittedMessages > 0 {
-                                            Text("本次内容较长，另有 \(trace.omittedMessages) 条文字未留存在诊断记录；发送给模型的内容未因此缩短。")
-                                                .font(.system(size: 12)).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    if !trace.toolNames.isEmpty {
-                                        AITraceDisclosure(title: "本次可用工具", subtitle: "\(trace.toolNames.count) 项") {
-                                            Text(trace.toolNames.map { AIProgressPresentationState.toolTitle($0) + "（" + $0 + "）" }.joined(separator: "\n"))
-                                                .font(.system(size: 12)).textSelection(.enabled)
-                                        }
-                                    }
-                                } else if request.traceExpired {
-                                    traceExpiredNotice
-                                }
-                                ForEach(state.value.toolSteps.filter { $0.requestID.map { $0 == request.id } ?? ($0.requestNumber == request.number) }) { step in
-                                    AITraceDisclosure(title: step.title, subtitle: step.trace?.fragments.first?.title ?? (step.requiresReview ? "审阅后应用" : step.succeeded == true ? "已返回" : "未完成")) {
-                                        VStack(alignment: .leading, spacing: 10) {
-                                            if step.succeeded == nil && !step.requiresReview && !state.value.isRunning {
-                                                Text("未完成").font(.system(size: 12)).foregroundStyle(.secondary)
-                                            }
-                                            if !step.summary.isEmpty { Text(step.summary).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled) }
-                                            if let trace = step.trace {
-                                                ForEach(trace.fragments) { fragment in
-                                                    VStack(alignment: .leading, spacing: 7) {
-                                                        Text(fragment.title).font(.system(size: 13, weight: .semibold))
-                                                        Text(fragment.detail).font(.system(size: 12)).foregroundStyle(.secondary)
-                                                        Text(fragment.text).font(.system(size: 14)).lineSpacing(5).textSelection(.enabled)
-                                                    }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                                                        .background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
-                                                }
-                                                AITraceDisclosure(title: "传给工具的参数") { AITraceTextView(content: trace.arguments) }
-                                                AITraceDisclosure(title: "工具实际返回的完整文字") { AITraceTextView(content: trace.result) }
-                                            } else if step.traceExpired { traceExpiredNotice }
-                                        }
-                                    }
-                                }
-                            }.padding(.top, 10)
-                        }.padding(14).background(Palette.accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
-                    }
-                    if !savedRequests.isEmpty { Text("以前的请求").font(.system(size: 14, weight: .semibold)).padding(.top, 6) }
-                    ForEach(savedRequests.reversed()) { request in
-                        DisclosureGroup(request.title + " · 第 \(request.number) 次请求") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(request.startedAt, style: .date).font(.system(size: 12)).foregroundStyle(.secondary)
-                                Text("\(max(0, Int(request.finishedAt.timeIntervalSince(request.startedAt)))) 秒 · 思考 \(request.reasoningCharacters) · 输出 \(request.answerCharacters) 字符").font(.system(size: 13))
-                                ForEach((store.book?.audit ?? []).filter { $0.requestID == request.id }) { audit in
-                                    Text(AIProgressPresentationState.toolTitle(audit.name)).font(.system(size: 14, weight: .medium))
-                                    ForEach(audit.resultDetails ?? [], id: \.self) { Text($0).font(.system(size: 13)).foregroundStyle(.secondary) }
-                                }
-                            }.padding(.top, 8)
-                        }.padding(12)
-                    }
-                    if !otherOperations.isEmpty { Text("其他已保存操作").font(.system(size: 14, weight: .semibold)).padding(.top, 6) }
-                    ForEach(otherOperations) { audit in
-                        DisclosureGroup(AIProgressPresentationState.toolTitle(audit.name)) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(audit.createdAt, style: .date).font(.system(size: 12)).foregroundStyle(.secondary)
-                                ForEach(audit.resultDetails ?? [], id: \.self) { Text($0).font(.system(size: 14)) }
-                                Text(audit.summary).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
-                            }.padding(.top, 8)
-                        }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }.padding(20)
-            }
-        }.frame(minWidth: 460, idealWidth: 640, minHeight: 380, idealHeight: 600).readingGlass(radius: 22, prominent: true)
-            .task(id: store.bookID) {
-                savedRequests = []
-                guard let id = store.bookID else { return }
-                let records = try? await store.repository.aiRequestHistory(bookID: id)
-                guard store.bookID == id, !Task.isCancelled else { return }
-                let currentIDs = Set(currentRequests.map { $0.id.uuidString })
-                savedRequests = (records ?? []).filter { !currentIDs.contains($0.id) }
-            }
-    }
-    private var traceExpiredNotice: some View {
-        Text("为控制内存，这条较早记录的文字已释放；时间、计数和操作状态仍保留。")
-            .font(.system(size: 12)).foregroundStyle(.secondary)
-    }
-    private func traceRole(_ role: String) -> String {
-        switch role {
-        case "system": return "软件给模型的要求"
-        case "user": return "问题与已分享资料"
-        case "assistant": return "模型前一轮的公开回答或操作请求"
-        case "tool": return "软件返回给模型的资料"
-        default: return "本次文字"
         }
     }
 }
 
 /// Hidden detail text is not laid out until expanded, including long source
 /// excerpts and JSON. The whole row has hover and keyboard feedback.
-private struct AITraceDisclosure<Content: View>: View {
+struct AITraceDisclosure<Content: View>: View {
     let title: String
     var subtitle = ""
     @ViewBuilder let content: () -> Content
@@ -579,7 +454,7 @@ private struct AITraceDisclosure<Content: View>: View {
     }
 }
 
-private struct AITraceTextView: View {
+struct AITraceTextView: View, Equatable {
     let content: AITraceText
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

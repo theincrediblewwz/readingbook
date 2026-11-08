@@ -74,6 +74,25 @@ final class ReadingContinuationContextTests: XCTestCase {
         XCTAssertEqual((ReadingProposalSchemas.extent["properties"] as? [String: Any])?["narrativeStart"].flatMap { ($0 as? [String: Any])?["maximum"] } as? Int, 1_000_000_000)
         XCTAssertEqual(ReadingProposalSchemas.eventMetadata["additionalProperties"] as? Bool, false)
     }
+    func testReusableViewOverviewIsBoundedAndExcludesDisabledViewsAndDocumentBodies() throws {
+        var book = fixture(entities: 20, events: 14)
+        book.views = [.init(id: "saved-map", title: "地图和时间轴", kind: .knowledge, rendererID: "reading.composition"), .init(id: "disabled-view", title: "停用视图", kind: .map)]
+        let plugin = PluginManifest(id: "disabled-plugin", name: "停用组件", description: "合成样例", views: [book.views[1]])
+        book.plugins = [plugin]; book.disabledPluginIDs = [plugin.id]
+        let base = try session(book)
+        let host = ReadingHostToolAccess(viewActions: ["component_show"], performViewAction: { _, _ in Data("{}".utf8) })
+        let query = ReadingQuerySession(snapshot: base.snapshot, history: [], loader: nil, providedDocuments: ["private": "未分享的秘密正文"], project: book,
+            hostTools: host, proposalAccess: base.proposalAccess)
+        let text = try XCTUnwrap(query.organizationStartingPoint(maximumBytes: 9000)), value = try object(text)
+        let views = try XCTUnwrap(value["availableViews"] as? [[String: String]])
+        XCTAssertEqual(views.map { $0["id"] ?? "" }, ["saved-map"])
+        XCTAssertFalse(text.contains("停用视图")); XCTAssertFalse(text.contains("未分享的"))
+        XCTAssertLessThanOrEqual(text.utf8.count, 9000)
+        XCTAssertEqual((value["savedObjects"] as? [[String: String]])?.count, 34)
+        XCTAssertTrue(query.sourceExcerpts.isEmpty)
+        let noHost = try object(try XCTUnwrap(base.organizationStartingPoint(maximumBytes: 9000)))
+        XCTAssertEqual((noHost["availableViews"] as? [[String: String]])?.count, 0)
+    }
     func testSerializedInstructionsAreBoundedAndKeepGrantedToolsAndSourceReferences() async throws {
         let book = fixture(entities: 1, events: 1), settings = ProviderSettings(model: "offline", maxRequestsPerRun: 20, maxOutputTokens: 6000, contextWindowTokens: 100000)
         var context = ReadingContext(sourceHash: book.sourceHash, unitID: "one", page: 1); context.queryRange = .init(pageStart: 1, pageEnd: 1)

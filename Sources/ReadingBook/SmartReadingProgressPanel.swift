@@ -81,16 +81,17 @@ struct SmartReadingProgressPanel: View {
                     if hasReading { readingHeader }
                     if expanded, detailHeight > 0 {
                         Divider().opacity(0.3)
+                        VStack(spacing: 0) {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 16) {
                                 if hasCompanion {
                                     detailLabel("伴读生成", icon: "sparkles")
-                                    AIProgressStatusView(state: companionState)
+                                    AIProgressStatusView(state: companionState, showsDetailsButton: false)
                                 }
                                 if hasQuery {
                                     if hasCompanion { Divider().opacity(0.3) }
                                     detailLabel("阅读对话", icon: "bubble.left.and.bubble.right")
-                                    AIProgressStatusView(state: queryState)
+                                    AIProgressStatusView(state: queryState, showsDetailsButton: false)
                                 }
                                 if hasReading {
                                     if hasCompanion || hasQuery || hasSummary { Divider().opacity(0.3) }
@@ -99,10 +100,20 @@ struct SmartReadingProgressPanel: View {
                                 if hasSummary {
                                     if hasCompanion || hasQuery { Divider().opacity(0.3) }
                                     detailLabel("对话摘要", icon: "brain.head.profile")
-                                    AIProgressStatusView(state: summaryState)
+                                    AIProgressStatusView(state: summaryState, showsDetailsButton: false)
                                 }
                             }.padding(17)
-                        }.frame(maxHeight: detailHeight)
+                        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        Divider().opacity(0.3)
+                        Button { store.showAIRequestHistory(hasQuery ? queryState : hasCompanion ? companionState : hasSummary ? summaryState : activityState) } label: {
+                            HStack {
+                                Label("请求记录与详情", systemImage: "clock.arrow.circlepath")
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.right").font(.system(size: 11, weight: .medium))
+                            }.font(.system(size: 13)).frame(maxWidth: .infinity, minHeight: 42).padding(.horizontal, 16).contentShape(Rectangle())
+                        }.buttonStyle(ReadingQuietButtonStyle()).foregroundStyle(Palette.accent)
+                            .help("在独立浮窗查看实际发送内容、AI返回与软件执行结果")
+                        }.frame(height: detailHeight)
                     }
                 }.frame(width: expanded ? 306 : 260).readingGlass(radius: expanded ? 23 : 26)
             }
@@ -116,7 +127,7 @@ struct SmartReadingProgressPanel: View {
         Label(text, systemImage: icon).font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.accent)
     }
     @ViewBuilder private var readingDetails: some View {
-        if owns(activityState.value), activityState.value.hasActivity { AIProgressStatusView(state: activityState) }
+        if owns(activityState.value), activityState.value.hasActivity { AIProgressStatusView(state: activityState, showsDetailsButton: false) }
         if let progress, session?.isPlanConfirmed == true {
             VStack(alignment: .leading, spacing: 12) {
                 if let continuation = store.readingContinuationProgress {

@@ -69,9 +69,6 @@ private struct BookChatContent: View {
         VStack(spacing: 0) {
             if selectionMode { selectionBar }
             conversationCollectionBar(history)
-            if !embedded && store.isQueryBusy {
-                queryStatus.padding(.horizontal, embedded ? 16 : 24).padding(.vertical, 8)
-            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 20) {
@@ -157,6 +154,10 @@ private struct BookChatContent: View {
                 }.buttonStyle(ReadingToolbarButtonStyle(selected: foldedExpanded)).help("收起的回答仍属于当前对话，后续问题仍可使用它们；点击展开列表。")
             }
             Spacer(minLength: 0)
+            CompanionTaskStatusRow(state: store.companionProgressState, queryState: store.queryProgressState,
+                bookID: store.bookID, libraryRoot: store.libraryRootURL,
+                cancel: store.cancelCompanion, cancelQuery: store.cancelQuery, inline: true)
+                .frame(maxWidth: 260)
             Button { Task { await store.collapseCurrentQueryAnswers() } } label: { Image(systemName: "rectangle.compress.vertical").frame(width: 32, height: 32) }
                 .buttonStyle(ReadingQuietButtonStyle()).help("一键收起所有回答；仍保留在当前上下文中。").accessibilityLabel("收起全部回答")
                 .disabled(store.isOrganizingCollections || !history.visible.contains { $0.role == "assistant" })

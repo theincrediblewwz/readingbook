@@ -21,9 +21,9 @@ struct ReaderAIPanel: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             // Reserve its real extent. The glass strip never covers the first
             // source sentence or the first chat answer.
-            CompanionTaskStatusRow(state: store.companionProgressState, queryState: store.queryProgressState,
+            if store.readingCompanionTab != "chat" { CompanionTaskStatusRow(state: store.companionProgressState, queryState: store.queryProgressState,
                 bookID: store.bookID, libraryRoot: store.libraryRootURL,
-                cancel: store.cancelCompanion, cancelQuery: store.cancelQuery)
+                cancel: store.cancelCompanion, cancelQuery: store.cancelQuery) }
         }
     }
 }

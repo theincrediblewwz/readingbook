@@ -121,6 +121,35 @@ final class AIRequestTraceTests: XCTestCase {
         XCTAssertFalse(texts.contains("PRIVATE_HEADER_KEY"))
         XCTAssertFalse(texts.contains("PRIVATE_REASONING"))
         XCTAssertEqual(events.values().filter { $0.phase == .requestCompleted }.count, 2)
+        let responses = events.values().filter { $0.phase == .requestCompleted }.compactMap(\.responseTrace)
+        XCTAssertEqual(responses.count, 2)
+        XCTAssertEqual(responses[0].toolCalls.map(\.name), ["source_read"])
+        XCTAssertTrue(responses[1].content?.text.contains("这句在问为何长叹") == true)
+        XCTAssertFalse(String(reflecting: responses).contains("PRIVATE_REASONING"))
+        XCTAssertFalse(String(reflecting: responses).contains("PRIVATE_HEADER_KEY"))
+    }
+    func testPublicResponseRetainsTextToolsAndTruncationWithoutPrivateReasoning() throws {
+        let result = ProviderClient.Result(message: .init(role: "assistant", content: "公开的回答", refusal: nil,
+            tool_calls: [.init(id: "call-one", type: "function", function: .init(name: "source_read", arguments: #"{"id":"u1"}"#))],
+            reasoning_content: "PRIVATE_REASONING_NOT_FOR_UI"), finishReason: "length", tokenCost: 10)
+        let trace = AIResponseTrace.capture(result)
+        XCTAssertEqual(trace.content?.text, "公开的回答")
+        XCTAssertEqual(trace.toolCalls.first?.arguments.text, #"{"id":"u1"}"#)
+        XCTAssertEqual(trace.finishReason, "length"); XCTAssertEqual(trace.omittedToolCalls, 0)
+        XCTAssertFalse(String(reflecting: trace).contains("PRIVATE_REASONING"))
+    }
+    func testLongResponsesAndManyToolCallsHaveAnExplicitRetentionBoundary() throws {
+        let calls = (0..<80).map { ProviderClient.ToolCall(id: "call-\($0)", type: "function", function: .init(name: "source_read", arguments: String(repeating: "长参数", count: 20000))) }
+        let response = ProviderClient.Result(message: .init(role: "assistant", content: String(repeating: "长回答", count: 30000), refusal: nil, tool_calls: calls, reasoning_content: nil), finishReason: "tool_calls", tokenCost: 10)
+        for cap in [0, 128, 262144] {
+            let trace = AIResponseTrace.capture(response, maximumBytes: cap)
+            XCTAssertLessThanOrEqual(trace.retainedBytes, cap)
+            XCTAssertLessThanOrEqual(trace.toolCalls.count, 32)
+            XCTAssertEqual(trace.toolCalls.count + trace.omittedToolCalls, 80)
+            XCTAssertTrue(trace.content?.isPartial == true)
+        }
+        let refusal = AIResponseTrace.capture(.init(message: .init(role: "assistant", content: nil, refusal: "暂不能回答", tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 10))
+        XCTAssertNil(refusal.content); XCTAssertEqual(refusal.refusal?.text, "暂不能回答")
     }
 }
 

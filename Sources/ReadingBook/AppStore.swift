@@ -119,6 +119,7 @@ import ReadingCore
     @Published var queryRetryQuestion: String?
     @Published var queryAwaitingReview = false
     var queryReviewContinuation: QueryReviewContinuation?
+    var requestHistoryWindow: AIRequestHistoryWindow?
     var queryActiveGrantID: String?
     @Published var queryAllowsOrganizing = false
     @Published var queryInteractionMode: ReadingConversationMode = .reading {

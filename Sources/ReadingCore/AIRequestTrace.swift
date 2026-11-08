@@ -64,6 +64,44 @@ public struct AIRequestTrace: Equatable, Sendable {
     }
 }
 
+/// The public response to one actual HTTP request. Kept in the same bounded
+/// diagnostic memory as outgoing text, independently of final-answer saving.
+public struct AIResponseTrace: Equatable, Sendable {
+    public struct ToolCall: Identifiable, Equatable, Sendable {
+        public let id: Int
+        public let name: String
+        public let arguments: AITraceText
+    }
+    public let content: AITraceText?
+    public let refusal: AITraceText?
+    public let toolCalls: [ToolCall]
+    public let omittedToolCalls: Int
+    public let finishReason: String
+    public var retainedBytes: Int {
+        (content?.text.utf8.count ?? 0) + (refusal?.text.utf8.count ?? 0)
+            + toolCalls.reduce(0) { $0 + $1.name.utf8.count + $1.arguments.text.utf8.count }
+    }
+    static func capture(_ response: ProviderClient.Result, maximumBytes: Int = 262_144) -> Self {
+        var remaining = max(0, maximumBytes)
+        func retain(_ text: String?) -> AITraceText? {
+            guard let text, !text.isEmpty else { return nil }
+            let value = AITraceText(text, maximumBytes: min(65_536, remaining)); remaining -= value.text.utf8.count
+            return value
+        }
+        let content = retain(response.message.content), refusal = retain(response.message.refusal)
+        var calls: [ToolCall] = [], omitted = 0
+        for (index, call) in (response.message.tool_calls ?? []).enumerated() {
+            let name = String(call.function.name.prefix(80))
+            guard calls.count < 32, name.utf8.count <= remaining else { omitted += 1; continue }
+            remaining -= name.utf8.count
+            let arguments = AITraceText(call.function.arguments, maximumBytes: min(32_768, remaining)); remaining -= arguments.text.utf8.count
+            calls.append(ToolCall(id: index, name: name, arguments: arguments))
+        }
+        return Self(content: content, refusal: refusal, toolCalls: calls, omittedToolCalls: omitted,
+            finishReason: String(response.finishReason.prefix(80)))
+    }
+}
+
 public struct AIToolTrace: Equatable, Sendable {
     public struct Fragment: Identifiable, Equatable, Sendable {
         public let id: Int

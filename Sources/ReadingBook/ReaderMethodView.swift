@@ -17,7 +17,6 @@ struct ReaderMethodView: View {
     @State private var isLoadingChapters = false
     @State private var details = false
     @State private var guide = false
-    @State private var requestHistory = false
     @State private var analysisHistory = false
     @State private var profileDraft = BookProfile()
     @State private var customGenre = ""
@@ -149,7 +148,6 @@ struct ReaderMethodView: View {
                 }.environmentObject(store)
         }
         .sheet(isPresented: $guide) { ReadingGuideView(onClose: { guide = false }) }
-        .sheet(isPresented: $requestHistory) { AIRequestHistoryView(state: store.aiProgressState).environmentObject(store) }
         .sheet(isPresented: $analysisHistory) { ReadingContinuationHistoryView().environmentObject(store) }
         .sheet(isPresented: $details) {
             VStack(spacing: 0) {
@@ -166,7 +164,7 @@ struct ReaderMethodView: View {
                 Button { analysisHistory = true } label: { Label("分析历史", systemImage: "clock.arrow.circlepath") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("只读查看过去的任务与保留分析，不切换当前版本或调用模型。")
                     .accessibilityIdentifier("reading-continuation-open-history")
-                Button { requestHistory = true } label: { Label("请求记录", systemImage: "clock.arrow.circlepath") }
+                Button { store.showAIRequestHistory(store.aiProgressState) } label: { Label("请求记录", systemImage: "clock.arrow.circlepath") }
                     .buttonStyle(ReadingToolbarButtonStyle()).help("查看本书当前与以前的请求和操作")
             }
             Text("安心读，线索会慢慢连起来。").font(.system(size: 33, weight: .semibold, design: .rounded)).fixedSize(horizontal: false, vertical: true)

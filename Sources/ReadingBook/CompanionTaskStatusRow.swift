@@ -10,7 +10,8 @@ struct CompanionTaskStatusRow: View {
     let libraryRoot: URL
     let cancel: () -> Void
     let cancelQuery: () -> Void
-    @State private var details: Lane?
+    var inline = false
+    @EnvironmentObject private var store: AppStore
     private enum Lane: String, Identifiable { case companion, query; var id: String { rawValue } }
     private func running(_ value: AIProgressPresentationState) -> Bool {
         value.isRunning && value.bookID == bookID && value.libraryRoot == libraryRoot
@@ -24,18 +25,12 @@ struct CompanionTaskStatusRow: View {
             .padding(.leading, 10).padding(.trailing, 4)
             .background(Palette.surface.opacity(0.82), in: Capsule())
             .overlay { Capsule().strokeBorder(Palette.line.opacity(0.35), lineWidth: 0.5).allowsHitTesting(false) }
-            .sheet(item: $details) { lane in
-                switch lane {
-                case .companion: AIRequestHistoryView(state: state)
-                case .query: AIRequestHistoryView(state: queryState)
-                }
-            }
-            .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 4)
+            .padding(.horizontal, inline ? 0 : 12).padding(.top, inline ? 0 : 2).padding(.bottom, inline ? 0 : 4)
         }
     }
     private func status(_ title: String, state: AIProgressObservableState, lane: Lane, cancel: @escaping () -> Void) -> some View {
         HStack(spacing: 2) {
-            Button { details = lane } label: {
+            Button { store.showAIRequestHistory(state) } label: {
                 HStack(spacing: 5) {
                     Circle().fill(Palette.accent.opacity(0.7)).frame(width: 4, height: 4)
                     Text("\(title) · \(state.value.phaseTitle)").font(.system(size: 11, weight: .medium)).lineLimit(1)
