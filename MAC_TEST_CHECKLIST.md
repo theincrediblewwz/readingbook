@@ -1,5 +1,5 @@
 <!-- time-review-local:start -->
-> 当前接续（2026-11-08，本地优先）：本机候选已验证，安装状态以最终回执为准。详细结果见 Design/2026-11-08-time-review-continuation.md；总入口 logs/time-review-continuation-20261108/final-local-delivery.json。用户 dirty 性能文档 SHA 9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4 未改、未提交。
+> 当前接续（2026-11-08，本地优先）：已更新本机安装，原书两次正常启动/退出通过。详细结果见 Design/2026-11-08-time-review-continuation.md；总入口 logs/time-review-continuation-20261108/final-local-delivery.json。用户 dirty 性能文档 SHA 9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4 未改、未提交。
 
 本批 18 产品 Swift；Release build15 零编译警告，core7 为 316 方法/3531 独立断言（非 XCTest），timeReview8 原生 47 项/五类告警0。较早 core6 的两个新边界失败已保留并修；新时间桥接探针首次编译字段错误保留。旧 38 项审阅/工作台门槛保留，新 9 项实际日期命令桥接通过。
 
@@ -8,6 +8,8 @@
 真实30 HTTP，已知2363813报告token、另1失败用量未知。real3 保存5地点/3事件；real6格式反馈后保存锚点，34→37。尚无新地图/路线/时间轴自然成功；real5第一个HTTP前布局卡顿两份sample保留，0收费，最终仅终止隔离进程。别把离线重放、合成47项或设计稿当真实理想成果。全部独有AI结果/关键失败保留，正式原库试读请求0。
 
 下一批先改真实ID复用和核心成果早保存，以及预算收尾后的剩余计划恢复；进程内审阅续接已做，不等于跨重启/跨预算恢复。再做选定地图融合稿、同日时刻、布局卡顿与16类轮转。仍按本地频繁迭代，阶段成果再集中GitHub；不要重复安装或为小改动跑云端发布。
+清理 6,053,236→5,610,040KiB，回收443,196KiB；批初5,468,228KiB。新鲜原69回滚在private-books/time-review-continuation-20261108/install-before-local-iteration。39原库成员保持，38全字节同，1派生推荐缓存仅JSON重序列化；原书/笔记/分析/项目/Workspace字节与偏好语义保持。正式程序已正常退出；不要恢复旧库。
+
 <!-- time-review-local:end -->
 
 > 当前接续69（2026-11-08）：**本地优先，集中阶段发布**。用户明确要求不要每个小改动都推送、等待云端编译并发布。后续先本机改代码、相关回归、增量编译和试用，保存本地提交；形成完整阶段成果再统一推送、完整CI、打双架构包和发布。具体规则与命令见DEVELOPMENT.md。以下历史批次的“每批发布”做法不再作为默认流程。
