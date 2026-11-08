@@ -137,6 +137,9 @@ enum ReadingQueryToolCatalog {
         }
         // Typed proposal schemas are added separately when the host grants a group.
         if let proposals { result += ReadingProposalSchemas.schemas(names: proposals.proposalTools.intersection(proposalNames)) }
+        if host?.viewActions.contains("component_show") == true || proposals?.proposalTools.isDisjoint(with: proposalNames) == false {
+            result.append(draftRepairSchema)
+        }
         return result
     }
 }

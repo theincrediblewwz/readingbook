@@ -34,10 +34,17 @@ extension CompositionRuntime {
             guard let source = sources[part.sourceID] else { issue("parts[\(index)].sourceID", "必须引用sources中的id：\(part.sourceID)不存在。"); continue }
             if part.selectionGroup != source.selectionGroup { issue("parts[\(index)].selectionGroup", "必须与数据源\(source.id)相同：\(source.selectionGroup)。省略时默认main。"); }
             if part.timeGroup != source.timeGroup { issue("parts[\(index)].timeGroup", "必须与数据源\(source.id)相同：\(source.timeGroup)。省略时默认main。"); }
+            if let id = part.routeSourceID {
+                if part.primitive != .map { issue("parts[\(index)].routeSourceID", "只有geo.map可另选行动关系数据源。"); }
+                else if let routes = sources[id], routes.collection == .relations {
+                    if routes.selectionGroup != part.selectionGroup { issue("parts[\(index)].routeSourceID", "行动数据源\(id)须与地图共用selectionGroup：\(part.selectionGroup)。"); }
+                    if routes.timeGroup != part.timeGroup { issue("parts[\(index)].routeSourceID", "行动数据源\(id)须与地图共用timeGroup：\(part.timeGroup)，才能同步筛选。"); }
+                } else { issue("parts[\(index)].routeSourceID", "须引用sources中collection=relations的数据源；它只投影已有行动，不创建事件归属。"); }
+            }
             if part.columns != nil && part.primitive != .table { issue("parts[\(index)].columns", "columns仅适用于object.table；其他元件请移除此字段。"); }
             if !value.layout.contains(where: { $0.kind == .part && $0.partID == part.id }) { issue("parts[\(index)].id", "元件\(part.id)缺少布局位置。请添加kind=part、partID=\(part.id)的layout节点，并在父容器children引用该节点id。"); }
         }
-        for (index, source) in value.sources.enumerated() where !value.parts.contains(where: { $0.sourceID == source.id }) {
+        for (index, source) in value.sources.enumerated() where !value.parts.contains(where: { $0.sourceID == source.id || $0.routeSourceID == source.id }) {
             issue("sources[\(index)]", "数据源\(source.id)没有元件使用；移除此数据源或为它添加元件。");
         }
         if layouts[value.rootID] == nil { issue("rootID", "必须指向layout中的节点id：\(value.rootID)不存在。"); }

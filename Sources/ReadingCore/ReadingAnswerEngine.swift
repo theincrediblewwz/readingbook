@@ -283,7 +283,7 @@ enum ReadingAnswerEngine {
                     result = try session.modelReadToolResult(result, tool: call.function.name)
                     let receipt = result.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
                     let status = receipt?["status"] as? String
-                    if ReadingQueryToolCatalog.proposalNames.contains(call.function.name), status == "needs_confirmation", receipt?["applied"] as? Bool == false {
+                    if ReadingQueryToolCatalog.proposalNames.contains(session.lastEffectiveTool ?? call.function.name), status == "needs_confirmation", receipt?["applied"] as? Bool == false {
                         if let review = proposalAccess?.awaitReview, let proposalID = receipt?["proposalID"] as? String {
                             progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count,
                                 toolSucceeded: false, toolStatus: "needs_confirmation",
@@ -299,7 +299,7 @@ enum ReadingAnswerEngine {
                             }
                             try await session.refreshReviewedProject()
                             result = String(decoding: reviewed, as: UTF8.self)
-                            try session.recordHostReceipt(result, tool: call.function.name)
+                            try session.recordHostReceipt(result, tool: session.lastEffectiveTool ?? call.function.name)
                             reviewedInBatch = true
                             progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count,
                                 toolSucceeded: decision["applied"] as? Bool == true,
@@ -336,6 +336,7 @@ enum ReadingAnswerEngine {
                         receipt["repairRule"] = "按列出的路径一起修正布局，再显式重交；只改显示声明，不重做已保存知识。children引用layout.id，partID引用parts.id，各元件与其数据源的联动组保持一致。"
                     }
                     else if call.function.name == "knowledge_changes_propose" { receipt["referenceGuide"] = ReadingProposalSchemas.referenceGuide(in: session.project ?? project) }
+                    if reportedStart, let repair = session.lastRepairOffer { receipt["repair"] = repair }
                     result = String(decoding: try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys]), as: UTF8.self)
                     if reportedStart {
                         progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count, toolSucceeded: false,

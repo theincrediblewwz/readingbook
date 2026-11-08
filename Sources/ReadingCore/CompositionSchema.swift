@@ -24,7 +24,8 @@ public enum CompositionSchema {
             "traversal": traversal.merging(["description": "仅relation=neighbors可用。按已保存关系名称和方向展开，先遵守来源与时间范围；省略沿用旧一跳。类型和属性筛选只限制结果，隐藏中间对象不生成跨节点直连。"], uniquingKeysWith: { _, new in new })], required: ["id", "collection"])
         let part = object(["id": id, "primitive": enumeration(CompositionPrimitive.allCases.map(\.rawValue)).merging(["description": "object.detail含摘要、字段、原文依据及跳转；source.excerpt仅展示原文；选择联动的元件共用selectionGroup，时间筛选共用timeGroup。"], uniquingKeysWith: { _, new in new }), "sourceID": id,
             "title": text, "selectionGroup": id, "timeGroup": id,
-            "columns": array(column, minimum: 1, maximum: 8)], required: ["id", "primitive", "sourceID"])
+            "columns": array(column, minimum: 1, maximum: 8),
+            "routeSourceID": id.merging(["description": "geo.map可另绑定collection=relations的行动数据源，与地图共用selectionGroup/timeGroup；事件标记和行动路线独立取数，没有eventID的行动也可显示，不替它编造事件关联。省略只画主数据源相关路线。"], uniquingKeysWith: { _, next in next })], required: ["id", "primitive", "sourceID"])
         let node = object(["id": id, "kind": enumeration(["row", "column", "tabs", "overlay", "part"]).merging(["description": "overlay按children顺序叠放：首项为主画布，其后为浮动卡片；首项是geo.map时地图铺满可用空间。每个元件各有kind=part的布局节点，children引用layout.id，partID引用parts.id。"], uniquingKeysWith: { _, new in new }), "children": array(id, maximum: 8),
             "partID": id, "fraction": ["type": "number", "minimum": 0.1, "maximum": 0.9],
             "dock": enumeration(FloatingPanelDock.allCases.map(\.rawValue)),

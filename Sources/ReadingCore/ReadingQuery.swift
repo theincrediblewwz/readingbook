@@ -448,6 +448,9 @@ struct ReadingQuerySession {
     let savedEvidenceAdmission: ((Evidence) -> Bool)?
     var hostReceipts: [String] = []
     var lastComponentReceipt: String?
+    var rejectedToolDraft: ReadingToolDraft?
+    var lastRepairOffer: [String: Any]?
+    var lastEffectiveTool: String?
     var taskCreatedNodeIDs = Set<String>()
     var sourceExcerpts: [(String, String)] = []
     var sourceReferences: [String: Evidence] = [:]
@@ -605,9 +608,28 @@ struct ReadingQuerySession {
     }
 
     mutating func execute(name: String, arguments: [String: Any], maximumBytes: Int) async throws -> String {
+        let (effectiveName, effectiveArguments) = try resolveToolDraft(name: name, arguments: arguments)
         let before = (sourceExcerpts.count, documentExcerpts.count, conversationExcerpts.count)
         let requestedBefore = modelRequestedSource
-        let result = try await perform(name: name, arguments: arguments, maximumBytes: maximumBytes)
+        var result: String
+        do {
+            result = try await perform(name: effectiveName, arguments: effectiveArguments,
+                maximumBytes: name == ReadingQueryToolCatalog.draftRepairName ? max(0, maximumBytes - 256) : maximumBytes)
+        } catch {
+            retainRejectedDraft(name: effectiveName, arguments: effectiveArguments, error: error)
+            throw error
+        }
+        if repairableToolNames.contains(effectiveName), let data = result.data(using: .utf8),
+           var receipt = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let acceptedForReview = ReadingQueryToolCatalog.proposalNames.contains(effectiveName)
+                && receipt["status"] as? String == "needs_confirmation" && receipt["proposalID"] is String
+            if acceptedForReview || (receipt["ok"] as? Bool != false && receipt["budgetLimited"] as? Bool != true
+                && !["busy", "unsupported", "failed", "needs_confirmation"].contains(receipt["status"] as? String ?? "")) { rejectedToolDraft = nil }
+            if name == ReadingQueryToolCatalog.draftRepairName {
+                receipt["repairedTool"] = effectiveName
+                result = try json(receipt)
+            }
+        }
         guard result.utf8.count <= max(400, maximumBytes) else {
             sourceExcerpts.removeSubrange(before.0...); documentExcerpts.removeSubrange(before.1...); conversationExcerpts.removeSubrange(before.2...)
             modelRequestedSource = requestedBefore

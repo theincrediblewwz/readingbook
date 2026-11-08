@@ -45,7 +45,7 @@ public enum SpatialKnowledgeRuntime {
     public static func routes(in project: BookProject, boundary: KnowledgeReadBoundary = .all,
                               at point: TemporalQueryPoint? = nil, within window: TemporalQueryWindow? = nil,
                               actorID: String? = nil, eventIDs: Set<String>? = nil,
-                              relevantObjectIDs: Set<String>? = nil, limit: Int = 128) throws -> [SpatialRoute] {
+                              relevantObjectIDs: Set<String>? = nil, relationIDs: Set<String>? = nil, limit: Int = 128) throws -> [SpatialRoute] {
         guard (1...128).contains(limit) else { throw ReadingError.invalid("地图路线数量应在1–128之间。") }
         try Task.checkCancellation()
         guard project.temporalKnowledge?.relationMetadata.contains(where: { $0.spatial != nil }) == true else { return [] }
@@ -60,6 +60,7 @@ public enum SpatialKnowledgeRuntime {
         for record in records {
             try Task.checkCancellation()
             guard let metadata = record.metadata, let spatial = metadata.spatial,
+                  relationIDs.map({ $0.contains(record.relation.id) }) ?? true,
                   actorID.map({ spatial.actorIDs.contains($0) }) ?? true,
                   eventIDs.map({ allowed in spatial.eventID.map { allowed.contains($0) } ?? false }) ?? true else { continue }
             // Incomparable/unknown dates are not outside the chosen period.

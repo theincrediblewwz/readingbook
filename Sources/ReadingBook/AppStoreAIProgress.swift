@@ -194,6 +194,7 @@ struct AIProgressPresentationState: Equatable {
         case "reading_enrich": return "生成伴读内容"
         case "reading_finish", "workflow_step_complete": return "核对阅读检查点"
         case "knowledge_changes_propose": return "整理实体、事件和关系"
+        case "tool_draft_repair": return "修正整理草案"
         case "document_changes_propose": return "准备笔记修改方案"
         case "book_scheme_propose", "book_plan": return "准备本书阅读方案"
         case "view_select", "view_focus", "map_fit_objects", "graph_focus", "panel_present", "view_set_time_window": return "调整当前组件视图"

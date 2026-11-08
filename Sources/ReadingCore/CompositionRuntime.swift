@@ -24,7 +24,7 @@ public enum CompositionRuntime {
                 boundary: boundary, sourceSnapshot: sourceSnapshot)
         }
         return PreparedCompositionInput(definition: definition, bases: bases,
-            mapSourceIDs: Set(definition.parts.filter { $0.primitive == .map }.map(\.sourceID)))
+            mapSourceIDs: Set(definition.parts.filter { $0.primitive == .map }.flatMap { [$0.sourceID] + [$0.routeSourceID].compactMap { $0 } }))
     }
 
     public static func validate(_ definition: CompositionDefinition, in project: BookProject) throws {
@@ -72,6 +72,7 @@ public enum CompositionRuntime {
             guard part.title.utf8.count <= 400, let source = sources[part.sourceID],
                   part.selectionGroup == source.selectionGroup, part.timeGroup == source.timeGroup else { throw invalid("组合元件必须引用同一联动组中的真实数据源。") }
             usedSources.insert(part.sourceID)
+            if let id = part.routeSourceID { usedSources.insert(id) }
             let compatible: Bool
             switch part.primitive {
             case .objectList, .objectDetail, .table: compatible = [.objects, .events, .documents].contains(source.collection)
@@ -285,7 +286,8 @@ public enum CompositionRuntime {
                 diagnostics.append("标为时间待考的记录仍保留供核对；时间未明、推测或历法不同不代表已确认落在这个区间。")
             }
             let routes = prepared.mapSourceIDs.contains(source.id) ? try SpatialKnowledgeRuntime.routes(in: base.project,
-                at: point, within: window, relevantObjectIDs: itemIDs) : []
+                at: point, within: window, relevantObjectIDs: itemIDs,
+                relationIDs: source.collection == .relations ? Set(edges.map(\.id)) : nil) : []
             if routes.count == 128 { diagnostics.append("地图先显示128条行动方向；可缩小时间或对象范围。") }
             result[source.id] = CompositionProjection(items: items, edges: edges, mapPoints: mapPoints, total: total,
                 partial: total > source.limit || edgeTruncated || pointTruncated || expanded?.partial == true || hiddenTraversalEdges || routes.count == 128, diagnostics: diagnostics, mapRoutes: routes)

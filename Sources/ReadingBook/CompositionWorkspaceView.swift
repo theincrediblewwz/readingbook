@@ -497,7 +497,8 @@ struct CompositionWorkspaceView: View {
                     }.pickerStyle(.menu).padding(.horizontal, 16).frame(minHeight: 48)
                 }
                 }
-                CompositionMap(points: projection.mapPoints, routes: projection.mapRoutes, selected: selections[part.selectionGroup] ?? [], height: height, canvas: canvas,
+                let routes = part.routeSourceID.flatMap { projections[$0]?.mapRoutes } ?? projection.mapRoutes
+                CompositionMap(points: projection.mapPoints, routes: routes, selected: selections[part.selectionGroup] ?? [], height: height, canvas: canvas,
                     select: { select($0, group: part.selectionGroup) },
                     deselect: { selections[part.selectionGroup] = []; canvasAnchors[part.selectionGroup] = nil },
                     selectedLocation: { if canvasAnchors[part.selectionGroup] != $0 { canvasAnchors[part.selectionGroup] = $0 } })
@@ -848,7 +849,7 @@ private struct CompositionMap: View {
                 .popover(item: $inspectedRoute) { SpatialRouteDetails(route: $0) }
                 .background(CompositionPageScrollInput())
                 .mapControls { MapCompass(); MapScaleView() }.frame(height: height).clipShape(RoundedRectangle(cornerRadius: canvas ? 0 : 18))
-                .help(canvas ? "拖动或双指平移地图，捏合缩放；点标记看详情，点空白收起。" : "双指滑动浏览整页；拖动平移地图，捏合缩放地图。")
+                    .help(canvas ? "拖动或双指平移地图，捏合缩放；点标记看详情，点空白收起。" : "双指滑动浏览整页；拖动平移地图，捏合缩放地图。")
                 .overlay(alignment: .topLeading) { SpatialRouteTimeNotice(routes: routes) }
                 .simultaneousGesture(SpatialTapGesture().onEnded { tap in
                     guard canvas, !selected.isEmpty else { return }

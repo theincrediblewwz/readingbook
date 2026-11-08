@@ -109,11 +109,13 @@ public struct CompositionPart: Codable, Hashable, Identifiable, Sendable {
     public var selectionGroup: String
     public var timeGroup: String
     public var columns: [CompositionTableColumn]?
-    public init(id: String, primitive: CompositionPrimitive, sourceID: String, title: String = "", selectionGroup: String = "main", timeGroup: String = "main", columns: [CompositionTableColumn]? = nil) {
+    /// A map may draw shared actions independently of its event/place markers.
+    public var routeSourceID: String?
+    public init(id: String, primitive: CompositionPrimitive, sourceID: String, title: String = "", selectionGroup: String = "main", timeGroup: String = "main", columns: [CompositionTableColumn]? = nil, routeSourceID: String? = nil) {
         self.id = id; self.primitive = primitive; self.sourceID = sourceID; self.title = title; self.selectionGroup = selectionGroup; self.timeGroup = timeGroup
-        self.columns = columns
+        self.columns = columns; self.routeSourceID = routeSourceID
     }
-    private enum CodingKeys: String, CodingKey, CaseIterable { case id, primitive, sourceID, title, selectionGroup, timeGroup, columns }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, primitive, sourceID, title, selectionGroup, timeGroup, columns, routeSourceID }
     public init(from decoder: Decoder) throws {
         try compositionKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -121,6 +123,7 @@ public struct CompositionPart: Codable, Hashable, Identifiable, Sendable {
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""; selectionGroup = try c.decodeIfPresent(String.self, forKey: .selectionGroup) ?? "main"
         timeGroup = try c.decodeIfPresent(String.self, forKey: .timeGroup) ?? "main"
         columns = try c.decodeIfPresent([CompositionTableColumn].self, forKey: .columns)
+        routeSourceID = try c.decodeIfPresent(String.self, forKey: .routeSourceID)
     }
 }
 
