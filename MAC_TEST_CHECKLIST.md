@@ -1,16 +1,18 @@
-<!-- continuation68-pending:start -->
-> 当前接续68：0.23.68/build99已同步main、发布并替换本机安装；原书界面和两次正常重启验收仍待桌面解锁。产品源4bf9f392459d4eb35292d4345d0a5a031d8c600a；完整CI42408962187 attempt1通过1098 XCTest/412指定/50原生JSON，全部67门槛保留，零编译警告。双架构、35资源/39文件、严格签名和公开下载通过。ZIP34544385B，SHA95759425f116be0ca0c60ef1120ec950a944cbe63404bed71b94fa38839a77c6。不是待编译或待安装状态。
+> 当前接续68已完成：0.23.68/build99，产品源4bf9f392459d4eb35292d4345d0a5a031d8c600a。完整CI42408962187 attempt1通过1098 XCTest/412指定/50原生JSON，全部67门槛保留，零编译警告。双架构、35资源/39文件、严格签名、公开下载、完整安装manifest及原书两次正常启动/退出通过。ZIP 34,544,385B，SHA 95759425f116be0ca0c60ef1120ec950a944cbe63404bed71b94fa38839a77c6。总入口logs/continuation-clarity-20261108/delivery68/final-delivery.json。
 
-当前保护：private-books/continuation-clarity-20261108/install-before-0.23.68为最新停机书库/偏好与67回滚。原库39成员、33非Workspace字节相同，原第104页/适宽277%/上下连续/reader route保持；原书未提交模型请求。原始dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4不得编辑或提交。禁止为了匹配旧hash恢复书库。
+本机Release build9、223方法2480独立断言通过；旧来源引用断言发现失败后修复并保留，缓存去重不改变实际读取的严格义务。已有事件补缺失元数据、均衡概览、紧凑发现列表、PDF时间换行唯一匹配和可读时间审阅均已交付，无书库迁移或组件私有数据库。具体指标见Design/2026-11-08-ai-continuation-review.md。
 
-本机223方法2480独立断言和实际3事件时间提案审阅通过。候选真实赤壁6HTTP/594897已知token/13工具，无额外source_read，保存15要素/11事件/25关系/1旧工作台；最后时间提案离线可准备并需审阅，没有自动应用推算日期。事实与时间共用分类是明确剩余缺口，整体地图/时间轴/导图仍部分。详细评价：Design/2026-11-08-ai-continuation-review.md。
+真实赤壁43–50回早期候选6HTTP，已知594897 token，新增4地点/1事件/17关系。未自然完成或打开新视图；第7诊断尝试在发送前被诊断宿主挡住，不是生产请求上限。最终只离线复用真实参数，无追加收费重试；3时间提案进入审阅而未提交。推算日期与依据分类仍矛盾、地图/时间轴/导图整体仍部分。关键证据保留，不编日期/坐标或把合成例子当实际成果。
 
-总接续目录logs/continuation-clarity-20261108/delivery68，pending-native-handoff.json列剩余步骤。下一步先用CUA验正式安装/关于68/99/104页/原便签你好/空CmdF鼠标关闭与回焦，两次正常启动退出；再跑post-install-preservation最终、retire-old-programs.py、cleanup-final.py、finalize-docs.py，明确提交4份完成文档并推送、写remote-main-final.json、跑final-audit.py。每个脚本有严格门槛；不要删旧测试、改容差或跳过原生检查。最终161项表尚待finalize-docs，不把当前156项表当作已更新完成。
+正式安装前最新停机保护及67回滚：private-books/continuation-clarity-20261108/install-before-0.23.68。原库39成员保留，33非Workspace逐字节相同，原书第104页、模式和route按新鲜现场恢复；不恢复旧库，本轮原书没有提交模型请求。正式CUA告警{'layout300': 0, 'publishingDuringViewUpdates': 0, 'attributeGraphCycles': 0, 'unsatisfiableConstraints': 0, 'invalidViewGeometry': 72}单独记录，不称全部App路径零告警。161项107通过/48已实现/4部分/2待验证，非本轮全部重新人工穷举。
 
-已清理结束且可重建的6组本批程序393844KiB，原书与全部私人资料/旧回滚未动。最终清理仍保留68/67规范包及新鲜67回滚，完成验收后才退役66旧程序/Release/tag/精确artifact和codex/continuation-clarity分支；不改写main历史。不要追加收费模型重试，不改变锁屏、安全或共享设置。最新异步解锁问题已提出，工具两次仍报告锁屏；等待用户回桌面即可继续，不重编译/重发布。
-<!-- continuation68-pending:end -->
+清理末阶段6,450,832→6,035,984KiB，累计回收808,692KiB；批初5,972,444KiB，净变化+63,540KiB。保留68/67规范包、新鲜67回滚、全部独有私人资料和关键证据及共享缓存；66旧程序、Release/tag、精确artifact及本批已合入分支退役，远端仅main，不改写源码历史。 用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4未改、未提交；不改锁屏、安全或共享设置。
 
-> 当前接续67已完成：0.23.67/build98，产品源40db44e6f2e6bf23384decefff21deeb75937901。完整ARM CI42388576859 attempt2通过1070 XCTest/384指定/50原生JSON，旧门槛全部保留，原范围29扩展36，零编译警告。双架构、35资源/39文件、严格签名、公开下载、安装manifest及原书两次正常启动/退出通过。ZIP 34,501,540B，SHA 562c58c903b154c766f39c2d3ea1ab2bc6f898fb10f03972150316142f073612。总入口logs/chibi-outcomes-20261107/delivery67/final-delivery.json。
+下一批优先同一赤壁资料的时间推断分类与叙事顺序，然后做时间—人物—地点可核对联动及同源可编辑导图。保留首成果等待、笔记转场偶发、Intel首布局及16类组件轮转，不退回只优化PDF。
+
+---
+
+> 历史接续67已完成：0.23.67/build98，产品源40db44e6f2e6bf23384decefff21deeb75937901。完整ARM CI42388576859 attempt2通过1070 XCTest/384指定/50原生JSON，旧门槛全部保留，原范围29扩展36，零编译警告。双架构、35资源/39文件、严格签名、公开下载、安装manifest及原书两次正常启动/退出通过。ZIP 34,501,540B，SHA 562c58c903b154c766f39c2d3ea1ab2bc6f898fb10f03972150316142f073612。总入口logs/chibi-outcomes-20261107/delivery67/final-delivery.json。
 
 实际20产品Swift：明确页码/连续章节范围、一次完整提供有界原文、原文编号与预算修复、简繁工具查找、SSE和语义大小分别保护、指定范围的分析标题/简介，以及可选时间地图布局。无书库迁移。本机Release build10、157方法1908独立断言和36原生范围/43动态组件检查通过，不是本机XCTest。
 
