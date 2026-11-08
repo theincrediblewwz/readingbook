@@ -214,7 +214,12 @@ extension ReadingQuerySession {
             temporal.presences = temporal.presences.filter { permits($0.sourceAnchorIDs) }
             temporal.participations = temporal.participations.filter { permits($0.sourceAnchorIDs) }
             temporal.eventMetadata = temporal.eventMetadata.filter { permits($0.sourceAnchorIDs) }
-            temporal.relationMetadata = temporal.relationMetadata.filter { permits($0.sourceAnchorIDs) }
+            let visibleIDs = Set(project.entities.map(\.id) + project.events.map(\.id))
+            temporal.relationMetadata = temporal.relationMetadata.filter { permits($0.sourceAnchorIDs) }.map { value in
+                var admitted = value
+                if !(value.spatial?.referenceIDs.allSatisfy(visibleIDs.contains) ?? true) { admitted.spatial = nil }
+                return admitted
+            }
             project.temporalKnowledge = temporal
         }
         return project

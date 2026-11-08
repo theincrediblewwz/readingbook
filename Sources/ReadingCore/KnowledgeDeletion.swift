@@ -86,7 +86,7 @@ public enum KnowledgeDeletion {
     private static func removeReferences(to id: String, from project: inout BookProject) {
         let removedRelations = Set(project.relations.filter { $0.fromID == id || $0.toID == id }.map(\.id))
         project.relations.removeAll { removedRelations.contains($0.id) }
-        project.temporalKnowledge?.relationMetadata.removeAll { removedRelations.contains($0.relationID) }
+        project.temporalKnowledge?.relationMetadata.removeAll { removedRelations.contains($0.relationID) || ($0.spatial?.referenceIDs.contains(id) ?? false) }
         for index in project.documents.indices { project.documents[index].linkedIDs.removeAll { $0 == id } }
         let documents = Dictionary(project.documents.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var removedNodes = Set<String>()

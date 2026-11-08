@@ -25,6 +25,7 @@ struct SpatialTimelineView: View {
     @State private var observedCamera: ReadingMapCameraSnapshot?
     @State private var selectionCameraCenter: CLLocationCoordinate2D?
     @State private var showingEvents = false
+    @State private var inspectedRoute: SpatialRoute?
     @State private var editingRange = false
     @State private var expandedEventID: String?
     @State private var inspectedObjectID: String?
@@ -83,18 +84,17 @@ struct SpatialTimelineView: View {
             event.startYear = Int(value); event.endYear = axisEnd(item.extent).map(Int.init); return event
         }
     }
-    private func axisValue(_ extent: TemporalExtent) -> Double? {
-        if store.temporalAxis == "narrative" { return extent.narrativeStart.map(Double.init) }
-        guard store.temporalAxis == "calendar:" + (extent.calendar ?? "") else { return nil }
-        return extent.start.map { Double($0.year) }
-    }
-    private func axisEnd(_ extent: TemporalExtent) -> Double? {
-        if store.temporalAxis == "narrative" { return extent.narrativeEnd.map(Double.init) }
-        guard store.temporalAxis == "calendar:" + (extent.calendar ?? "") else { return nil }
-        return extent.end.map { Double($0.year) }
-    }
+    private func axisValue(_ extent: TemporalExtent) -> Double? { TemporalAxis(store.temporalAxis).value(extent) }
+    private func axisEnd(_ extent: TemporalExtent) -> Double? { TemporalAxis(store.temporalAxis).value(extent, end: true) }
     private func axisLabel(_ value: Double) -> String {
-        store.temporalAxis == "narrative" ? "叙事 \(Int(value))" : TimelineRangeControl.yearLabel(Int(value))
+        temporalMode ? TemporalAxis(store.temporalAxis).label(value) : TimelineRangeControl.yearLabel(Int(value))
+    }
+    private var actionRoutes: [SpatialRoute] {
+        guard let book = store.componentDataBook else { return [] }
+        let window = temporalMode ? TemporalAxis(store.temporalAxis).window(from: store.timeFrom, to: store.timeTo) : nil
+        return (try? SpatialKnowledgeRuntime.routes(in: book, boundary: store.temporalBoundary, within: window,
+            actorID: store.selectedTemporalEntityID,
+            relevantObjectIDs: store.componentUsesCurrentContext ? Set(visibleEvents.flatMap { [$0.id] + $0.placeIDs + $0.participantIDs }) : nil)) ?? []
     }
 
     private var filteredEvents: [KnowledgeEvent] {
@@ -145,7 +145,7 @@ struct SpatialTimelineView: View {
         if temporalMode {
             let extents = store.availableTemporalExtents
             let values = extents.flatMap { [axisValue($0), axisEnd($0)].compactMap { $0 } }
-            if let first = values.min(), let last = values.max() { return (first - 1)...(last + 1) }
+            if let first = values.min(), let last = values.max() { return TemporalAxis(store.temporalAxis).isDateOrder ? first...last : (first - 1)...(last + 1) }
             return 0...1
         }
         let years = axisEvents.flatMap { [$0.startYear, $0.endYear].compactMap { $0 } }
@@ -323,7 +323,7 @@ struct SpatialTimelineView: View {
             store.selectedTemporalEntityID = id
             showsPerson = true
             if store.temporalAxis == "legacy" {
-                if let calendar = store.temporalCalendars.first { selectAxis("calendar:" + calendar) }
+                if let axis = store.availableTemporalAxes.first { selectAxis(axis) }
                 else if store.hasNarrativeTime { selectAxis("narrative") }
             }
         }
@@ -336,10 +336,11 @@ struct SpatialTimelineView: View {
     private var bookMap: some View {
         let expectedKey = store.workspaceMemoryKey
         let expectedRoot = store.libraryRootURL
-        return ReadingMapRenderer(points: points, sequence: footprintSequence,
+        return ReadingMapRenderer(points: points, routes: actionRoutes, sequence: footprintSequence,
                                   selectedID: store.selectedObjectID, scope: mapScope,
-                                  cameraValue: camera, camera: $camera, selection: $mapSelection)
+                                  cameraValue: camera, camera: $camera, selection: $mapSelection, inspectedRoute: $inspectedRoute)
         .equatable()
+        .popover(item: $inspectedRoute) { SpatialRouteDetails(route: $0) }
         .onChange(of: mapSelection) { _, value in
             guard let value, value.scope == mapScope else { return }
             selectEvent(value.targetID)
@@ -430,9 +431,10 @@ struct SpatialTimelineView: View {
     private var timelineContents: some View {
         VStack(alignment: .leading, spacing: 8) {
             timeRangeBar
-            TimelineRangeControl(lower: $store.timeFrom, upper: $store.timeTo, bounds: bounds,
+            TimelineRangeControl(lower: Binding(get: { store.timeFrom }, set: { store.timeFrom = TemporalAxis(store.temporalAxis).snapped($0, among: store.availableTemporalExtents) }),
+                                   upper: Binding(get: { store.timeTo }, set: { store.timeTo = TemporalAxis(store.temporalAxis).snapped($0, among: store.availableTemporalExtents) }), bounds: bounds,
                                    events: axisEvents, selectedID: store.selectedObjectID, select: selectEvent,
-                                   cursor: temporalMode ? $store.timeCursor : nil, label: axisLabel)
+                                   cursor: temporalMode ? Binding(get: { store.timeCursor }, set: { store.timeCursor = TemporalAxis(store.temporalAxis).snapped($0, among: store.availableTemporalExtents) }) : nil, label: axisLabel)
                 .id(store.bookID)
             if let event = expandedEvent {
                 Divider().opacity(0.5)
@@ -473,7 +475,7 @@ struct SpatialTimelineView: View {
                 Button("浏览事件清单（\(visibleEvents.count)）") { showingEvents = true }
                 Menu("时间体系") {
                     Button("原书纪年标签（历法未统一）") { selectAxis("legacy") }
-                    ForEach(store.temporalCalendars, id: \.self) { calendar in Button(calendar) { selectAxis("calendar:" + calendar) } }
+                    ForEach(store.availableTemporalAxes.filter { $0 != "narrative" }, id: \.self) { axis in Button(TemporalAxis(axis).title) { selectAxis(axis) } }
                     if store.hasNarrativeTime { Button("叙事顺序") { selectAxis("narrative") } }
                 }
                 Toggle("显示出现次序虚线", isOn: $showsFootprintSequence).disabled(store.selectedTemporalEntityID == nil || !temporalMode)
@@ -527,7 +529,9 @@ struct SpatialTimelineView: View {
     }
     private var timeRangeButton: some View {
         Button {
-            fromText = String(Int(store.timeFrom)); toText = String(Int(store.timeTo)); rangeError = ""; editingRange = true
+            let axis = TemporalAxis(store.temporalAxis)
+            fromText = temporalMode ? axis.input(store.timeFrom) : String(Int(store.timeFrom))
+            toText = temporalMode ? axis.input(store.timeTo) : String(Int(store.timeTo)); rangeError = ""; editingRange = true
         } label: {
             HStack(spacing: 5) {
                 Text("\(axisLabel(store.timeFrom)) — \(axisLabel(store.timeTo))")
@@ -569,6 +573,10 @@ struct SpatialTimelineView: View {
             if expandedEventIsVisible {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
+                        if let extent = store.temporalEvents.first(where: { $0.object.id == event.id })?.extent, extent.assertion == .inferred {
+                            Label("时间由原文线索推算", systemImage: "clock.badge.questionmark").font(.caption).foregroundStyle(Palette.copper)
+                                .help(extent.explanation ?? "具体时间尚待核对")
+                        }
                         if !event.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { MarkdownText(markdown: event.summary) }
                         ScrollView(.horizontal) {
                             HStack(spacing: 6) {
@@ -622,7 +630,7 @@ struct SpatialTimelineView: View {
     private var rangeEditor: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("精确时间范围").font(.headline)
-            Text("公元前年份输入负数。两个端点也可在轴上拖动或用方向键调整。").font(.caption).foregroundStyle(.secondary)
+            Text(TemporalAxis(store.temporalAxis).isDateOrder ? "按所选历法输入 年/月/日，也可拖动时间轴两端。" : "公元前年份输入负数，也可拖动时间轴两端。").font(.caption).foregroundStyle(.secondary)
             HStack {
                 TextField("起点", text: $fromText).textFieldStyle(.roundedBorder)
                 Text("至").foregroundStyle(.secondary)
@@ -633,11 +641,13 @@ struct SpatialTimelineView: View {
                 Button("取消") { editingRange = false }.keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("应用") {
-                    guard let from = Int(fromText.trimmingCharacters(in: .whitespaces)), let to = Int(toText.trimmingCharacters(in: .whitespaces)),
-                          from <= to, bounds.contains(Double(from)), bounds.contains(Double(to)) else {
-                        rangeError = "请输入轴内年份，并让起点不晚于终点。"; return
+                    let axis = TemporalAxis(store.temporalAxis)
+                    let from = temporalMode ? axis.parse(fromText) : Double(fromText.trimmingCharacters(in: .whitespaces))
+                    let to = temporalMode ? axis.parse(toText) : Double(toText.trimmingCharacters(in: .whitespaces))
+                    guard let from, let to, from.isFinite, to.isFinite, from <= to, bounds.contains(from), bounds.contains(to) else {
+                        rangeError = "请输入轴内有效时间，并让起点不晚于终点。"; return
                     }
-                    store.timeFrom = Double(from); store.timeTo = Double(to); editingRange = false
+                    store.timeFrom = from; store.timeTo = to; editingRange = false
                 }.keyboardShortcut(.defaultAction)
             }.buttonStyle(ReadingToolbarButtonStyle())
         }.padding(18).frame(width: 320)
@@ -832,14 +842,16 @@ private struct ReadingMapSelection: Equatable {
 /// parent view, so this equality never retains an old action closure.
 private struct ReadingMapRenderer: View, Equatable {
     let points: [ReadingMapPoint]
+    let routes: [SpatialRoute]
     let sequence: [CLLocationCoordinate2D]
     let selectedID: String?
     let scope: ReadingMapScope
     let cameraValue: MapCameraPosition
     @Binding var camera: MapCameraPosition
     @Binding var selection: ReadingMapSelection?
+    @Binding var inspectedRoute: SpatialRoute?
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.scope == rhs.scope && lhs.selectedID == rhs.selectedID && lhs.cameraValue == rhs.cameraValue
+        lhs.scope == rhs.scope && lhs.selectedID == rhs.selectedID && lhs.cameraValue == rhs.cameraValue && lhs.routes == rhs.routes
             && lhs.points == rhs.points && lhs.sequence.count == rhs.sequence.count
             && zip(lhs.sequence, rhs.sequence).allSatisfy { $0.latitude == $1.latitude && $0.longitude == $1.longitude }
     }
@@ -847,6 +859,7 @@ private struct ReadingMapRenderer: View, Equatable {
         let contents = ReadingMapContents(points: points, selectedID: selectedID,
                                           scope: scope, selection: $selection)
         Map(position: $camera) {
+            SpatialMapRoutes(routes: routes, inspected: $inspectedRoute) { id in selection = ReadingMapSelection(targetID: id, scope: scope) }
             // Keep the changing trajectory at one content identity when marker
             // counts cross the reuse threshold. Only annotations are reusable.
             if sequence.count > 1 {

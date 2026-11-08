@@ -371,7 +371,7 @@ struct CompositionWorkspaceView: View {
                         Text("这段时间的已知足迹").tag(CompositionMapTimeMode.windowFootprints)
                     }.pickerStyle(.menu).padding(.horizontal, 16).frame(minHeight: 48)
                 }
-                CompositionMap(points: projection.mapPoints, selected: selected, height: embedded ? 220 : 420) { select($0, group: part.selectionGroup) }
+                CompositionMap(points: projection.mapPoints, routes: projection.mapRoutes, selected: selected, height: embedded ? 220 : 420) { select($0, group: part.selectionGroup) }
                 Text(clocks[part.timeGroup]?.mapMode == .windowFootprints && clocks[part.timeGroup]?.window != nil
                      ? "人物仅显示所选区间内时间明确、有独立原文出处的足迹；时间待考的记录不作确定位置。"
                      : clocks[part.timeGroup]?.point != nil
@@ -684,14 +684,17 @@ private struct CompositionMarkdown: View {
 
 private struct CompositionMap: View {
     let points: [CompositionMapPoint]
+    let routes: [SpatialRoute]
     let selected: Set<String>
     var height: CGFloat = 420
     var select: (String) -> Void
     @State private var camera: MapCameraPosition = .automatic
+    @State private var inspectedRoute: SpatialRoute?
     var body: some View {
-        if points.isEmpty { CompositionEmptyState(text: "当前范围和时间没有已确认的位置。人物仅显示有出处的出现地点。", icon: "map") }
+        if points.isEmpty && routes.isEmpty { CompositionEmptyState(text: "当前范围和时间没有已确认的位置。人物仅显示有出处的出现地点。", icon: "map") }
         else {
             Map(position: $camera) {
+                SpatialMapRoutes(routes: routes, inspected: $inspectedRoute, selectEvent: select)
                 ForEach(points) { point in
                     Annotation(point.title, coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)) {
                         Button { select(point.targetID) } label: {
@@ -703,6 +706,7 @@ private struct CompositionMap: View {
                     }
                 }
             }
+                .popover(item: $inspectedRoute) { SpatialRouteDetails(route: $0) }
                 .background(CompositionPageScrollInput())
                 .mapControls { MapCompass(); MapScaleView() }.frame(height: height).clipShape(RoundedRectangle(cornerRadius: 18))
                 .help("双指滑动浏览整页；拖动平移地图，捏合缩放地图。")
@@ -727,20 +731,10 @@ private struct CompositionClock: Equatable {
     var cursor: Double?
     var mapMode: CompositionMapTimeMode = .instant
     var point: TemporalQueryPoint? {
-        guard let axis, let cursor, cursor.isFinite else { return nil }
-        if axis == "narrative", (0...1_000_000_000).contains(cursor) { return .narrative(Int(cursor)) }
-        if axis.hasPrefix("calendar:"), abs(cursor) <= 1_000_000_000_000 { return .date(TemporalDate(year: Int(cursor)), calendar: String(axis.dropFirst(9))) }
-        return nil
+        guard let axis, let cursor else { return nil }; return TemporalAxis(axis).point(cursor)
     }
     var window: TemporalQueryWindow? {
-        guard let axis, let lower, let upper, lower.isFinite, upper.isFinite, lower <= upper else { return nil }
-        if axis == "narrative", lower >= 0, upper <= 1_000_000_000 {
-            return .narrative(from: Int(lower), to: Int(upper))
-        }
-        if axis.hasPrefix("calendar:"), abs(lower) <= 1_000_000_000_000, abs(upper) <= 1_000_000_000_000 {
-            return .date(from: TemporalDate(year: Int(lower)), to: TemporalDate(year: Int(upper)), calendar: String(axis.dropFirst(9)))
-        }
-        return nil
+        guard let axis, let lower, let upper else { return nil }; return TemporalAxis(axis).window(from: lower, to: upper)
     }
 }
 
@@ -750,24 +744,12 @@ private struct CompositionTimeline: View {
     let selected: Set<String>
     @Binding var clock: CompositionClock
     var select: (String) -> Void
-    private var axes: [String] {
-        var values = Set<String>()
-        for item in items {
-            if item.extent?.narrativeStart != nil { values.insert("narrative") }
-            if let extent = item.extent, let calendar = extent.calendar, extent.start != nil { values.insert("calendar:" + calendar) }
-        }
-        return values.sorted()
-    }
+    private var axes: [String] { TemporalAxis.available(items.compactMap(\.extent)) }
     private var axis: String { clock.axis.flatMap { axes.contains($0) ? $0 : nil } ?? axes.first ?? "" }
-    private func value(_ extent: TemporalExtent?, end: Bool = false) -> Double? {
-        guard let extent else { return nil }
-        if axis == "narrative" { return (end ? extent.narrativeEnd : extent.narrativeStart).map(Double.init) }
-        guard axis == "calendar:" + (extent.calendar ?? "") else { return nil }
-        return (end ? extent.end : extent.start).map { Double($0.year) }
-    }
+    private func value(_ extent: TemporalExtent?, end: Bool = false) -> Double? { TemporalAxis(axis).value(extent, end: end) }
     private var bounds: ClosedRange<Double> {
         let values = items.flatMap { [value($0.extent), value($0.extent, end: true)].compactMap { $0 } }
-        return (values.min() ?? 0)...max((values.min() ?? 0) + 1, values.max() ?? 1)
+        return (values.min() ?? 0)...max(values.min() ?? 0, values.max() ?? 1)
     }
     private var lower: Double { min(bounds.upperBound, max(bounds.lowerBound, clock.lower ?? bounds.lowerBound)) }
     private var upper: Double { min(bounds.upperBound, max(lower, clock.upper ?? bounds.upperBound)) }
@@ -784,7 +766,7 @@ private struct CompositionTimeline: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Picker("时间轴", selection: Binding(get: { axis }, set: { clock = CompositionClock(axis: $0, mapMode: clock.mapMode) })) {
-                        ForEach(axes, id: \.self) { Text($0 == "narrative" ? "叙事顺序" : String($0.dropFirst(9))).tag($0) }
+                        ForEach(axes, id: \.self) { Text(TemporalAxis($0).title).tag($0) }
                     }.labelsHidden().pickerStyle(.menu).frame(minHeight: 48)
                     Spacer()
                     if clock.point != nil {
@@ -795,11 +777,16 @@ private struct CompositionTimeline: View {
                     upper: Binding(get: { upper }, set: { update(upper: $0) }), bounds: bounds,
                     events: events, selectedID: selected.sorted().first, select: select,
                     cursor: Binding(get: { cursor }, set: { update(cursor: $0) }), label: label)
-                Text("两端筛选事件与关系；光标控制人物的此时行动，地图可切换此刻位置或区间足迹。").font(.caption).foregroundStyle(.secondary)
+                Text("两端筛选事件和行动箭头；光标查看人物此时的位置。").font(.caption).foregroundStyle(.secondary)
                 if let item = items.first(where: { selected.contains($0.objectID ?? $0.id) }) {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(item.title).font(.system(size: 17, weight: .medium))
-                        if let extent = item.extent, !extent.sourceText.isEmpty { Text(extent.sourceText).font(.caption).foregroundStyle(.secondary) }
+                        if let extent = item.extent, !extent.sourceText.isEmpty {
+                            HStack(spacing: 6) {
+                                Text(extent.sourceText)
+                                if extent.assertion == .inferred { Text("推算时间").foregroundStyle(Palette.copper).help(extent.explanation ?? "时间由原文线索推算") }
+                            }.font(.caption).foregroundStyle(.secondary)
+                        }
                         if !item.summary.isEmpty { Text(item.summary).font(typography.font(for: .knowledge)).lineLimit(4) }
                         CompositionEvidenceList(evidence: item.evidence)
                     }.padding(.top, 10)
@@ -807,11 +794,13 @@ private struct CompositionTimeline: View {
             }.padding(18)
         }
     }
-    private func label(_ value: Double) -> String { axis == "narrative" ? "叙事 \(Int(value))" : TimelineRangeControl.yearLabel(Int(value)) }
+    private func label(_ value: Double) -> String { TemporalAxis(axis).label(value) }
     private func update(lower nextLower: Double? = nil, upper nextUpper: Double? = nil, cursor nextCursor: Double? = nil) {
-        let lo = min(upper, max(bounds.lowerBound, nextLower ?? lower))
-        let hi = max(lo, min(bounds.upperBound, nextUpper ?? upper))
-        clock = CompositionClock(axis: axis, lower: lo, upper: hi, cursor: min(hi, max(lo, nextCursor ?? cursor)), mapMode: clock.mapMode)
+        let temporal = TemporalAxis(axis), extents = items.compactMap(\.extent)
+        let lo = min(upper, max(bounds.lowerBound, nextLower.map { temporal.snapped($0, among: extents) } ?? lower))
+        let hi = max(lo, min(bounds.upperBound, nextUpper.map { temporal.snapped($0, among: extents) } ?? upper))
+        let position = nextCursor.map { temporal.snapped($0, among: extents) } ?? cursor
+        clock = CompositionClock(axis: axis, lower: lo, upper: hi, cursor: min(hi, max(lo, position)), mapMode: clock.mapMode)
     }
 }
 

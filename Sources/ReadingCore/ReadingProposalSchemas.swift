@@ -86,8 +86,8 @@ enum ReadingProposalSchemas {
         var order = integer; order["minimum"] = 0; order["maximum"] = 1_000_000_000
         var result = object(["sourceText": source, "calendar": text(80), "start": date, "end": date, "precision": ["type": "string", "enum": ["unknown", "year", "month", "day", "narrative"]],
             "uncertainty": ["type": "string", "enum": ["exact", "approximate", "disputed", "unknown"]], "kind": ["type": "string", "enum": ["point", "interval", "uncertainRange"]],
-            "narrativeStart": order, "narrativeEnd": order], required: ["sourceText", "precision", "uncertainty", "kind"])
-        result["description"] = "narrative只表示有原文依据的叙事先后，不填历法日期；point的两端须相同，不同两端用interval。unknown不填数字边界且uncertainty=unknown。没有可靠时间依据可省略extent。"
+            "narrativeStart": order, "narrativeEnd": order, "assertion": attribution["assertion"]!, "explanation": text()], required: ["sourceText", "precision", "uncertainty", "kind", "assertion", "explanation"])
+        result["description"] = "narrative只表示有原文依据的叙事先后，不填历法日期；point的两端须相同，不同两端用interval。unknown不填数字边界且uncertainty=unknown。没有可靠时间依据可省略extent。extent.assertion单独标时间依据：数字日期是推算时用inferred并在extent.explanation说明推算链；事件本身可以仍是explicit。"
         return result
     }
     static var attribution: [String: Any] { ["sourceAnchorIDs": nonemptyArray(id), "assertion": ["type": "string", "enum": ["explicit", "inferred", "unknown"]], "explanation": text()] }
@@ -108,7 +108,10 @@ enum ReadingProposalSchemas {
         return result
     }
     static var relationMetadata: [String: Any] {
-        var fields = attribution; fields.merge(["id": id, "relationID": id, "validity": extent]) { _, next in next }; return object(fields)
+        var spatial = object(["kind": text(80), "actorIDs": array(id), "viaPlaceIDs": array(id), "eventID": id], required: ["kind", "actorIDs", "viaPlaceIDs"])
+        spatial["description"] = "可选地图行动：关系fromID→toID是已有地点，途经点按顺序；参与者、事件复用共享ID。kind自由描述进攻、撤退、调兵等；线是方向示意，不冒充实测道路。推演路线用关系元数据assertion=inferred并说明；坐标由地点提供，locationNote注明现代参考或约略位置。"
+        var fields = attribution; fields.merge(["id": id, "relationID": id, "validity": extent, "spatial": spatial]) { _, next in next }
+        return object(fields, required: ["id", "relationID", "validity", "sourceAnchorIDs", "assertion", "explanation"])
     }
     static var provenance: [String: Any] { object(["label": text(), "url": text(), "workTitle": text(), "locator": text()], required: ["label"]) }
     static var knowledge: [String: Any] {
@@ -162,7 +165,10 @@ extension ReadingQuerySession {
         let admitted = (try TemporalKnowledgeRuntime.objectIDs(in: scoped, boundary: KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs)))).union(snapshot.documentIDs)
         let newObjects = Set((batch.knowledge?.newEntityIDs ?? []) + (batch.knowledge?.newEventIDs ?? []) + (batch.documents?.create ?? []).map(\.clientID))
         let targets = admitted.union(newObjects)
+        let known = Set(project.entities.map(\.id) + project.events.map(\.id) + project.documents.map(\.id))
         func requireTargets(_ ids: [String]) throws {
+            let undeclared = Set(ids).subtracting(targets).subtracting(known).sorted()
+            guard undeclared.isEmpty else { throw invalid("以下ID既不是已有对象，也未在本批声明为新增：" + undeclared.prefix(8).joined(separator: "、") + "。新增实体须列newEntityIDs，新增事件须列newEventIDs，并提供对应记录；不要切换原文范围。") }
             guard ids.allSatisfy(targets.contains) else { throw invalid("变更引用了冻结范围之外的已有对象；请先切换范围。") }
         }
         if let knowledge = batch.knowledge {
@@ -172,6 +178,7 @@ extension ReadingQuerySession {
             try requireTargets((knowledge.presences ?? []).flatMap { [$0.entityID] + [$0.placeID, $0.eventID].compactMap { $0 } })
             try requireTargets((knowledge.participations ?? []).flatMap { [$0.entityID, $0.eventID] })
             try requireTargets((knowledge.eventMetadata ?? []).flatMap { [$0.eventID] + [$0.parentEventID].compactMap { $0 } })
+            try requireTargets((knowledge.relationMetadata ?? []).flatMap { $0.spatial?.referenceIDs ?? [] })
             let relations = Set(scoped.relations.filter { admitted.contains($0.fromID) && admitted.contains($0.toID) }.map(\.id)).union(knowledge.newRelationIDs ?? [])
             guard (knowledge.relations ?? []).allSatisfy({ relations.contains($0.id) }),
                   (knowledge.relationMetadata ?? []).allSatisfy({ relations.contains($0.relationID) }) else { throw invalid("变更引用了范围外的关系。") }

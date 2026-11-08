@@ -371,6 +371,7 @@ public struct ReadingAnswerDiagnostics: Sendable {
     public var toolCalls: Int
     public var sourceReadIDs: [String]
     public var documentReadIDs: [String]
+    public var awaitingReview: Bool = false
 }
 
 public struct ReadingAnswerResult: Sendable {

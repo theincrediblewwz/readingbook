@@ -12,13 +12,8 @@ import ReadingCore
         guard let boundary = try? KnowledgeReadBoundary.throughSourceUnit(cursor.id, in: book) else { return .all }
         return boundary
     }
-    var temporalPoint: TemporalQueryPoint? {
-        if temporalAxis == "narrative" { return .narrative(Int(timeCursor)) }
-        if temporalAxis.hasPrefix("calendar:") {
-            return .date(TemporalDate(year: Int(timeCursor)), calendar: String(temporalAxis.dropFirst(9)))
-        }
-        return nil // Legacy year labels have no verified calendar.
-    }
+    var temporalPoint: TemporalQueryPoint? { TemporalAxis(temporalAxis).point(timeCursor) }
+    var availableTemporalAxes: [String] { TemporalAxis.available(availableTemporalExtents) }
     var temporalCalendars: [String] {
         Array(Set(availableTemporalExtents.compactMap(\.calendar))).sorted()
     }
@@ -49,7 +44,7 @@ import ReadingCore
             at: selectedTemporalEntityID == nil ? nil : temporalPoint, boundary: temporalBoundary)) ?? []
     }
     var temporalValueLabel: String {
-        temporalAxis == "narrative" ? "叙事位置 \(Int(timeCursor))" : TimelineRangeControl.yearLabel(Int(timeCursor))
+        temporalAxis == "legacy" ? TimelineRangeControl.yearLabel(Int(timeCursor)) : TemporalAxis(temporalAxis).label(timeCursor)
     }
 }
 

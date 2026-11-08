@@ -302,6 +302,7 @@ public enum ManualTrashRuntime {
                 let value = try decoder.decode(EventTemporalMetadata.self, from: patch.before); add(.events, value.eventID); add(.events, value.parentEventID); anchors(value.sourceAnchorIDs)
             case .relationMetadata:
                 let value = try decoder.decode(RelationTemporalMetadata.self, from: patch.before); add(.relations, value.relationID); anchors(value.sourceAnchorIDs)
+                for id in (value.spatial?.actorIDs ?? []) + (value.spatial?.viaPlaceIDs ?? []) { add(.entities, id) }; add(.events, value.spatial?.eventID)
             case .mentions:
                 let value = try decoder.decode(SourceMention.self, from: patch.before); target(value.targetID); anchors([value.anchorID])
             default: break

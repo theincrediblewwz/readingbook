@@ -173,9 +173,23 @@ public enum ControlledKnowledgeRuntime {
             }
             try enrichEventMetadata(metadata, in: &temporal.eventMetadata)
         }
+        let spatialAdmitted = (changes.relationMetadata ?? []).contains { $0.spatial != nil }
+            ? try TemporalKnowledgeRuntime.objectIDs(in: project, boundary: KnowledgeReadBoundary(allowedUnitIDs: allowedUnitIDs)) : []
         for var metadata in changes.relationMetadata ?? [] {
             metadata.id = identity.resolve(metadata.id); metadata.relationID = identity.resolve(metadata.relationID)
-            metadata.sourceAnchorIDs = metadata.sourceAnchorIDs.map(identity.resolve); try appendImmutable(metadata, to: &temporal.relationMetadata)
+            metadata.sourceAnchorIDs = metadata.sourceAnchorIDs.map(identity.resolve)
+            if var spatial = metadata.spatial {
+                spatial.actorIDs = spatial.actorIDs.map(identity.resolve); spatial.viaPlaceIDs = spatial.viaPlaceIDs.map(identity.resolve)
+                spatial.eventID = spatial.eventID.map(identity.resolve)
+                guard spatial.referenceIDs.allSatisfy(spatialAdmitted.contains),
+                      let relation = project.relations.first(where: { $0.id == metadata.relationID }),
+                      spatialAdmitted.contains(relation.fromID), spatialAdmitted.contains(relation.toID) else {
+                    throw ControlledChangeError.denied("地图行动引用了获准原文之外的参与者、地点或事件。")
+                }
+                metadata.spatial = spatial
+            }
+            metadata.validity.sourceText = ReadingTemporalSourceText.canonical(metadata.validity.sourceText, anchors: metadata.sourceAnchorIDs.compactMap { allAnchors[$0] })
+            try enrichRelationMetadata(metadata, in: &temporal.relationMetadata)
         }
         for ids in (changes.presences ?? []).map(\.sourceAnchorIDs) + (changes.participations ?? []).map(\.sourceAnchorIDs) + (changes.eventMetadata ?? []).map(\.sourceAnchorIDs) + (changes.relationMetadata ?? []).map(\.sourceAnchorIDs) {
             guard ids.allSatisfy({ id in allAnchors[identity.resolve(id)].map { allowedUnitIDs.contains($0.unitID) } ?? false }) else { throw ControlledChangeError.denied("新时态记录引用了获准原文之外的锚点。") }
@@ -235,6 +249,18 @@ public enum ControlledKnowledgeRuntime {
             throw ControlledChangeError.conflict("事件\(value.eventID)的assertion与已有依据分类冲突；保留原值。")
         }
         if old.assertion == .unknown { old.assertion = value.assertion }
+        old.sourceAnchorIDs = union(old.sourceAnchorIDs, value.sourceAnchorIDs)
+        old.explanation = merge(old.explanation, value.explanation)
+        values[index] = old
+    }
+    private static func enrichRelationMetadata(_ value: RelationTemporalMetadata, in values: inout [RelationTemporalMetadata]) throws {
+        guard let index = values.firstIndex(where: { $0.id == value.id }) else { values.append(value); return }
+        var old = values[index]
+        guard old.relationID == value.relationID, old.validity == value.validity, old.assertion == value.assertion,
+              old.spatial == nil || value.spatial == nil || old.spatial == value.spatial else {
+            throw ControlledChangeError.conflict("同一行动的路线、时间或依据与已有资料冲突；保留原值，请先核对。")
+        }
+        old.spatial = old.spatial ?? value.spatial
         old.sourceAnchorIDs = union(old.sourceAnchorIDs, value.sourceAnchorIDs)
         old.explanation = merge(old.explanation, value.explanation)
         values[index] = old

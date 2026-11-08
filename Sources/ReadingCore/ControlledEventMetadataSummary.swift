@@ -21,6 +21,10 @@ enum ControlledEventMetadataSummary {
         if old?.extent != new?.extent {
             lines.append("时间：\(time(old?.extent)) → \(time(new?.extent))")
             if let text = new?.extent?.sourceText, !text.isEmpty { lines.append("时间依据原句：" + text) }
+            if let extent = new?.extent {
+                lines.append("时间依据标记：" + assertion(extent.assertion ?? new?.assertion))
+                if let explanation = extent.explanation, !explanation.isEmpty { lines.append("时间推算说明：" + explanation) }
+            }
         }
         if old?.typeID != new?.typeID { lines.append("类型：\(typeName(old?.typeID, in: before)) → \(typeName(new?.typeID, in: after))") }
         if old?.kind != new?.kind { lines.append("分类：\(classification(old?.kind)) → \(classification(new?.kind))") }
@@ -39,7 +43,7 @@ enum ControlledEventMetadataSummary {
         }
         return lines.joined(separator: "\n")
     }
-    private static func time(_ value: TemporalExtent?) -> String {
+    static func time(_ value: TemporalExtent?) -> String {
         guard let value else { return "未记录" }
         let certainty: String
         switch value.uncertainty { case .exact: certainty = "明确"; case .approximate: certainty = "约"; case .disputed: certainty = "有争议"; case .unknown: certainty = "确定性未注明" }

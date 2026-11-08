@@ -174,6 +174,11 @@ enum ControlledChangeSummary {
             case .bookSchemes:
                 guard let pending = after.bookSchemes?.pending else { return "更新书本方案状态：\(body(patch.before)) → \(body(patch.after))" }
                 return "暂存书本方案，尚未采纳或执行。类型/读书法/组件/计划/书籍分类的完整声明：\(body(try? ControlledChangeCoding.data(pending.before))) → \(body(try? ControlledChangeCoding.data(pending.proposed)))"
+            case .entities:
+                return try ControlledKnowledgeSummary.entity(patch, from: before, to: after)
+            case .relationMetadata:
+                if let summary = try ControlledKnowledgeSummary.spatial(patch, from: before, to: after) { return summary }
+                return "\(action) 关系时间：\(body(patch.before)) → \(body(patch.after))"
             case .eventMetadata:
                 return try ControlledEventMetadataSummary.describe(patch, from: before, to: after)
             default:

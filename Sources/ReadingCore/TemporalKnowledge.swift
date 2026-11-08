@@ -42,10 +42,14 @@ public struct TemporalExtent: Codable, Hashable, Sendable {
     public var kind: TemporalExtentKind
     public var narrativeStart: Int?
     public var narrativeEnd: Int?
-    public init(sourceText: String = "", calendar: String? = nil, start: TemporalDate? = nil, end: TemporalDate? = nil, precision: TemporalPrecision = .unknown, uncertainty: TemporalUncertainty = .unknown, kind: TemporalExtentKind = .point, narrativeStart: Int? = nil, narrativeEnd: Int? = nil) {
+    /// Evidence for the time itself; nil preserves older records without migration.
+    public var assertion: KnowledgeAssertion?
+    public var explanation: String?
+    public init(sourceText: String = "", calendar: String? = nil, start: TemporalDate? = nil, end: TemporalDate? = nil, precision: TemporalPrecision = .unknown, uncertainty: TemporalUncertainty = .unknown, kind: TemporalExtentKind = .point, narrativeStart: Int? = nil, narrativeEnd: Int? = nil, assertion: KnowledgeAssertion? = nil, explanation: String? = nil) {
         self.sourceText = sourceText; self.calendar = calendar; self.start = start; self.end = end
         self.precision = precision; self.uncertainty = uncertainty; self.kind = kind
         self.narrativeStart = narrativeStart; self.narrativeEnd = narrativeEnd
+        self.assertion = assertion; self.explanation = explanation
     }
 }
 
@@ -119,8 +123,10 @@ public struct RelationTemporalMetadata: Codable, Identifiable, Hashable, Sendabl
     public var sourceAnchorIDs: [String]
     public var assertion: KnowledgeAssertion
     public var explanation: String
-    public init(id: String, relationID: String, validity: TemporalExtent, sourceAnchorIDs: [String], assertion: KnowledgeAssertion = .unknown, explanation: String = "") {
+    public var spatial: SpatialRelation?
+    public init(id: String, relationID: String, validity: TemporalExtent, sourceAnchorIDs: [String], assertion: KnowledgeAssertion = .unknown, explanation: String = "", spatial: SpatialRelation? = nil) {
         self.id = id; self.relationID = relationID; self.validity = validity; self.sourceAnchorIDs = sourceAnchorIDs; self.assertion = assertion; self.explanation = explanation
+        self.spatial = spatial
     }
 }
 
@@ -326,7 +332,9 @@ public enum TemporalKnowledgeRuntime {
             }
             return visible.compactMap { metadata in
                 let state = assertedMatch(metadata.validity, assertion: metadata.assertion, at: point)
-                return state == .outside ? nil : TemporalRelationSnapshot(relation: relation, metadata: metadata, match: state)
+                var admitted = metadata
+                if !(metadata.spatial?.referenceIDs.allSatisfy(visibleIDs.contains) ?? true) { admitted.spatial = nil }
+                return state == .outside ? nil : TemporalRelationSnapshot(relation: relation, metadata: admitted, match: state)
             }
         }
     }
@@ -341,11 +349,11 @@ public enum TemporalKnowledgeRuntime {
         let presences = (project.temporalKnowledge?.presences ?? []).filter {
             $0.entityID == entityID && ($0.placeID.map(visibleIDs.contains) ?? true) && ($0.eventID.map(visibleIDs.contains) ?? true) && admits($0.sourceAnchorIDs, anchors: anchors, boundary: boundary)
         }
-        let exact = presences.filter { match($0.extent, at: point) == .matches && $0.assertion == .explicit }
+        let exact = presences.filter { assertedMatch($0.extent, assertion: $0.assertion, at: point) == .matches && $0.assertion == .explicit }
         let exactIDs = Set(exact.map(\.id))
         let uncertain = presences.filter { match($0.extent, at: point) != .outside && !exactIDs.contains($0.id) }
         let participants = (project.temporalKnowledge?.participations ?? []).filter { $0.entityID == entityID && visibleIDs.contains($0.eventID) && admits($0.sourceAnchorIDs, anchors: anchors, boundary: boundary) }
-        let exactParticipants = participants.filter { $0.extent.map { match($0, at: point) } == .matches && $0.assertion == .explicit }
+        let exactParticipants = participants.filter { value in value.extent.map { assertedMatch($0, assertion: value.assertion, at: point) } == .matches && value.assertion == .explicit }
         let exactParticipantIDs = Set(exactParticipants.map(\.id))
         let uncertainParticipants = participants.filter { $0.extent.map { match($0, at: point) } != .outside && !exactParticipantIDs.contains($0.id) }
         return EntityTimeSnapshot(object: entity, presences: exact, uncertainPresences: uncertain,
@@ -448,8 +456,8 @@ public enum TemporalKnowledgeRuntime {
     private static func assertedMatch(_ extent: TemporalExtent, assertion: KnowledgeAssertion?, at point: TemporalQueryPoint?) -> TemporalMatch {
         let result = match(extent, at: point)
         guard result != .outside else { return result }
-        if assertion == .unknown { return .unknown }
-        return assertion == .inferred && result == .matches ? .possible : result
+        if extent.assertion == .unknown || assertion == .unknown { return .unknown }
+        return (extent.assertion == .inferred || assertion == .inferred) && result == .matches ? .possible : result
     }
     private static func anchorIndex(in project: BookProject) -> [String: SourceAnchor] {
         Dictionary(((project.readingExperience?.anchors ?? []) + (project.temporalKnowledge?.anchors ?? [])).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -554,15 +562,32 @@ public extension TemporalKnowledgeRuntime {
             }
             completed.formUnion(chain)
         }
+        let spatialRelations = state.relationMetadata.contains { $0.spatial != nil }
+            ? Dictionary(project.relations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) : [:]
         for relation in state.relationMetadata {
             guard relations.contains(relation.relationID) else { throw invalid("关系有效期引用了不存在的关系。") }
             try validateExtent(relation.validity)
+            if let spatial = relation.spatial {
+                try text(spatial.kind, maximum: 80)
+                try ids(spatial.actorIDs, maximum: 32); try ids(spatial.viaPlaceIDs, maximum: 16)
+                guard spatial.actorIDs.allSatisfy({ entities[$0] != nil }), spatial.eventID.map(events.contains) ?? true,
+                      let shared = spatialRelations[relation.relationID], shared.fromID != shared.toID else {
+                    throw invalid("地图行动须引用已有参与者、事件和不同的起止地点。")
+                }
+                let locations = Set(state.profile?.locationTypeIDs ?? []).union(["place", "location"])
+                let places = [shared.fromID] + spatial.viaPlaceIDs + [shared.toID]
+                guard places.count == Set(places).count, places.allSatisfy({ id in
+                    guard let place = entities[id] else { return false }; return locations.contains(place.typeID)
+                }) else { throw invalid("地图行动的起点、途经点和终点须为不同的地点实体。") }
+            }
             try provenance(relation.sourceAnchorIDs, relation.assertion, relation.explanation, extent: relation.validity)
         }
     }
 
     static func validateExtent(_ extent: TemporalExtent) throws {
         try text(extent.sourceText, maximum: 4000, allowEmpty: true)
+        if let explanation = extent.explanation { try text(explanation, maximum: 4000, allowEmpty: extent.assertion != .inferred) }
+        if extent.assertion == .inferred { try text(extent.explanation ?? "", maximum: 4000) }
         if let calendar = extent.calendar { try text(calendar, maximum: 80) }
         if extent.precision != .unknown { try text(extent.sourceText, maximum: 4000) }
         for date in [extent.start, extent.end].compactMap({ $0 }) { try validateDate(date, calendar: extent.calendar) }
@@ -687,8 +712,8 @@ extension TemporalKnowledgeRuntime {
     private static func assertedMatch(_ extent: TemporalExtent, assertion: KnowledgeAssertion?, within window: TemporalQueryWindow) -> TemporalMatch {
         let result = windowMatch(extent, within: window)
         guard result != .outside else { return result }
-        if assertion == .unknown { return .unknown }
-        return assertion == .inferred && result == .matches ? .possible : result
+        if extent.assertion == .unknown || assertion == .unknown { return .unknown }
+        return (extent.assertion == .inferred || assertion == .inferred) && result == .matches ? .possible : result
     }
 
     /// A wide window must not join an event at one time to a participant at a
@@ -838,7 +863,9 @@ extension TemporalKnowledgeRuntime {
                 guard admits(value.sourceAnchorIDs, anchors: index.anchors, boundary: boundary) else { continue }
                 visible = true
                 let state = assertedMatch(value.validity, assertion: value.assertion, within: window)
-                if state != .outside { result.append(TemporalRelationSnapshot(relation: relation, metadata: value, match: state)) }
+                var admitted = value
+                if !(value.spatial?.referenceIDs.allSatisfy(index.visibleIDs.contains) ?? true) { admitted.spatial = nil }
+                if state != .outside { result.append(TemporalRelationSnapshot(relation: relation, metadata: admitted, match: state)) }
             }
             if !visible, all.isEmpty { result.append(TemporalRelationSnapshot(relation: relation, metadata: nil, match: .unknown)) }
         }

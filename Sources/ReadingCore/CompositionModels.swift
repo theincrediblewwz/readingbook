@@ -204,6 +204,7 @@ public struct CompositionMapPoint: Identifiable, Hashable, Sendable {
 public struct CompositionProjection: Sendable {
     public var items: [CompositionItem]; public var edges: [CompositionEdge]; public var mapPoints: [CompositionMapPoint]
     public var total: Int; public var partial: Bool; public var diagnostics: [String]
+    public var mapRoutes: [SpatialRoute] = []
 }
 
 private struct CompositionKey: CodingKey {

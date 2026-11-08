@@ -228,8 +228,12 @@ public enum CompositionRuntime {
                 case .name: return lhs.title == rhs.title ? lhs.id < rhs.id : lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
                 case .sourceOrder: return (lhs.sourceOrder ?? Int.max, lhs.id) < (rhs.sourceOrder ?? Int.max, rhs.id)
                 case .time:
-                    let a = lhs.extent?.narrativeStart ?? lhs.extent?.start?.year ?? Int.max, b = rhs.extent?.narrativeStart ?? rhs.extent?.start?.year ?? Int.max
-                    return a == b ? lhs.id < rhs.id : a < b
+                    func key(_ item: CompositionItem) -> (String, Double, String) {
+                        guard let extent = item.extent else { return ("~", .greatestFiniteMagnitude, item.id) }
+                        let axis = extent.calendar.map { "calendar-day:" + $0 } ?? "narrative"
+                        return (axis, TemporalAxis(axis).value(extent) ?? .greatestFiniteMagnitude, item.id)
+                    }
+                    return key(lhs) < key(rhs)
                 }
             }
             let total = items.count
@@ -274,8 +278,11 @@ public enum CompositionRuntime {
                 edges.contains(where: { $0.temporalMatch == .unknown || $0.temporalMatch == .possible })) {
                 diagnostics.append("标为时间待考的记录仍保留供核对；时间未明、推测或历法不同不代表已确认落在这个区间。")
             }
+            let routes = prepared.mapSourceIDs.contains(source.id) ? try SpatialKnowledgeRuntime.routes(in: base.project,
+                at: point, within: window, relevantObjectIDs: itemIDs) : []
+            if routes.count == 128 { diagnostics.append("地图先显示128条行动方向；可缩小时间或对象范围。") }
             result[source.id] = CompositionProjection(items: items, edges: edges, mapPoints: mapPoints, total: total,
-                partial: total > source.limit || edgeTruncated || pointTruncated || expanded?.partial == true || hiddenTraversalEdges, diagnostics: diagnostics)
+                partial: total > source.limit || edgeTruncated || pointTruncated || expanded?.partial == true || hiddenTraversalEdges || routes.count == 128, diagnostics: diagnostics, mapRoutes: routes)
         }
         return result
     }

@@ -658,7 +658,10 @@ import ReadingCore
                 queryReferencedAnswerIDs.subtract(referencedAnswerIDs)
                 queryDisclosure = ([answer.diagnostics.disclosure] + answer.diagnostics.notices).joined(separator: "\n")
                 if memoryEnabled { await saveQueryMemory(answer.memory, for: snapshot, preferences: preferences, root: requestRoot) }
-                if !isSmartReadingRunning { activity = "回答已生成，可以选一段记入笔记。" }
+                if answer.diagnostics.awaitingReview {
+                    queryRetryQuestion = question
+                    activity = "修改已准备，审阅后可以继续整理。"
+                } else if !isSmartReadingRunning { activity = "回答已生成，可以选一段记入笔记。" }
             } catch {
                 let cancelled = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
                 finishAIProgress(aiRunID, error: cancelled ? CancellationError() : error)

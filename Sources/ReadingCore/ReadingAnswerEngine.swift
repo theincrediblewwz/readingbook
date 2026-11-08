@@ -148,6 +148,7 @@ enum ReadingAnswerEngine {
         var messages = prefix + fitted + [questionMessage]
         if fitted.count < remainingHistory.count { notices.append("较早问答已按预算折叠；完整记录仍可按需检索重读。") }
         var finalText: String?
+        var awaitingReview = false
         var repairedToolFormat = false
         var toolFailures: [String] = []
         // The configured per-task budget is the loop limit. A hidden 6/12
@@ -236,6 +237,9 @@ enum ReadingAnswerEngine {
                     result = try await session.execute(name: call.function.name, arguments: arguments, maximumBytes: max(0, room / 2))
                     let receipt = result.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
                     let status = receipt?["status"] as? String
+                    if ReadingQueryToolCatalog.proposalNames.contains(call.function.name), status == "needs_confirmation", receipt?["applied"] as? Bool == false {
+                        awaitingReview = true
+                    }
                     if receipt?["ok"] as? Bool == false || ["needs_confirmation", "busy", "unsupported", "failed"].contains(status ?? "") { session.lastComponentReceipt = nil }
                     progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count,
                         toolSucceeded: receipt?["ok"] as? Bool != false && !["needs_confirmation", "busy", "unsupported", "failed"].contains(status ?? ""), toolStatus: status,
@@ -254,6 +258,11 @@ enum ReadingAnswerEngine {
                     }
                 }
                 messages.append(["role": "tool", "tool_call_id": call.id, "content": result])
+                if awaitingReview { break }
+            }
+            if awaitingReview {
+                finalText = "修改已经准备好，等待你审阅后应用。其余整理尚未继续；原书和已有内容保留。"
+                break
             }
             // Pure presentation needs no second model request to guess what the
             // host has already opened. Never shortcut a writing task, mixed tool
@@ -317,7 +326,7 @@ enum ReadingAnswerEngine {
         } else { answer = finalText }
         return ReadingAnswerResult(message: ChatMessage(role: "assistant", content: answer, evidence: evidence), memory: memory,
             scope: snapshot, diagnostics: ReadingAnswerDiagnostics(disclosure: disclosure, notices: notices, toolCalls: session.toolCalls,
-                sourceReadIDs: sourceIDs, documentReadIDs: documentIDs))
+                sourceReadIDs: sourceIDs, documentReadIDs: documentIDs, awaitingReview: awaitingReview))
     }
 
     static func citations(_ content: String, session: ReadingQuerySession) throws -> [Evidence] {
