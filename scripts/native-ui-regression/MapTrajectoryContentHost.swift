@@ -13,13 +13,19 @@ import QuartzCore
 }
 private struct TrajectoryFixtureView: View {
     @ObservedObject var input: TrajectoryInput
+    private var points: [ReadingMapPoint] {
+        (0..<input.count).map { index in
+            let latitude = 22 + Double(index % 10) * 0.1
+            let longitude = 82 + Double(index / 10) * 0.1
+            return ReadingMapPoint(id: "p\(index)", targetID: "e\(index)", title: "地点\(index)", subtitle: "合成出处",
+                coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude))
+        }
+    }
     var body: some View {
-        ReadingMapRenderer(points: (0..<input.count).map {
-            ReadingMapPoint(id: "p\($0)", targetID: "e\($0)", title: "地点\($0)", subtitle: "合成出处",
-                coordinate: .init(latitude: 22 + Double($0 % 10) * 0.1, longitude: 82 + Double($0 / 10) * 0.1))
-        }, sequence: input.sequence, selectedID: nil,
+        ReadingMapRenderer(points: points, routes: [], sequence: input.sequence, selectedID: nil,
         scope: ReadingMapScope(root: URL(fileURLWithPath: CommandLine.arguments[1]), key: "trajectory"),
-        cameraValue: input.camera, camera: $input.camera, selection: $input.selection).equatable()
+        cameraValue: input.camera, camera: $input.camera, selection: $input.selection,
+        inspectedRoute: .constant(nil)).equatable()
             .environment(\.readingReduceMotion, true)
     }
 }
