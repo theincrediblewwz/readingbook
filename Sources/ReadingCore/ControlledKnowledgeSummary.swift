@@ -2,6 +2,46 @@ import Foundation
 
 /// Show changed knowledge fields, not pages of escaped provenance JSON.
 enum ControlledKnowledgeSummary {
+    private static func name(_ id: String, in project: BookProject) -> String {
+        project.entities.first { $0.id == id }?.name ?? project.events.first { $0.id == id }?.name ?? "相关对象"
+    }
+    private static func sources(_ evidence: [Evidence], in project: BookProject) -> String {
+        let units = Dictionary(project.units.map { ($0.id, $0.locator) }, uniquingKeysWith: { first, _ in first })
+        let locations = Set(evidence.compactMap { units[$0.unitID] }).sorted()
+        return "原文依据：\(evidence.count)处" + (locations.isEmpty ? "" : "（" + locations.joined(separator: "、") + "）")
+    }
+    static func relation(_ patch: ControlledRecordPatch, from before: BookProject, to after: BookProject) throws -> String {
+        let decoder = JSONDecoder(), old = try patch.before.map { try decoder.decode(KnowledgeRelation.self, from: $0) }, new = try patch.after.map { try decoder.decode(KnowledgeRelation.self, from: $0) }
+        func detail(_ relation: KnowledgeRelation, in project: BookProject) -> String {
+            name(relation.fromID, in: project) + " —" + relation.label + "→ " + name(relation.toID, in: project)
+        }
+        guard let value = new ?? old else { throw ReadingError.invalid("关系审阅缺少内容。") }
+        var lines = [(new == nil ? "移除关系：" : "关系：") + detail(value, in: new == nil ? before : after)]
+        if let old, let new, old.fromID != new.fromID || old.toID != new.toID || old.label != new.label { lines.append("原关系：" + detail(old, in: before)) }
+        if let new { lines.append(sources(new.evidence, in: after)) }
+        return lines.joined(separator: "\n")
+    }
+    static func anchor(_ patch: ControlledRecordPatch, from before: BookProject, to after: BookProject) throws -> String {
+        guard let data = patch.after ?? patch.before else { throw ReadingError.invalid("原文依据审阅缺少内容。") }
+        let value = try JSONDecoder().decode(SourceAnchor.self, from: data), project = patch.after == nil ? before : after
+        let location = project.units.first { $0.id == value.unitID }?.locator ?? "原文位置"
+        let preview = value.quote.replacingOccurrences(of: "\n", with: " ")
+        return (patch.after == nil ? "移除原文依据：" : "原文依据：") + location + "\n" + String(preview.prefix(180)) + (preview.count > 180 ? "…（全文保留在原书中）" : "")
+    }
+    static func event(_ patch: ControlledRecordPatch, from before: BookProject, to after: BookProject) throws -> String {
+        let decoder = JSONDecoder(), old = try patch.before.map { try decoder.decode(KnowledgeEvent.self, from: $0) }, new = try patch.after.map { try decoder.decode(KnowledgeEvent.self, from: $0) }
+        var lines = ["事件：" + (new?.name ?? old?.name ?? "事件")]
+        if let change = textChange("名称", before: old?.name, after: new?.name) { lines.append(change) }
+        if let change = textChange("内容", before: old?.summary, after: new?.summary) { lines.append(change) }
+        if let change = textChange("时间说明", before: old?.dateText, after: new?.dateText) { lines.append(change) }
+        if old?.startYear != new?.startYear || old?.endYear != new?.endYear {
+            lines.append("年份：\(old?.startYear.map(String.init) ?? "未记录")—\(old?.endYear.map(String.init) ?? "未记录") → \(new?.startYear.map(String.init) ?? "未记录")—\(new?.endYear.map(String.init) ?? "未记录")")
+        }
+        if old?.placeIDs != new?.placeIDs, let new { lines.append("地点：" + new.placeIDs.map { name($0, in: after) }.joined(separator: "、")) }
+        if old?.participantIDs != new?.participantIDs, let new { lines.append("参与者：" + new.participantIDs.map { name($0, in: after) }.joined(separator: "、")) }
+        if let new { lines.append(sources(new.evidence, in: after)) }
+        return lines.joined(separator: "\n\n")
+    }
     static func entity(_ patch: ControlledRecordPatch, from before: BookProject, to after: BookProject) throws -> String {
         let decoder = JSONDecoder(), old = try patch.before.map { try decoder.decode(KnowledgeEntity.self, from: $0) }, new = try patch.after.map { try decoder.decode(KnowledgeEntity.self, from: $0) }
         var lines = ["资料：" + (new?.name ?? old?.name ?? "实体")]

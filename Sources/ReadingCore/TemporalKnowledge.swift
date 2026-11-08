@@ -518,7 +518,10 @@ public extension TemporalKnowledgeRuntime {
             }
             try text(explanation, maximum: 4000, allowEmpty: assertion == .explicit)
             if let label = extent?.sourceText, !label.isEmpty {
-                guard ids.contains(where: { anchors[$0]?.quote.range(of: label, options: .literal) != nil }) else { throw invalid("原文时间表述必须确实出现在所引用的原文锚点中。") }
+                guard ids.contains(where: { anchors[$0]?.quote.range(of: label, options: .literal) != nil }) else {
+                    let sources = Set(ids.compactMap { anchors[$0]?.unitID }).sorted().joined(separator: "、")
+                    throw invalid("原文时间表述必须确实出现在所引用的原文锚点中。未匹配：『\(label.prefix(160))』；当前原文单元：\(sources)。请核对sourceAnchorIDs，或使用这些锚点里的逐字时间短语；不要改写原句。")
+                }
             }
         }
         for presence in state.presences {

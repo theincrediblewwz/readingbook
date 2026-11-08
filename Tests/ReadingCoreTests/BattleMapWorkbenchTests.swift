@@ -139,6 +139,10 @@ final class BattleMapWorkbenchTests: XCTestCase {
     }
     func testInvalidSpatialReferencesAndLoopsFailValidation() throws {
         let book = try fixture()
+        var invalidTime = book; invalidTime.temporalKnowledge!.eventMetadata[0].extent!.sourceText = "找不到的时间"
+        XCTAssertThrowsError(try TemporalKnowledgeRuntime.validateStoredState(in: invalidTime)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("找不到的时间")); XCTAssertTrue(error.localizedDescription.contains("u1"))
+        }
         for spatial in [SpatialRelation(kind: "进攻", actorIDs: ["missing"]), .init(kind: "进攻", viaPlaceIDs: ["gai"]),
                         .init(kind: "进攻", viaPlaceIDs: ["south"]), .init(kind: "进攻", eventID: "missing"), .init(kind: "")] {
             var invalid = book; invalid.temporalKnowledge!.relationMetadata[0].spatial = spatial
@@ -155,6 +159,8 @@ final class BattleMapWorkbenchTests: XCTestCase {
             relationMetadata: [.init(id: "new-time", relationID: "new-action", validity: day(20), sourceAnchorIDs: [book.temporalKnowledge!.anchors[0].id], assertion: .explicit,
                                      spatial: .init(kind: "佯降与火攻", actorIDs: ["new-army"], eventID: "fire"))])
         let prepared = try prepare(changes, in: book)
+        let review = prepared.proposal.summary.joined(separator: "\n")
+        XCTAssertTrue(review.contains("南岸")); XCTAssertFalse(review.contains("\"unitID\"")); XCTAssertFalse(review.contains("\"fromID\""))
         let route = try XCTUnwrap(SpatialKnowledgeRuntime.routes(in: prepared.project).first)
         XCTAssertEqual(route.kind, "佯降与火攻"); XCTAssertEqual(route.actorNames, ["水军"])
         XCTAssertNotEqual(route.actorIDs, ["new-army"]); XCTAssertNotEqual(route.relationID, "new-action")
