@@ -92,15 +92,16 @@ enum ReadingProposalSchemas {
     static var relation: [String: Any] { object(["id": id, "fromID": id, "toID": id, "label": text(400), "evidence": nonemptyArray(evidence)]) }
     static var date: [String: Any] { object(["year": integer, "month": integer, "day": integer], required: ["year"]) }
     static var extent: [String: Any] {
-        var source = text(); source["description"] = "逐字取自sourceAnchorIDs所指原文的时间、章回或先后语句；不能自造‘第X回（依叙事顺序）’等标签。"
+        var source = text(); source["description"] = "逐字取自sourceAnchorIDs所指原文的时间语句；仅用source-order表示原文先后时可留空，不自造时间或章回标签。"
         var calendar = text(80); calendar["description"] = "历法名称须与start/end.year属于同一历法；年号纪年保留年号数，不换算公元。例如建安十二年用calendar=建安、year=12，不能写成建安207年。若另做历法换算，须另标推算依据，不能冒充原文明载。"
         var order = integer; order["minimum"] = 0; order["maximum"] = 1_000_000_000
         var result = object(["sourceText": source, "calendar": calendar, "start": date, "end": date, "precision": ["type": "string", "enum": ["unknown", "year", "month", "day", "narrative"]],
             "uncertainty": ["type": "string", "enum": ["exact", "approximate", "disputed", "unknown"]], "kind": ["type": "string", "enum": ["point", "interval", "uncertainRange"]],
             "narrativeStart": order, "narrativeEnd": order,
+            "sourceSpan": object(["startAnchorID": id, "endAnchorID": id], required: ["startAnchorID"]),
             "narrativeDomain": ["type": "string", "maxLength": 80, "description": "叙事序号的共同基准。优先source-order，此时narrativeStart/end使用已提供原文的order，且须对应sourceAnchorIDs。章回号、自拟阶段号不能混为原文order；确需独立刻度须分别命名，不能混排。"],
             "assertion": attribution["assertion"]!, "explanation": text()], required: ["sourceText", "precision", "uncertainty", "kind", "assertion", "explanation"])
-        result["description"] = "narrative保留原文先后与时刻原词（如将近三更、天色微明），指定narrativeDomain，不虚构日期或现代钟点。point两端相同，不同两端用interval。unknown不填数字边界且uncertainty=unknown。无可靠依据可省略extent。推算日期用extent.assertion=inferred并说明推算链，事件本身仍可explicit。"
+        result["description"] = "原文先后优先precision=narrative、sourceSpan={startAnchorID,可选endAnchorID}：两端引用本条sourceAnchorIDs，软件定位，不填手算序号或日期。时刻原词可留在sourceText，无时间词可留空。point两端相同，不同两端用interval；unknown不填数字边界且uncertainty=unknown。推算日期用extent.assertion=inferred并说明推算链，事件本身仍可explicit。"
         return result
     }
     static var attribution: [String: Any] { ["sourceAnchorIDs": nonemptyArray(id), "assertion": ["type": "string", "enum": ["explicit", "inferred", "unknown"]], "explanation": text()] }
@@ -215,6 +216,7 @@ extension ReadingQuerySession {
             + scoped.events.map { .init(id: $0.id, name: String($0.name.prefix(40)), kind: "event") }
             + project.documents.filter { snapshot.documentIDs.contains($0.id) }.map { .init(id: $0.id, name: String($0.title.prefix(40)), kind: "document") }
         try ReadingProposalReferenceError.check(references, allowed: targets, known: known, identities: identities)
+        var metadataConflicts: [[String: String]] = []
         if let metadata = batch.knowledge?.eventMetadata {
             let previous = Dictionary((scoped.temporalKnowledge?.eventMetadata ?? []).map { ($0.eventID, $0) }, uniquingKeysWith: { first, _ in first })
             var conflicts: [[String: String]] = []
@@ -227,7 +229,7 @@ extension ReadingQuerySession {
                         "reason": "这是事件本身已有的依据分类，应保持currentValue。若只是时间先后的推算，请放到extent.assertion与extent.explanation中，不能据此改写事件整体的assertion。"])
                 }
             }
-            if !conflicts.isEmpty { throw ReadingProposalMetadataError(issues: conflicts) }
+            metadataConflicts = conflicts
         }
         func requireTargets(_ ids: [String]) throws {
             let undeclared = Set(ids).subtracting(targets).subtracting(known).sorted()
@@ -315,6 +317,9 @@ extension ReadingQuerySession {
                 guard let anchor = anchors.first(where: { $0.id == id }), read(anchor.unitID, anchor.quote) else { throw invalid("提案锚点超出本次实际读取范围。") }
             }
         }
+        let temporalIssues = try temporalFormIssues(in: data)
+        if !temporalIssues.isEmpty { throw ReadingProposalTemporalError(issues: temporalIssues, metadataIssues: metadataConflicts) }
+        if !metadataConflicts.isEmpty { throw ReadingProposalMetadataError(issues: metadataConflicts) }
         for edit in batch.documents?.edits ?? [] {
             guard snapshot.documentIDs.contains(edit.documentID), documentHashes[edit.documentID] == edit.expectedHash else { throw invalid("修改已有笔记前须在本次授权范围内读取正文并使用其真实hash。") }
         }

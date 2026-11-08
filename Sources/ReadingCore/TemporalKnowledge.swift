@@ -616,7 +616,11 @@ public extension TemporalKnowledgeRuntime {
             try text(domain, maximum: 80)
             guard extent.precision == .narrative else { throw invalid("叙事基准仅用于叙事顺序，不替代日期历法。") }
         }
-        if extent.precision != .unknown { try text(extent.sourceText, maximum: 4000) }
+        // A source position is verified through its cited anchors and real
+        // unit orders; it need not pretend to be a quoted time expression.
+        if extent.precision != .unknown && !(extent.precision == .narrative && extent.narrativeDomain == "source-order") {
+            try text(extent.sourceText, maximum: 4000)
+        }
         for date in [extent.start, extent.end].compactMap({ $0 }) { try validateDate(date, calendar: extent.calendar) }
         if let start = extent.start, let end = extent.end, dateKey(start, upper: false) > dateKey(end, upper: true) { throw invalid("时间范围的结束早于开始。") }
         for order in [extent.narrativeStart, extent.narrativeEnd].compactMap({ $0 }) {

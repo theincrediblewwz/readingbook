@@ -292,7 +292,7 @@ extension ReadingQuerySession {
         if ReadingQueryToolCatalog.proposalNames.contains(name), let proposalAccess, proposalAccess.proposalTools.contains(name) {
             guard maximumBytes >= 4000 else { return try json(["ok": false, "budgetLimited": true, "message": "没有足够空间返回保存/提案回执，未调用宿主。"] ) }
             let data = try JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys])
-            let resolved = try resolveSourceReferences(in: data)
+            let resolved = try resolveTemporalSourceSpans(in: resolveSourceReferences(in: data))
             try validateProposal(name: name, data: resolved)
             let returned = try await proposalAccess.prepare(name, resolved)
             let result = try hostResult(returned); hostReceipts.append(result)

@@ -92,7 +92,7 @@ struct TemporalPersonContents: View {
                             ForEach(snapshot.uncertainPresences) { item in
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(item.action).font(typography.font(for: .knowledge))
-                                    Text(item.extent.sourceText.isEmpty ? "时间未明" : item.extent.sourceText).font(.caption).foregroundStyle(.secondary)
+                                    Text(item.extent.sourceText.isEmpty ? (item.extent.narrativeDomain == "source-order" ? "按原文先后" : "时间未明") : item.extent.sourceText).font(.caption).foregroundStyle(.secondary)
                                     anchorEvidence(item.sourceAnchorIDs)
                                 }.padding(.vertical, 6)
                             }

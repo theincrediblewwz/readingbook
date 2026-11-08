@@ -1,3 +1,8 @@
+<!-- chibi-time-repair-local:start -->
+本批继续真实赤壁：按原文锚点解析sourceSpan（不增加存储格式），一次反馈多个时间字段与依据分类；出处合写标记仅拆分明确ID，另有精确纠错反馈。最终Core为355方法/3827独立断言（非XCTest），原生49/43最终记录timeRepair2；实际两份失败回复原样离线重放通过，权限未变。
+真实Flash已在隔离副本保存14条路线、补充事件时间，追问后实际打开地图+时间轴，事件回原文跳到614页；主任务未一次做完。日期筛选下叙事路线消失、重复查询与收尾状态混乱仍是下一批重点。12HTTP/742928报告token，不宣称模型整体提速。详见[本批证据与评价](Design/2026-11-08-chibi-time-repair.md)。交付状态以logs/chibi-time-repair-20261108/final-local-delivery.json为准；本地优先，不推送/发布GitHub。用户dirty文档不改不提交，原书不恢复旧快照。
+<!-- chibi-time-repair-local:end -->
+
 <!-- clean-source-local:start -->
 本轮本地迭代：已实现干净正文、按需定位、实际保存计数，以及请求详情长文本和窗口外框修复。338方法/3731独立断言（非XCTest），最终43项请求详情、49项共享工作台原生检查通过；安装状态以logs/clean-reading-payload-20261108/final-local-delivery.json为准。自动门槛五类零告警，人工重放另6条几何诊断保留。
 
