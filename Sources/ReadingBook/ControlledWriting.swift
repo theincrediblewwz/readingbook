@@ -143,7 +143,7 @@ struct AIChangeReview: View {
                                 }
                             }
                             HStack {
-                                Button("放弃这次提案", role: .destructive) { Task { await store.discardAIChange(pending) } }.buttonStyle(ReadingToolbarButtonStyle())
+                                Button("放弃这次提案", role: .destructive) { Task { await store.discardAIChange(pending); if store.pendingCurrentBookChanges.isEmpty { close() } } }.buttonStyle(ReadingToolbarButtonStyle())
                                 Spacer()
                                 Button("应用这次修改") { Task { if await store.applyAIChange(pending), store.pendingCurrentBookChanges.isEmpty { close() } } }.buttonStyle(.borderedProminent).controlSize(.large)
                             }.disabled(store.isBusy)
@@ -153,6 +153,6 @@ struct AIChangeReview: View {
             }
             Text("保存前会检查是否有新的改动；发生冲突时停止，保留原书和已有内容。")
                 .font(.caption).foregroundStyle(.secondary).padding(16)
-        }.background(Palette.canvas).frame(minWidth: 620, idealWidth: 800, minHeight: 500, idealHeight: 680)
+        }.background(Palette.canvas).frame(minWidth: 620, idealWidth: 800, maxWidth: 860, minHeight: 400, idealHeight: 640, maxHeight: 680)
     }
 }

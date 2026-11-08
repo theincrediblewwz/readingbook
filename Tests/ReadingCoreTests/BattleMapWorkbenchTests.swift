@@ -51,6 +51,9 @@ final class BattleMapWorkbenchTests: XCTestCase {
         XCTAssertEqual(try encoded(record), legacy)
     }
     func testDateAxisSeparatesEventsWithinSameYearAndPreservesNamedCalendar() throws {
+        let properties = try XCTUnwrap(ReadingProposalSchemas.extent["properties"] as? [String: Any])
+        let calendar = try XCTUnwrap(properties["calendar"] as? [String: Any])
+        XCTAssertTrue((calendar["description"] as? String)?.contains("同一历法") == true)
         let axis = TemporalAxis("calendar-day:建安"), a = try XCTUnwrap(axis.value(day(20))), b = try XCTUnwrap(axis.value(day(21)))
         XCTAssertEqual(b-a, 1); XCTAssertEqual(axis.label(a), "12年11月20日"); XCTAssertEqual(axis.input(a), "12/11/20")
         XCTAssertEqual(axis.point(a), .date(.init(year: 12, month: 11, day: 20), calendar: "建安"))

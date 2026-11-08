@@ -83,8 +83,9 @@ enum ReadingProposalSchemas {
     static var date: [String: Any] { object(["year": integer, "month": integer, "day": integer], required: ["year"]) }
     static var extent: [String: Any] {
         var source = text(); source["description"] = "逐字取自sourceAnchorIDs所指原文的时间、章回或先后语句；不能自造‘第X回（依叙事顺序）’等标签。"
+        var calendar = text(80); calendar["description"] = "历法名称须与start/end.year属于同一历法；年号纪年保留年号数，不换算公元。例如建安十二年用calendar=建安、year=12，不能写成建安207年。若另做历法换算，须另标推算依据，不能冒充原文明载。"
         var order = integer; order["minimum"] = 0; order["maximum"] = 1_000_000_000
-        var result = object(["sourceText": source, "calendar": text(80), "start": date, "end": date, "precision": ["type": "string", "enum": ["unknown", "year", "month", "day", "narrative"]],
+        var result = object(["sourceText": source, "calendar": calendar, "start": date, "end": date, "precision": ["type": "string", "enum": ["unknown", "year", "month", "day", "narrative"]],
             "uncertainty": ["type": "string", "enum": ["exact", "approximate", "disputed", "unknown"]], "kind": ["type": "string", "enum": ["point", "interval", "uncertainRange"]],
             "narrativeStart": order, "narrativeEnd": order, "assertion": attribution["assertion"]!, "explanation": text()], required: ["sourceText", "precision", "uncertainty", "kind", "assertion", "explanation"])
         result["description"] = "narrative只表示有原文依据的叙事先后，不填历法日期；point的两端须相同，不同两端用interval。unknown不填数字边界且uncertainty=unknown。没有可靠时间依据可省略extent。extent.assertion单独标时间依据：数字日期是推算时用inferred并在extent.explanation说明推算链；事件本身可以仍是explicit。"
