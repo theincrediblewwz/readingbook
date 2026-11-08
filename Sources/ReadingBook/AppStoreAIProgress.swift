@@ -169,6 +169,7 @@ struct AIProgressPresentationState: Equatable {
         case "components_list": return "选择合适的展示方式"
         case "component_show": return "打开阅读组件"
         case "source_read": return "阅读原文片段"
+        case "source_locate": return "查询原文位置"
         case "capabilities_list": return "查看可用功能与参数"
         case "book_schema_get": return "查看本书数据类型"
         case "objects_search", "object_get": return "查找已保存的要素"
@@ -456,16 +457,36 @@ struct AITraceDisclosure<Content: View>: View {
 
 struct AITraceTextView: View, Equatable {
     let content: AITraceText
+    @State private var readable: String?
+    @State private var readableSource: String?
+    @State private var showRaw = false
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.content == rhs.content }
+    private var currentReadable: String? { readableSource == content.text ? readable : nil }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if content.isPartial {
                 Text("仅保留了这段文字的前 \(content.text.utf8.count) 字节（原长 \(content.originalBytes) 字节）；不是模型看到的全部内容。")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             }
-            ScrollView {
-                Text(content.text).font(.system(size: 13)).lineSpacing(4).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
-            }.frame(maxHeight: 260).background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+            if currentReadable != nil {
+                HStack {
+                    Text(showRaw ? "原始文字" : "阅读显示 · 仅排版").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(showRaw ? "阅读显示" : "原始文字") { showRaw.toggle() }
+                        .font(.system(size: 11)).buttonStyle(ReadingQuietButtonStyle())
+                        .help("阅读显示把结构化字段中的文字展开成正常换行；原始文字保留实际收发内容，不改变模型请求。")
+                }
+            }
+            let text = showRaw ? content.text : currentReadable ?? content.text
+            AITraceNativeTextView(text: text)
+                .frame(height: text.utf8.count > 1000 ? 260 : max(64, min(260, CGFloat(text.filter { $0 == "\n" }.count + 2) * 20 + 24)))
+                .background(Palette.accent.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        }.task(id: content.text) {
+            let source = content
+            let value = await Task.detached(priority: .userInitiated) { source.readableJSON() }.value
+            guard !Task.isCancelled else { return }
+            readable = value; readableSource = source.text
         }
     }
 }

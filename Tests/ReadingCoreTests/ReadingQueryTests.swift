@@ -185,7 +185,7 @@ final class ReadingQueryTests: XCTestCase {
                         tool_calls: [ProviderClient.ToolCall(id: "read", type: "function", function: .init(name: "source_read", arguments: #"{"id":"u1"}"#))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 100)
                 }
                 XCTAssertFalse(messages.contains(where: { ($0["role"] as? String) == "tool" }), "最终请求从实际片段重建，不能被旧工具意图挤掉")
-                XCTAssertTrue(messages.contains(where: { ($0["content"] as? String)?.contains("actualReadFragments") == true && ($0["content"] as? String)?.contains("刘备在此") == true }))
+                XCTAssertTrue(messages.contains(where: { ($0["content"] as? String)?.contains("【原文 [unit:u1]") == true && ($0["content"] as? String)?.contains("刘备在此") == true }))
                 return ProviderClient.Result(message: ProviderClient.Message(role: "assistant", content: "原文说“刘备在此”。[unit:u1]", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 100)
             }
         let records = await calls.values()
@@ -304,7 +304,7 @@ final class ReadingQueryTests: XCTestCase {
             preferences: .init(interaction: .functional, style: .research)) { messages, tools, _, final in
                 let index = await calls.record(final: final, tools: tools.count)
                 if index == 1 { return ProviderClient.Result(message: .init(role: "assistant", content: nil, refusal: nil, tool_calls: [.init(id: "open", type: "function", function: .init(name: "panel_present", arguments: #"{"panelID":"nodes","state":"open"}"#))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 100) }
-                XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("hostToolReceipts") == true })
+                XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("软件回执（非正文）") == true && ($0["content"] as? String)?.contains("已打开面板") == true })
                 return ProviderClient.Result(message: .init(role: "assistant", content: "节点面板已打开。", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 100)
             }
         XCTAssertTrue(result.message.content.contains("节点面板已打开")); XCTAssertFalse(result.message.content.contains("不能据此给出内容结论"))

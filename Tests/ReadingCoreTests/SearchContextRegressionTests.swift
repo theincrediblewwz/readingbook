@@ -29,7 +29,8 @@ final class SearchContextRegressionTests: XCTestCase {
         let p=project()
         let result=try await ReadingAnswerEngine.run(question:"这页讲啥",project:p,settings:.init(model:"fixture",contextWindowTokens:128_000),documents:[:],context:.init(unitID:"u1",page:2),scope:.page,history:[],memory:nil,memoryEnabled:false,documentIDs:nil,loader:nil,operationLimit:128_000,remainingRequests:1) { messages,_,_,_ in
             let contents=messages.compactMap { $0["content"] as? String }.joined()
-            XCTAssertTrue(contents.contains("司徒王允歸到府中"));XCTAssertTrue(contents.contains("actualReadFragments"))
+            XCTAssertTrue(contents.contains(p.units[1].text));XCTAssertTrue(contents.contains("【原文 [unit:u1]｜本范围完整】"))
+            XCTAssertFalse(contents.contains("actualReadFragments"));XCTAssertFalse(contents.contains("fragmentTruncated"))
             XCTAssertFalse(contents.contains("第0页的原文"));XCTAssertFalse(contents.contains("第2页的原文"))
             return self.response("王允回到府中，因席间之事不安。[unit:u1]")
         }

@@ -23,7 +23,7 @@ public struct ReadingAnswerPreferences: Codable, Hashable, Sendable {
     /// Derived memories from another mode must never become this mode's context.
     public var contextIdentity: String { interaction.rawValue + ":" + style.rawValue + ":" + (avoidsSpoilers ? "current" : "open") }
 
-    static let readingToolNames: Set<String> = ["source_outline", "source_search", "source_read", "objects_search", "object_get", "documents_list", "documents_search", "document_read", "conversation_search", "conversation_read", "components_list", "component_show"]
+    static let readingToolNames: Set<String> = ["source_outline", "source_search", "source_read", "source_locate", "objects_search", "object_get", "documents_list", "documents_search", "document_read", "conversation_search", "conversation_read", "components_list", "component_show"]
 
     var voiceInstructions: String {
         let voice = style == .mentor

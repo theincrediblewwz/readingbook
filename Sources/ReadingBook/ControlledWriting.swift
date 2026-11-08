@@ -58,7 +58,12 @@ struct PendingAIChange: Identifiable {
             "message": applied ? "本次授权整理已实际保存，可撤销。" : "具体变更已准备，等待读者审阅；尚未应用。",
             "groups": proposal.groups.map(\.rawValue), "summaryCount": proposal.summary.count, "fullPreview": "in_app_review",
             "replayed": replayed]
-        if let receipt { result["operationID"] = receipt.operationID }
+        if let receipt {
+            result["operationID"] = receipt.operationID
+            result["actualChanges"] = replayed ? [:] : receipt.changeCounts
+            result["newlyApplied"] = applied && !replayed
+            result["scope"] = "data_changes_only"
+        }
         let mappings = receipt?.idMap ?? [:]
         var included: [String: String] = [:]
         result["idMapCount"] = mappings.count; result["idMapPartial"] = !mappings.isEmpty

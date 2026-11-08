@@ -23,8 +23,8 @@ import SwiftUI
         panel.minSize = NSSize(width: 680, height: 440)
         panel.backgroundColor = .clear; panel.isOpaque = false
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { panel.standardWindowButton(button)?.isHidden = true }
-        panel.contentView = NSHostingView(rootView: AIRequestHistoryView(state: state, onClose: { [weak self] in self?.close() })
-            .environmentObject(store))
+        panel.contentView = NSHostingView(rootView: AIRequestHistoryView(state: state, onClose: { [weak self] in self?.close() }, usesNativeWindowSurface: true)
+            .environmentObject(store).ignoresSafeArea())
         if first {
             if let screen = owner?.screen ?? NSScreen.main {
                 let space = screen.visibleFrame

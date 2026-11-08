@@ -73,7 +73,7 @@ public struct ReadingProposalToolAccess: Sendable {
 
 enum ReadingQueryToolCatalog {
     static let maximumCallsPerResponse = 32
-    static let readNames: Set<String> = ["capabilities_list", "book_schema_get", "source_outline", "source_search", "source_read", "reading_coverage_get",
+    static let readNames: Set<String> = ["capabilities_list", "book_schema_get", "source_outline", "source_search", "source_read", "source_locate", "reading_coverage_get",
         "objects_search", "object_get", "relations_list", "events_query", "entity_history_get", "documents_list", "documents_search", "document_read",
         "conversation_search", "conversation_read", "workspace_context_get", "visible_objects_list"]
     static let viewNames: Set<String> = ["view_select", "view_focus", "view_set_time_window", "map_fit_objects", "graph_focus", "panel_present"]

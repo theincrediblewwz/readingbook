@@ -3,6 +3,16 @@ import XCTest
 @testable import ReadingCore
 
 final class AIRequestTraceTests: XCTestCase {
+    func testReadableJSONKeepsRawBytesAndLiteralBookEscapes() throws {
+        let raw = #"{"text":"原书第一行\n原书第二行，代码里的\\n保留。","ok":true,"items":["甲","乙"]}"#
+        let value = AITraceText(raw), display = try XCTUnwrap(value.readableJSON())
+        XCTAssertTrue(display.contains("原书第一行\n原书第二行，代码里的\\n保留。"))
+        XCTAssertTrue(display.contains("true")); XCTAssertTrue(display.contains("[2]\n乙"))
+        XCTAssertEqual(value.text, raw)
+        XCTAssertNil(AITraceText("正常原文\\n不是格式转换对象").readableJSON())
+        XCTAssertNil(AITraceText(raw, maximumBytes: 12).readableJSON())
+        XCTAssertNil(AITraceText("{坏格式").readableJSON())
+    }
     func testPreparedTraceContainsActualTextAndArgumentsWithoutTransportSecretsOrReasoning() throws {
         let messages: [[String: Any]] = [
             ["role": "system", "content": "只根据原文回答。"],

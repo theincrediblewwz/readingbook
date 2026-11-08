@@ -30,6 +30,7 @@ final class ControlledChangesTests: XCTestCase {
         XCTAssertTrue(unchanged[0].documents.isEmpty)
         let second = try await repository.prepareChanges(newNote("second"), grant: grant)
         let committed = try await repository.commitChanges(proposalID: first.id, grant: grant)
+        XCTAssertEqual(committed.receipt.changeCounts, ["documents": ["created": 1], "nodes": ["created": 1]])
         let replay = try await repository.commitChanges(proposalID: first.id, grant: grant)
         XCTAssertTrue(replay.replayed); XCTAssertEqual(replay.receipt.operationID, committed.receipt.operationID)
         let after = try await repository.commitChanges(proposalID: second.id, grant: grant)
@@ -82,11 +83,13 @@ final class ControlledChangesTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), Data("外部编辑".utf8))
         try original.write(to: path)
         let committed = try await repository.commitChanges(proposalID: proposal.id, grant: grant, approval: approval)
+        XCTAssertEqual(committed.receipt.changeCounts["documents"]?["updated"], 1)
         XCTAssertEqual(committed.project.activeDocuments.count, 1)
         XCTAssertEqual(committed.project.trashedDocuments.first?.origin, "change-recovery")
         XCTAssertEqual(try Data(contentsOf: path), Data("新内容".utf8))
         let undo = try await repository.undoChanges(bookID: book.id, operationID: proposal.operationID)
         XCTAssertNotNil(undo.receipt.undoneAt); XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertTrue(undo.receipt.changeCounts.isEmpty)
         // Old callers cannot save their pre-transaction project back over this history.
         do { _ = try await repository.saveDocument(project: saved, document: document, markdown: "旧窗口", expectedContentHash: try BookImporter.sha256(original)); XCTFail("stale history") } catch {}
     }

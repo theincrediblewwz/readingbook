@@ -167,6 +167,28 @@ private actor TraceTransport {
         store.requestHistoryWindow?.close()
         try await wait { self.store.requestHistoryWindow == nil }
         try check("closingDetailsKeepsTaskAndAnswer", store.queryProgressState.value == state && store.book?.chats.last?.role == "assistant")
+        let longSource = "长正文开头。" + String(repeating: "原书文字。", count: 4000) + "长正文末尾。"
+        let retained = AITraceText(longSource)
+        host.rootView = AnyView(ScrollView { AITraceDisclosure(title: "长正文") { AITraceTextView(content: retained).equatable() }.padding(20) }.id("long-source"))
+        try await Task.sleep(for: .milliseconds(80))
+        let openedAt = ProcessInfo.processInfo.systemUptime
+        try await press("展开长正文")
+        try await wait { self.hasText("长正文开头") }
+        let openMilliseconds = (ProcessInfo.processInfo.systemUptime - openedAt) * 1000
+        try check("longSourceCanOpenThroughActualInput", hasText("长正文开头"))
+        try check("longSourceRetainsLastCharacters", hasText("长正文末尾"))
+        try check("longSourceOpensWithoutMainThreadStall", openMilliseconds < 2000)
+        try JSONSerialization.data(withJSONObject: ["retainedBytes": retained.text.utf8.count, "openMilliseconds": openMilliseconds], options: [.sortedKeys]).write(to: output.appendingPathComponent("long-source-open.json"))
+        try await press("收起长正文")
+        let raw = #"{"text":"第一行\n第二行","ok":true}"#
+        host.rootView = AnyView(AITraceTextView(content: AITraceText(raw)).padding(20).id("long-json"))
+        try await wait { self.objects().compactMap { $0 as? NSTextView }.contains { $0.string.contains("第一行\n第二行") } }
+        try check("longJSONReadingDisplayDecodesNewlines", objects().compactMap { $0 as? NSTextView }.contains { $0.string.contains("第一行\n第二行") })
+        try await press("原始文字")
+        try await wait { self.objects().compactMap { $0 as? NSTextView }.contains { $0.string == raw } }
+        try check("rawTraceRemainsAvailableThroughActualInput", hasText("原始文字"))
+        try check("rawTracePreservesEscapesAndText", objects().compactMap { $0 as? NSTextView }.contains { $0.string == raw })
+        try check("longDisclosureKeepsActualTrace", store.queryProgressState.value == state)
         try write(status: "passed")
         if CommandLine.arguments.contains("--inspect") {
             while !FileManager.default.fileExists(atPath: output.appendingPathComponent("finish").path) { try await Task.sleep(for: .milliseconds(100)) }

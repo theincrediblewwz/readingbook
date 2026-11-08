@@ -166,6 +166,15 @@ private actor WorkbenchTransport {
                   let bytes = content.data(using: .utf8), let result = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { return false }
             return result["applied"] as? Bool == true && result["proposalID"] as? String == pending.id
         })
+        let actualReceipt = lastMessages.compactMap { row -> [String: Any]? in
+            guard row["role"] as? String == "tool", let content = row["content"] as? String,
+                  let result = try? JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any],
+                  result["proposalID"] as? String == pending.id, result["applied"] as? Bool == true else { return nil }
+            return result
+        }.last
+        let actualCounts = actualReceipt?["actualChanges"] as? [String: [String: Int]]
+        try check("receiptDistinguishesNewAndUpdatedFacts", actualCounts?["entities"] == ["created": 1, "updated": 1] && actualCounts?["events"] == ["created": 1])
+        try check("dataReceiptDoesNotClaimComponentOpened", actualReceipt?["scope"] as? String == "data_changes_only" && actualReceipt?["newlyApplied"] as? Bool == true)
         try check("continuationActuallyAddedKnowledge", store.book!.entities.contains { $0.name == "张飞" } && store.book!.events.contains { $0.name == "重逢" })
         try check("continuationKeepsSameWorkbench", store.book!.views.count == 1 && store.route == view.id)
         try check("continuedRangeStopsBeforeFuturePage", store.activeComponentView?.snapshot?.unitIDs == ["u1", "u2"] && store.componentDataBook?.entities.contains { $0.id == "cao" } == false)

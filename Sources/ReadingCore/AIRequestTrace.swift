@@ -19,6 +19,30 @@ public struct AITraceText: Equatable, Sendable {
         }
         self.text = String(text[..<end])
     }
+
+    /// Inspection-only layout. Keep the original retained bytes separately;
+    /// decode JSON strings once, without replacing literal escapes in a book.
+    public func readableJSON() -> String? {
+        guard !isPartial, let first = text.first(where: { !$0.isWhitespace }), ["{", "["].contains(first),
+              let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) else { return nil }
+        func format(_ value: Any, depth: Int) throws -> String {
+            guard depth <= 32 else { throw ReadingError.invalid("诊断资料层级过深。") }
+            if let string = value as? String { return string }
+            if let object = value as? [String: Any] {
+                return try object.keys.sorted().map { key in
+                    key + "：\n" + (try format(object[key]!, depth: depth + 1))
+                }.joined(separator: "\n\n")
+            }
+            if let array = value as? [Any] {
+                return try array.enumerated().map { index, value in
+                    "[\(index + 1)]\n" + (try format(value, depth: depth + 1))
+                }.joined(separator: "\n\n")
+            }
+            return String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]), as: UTF8.self)
+        }
+        guard let result = try? format(object, depth: 0), result.utf8.count <= 262_144 else { return nil }
+        return result
+    }
 }
 
 public struct AIRequestTrace: Equatable, Sendable {

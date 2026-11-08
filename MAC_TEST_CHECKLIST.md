@@ -1,3 +1,12 @@
+<!-- clean-source-local:start -->
+本轮本地迭代：已实现干净正文、按需定位、实际保存计数，以及请求详情长文本和窗口外框修复。338方法/3731独立断言（非XCTest），最终43项请求详情、49项共享工作台原生检查通过；安装状态以logs/clean-reading-payload-20261108/final-local-delivery.json为准。自动门槛五类零告警，人工重放另6条几何诊断保留。
+
+94段实际正文143802→120402B（少16.27%）；实际65535B长文展开四轮约15.4秒→43–61毫秒。不能推出整App或模型提速。真实赤壁9HTTP/685346报告token仍未生成新地图路线，不能把数据准备或模型自述当成果。重点机制、失败与下一步见[AI怎样构造阅读工作台](Design/2026-11-08-clean-reading-payload.md)。
+
+本表现为188项：122通过、48已实现、11部分、4待实现、3待验证，非本轮逐项重测全部要求。原书不恢复旧快照，用户dirty文档不改不提交；本地优先，本轮不推送/发布GitHub。
+<!-- clean-source-local:end -->
+
+
 <!-- chibi-core-local:start -->
 > 当前接续（2026-11-08，本地优先）：请求窗口/引用反馈已更新本机安装，原书两次正常启动/退出通过。Design/2026-11-08-chibi-core-workbench.md 为本批简明说明；logs/chibi-core-workbench-20261108 为证据。19 产品 Swift；build4、core4 的 328 方法/3632 standalone 断言、chibiMonitor2 的36项、chibiCore3 的47项通过，不冒充本机 XCTest。两组自动原生五类零告警；人工详情30、real3另36条几何诊断保留，未归属。
 

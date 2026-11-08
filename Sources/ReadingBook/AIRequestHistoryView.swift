@@ -6,6 +6,7 @@ struct AIRequestHistoryView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var state: AIProgressObservableState
     var onClose: (() -> Void)? = nil
+    var usesNativeWindowSurface = false
     @State private var savedRequests: [AIRequestHistoryRecord] = []
     @State private var selectedRequestID: UUID?
     @State private var showingArchive = false
@@ -53,7 +54,7 @@ struct AIRequestHistoryView: View {
                 }.accessibilityIdentifier("ai-request-detail-content")
             }
         }.frame(minWidth: 680, idealWidth: 900, minHeight: 440, idealHeight: 660)
-            .readingGlass(radius: 22, prominent: true)
+            .modifier(AIRequestHistorySurface(nativeWindow: usesNativeWindowSurface))
             .task(id: (store.bookID ?? "") + "|" + store.libraryRootURL.path) {
                 savedRequests = []
                 guard let id = store.bookID else { return }
@@ -144,7 +145,7 @@ struct AIRequestHistoryView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(fragment.title).font(.system(size: 13, weight: .medium))
                             Text(fragment.detail).font(.system(size: 12)).foregroundStyle(.secondary)
-                            Text(fragment.text).font(.system(size: 14)).lineSpacing(4).textSelection(.enabled)
+                            AITraceTextView(content: AITraceText(fragment.text)).equatable()
                         }
                     }
                     AITraceDisclosure(title: "实际执行的参数") { AITraceTextView(content: trace.arguments).equatable() }
@@ -185,6 +186,20 @@ struct AIRequestHistoryView: View {
                     Text(audit.summary).font(.system(size: 13)).textSelection(.enabled)
                 }
             }
+        }
+    }
+}
+
+/// A real window already supplies its rounded edge and exterior shadow.
+/// Do not draw a second glass rim inside that system frame.
+private struct AIRequestHistorySurface: ViewModifier {
+    let nativeWindow: Bool
+    @Environment(\.readingReduceTransparency) private var reduceTransparency
+    @ViewBuilder func body(content: Content) -> some View {
+        if nativeWindow {
+            content.background(Palette.surface.opacity(reduceTransparency ? 1 : 0.84)).background(.regularMaterial)
+        } else {
+            content.readingGlass(radius: 22, prominent: true)
         }
     }
 }

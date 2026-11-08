@@ -518,16 +518,17 @@ struct ReadingQuerySession {
             let full = try json(["actualReadFragments": rows, "hostToolReceipts": []])
             guard full.utf8.count <= maximumBytes else { return nil }
             sourceExcerpts = snapshot.sources.map { ($0.unitID, $0.text) }; sourceWasPreloaded = !sourceExcerpts.isEmpty
-            for source in snapshot.sources where source.text.count <= 32_768 {
-                sourceReferences[try sourceReferenceID(unitID: source.unitID, text: source.text)] = Evidence(unitID: source.unitID, quote: source.text)
-            }
+            try registerInitialSourceReferences()
             return full
         }
         guard snapshot.scope == .page || snapshot.scope == .selection, maximumBytes >= 512 else { return nil }
         var candidate = self
         candidate.sourceExcerpts = snapshot.sources.prefix(32).reversed().map { ($0.unitID, $0.text) }
         let supplied = try candidate.finalEvidence(maximumBytes: maximumBytes)
-        if supplied != nil { sourceExcerpts = candidate.sourceExcerpts; sourceWasPreloaded = !sourceExcerpts.isEmpty }
+        if supplied != nil {
+            sourceExcerpts = candidate.sourceExcerpts; sourceWasPreloaded = !sourceExcerpts.isEmpty
+            try registerInitialSourceReferences()
+        }
         return supplied
     }
 
@@ -604,6 +605,7 @@ struct ReadingQuerySession {
             tool("source_outline", "仅列当前冻结范围内原文单元索引，并非PDF书签目录；nextOffset分页。索引不代表正文已读。", paging),
             tool("source_search", "检索当前范围原文，自动简繁互搜，1至8关键词any/all；返回有界原文字形和定位，范围外无法读取。", search, ["keywords"]),
             tool("source_read", "按目录id/字符offset分段读取当前范围原文；选段范围只返回选段，按nextOffset续读，不增加阅读覆盖。", reading, ["id"]),
+            tool("source_locate", "按已知原文ID查询本范围的页码、章回和实际叙事序号；不重读正文，不增加引用或阅读覆盖。", ["ids": ["type": "array", "items": string, "minItems": 1, "maxItems": 20]], ["ids"]),
             tool("documents_list", "只列本次显式授权的笔记目录；原文范围不会自动附加笔记。目录不是正文。", paging),
             tool("documents_search", "按需检索已授权笔记全文，每批最多32篇，nextScanOffset续查后续文档，offset只在本批命中中分页；笔记不能冒充原书。", documentSearch, ["keywords"]),
             tool("document_read", "按id/offset读取已授权笔记片段，返回内容hash和续读位置，不修改文档。", reading, ["id"]),
@@ -630,6 +632,22 @@ struct ReadingQuerySession {
         let cap = min(16_000, max(0, maximumBytes))
         guard cap >= 700 else { return try json(["ok": false, "budgetLimited": true, "message": "剩余空间不足，未继续读取；请说明尚未完成范围。"] ) }
         switch name {
+        case "source_locate":
+            guard let ids = arguments["ids"] as? [String], (1...20).contains(ids.count), Set(ids).count == ids.count,
+                  Set(arguments.keys) == ["ids"] else { throw invalid("定位需1至20个不重复的原文ID。") }
+            let sources = Dictionary(snapshot.sources.map { ($0.unitID, $0) }, uniquingKeysWith: { first, _ in first })
+            let orders = Dictionary((project?.units ?? []).map { ($0.id, $0.order) }, uniquingKeysWith: { first, _ in first })
+            var rows: [[String: Any]] = try ids.map { id in
+                guard let source = sources[id] else { throw invalid("原文ID不在本次冻结范围内。") }
+                var row: [String: Any] = ["id": id, "locator": source.locator, "chapter": source.chapter]
+                if let order = orders[id] { row["order"] = order }
+                return row
+            }
+            func result() throws -> String { try json(["ok": true, "locations": rows, "bodyProvided": false, "omittedCount": ids.count - rows.count]) }
+            while !rows.isEmpty, try result().utf8.count > cap { rows.removeLast() }
+            let value = try result()
+            guard value.utf8.count <= cap else { throw invalid("剩余空间不足以返回定位信息。") }
+            return value
         case "source_outline", "source_list":
             return try page(snapshot.sources.map { ["id": $0.unitID, "locator": $0.locator, "chapter": $0.chapter, "characters": $0.text.count, "hash": $0.textHash] as [String: Any] }, arguments, cap)
         case "documents_list":

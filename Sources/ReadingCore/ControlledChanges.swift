@@ -172,6 +172,25 @@ public struct ControlledChangeReceipt: Codable, Identifiable, Sendable {
     public var createdAt: Date; public var undoneAt: Date?
     public var idMap: [String: String]; public var groups: [ControlledChangeGroup]
     public var patches: [ControlledRecordPatch]; public var documents: [ControlledDocumentReceipt]
+
+    /// Counts actual stored changes, rather than requested items or aliases.
+    /// A document's metadata and body represent one document change.
+    public var changeCounts: [String: [String: Int]] {
+        guard undoneAt == nil else { return [:] }
+        var records: [String: [String: String]] = [:]
+        for patch in patches where patch.before != patch.after {
+            let action = patch.before == nil ? "created" : patch.after == nil ? "removed" : "updated"
+            records[patch.collection.rawValue, default: [:]][patch.id] = action
+        }
+        for document in documents where document.beforeHash != document.afterHash {
+            if records["documents"]?[document.documentID] == nil {
+                records["documents", default: [:]][document.documentID] = document.beforeHash == nil ? "created" : "updated"
+            }
+        }
+        return records.mapValues { values in
+            values.values.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
+        }
+    }
 }
 public struct ControlledChangeState: Codable, Sendable {
     public var version: Int = 1
