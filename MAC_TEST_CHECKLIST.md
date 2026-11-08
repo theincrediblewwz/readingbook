@@ -1,3 +1,15 @@
+<!-- chibi-partial-repair-local:start -->
+本批已完成：Design/2026-11-09-chibi-partial-repair.md，总入口logs/chibi-partial-repair-20261109/final-local-delivery.json。产品07253c24，12产品Swift/2新测试；本机69/100 ARM64已替换安装，两次原书104页、便签“你好”和已有伴读启动/正常退出。39库成员保留：38字节同、1推荐缓存仅键顺序变化/JSON值同，偏好同；不恢复旧库。用户dirty性能文档SHA9b186792…563d4保持，未改未提交。最新回滚private-books/chibi-partial-repair-20261109/install-before-local-iteration；正式App已正常退出，不要重复安装。
+
+失败草案在冻结Session保留，只改字段的tool_draft_repair再进原工具完整校验/授权/审阅。不能跨任务、越范围或自批准。新增geo.map可选routeSourceID引用同组relations源，六条没有eventID的行动不硬编归属；关系标签筛选按实际edgeID，不能借共享端点混入未匹配路线。旧布局不迁移。408方法/4466独立断言（非XCTest），最终partialRepair1原生48/49/43/25通过，自动相应告警类0；真实real5另126、正式启动12条几何诊断保留，未定位，不称全场景零告警。
+
+先重放上一轮真实失败。real4生产Session/宿主定向真实修复2HTTP，修正参数81546→1178B/少98.555%，35要素/18事件/9行动实际保存；非完整问答引擎。real5完整问答4HTTP，模型自选独立行动源，布局8字段不一致后用712B局部修复，真正创建并打开第二视图。事实/原文/旧视图保持；同输入旧声明总投影3→新9，之前2为原生画面观察数。原生窄到11月20日、待定路线8提示、独立路线详情、火攻出处614页通过；投影事件18→17/路线9。另1HTTP400为旧调用注入回放被拒、无报告用量；成功6HTTP合计394716报告token。不要冒称整应用提速或一次空库自然完成理想地图。
+
+用户最新要求已写DEVELOPMENT.md：退出问题现场前保存输入/原始失败/公开回复/源码构建hash；下轮先核hash离线重放，不能带入从零测试。现有failure-cases包括侧栏重开scope=current视图后标题泛化、路线浮层坐标输入未触发出处、实际几何诊断，未认定全是产品bug；下一批先0HTTP查这些，再补实际可见范围/相机回执、按概念稿做新标记。现代地名密度和横移时间轴/可视端点/层级括号仍是未来计划；16类轮转保留。
+
+清理6802084→6075860KiB，回收726224KiB/约709MiB；批初5999020/净增76840。4560非App私人文件保持；运行库逐成员归档验SHA，重复PDF仅在规范副本同SHA后省略。保留唯一输入/AI输出/失败现场、共享缓存/最新回滚，退役结束测试程序和旧回滚。没有推送GitHub、云端CI或Release，继续本地优先。
+<!-- chibi-partial-repair-local:end -->
+
 <!-- chibi-fresh-canvas-local:start -->
 本批已完成，详见Design/2026-11-09-chibi-fresh-canvas.md，总入口logs/chibi-fresh-canvas-20261109/final-local-delivery.json。产品bfac3d3+最终935ab65，12产品Swift；本机69/100 ARM64已替换安装，两次104页/便签“你好”/已有伴读正常启动退出，39原库文件字节同、偏好同，没有恢复旧库。用户dirty性能文档不改不提交。最新回滚private-books/chibi-fresh-canvas-20261109/install-before-local-iteration；正式App已正常退出，不要重复安装。
 
