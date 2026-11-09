@@ -170,13 +170,36 @@ private actor WorkbenchTransport {
         let question = store.queryComposerDraft.text; store.queryComposerDraft.text = ""
         store.ask(question, allowsOrganizing: true)
         try check("continuationQueryStarted", store.isQueryBusy)
-        try await wait { !self.store.isQueryBusy }
+        try await wait { self.store.queryAwaitingReview && !self.store.pendingCurrentBookChanges.isEmpty }
         let pausedRequestCount = await transport.count()
-        try check("continuationQueryCompleted", store.queryAwaitingReview && store.queryRetryQuestion == question && store.errorMessage == nil && pausedRequestCount == callsBeforeEdit + 6)
+        try check("continuationQueryCompleted", store.queryAwaitingReview && store.isQueryBusy && store.queryRetryQuestion == nil && store.errorMessage == nil && pausedRequestCount == callsBeforeEdit + 6)
         try check("existingRecordSupplementWaitsForReview", store.pendingCurrentBookChanges.count == 1 && !store.book!.entities.contains { $0.name == "张飞" })
         guard let pending = store.pendingCurrentBookChanges.first else { throw ReadingError.invalid("缺少新增证据的审阅提案。") }
+        try await Task.sleep(for: .milliseconds(200))
+        let stillPaused = await transport.count()
+        try check("reviewPauseSendsNoFurtherRequests", stillPaused == pausedRequestCount && store.isQueryBusy)
+        let originalRun = store.queryRunID
         let reviewed = await store.applyAIChange(pending)
         try check("reviewedSupplementActuallyCommits", reviewed && store.pendingCurrentBookChanges.isEmpty)
+        let afterReview = await transport.count()
+        try check("reviewApplyDoesNotAutomaticallySend", afterReview == pausedRequestCount && store.canContinueReviewedQuery)
+        store.continueReviewedQuery()
+        try check("reviewContinueKeepsOriginalTask", store.queryRunID == originalRun && store.isQueryBusy)
+        try await wait { !self.store.isQueryBusy }
+        try check("reviewContinueFinishesOriginalTask", store.queryRetryQuestion == nil && !store.queryAwaitingReview && store.errorMessage == nil)
+        let continuedRecords = await transport.allRecords()
+        let lastMessages = continuedRecords.last?["messages"] as? [[String: Any]] ?? []
+        try check("reviewContinueKeepsOriginalQuestion", lastMessages.filter { $0["content"] as? String == question }.count == 1)
+        let actualReceipt = lastMessages.compactMap { row -> [String: Any]? in
+            guard row["role"] as? String == "tool", let content = row["content"] as? String,
+                  let result = try? JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any],
+                  result["proposalID"] as? String == pending.id, result["applied"] as? Bool == true else { return nil }
+            return result
+        }.last
+        try check("reviewContinueRetainsActualHostReceipt", actualReceipt != nil)
+        let actualCounts = actualReceipt?["actualChanges"] as? [String: [String: Int]]
+        try check("receiptDistinguishesNewAndUpdatedFacts", actualCounts?["entities"] == ["created": 1, "updated": 1] && actualCounts?["events"] == ["created": 1])
+        try check("dataReceiptDoesNotClaimComponentOpened", actualReceipt?["scope"] as? String == "data_changes_only" && actualReceipt?["newlyApplied"] as? Bool == true)
         try check("continuationActuallyAddedKnowledge", store.book!.entities.contains { $0.name == "张飞" } && store.book!.events.contains { $0.name == "重逢" })
         try check("continuationKeepsSameWorkbench", store.book!.views.count == 1 && store.route == view.id)
         try check("continuedRangeStopsBeforeFuturePage", store.activeComponentView?.snapshot?.unitIDs == ["u1", "u2"] && store.componentDataBook?.entities.contains { $0.id == "cao" } == false)
