@@ -114,6 +114,36 @@ final class ReadingTemporalFormTests: XCTestCase {
         XCTAssertNoThrow(try query.validateProposal(name: "knowledge_changes_propose", data: data))
         time["sourceText"] = "忽听风声响"; XCTAssertThrowsError(try query.validateProposal(name: "knowledge_changes_propose", data: resolved(time, query: query)))
     }
+    func testMalformedSuppliedAnchorPointsToQuoteInsteadOfMisleadingTimeEndpoint() throws {
+        let query = try session()
+        let root: [String: Any] = ["batch": ["knowledge": [
+            "anchors": [["clientID": "a", "unitID": "unit-000001", "quote": "忽聽風聲響"]],
+            "eventMetadata": [["eventID": "wind", "kind": "event", "sourceAnchorIDs": ["a"],
+                "assertion": "explicit", "explanation": "原文", "extent": extent()]]]]]
+        let data = try JSONSerialization.data(withJSONObject: root)
+        do { _ = try query.resolveTemporalSourceSpans(in: data); XCTFail("Must reject nonliteral anchor") }
+        catch let error as ReadingProposalEvidenceError {
+            XCTAssertEqual(error.issues.first?["path"], "$.batch.knowledge.anchors[0]")
+            XCTAssertEqual(error.issues.first?["suppliedUnitSourceRef"], "unit-000001")
+            XCTAssertFalse(String(describing: error.issues).contains("秘密后文"))
+        }
+        // The model must explicitly replace the anchor; diagnostics alone do
+        // not alter any input bytes or grant the rest of the book.
+        let resolved = try query.resolveTemporalSourceSpans(in: query.resolveSourceReferences(in: payload(extent())))
+        XCTAssertNoThrow(try query.validateProposal(name: "knowledge_changes_propose", data: resolved))
+        XCTAssertTrue(query.project!.temporalKnowledge!.eventMetadata[0].extent == nil)
+    }
+    func testCroppedSuppliedAnchorDoesNotOfferReferenceToUnprovidedRestOfPage() throws {
+        var query = try session(); query.sourceExcerpts = [("unit-000001", "風聲響。")]
+        let root: [String: Any] = ["batch": ["knowledge": [
+            "anchors": [["clientID": "a", "unitID": "unit-000001", "quote": "忽聽風聲響"]],
+            "eventMetadata": [["eventID": "wind", "sourceAnchorIDs": ["a"], "extent": extent()]]]]]
+        do { _ = try query.resolveTemporalSourceSpans(in: JSONSerialization.data(withJSONObject: root)); XCTFail("Must reject cropped text") }
+        catch let error as ReadingProposalEvidenceError {
+            XCTAssertNil(error.issues.first?["suppliedUnitSourceRef"])
+            XCTAssertFalse(String(describing: error.issues).contains("將近三更"))
+        }
+    }
     func testEmptyPositionLabelCannotWeakenDateOrUnscopedNarrativeValidation() throws {
         let time = TemporalExtent(sourceText: "", precision: .narrative, uncertainty: .exact, narrativeStart: 605, assertion: .explicit, narrativeDomain: "source-order")
         XCTAssertNoThrow(try TemporalKnowledgeRuntime.validateExtent(time))

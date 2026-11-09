@@ -40,6 +40,14 @@ extension ReadingQuerySession {
                 let endID = span["endAnchorID"] as? String ?? startID
                 let declared = Set(rows[index]["sourceAnchorIDs"] as? [String] ?? [])
                 guard declared.contains(startID), declared.contains(endID), let start = anchors[startID], let end = anchors[endID] else {
+                    // A malformed quotation must not look like a missing time
+                    // endpoint. Return the existing evidence repair shape;
+                    // never normalize or silently replace the proposed quote.
+                    if declared.contains(startID), declared.contains(endID) {
+                        let evidenceIssues = suppliedAnchorQuoteIssues(knowledge: knowledge, path: path,
+                            ids: Set([startID, endID]).subtracting(anchors.keys))
+                        if !evidenceIssues.isEmpty { throw ReadingProposalEvidenceError(issues: evidenceIssues) }
+                    }
                     fail("两端都须在本条sourceAnchorIDs中，且其逐字原文已实际提供；不能借用未读取、范围外或未知锚点。"); continue
                 }
                 guard end.order >= start.order else { fail("结束锚点在开始锚点之前，请核对原文先后。"); continue }
@@ -54,6 +62,29 @@ extension ReadingQuerySession {
         if grouped { batch["knowledge"] = knowledge } else { batch = knowledge }
         if wrapped { root["batch"] = batch } else { root = batch }
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    private func suppliedAnchorQuoteIssues(knowledge: [String: Any], path: String, ids: Set<String>) -> [[String: String]] {
+        let rows = knowledge["anchors"] as? [[String: Any]] ?? []
+        let counts = Dictionary(rows.compactMap { ($0["clientID"] as? String).map { ($0, 1) } }, uniquingKeysWith: +)
+        let existing = Set(((project?.readingExperience?.anchors ?? []) + (project?.temporalKnowledge?.anchors ?? [])).map(\.id))
+        var issues = [[String: String]]()
+        for (index, row) in rows.enumerated() {
+            guard let id = row["clientID"] as? String, ids.contains(id), counts[id] == 1, !existing.contains(id),
+                  let unitID = row["unitID"] as? String, snapshot.unitIDs.contains(unitID),
+                  let quote = row["quote"] as? String, !quote.isEmpty,
+                  sourceExcerpts.contains(where: { $0.0 == unitID }),
+                  !sourceExcerpts.contains(where: { $0.0 == unitID && SourceTextLiteral.contains(quote, in: $0.1) }) else { continue }
+            var issue = ["path": path + ".anchors[\(index)]", "unitID": unitID,
+                "reason": "这个单元已提供，但锚点引文不逐字匹配（包括原始换行）；请核对quote。可保留clientID，用有效sourceRef替代unitID/quote，由软件定位已提供片段。"]
+            if let ref = sourceReferences.keys.sorted().first(where: { key in
+                guard let value = sourceReferences[key], value.unitID == unitID else { return false }
+                return sourceExcerpts.contains { $0.0 == unitID && SourceTextLiteral.contains(value.quote, in: $0.1) }
+            }) { issue["suppliedUnitSourceRef"] = ref }
+            issues.append(issue)
+            if issues.count == 4 { break }
+        }
+        return issues
     }
 
     private struct SuppliedTemporalAnchor {
