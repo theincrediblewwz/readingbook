@@ -1,3 +1,15 @@
+<!-- chibi-open-receipt-local:start -->
+本批已完成，本地产品9c13e5cd33d45a804b960e9f70f82fbe17498c65，8产品Swift；69/100 ARM64已替换本机安装，签名/资源/全App文件manifest通过。两次原书104页、便签你好、已有伴读启动并正常退出；原库最终39文件字节同、偏好语义同，没有恢复旧库。用户dirty性能文档SHA9b186792…563d4未改未提交。报告Design/2026-11-09-chibi-open-receipt.md，总入口logs/chibi-open-receipt-20261109/final-local-delivery.json。正式App已正常退出，勿重复安装。
+
+已修首开→最多1秒本地小状态等待→实际画面回执，pending/ready/empty/obscured/failed分开，换书/库/范围/阅读位置/取消不采旧快照。最终replay3首次约0.313s得9投影/9可见；空范围empty，恢复success。真实live2已给画面却在预算收尾丢actualView，已修收尾保留最新范围/路线/时间小概要；941B冻结失败重放保留9/9。纯阅读模式不增加读取能力。425方法/4589 standalone断言，非XCTest；范围55/动态48/共享49/详情43均openReceipt3，滚动25为解锁后openReceipt4，共220项，所检告警零。原书正式验收另18条AppKit尺寸诊断，未重采归属栈，不称所有场景零告警。
+
+真实live3同输入范围43–50回复测3HTTP/143858报告token，正确核对9投影9可见/未筛时间，35要素18事件9关系2视图1484单元保持；0source_read调用但预载94单元，不能说没给正文。前一失败live2为4HTTP/152328，本批合计7HTTP/296186，不重复收费生成。AI仍把部分路线可见过度说成全条、把列表说成叙事先后，已记不足；没有从空书新建理想图。退出前输入/公开回复/工具回执/版本hash都保存，入口saved-case.json；下轮先核hash离线重放。所有测试host已退出，运行库已归档，不要再投marker。
+
+两轮合计回收1041992KiB/约1017.6MiB，最终清理点6255472KiB、相对批初净增130900KiB/约127.8MiB。原4602非App私人文件保持，新鲜安装保护新增42，总4644。运行库逐成员归档验SHA，重复PDF同SHA后省略；测试宿主和旧07253回滚App已退役，共享缓存/候选/独有AI失败与输出/最新0849回滚保留。最新回滚private-books/chibi-open-receipt-20261109/install-before-local-iteration；其protection.json:newAppFiles证明当前安装9c13，oldAppFiles证明保留0849。未推GitHub/云CI/Release，本地优先。
+
+下一批：按已选概念稿新标记素材、碰撞分级/战役聚合、清楚的路线与时间表达；精确可见性和顺序语义/默认时间轴边界，以及只查已有工作台时的原文冗余。现代地名密度、时间轴横移与端点/层级括号、16类组件性能轮转继续保留。
+<!-- chibi-open-receipt-local:end -->
+
 <!-- chibi-view-state-local:start -->
 本批已完成，报告 Design/2026-11-09-chibi-view-state.md，总入口 logs/chibi-view-state-20261109/final-local-delivery.json。产品0849ac8，8产品Swift；69/100 ARM64本机已更新，两次104页/便签“你好”/已有伴读正常启动退出。原库39成员，38字节同、1派生缓存JSON值同，书/笔记/分析/project字节同，偏好同，不恢复旧库。用户dirty性能文档SHA保持，未改/未提交。最新回滚 private-books/chibi-view-state-20261109/install-before-local-iteration，正式App已正常退出，勿重复安装。
 
