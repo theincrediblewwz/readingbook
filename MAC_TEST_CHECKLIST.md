@@ -1,3 +1,17 @@
+<!-- chibi-battle-structure-local:start -->
+本批已完成：Design/2026-11-09-chibi-battle-structure.md；总入口 logs/chibi-battle-structure-20261109/final-local-delivery.json。产品cbb0cf650e4ea4a44ef54f8c8ad6e5e8b981b512，5产品Swift/2测试文件；69/100 ARM64本机已更新。两次原书104页/便签“你好”/已有伴读对话启动正常退出，最终39文件字节同、偏好同，没有恢复旧库。用户dirty性能文档SHA9b186792…563d4保持、未改未提交。最新回滚private-books/chibi-battle-structure-20261109/install-before-local-iteration，正式App已正常退出，不要重复安装或恢复旧库。
+
+父事件越界仅隐藏父/phase，保留有独立出处子事件时间/类别；关系全范围简表支持省略objectID，原单对象完整返回保留；objects_search的queries数组做多名OR/去重分页，不以空格拆姓名；提问前旧操作用priorResults等明确历史，不能误报本轮保存。无新存储格式或第二套地图数据。
+
+443方法/4730独立断言（非XCTest），最终battleStructure2原生55/48/49/43/25，加battleStructureReuse2/Trajectory2各32，共284通过；自动报告各自所检告警零。真实手动另84/正式启动54几何诊断保留。离线同9关系10次/43216B→1次/9924B；同28对象名字查17次→3次，不能说整体HTTP/FPS提速。
+
+真实live1/live2各6次诊断额度，只查资料无写入/打开；live1将历史118误当本次，live2已分清。focus1收窄主线后8HTTP/727813报告token，实际开旧工作台、保存第610页两路设伏（2关系/2元数据/1去重锚点），9→11实际可见路线。旧35要素/18事件/9关系/2视图/1484单元/旧时间字段保持。原生待定路线10提示、新行动回610、火攻回614、恢复43—50回范围通过。三次共20HTTP/1572527报告token，不是从零生成、不是受控模型提速。
+
+下一批先读saved-case.json与focus1/reviewed-outcome.json：六段主线只在答案里，没有新存成共享战役父级/阶段/完整相对时间，不能标理想图完成。先以focus1/after-question/project.json冻结续接（清旧对话/请求历史），查明为什么能讲清却未存成结构；随后按任务减少预载94段重复正文。不要又盲目生成同94单元。原始失败、公开响应、退出前最终数据、源码/构建hash已保留。现代地名密度、时间轴横移/可视端点/层级括号、远景战役聚合与密度、曲线区域和16类轮转继续保留。
+
+清理7803040→6478556KiB，回收1324484KiB/约1293.4MiB；批初6401944/净增76612KiB。33运行目录逐文件归档验SHA/3重复PDF比对规范原书后省略；11结束测试程序与旧App退役，4729非App私人文件保持。共享缓存/当前候选/最新回滚/唯一证据保留，没有推送GitHub、云端CI或Release。
+<!-- chibi-battle-structure-local:end -->
+
 <!-- chibi-marker-lod-local:start -->
 本批已完成，本地产品c397c449694ac486226995dd1599cb965e683492（连同9419da0，10产品Swift），69/100 ARM64本机已更新；原书两次104页/便签你好/已有伴读对话启动正常退出。安装前新鲜原库39文件字节同、偏好语义同，无旧库恢复。用户dirty性能文档SHA9b186792…563d4保持，未改/未提交。正式App已正常退出，勿重复安装。总入口logs/chibi-marker-lod-20261109/final-local-delivery.json，报告Design/2026-11-09-chibi-marker-lod.md；最新回滚private-books/chibi-marker-lod-20261109/install-before-local-iteration，其protection.json:newAppFiles证明当前c397，oldAppFiles证明保留9c13。
 
