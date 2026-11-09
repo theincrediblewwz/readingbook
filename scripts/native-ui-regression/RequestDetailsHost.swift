@@ -36,6 +36,7 @@ private actor TraceTransport {
     var rasterAt = 0.0
     var rasterImage: CGImage?
     var rasterCaptureCount = 0
+    var headingObservationCount = 0
     var forceRaster: Bool { CommandLine.arguments.contains("--raster-observation") }
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
@@ -169,26 +170,24 @@ private actor TraceTransport {
         try check("closingDetailsKeepsTaskAndAnswer", store.queryProgressState.value == state && store.book?.chats.last?.role == "assistant")
         host.rootView = AnyView(ScrollView { AIProgressStatusView(state: store.queryProgressState).environmentObject(store).padding(20) }.id("operation-order"))
         try await Task.sleep(for: .milliseconds(100))
-        let progressRows = objects().compactMap { object -> (String, CGRect)? in
-            guard let title = read(object, "accessibilityLabel") as? String, title.hasPrefix("查看请求"),
-                  object.responds(to: NSSelectorFromString("accessibilityFrame")),
-                  let frame = (object.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue, frame.width > 0, frame.height > 0 else { return nil }
-            return (title, frame)
-        }.sorted { $0.1.midY > $1.1.midY }
+        try await wait { self.progressOperationRows().count == state.toolSteps.count }
+        let progressRows = progressOperationRows()
+        try JSONSerialization.data(withJSONObject: progressRows.map { ["label": $0.0, "frame": NSStringFromRect($0.1)] }, options: [.prettyPrinted, .sortedKeys])
+            .write(to: output.appendingPathComponent("progress-visible-order.json"))
         try check("progressNewestOperationFirst", progressRows.first?.0.hasPrefix("查看请求2的操作") == true)
         try check("progressRowsExplainOwningRequest", Set(progressRows.map(\.0)) == ["查看请求1的操作：阅读原文片段", "查看请求2的操作：阅读原文片段"])
         try await press("查看请求2的操作：阅读原文片段")
         try await wait { NSApp.windows.contains { $0.title == "请求记录与详情" && $0.isVisible && $0 !== self.window } }
         let focused = try require(NSApp.windows.first { $0.title == "请求记录与详情" && $0.isVisible && $0 !== self.window })
         try await wait { self.detailText(focused).contains("冻结范围") }
-        try check("operationClickSelectsItsOwningRequest", detailHeading(focused).contains("请求 2"))
         try check("operationClickExpandsItsActualParameters", detailText(focused).contains("outside"))
         try check("operationClickExpandsItsActualResult", detailText(focused).contains("冻结范围"))
+        try check("operationClickSelectsItsOwningRequest", comparable(detailHeading(focused)).hasPrefix("请求2"))
         try check("openingFocusedDetailsPreservesOwnerFrame", window.frame == ownerFrame)
         window.makeKeyAndOrderFront(nil)
         try await press("查看请求1的操作：阅读原文片段")
         try await wait { self.detailText(focused).contains(project.units[1].text) }
-        try check("olderOperationClickReselectsExactRequest", detailHeading(focused).contains("请求 1") && detailText(focused).contains(project.units[1].text))
+        try check("olderOperationClickReselectsExactRequest", comparable(detailHeading(focused)).hasPrefix("请求1") && detailText(focused).contains(project.units[1].text))
         let afterInspectionCount = await transport.count()
         try check("focusedInspectionDoesNotSendModelRequests", afterInspectionCount == requestCount && store.queryProgressState.value == state)
         store.requestHistoryWindow?.close()
@@ -198,12 +197,12 @@ private actor TraceTransport {
         let retained = AITraceText(longSource)
         host.rootView = AnyView(ScrollView { AITraceDisclosure(title: "长正文") { AITraceTextView(content: retained).equatable() }.padding(20) }.id("long-source"))
         try await Task.sleep(for: .milliseconds(80))
-        let openedAt = ProcessInfo.processInfo.systemUptime
-        try await press("展开长正文")
-        try await wait { self.hasText("长正文开头") }
+        // Observation/OCR belongs to the driver, not the app's input latency.
+        let openedAt = try await press("展开长正文")
+        try await wait { self.objects().compactMap { $0 as? NSTextView }.contains { $0.string.contains("长正文开头") } }
         let openMilliseconds = (ProcessInfo.processInfo.systemUptime - openedAt) * 1000
-        try check("longSourceCanOpenThroughActualInput", hasText("长正文开头"))
-        try check("longSourceRetainsLastCharacters", hasText("长正文末尾"))
+        try check("longSourceCanOpenThroughActualInput", objects().compactMap { $0 as? NSTextView }.contains { $0.string.contains("长正文开头") })
+        try check("longSourceRetainsLastCharacters", objects().compactMap { $0 as? NSTextView }.contains { $0.string.contains("长正文末尾") })
         try check("longSourceOpensWithoutMainThreadStall", openMilliseconds < 2000)
         try JSONSerialization.data(withJSONObject: ["retainedBytes": retained.text.utf8.count, "openMilliseconds": openMilliseconds], options: [.sortedKeys]).write(to: output.appendingPathComponent("long-source-open.json"))
         try await press("收起长正文")
@@ -243,8 +242,44 @@ private actor TraceTransport {
         }.joined(separator: "\n")
     }
     func detailHeading(_ window: NSWindow) -> String {
-        objects(root: window.contentView).filter { read($0, "accessibilityIdentifier") as? String == "ai-request-heading" }
+        let heading = objects(root: window.contentView).filter { read($0, "accessibilityIdentifier") as? String == "ai-request-heading" }
             .flatMap { object in ["accessibilityLabel", "accessibilityValue"].compactMap { read(object, $0) as? String } }.joined()
+        if !forceRaster, !heading.isEmpty { return heading }
+        guard let root = window.contentView else { return "" }
+        // Focusing an operation correctly scrolls its request heading offscreen.
+        // Reveal that heading through the real native clip view before OCR;
+        // the focused parameters/result have already been checked above.
+        let scrolls = objects(root: root).compactMap { $0 as? NSScrollView }.filter { scroll in
+            let frame = scroll.convert(scroll.bounds, to: root)
+            return frame.minX > 150 && frame.width > 300 && frame.height > 200 && scroll.documentView != nil
+        }.sorted { $0.bounds.height * $0.bounds.width > $1.bounds.height * $1.bounds.width }
+        if let scroll = scrolls.first, let document = scroll.documentView {
+            let old = scroll.contentView.bounds.origin
+            let top = CGPoint(x: old.x, y: document.isFlipped ? document.bounds.minY : max(document.bounds.minY, document.bounds.maxY - scroll.contentView.bounds.height))
+            scroll.contentView.scroll(to: top); scroll.reflectScrolledClipView(scroll.contentView)
+            inputs.append(["input": "Native AppKit detail clip scroll", "from": NSStringFromPoint(old), "to": NSStringFromPoint(top)])
+        }
+        guard let image = opaqueSnapshot(root, in: window) else { return "" }
+        // Read the actual heading in the right detail pane, excluding the
+        // request list on the left. No expected request supplies this text.
+        var sidebarEdges: [CGFloat] = []
+        for object in objects(root: root) {
+            guard let view = object as? NSView, !view.isHiddenOrHasHiddenAncestor,
+                  String(describing: type(of: view)).contains("FocusRing") else { continue }
+            let frame = view.convert(view.bounds, to: root)
+            if frame.minX < 40 && frame.width > 100 && frame.width < 180 { sidebarEdges.append(frame.maxX) }
+        }
+        let sidebarRight = sidebarEdges.max() ?? 160
+        let rows = recognize(image)
+        let selected = rows.filter { $0.1.minX * root.bounds.width > sidebarRight && $0.1.maxY > 0.6 &&
+            comparable($0.0).range(of: #"^请求\d+"#, options: .regularExpression) != nil }
+            .sorted { $0.1.maxY > $1.1.maxY }.first?.0 ?? ""
+        headingObservationCount += 1
+        let evidence: [String: Any] = ["sidebarRight": sidebarRight, "rootBounds": NSStringFromRect(root.bounds), "heading": selected,
+            "rows": rows.map { ["text": $0.0, "bounds": NSStringFromRect($0.1)] }]
+        try? JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
+            .write(to: output.appendingPathComponent("detail-heading-\(headingObservationCount).json"))
+        return selected
     }
     func labels() -> [String] {
         host.layoutSubtreeIfNeeded(); window.displayIfNeeded()
@@ -267,17 +302,7 @@ private actor TraceTransport {
         guard now - rasterAt >= 0.12 else { return }
         rasterAt = now; rasterRows = []; rasterImage = nil; rasterCaptureCount += 1
         host.layoutSubtreeIfNeeded(); window.displayIfNeeded()
-        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
-        host.cacheDisplay(in: host.bounds, to: bitmap)
-        guard let original = bitmap.cgImage else { return }
-        let image: CGImage
-        if CGFloat(original.width) < host.bounds.width * 2,
-           let context = CGContext(data: nil, width: Int(host.bounds.width * 2), height: Int(host.bounds.height * 2),
-                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
-            context.interpolationQuality = .high
-            context.draw(original, in: CGRect(x: 0, y: 0, width: context.width, height: context.height))
-            image = context.makeImage() ?? original
-        } else { image = original }
+        guard let image = opaqueSnapshot(host, in: window) else { return }
         rasterImage = image
         rasterRows = recognize(image).map { text, box in
             (text, CGRect(x: box.minX * host.bounds.width, y: (host.isFlipped ? 1 - box.maxY : box.minY) * host.bounds.height,
@@ -288,26 +313,60 @@ private actor TraceTransport {
         let needle = comparable(text)
         if labels().contains(where: { comparable($0).contains(needle) }) { return true }
         refreshRaster()
-        return rasterRows.contains { comparable($0.0).contains(needle) }
+        return comparable(rasterRows.map(\.0).joined()).contains(needle)
     }
-    func visibleButtons(_ title: String) -> [CGRect] {
+    func opaqueSnapshot(_ root: NSView, in targetWindow: NSWindow) -> CGImage? {
+        root.layoutSubtreeIfNeeded(); targetWindow.displayIfNeeded()
+        guard let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { return nil }
+        root.cacheDisplay(in: root.bounds, to: bitmap)
+        guard let original = bitmap.cgImage,
+              let context = CGContext(data: nil, width: max(1, Int(root.bounds.width * 2)), height: max(1, Int(root.bounds.height * 2)),
+                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        targetWindow.effectiveAppearance.performAsCurrentDrawingAppearance {
+            context.setFillColor((NSColor.windowBackgroundColor.usingColorSpace(.deviceRGB) ?? .white).cgColor)
+        }
+        let bounds = CGRect(x: 0, y: 0, width: context.width, height: context.height)
+        context.fill(bounds); context.interpolationQuality = .high; context.draw(original, in: bounds)
+        return context.makeImage()
+    }
+    func renderedButtonText(_ frame: CGRect) -> String {
+        guard let image = rasterImage else { return "" }
+        let sx = CGFloat(image.width) / host.bounds.width, sy = CGFloat(image.height) / host.bounds.height
+        let crop = CGRect(x: frame.minX * sx, y: (host.isFlipped ? frame.minY : host.bounds.height - frame.maxY) * sy,
+            width: frame.width * sx, height: frame.height * sy).integral
+        guard let clipped = image.cropping(to: crop) else { return "" }
+        return recognize(clipped).map(\.0).joined(separator: " ")
+    }
+    func progressOperationRows() -> [(String, CGRect)] {
+        let ax = forceRaster ? [] : objects().compactMap { object -> (String, CGRect)? in
+            guard let title = read(object, "accessibilityLabel") as? String, title.hasPrefix("查看请求"),
+                  object.responds(to: NSSelectorFromString("accessibilityFrame")),
+                  let frame = (object.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue,
+                  frame.width > 0, frame.height > 0 else { return nil }
+            return (title, frame)
+        }
+        if !ax.isEmpty { return ax.sorted { $0.1.midY > $1.1.midY } }
+        return visibleButtons("阅读原文片段").compactMap { frame -> (String, CGRect)? in
+            let text = comparable(renderedButtonText(frame))
+            guard let range = text.range(of: #"请求\d+"#, options: .regularExpression) else { return nil }
+            return ("查看" + String(text[range]) + "的操作：阅读原文片段", window.convertToScreen(host.convert(frame, to: nil)))
+        }.sorted { $0.1.midY > $1.1.midY }
+    }
+    func visibleButtons(_ title: String, owningRequest: String? = nil) -> [CGRect] {
         refreshRaster()
-        guard let image = rasterImage else { return [] }
+        guard rasterImage != nil else { return [] }
         var frames: [CGRect] = []
         // Use the actual native focus/button view bounds and text from its
         // pixels. This is the same fallback as the existing graph UI probe;
         // no product state or expected body text supplies the hit location.
         for view in objects().compactMap({ $0 as? NSView }) where !view.isHiddenOrHasHiddenAncestor
                 && String(describing: type(of: view)).contains("FocusRing")
-                && view.bounds.height >= 28 && view.bounds.height <= 80 && view.bounds.width > 100 {
+                && view.bounds.height >= 12 && view.bounds.height <= 80 && view.bounds.width >= 24 {
             let frame = view.convert(view.bounds, to: host)
             guard host.bounds.contains(frame), view.visibleRect.height >= view.bounds.height - 1,
                   !frames.contains(frame) else { continue }
-            let sx = CGFloat(image.width) / host.bounds.width, sy = CGFloat(image.height) / host.bounds.height
-            let crop = CGRect(x: frame.minX * sx, y: (host.isFlipped ? frame.minY : host.bounds.height - frame.maxY) * sy,
-                width: frame.width * sx, height: frame.height * sy).integral
-            guard let clipped = image.cropping(to: crop) else { continue }
-            if recognize(clipped).contains(where: { comparable($0.0).contains(comparable(title)) }) { frames.append(frame) }
+            let text = comparable(renderedButtonText(frame))
+            if text.contains(comparable(title)), owningRequest.map({ text.contains(comparable($0)) }) ?? true { frames.append(frame) }
         }
         return frames.sorted { host.isFlipped ? $0.minY < $1.minY : $0.maxY > $1.maxY }
     }
@@ -329,17 +388,18 @@ private actor TraceTransport {
             return row
         }
         let state: [String: Any] = ["visible": window.isVisible, "key": window.isKeyWindow,
-            "hostBounds": NSStringFromRect(host.bounds), "rows": rows]
+            "hostBounds": NSStringFromRect(host.bounds), "rows": rows,
+            "renderedTextRows": rasterRows.map { ["text": $0.0, "frame": NSStringFromRect($0.1)] }]
         try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys])
             .write(to: output.appendingPathComponent(stage + ".json"))
-        if let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
-            host.cacheDisplay(in: host.bounds, to: bitmap)
+        if let image = opaqueSnapshot(host, in: window) {
+            let bitmap = NSBitmapImageRep(cgImage: image)
             if let data = bitmap.representation(using: .png, properties: [:]) {
                 try? data.write(to: output.appendingPathComponent(stage + ".png"))
             }
         }
     }
-    func press(_ label: String, occurrence: Int = 0) async throws {
+    @discardableResult func press(_ label: String, occurrence: Int = 0) async throws -> TimeInterval {
         let started = ProcessInfo.processInfo.systemUptime
         var ready: CGRect?
         repeat {
@@ -351,7 +411,8 @@ private actor TraceTransport {
             var title = label.hasPrefix("展开") || label.hasPrefix("收起") ? String(label.dropFirst(2)) : label
             if label.hasPrefix("查看请求"), let marker = label.range(of: "的操作：") { title = String(label[marker.upperBound...]) }
             if label.hasPrefix("查看第 "), label.hasSuffix(" 次请求") { title = "请求 " + label.replacingOccurrences(of: "查看第 ", with: "").replacingOccurrences(of: " 次请求", with: "") }
-            let frames = visibleButtons(title)
+            let owningRequest = label.hasPrefix("查看请求") ? label.range(of: "的操作：").map { String(label[..<$0.lowerBound].dropFirst(2)) } : nil
+            let frames = visibleButtons(title, owningRequest: owningRequest)
             if frames.indices.contains(occurrence) { ready = window.convertToScreen(host.convert(frames[occurrence], to: nil)); break }
             try await Task.sleep(for: .milliseconds(30))
         } while ProcessInfo.processInfo.systemUptime - started < 1.5
@@ -361,6 +422,7 @@ private actor TraceTransport {
         guard let receiver = host.hitTest(local) else { throw ReadingError.invalid("按钮未命中实际窗口：" + label) }
         inputs.append(["label": label, "occurrence": occurrence, "frame": NSStringFromRect(rect), "readyAfterMilliseconds": (ProcessInfo.processInfo.systemUptime - started) * 1000,
             "receiver": String(describing: type(of: receiver)), "input": "Own application event queue, not OS post"])
+        let postedAt = ProcessInfo.processInfo.systemUptime
         for kind in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             guard let event = NSEvent.mouseEvent(with: kind, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: kind == .leftMouseDown ? 1 : 0) else { throw ReadingError.invalid("无法建立窗口内事件。") }
@@ -368,6 +430,7 @@ private actor TraceTransport {
         }
         try await Task.sleep(for: .milliseconds(40))
         rasterAt = 0
+        return postedAt
     }
     func require<T>(_ value: T?) throws -> T { guard let value else { throw ReadingError.invalid("离线文字未捕获。") }; return value }
 }
