@@ -126,4 +126,32 @@ final class LibraryDocumentSearchTests: XCTestCase {
         XCTAssertTrue(actual.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
     }
+
+    func testStreamingSearchMatchesFullBatchUnicodeTitlesAndFreshExternalChanges() async throws {
+        let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.directory) }
+        let before = try metadata(f), docs = f.project.activeDocuments
+        let texts = try await f.repository.readDocumentsForSearch(bookID: f.project.id, sourceHash: f.project.sourceHash, documents: docs)
+        for query in ["完整原文", "笔记2", "😀", "e\u{301}", "没有这个词"] {
+            let expected = Set(docs.filter { $0.title.localizedCaseInsensitiveContains(query) || texts[$0.id]?.localizedCaseInsensitiveContains(query) == true }.map(\.id))
+            let actual = try await f.repository.searchDocumentIDs(bookID: f.project.id, sourceHash: f.project.sourceHash, documents: docs, query: query)
+            XCTAssertEqual(actual, expected)
+        }
+        try Data("外部刚写入的 fire_NEEDLE".utf8).write(to: f.package.appendingPathComponent(docs[0].relativePath))
+        let fresh = try await f.repository.searchDocumentIDs(bookID: f.project.id, sourceHash: f.project.sourceHash, documents: docs, query: "fire_needle")
+        XCTAssertEqual(fresh, [docs[0].id]); XCTAssertEqual(try metadata(f), before)
+    }
+
+    func testStreamingSearchKeepsSourceRevisionPathAndCancellationGuards() async throws {
+        let f = try await fixture(); defer { try? FileManager.default.removeItem(at: f.directory) }
+        let docs = f.project.activeDocuments
+        do { _ = try await f.repository.searchDocumentIDs(bookID: f.project.id, sourceHash: "wrong", documents: docs, query: "笔记"); XCTFail("错误来源不能检索") } catch { XCTAssertTrue(error is ReadingError) }
+        let current = try await f.repository.setDocumentTrashed(project: f.project, documentID: docs[0].id, trashed: true)
+        do { _ = try await f.repository.searchDocumentIDs(bookID: current.id, sourceHash: current.sourceHash, documents: docs, query: "笔记"); XCTFail("旧回收引用不能检索") } catch { XCTAssertTrue(error is ReadingError) }
+        let file = f.package.appendingPathComponent(docs[1].relativePath), outside = f.directory.appendingPathComponent("outside.md")
+        try Data("不应读取".utf8).write(to: outside); try FileManager.default.removeItem(at: file); try FileManager.default.createSymbolicLink(at: file, withDestinationURL: outside)
+        do { _ = try await f.repository.searchDocumentIDs(bookID: current.id, sourceHash: current.sourceHash, documents: [docs[1]], query: "笔记"); XCTFail("不能沿符号链接检索") } catch { XCTAssertTrue(error is ReadingError) }
+        let owner = f.repository
+        let cancelled = Task { withUnsafeCurrentTask { $0?.cancel() }; return try await owner.searchDocumentIDs(bookID: current.id, sourceHash: current.sourceHash, documents: [], query: "词") }
+        do { _ = try await cancelled.value; XCTFail("取消必须传播") } catch { XCTAssertTrue(error is CancellationError) }
+    }
 }

@@ -249,7 +249,8 @@ struct KnowledgeLibraryView: View {
     @State private var query = ""
     @State private var section = "documents"
     @StateObject private var noteBrowser = ReaderRecordBrowserState()
-    @State private var documentTexts: [String: String] = [:]
+    @State private var matchingDocumentIDs = Set<String>()
+    @State private var documentSearchFailed = false
     @State private var loadedDocumentKey: DocumentSearchRequest?
     private struct DocumentSearchEntry: Hashable {
         let id: String
@@ -260,11 +261,12 @@ struct KnowledgeLibraryView: View {
         let libraryRoot: URL
         let bookID: String
         let sourceHash: String
+        let query: String
         let documents: [DocumentSearchEntry]
     }
     private var documents: [DocumentRecord] {
         let contentIsCurrent = loadedDocumentKey == documentSearchKey
-        return (store.componentDataBook?.activeDocuments ?? []).filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || (contentIsCurrent && documentTexts[$0.id]?.localizedCaseInsensitiveContains(query) == true) }
+        return (store.componentDataBook?.activeDocuments ?? []).filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || (contentIsCurrent && matchingDocumentIDs.contains($0.id)) }
     }
     private var insights: [ReadingInsight] {
         (store.componentDataBook?.insights ?? []).filter { query.isEmpty || $0.markdown.localizedCaseInsensitiveContains(query) }
@@ -284,7 +286,9 @@ struct KnowledgeLibraryView: View {
                     documentSection(visibleDocuments)
                     insightSection(visibleInsights)
                     entitySection(visibleEntities)
-                    if searching, visibleDocuments.isEmpty, visibleInsights.isEmpty, visibleEntities.isEmpty { Text("没有找到匹配内容。").foregroundStyle(.secondary).padding(.vertical, 20) }
+                    if searching, documentSearchFailed { Text("笔记搜索未完成，请重新输入重试。").font(.caption).foregroundStyle(.secondary).padding(.vertical, 12) }
+                    else if searching, loadedDocumentKey != documentSearchKey { ProgressView("正在搜索笔记…").controlSize(.small).padding(.vertical, 12) }
+                    else if searching, visibleDocuments.isEmpty, visibleInsights.isEmpty, visibleEntities.isEmpty { Text("没有找到匹配内容。").foregroundStyle(.secondary).padding(.vertical, 20) }
                 }.padding(.horizontal, 24).padding(.bottom, 24).frame(maxWidth: 1100).frame(maxWidth: .infinity, alignment: .topLeading)
             }.background(Palette.canvas)
         }.padding(.top, 80).padding(.bottom, 92).background(Palette.canvas)
@@ -292,26 +296,18 @@ struct KnowledgeLibraryView: View {
             .popover(isPresented: Binding(get: { inspectedID != nil }, set: { if !$0 { inspectedID = nil } })) {
             if let id = inspectedID { ObjectInspector(id: id, onClose: { inspectedID = nil }).environmentObject(store).frame(width: 330, height: 500) }
         }.task(id: documentSearchKey) {
-            documentTexts = [:]; loadedDocumentKey = nil
-            // Opening the library needs metadata only. Read Markdown bodies
-            // once when a content search is active, not on every library visit.
+            matchingDocumentIDs = []; loadedDocumentKey = nil; documentSearchFailed = false
+            // Opening needs metadata only. Stream matching on the repository
+            // actor after typing settles; keep only result IDs in view state.
             guard let request = documentSearchKey, let book = store.componentDataBook else { return }
             let repository = store.repository
-            var loaded: [String: String] = [:]
             do {
-                let documents = book.activeDocuments
-                if documents.count > 2 {
-                    loaded = try await repository.readDocumentsForSearch(bookID: book.id, sourceHash: book.sourceHash, documents: documents)
-                } else {
-                    for document in documents {
-                        try Task.checkCancellation()
-                        loaded[document.id] = try await repository.readDocument(bookID: book.id, document: document)
-                    }
-                }
-                if !Task.isCancelled, documentSearchKey == request { documentTexts = loaded; loadedDocumentKey = request }
+                try await Task.sleep(for: .milliseconds(140))
+                let matches = try await repository.searchDocumentIDs(bookID: book.id, sourceHash: book.sourceHash, documents: book.activeDocuments, query: request.query)
+                if !Task.isCancelled, documentSearchKey == request { matchingDocumentIDs = matches; loadedDocumentKey = request }
             }
             catch is CancellationError { }
-            catch { if !Task.isCancelled, documentSearchKey == request { store.errorMessage = error.localizedDescription } }
+            catch { if !Task.isCancelled, documentSearchKey == request { documentSearchFailed = true; store.errorMessage = error.localizedDescription } }
         }.onChange(of: store.bookID) { _, _ in inspectedID = nil; query = "" }
     }
     @ViewBuilder private func documentSection(_ documents: [DocumentRecord]) -> some View {
@@ -419,7 +415,7 @@ struct KnowledgeLibraryView: View {
     }
     private var documentSearchKey: DocumentSearchRequest? {
         guard !query.isEmpty, let book = store.componentDataBook else { return nil }
-        return DocumentSearchRequest(libraryRoot: store.libraryRootURL, bookID: book.id, sourceHash: book.sourceHash,
+        return DocumentSearchRequest(libraryRoot: store.libraryRootURL, bookID: book.id, sourceHash: book.sourceHash, query: query,
             documents: book.activeDocuments.map { DocumentSearchEntry(id: $0.id, relativePath: $0.relativePath, updatedAt: $0.updatedAt) })
     }
 }

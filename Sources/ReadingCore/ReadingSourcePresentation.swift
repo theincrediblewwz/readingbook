@@ -39,6 +39,27 @@ extension ReadingQuerySession {
         if let receipts = value["hostToolReceipts"] as? [[String: Any]], !receipts.isEmpty {
             sections.append("软件回执（非正文）：\n" + (try json(receipts)))
         }
+        if let objects = value["retainedReadObjects"] as? [[String: Any]], !objects.isEmpty {
+            let locations = Dictionary(snapshot.sources.map { ($0.unitID, $0.locator) }, uniquingKeysWith: { first, _ in first })
+            let lines = objects.map { object -> String in
+                var lines = ["- \(object["name"] as? String ?? "资料")（资料ID：\(object["id"] as? String ?? "")）"]
+                if let fields = object["fields"] as? [String: String], !fields.isEmpty {
+                    lines.append("  已存字段：" + fields.keys.sorted().map { $0 + "=" + fields[$0]! }.joined(separator: "；"))
+                }
+                if let references = object["references"] as? [String: [String]], !references.isEmpty {
+                    lines.append("  关联：" + references.keys.sorted().map { $0 + "=" + references[$0]!.joined(separator: ",") }.joined(separator: "；"))
+                }
+                if let ids = object["sourceUnitIDs"] as? [String], !ids.isEmpty {
+                    lines.append("  出处定位：" + ids.map { locations[$0] ?? $0 }.joined(separator: "；"))
+                }
+                if ["nameTruncated", "summaryTruncated", "fieldsPartial", "referencesPartial", "sourcesPartial"].contains(where: { object[$0] as? Bool == true }) {
+                    lines.append("  仅保留部分字段或内容，不能视为完整记录。")
+                }
+                return lines.joined(separator: "\n")
+            }.joined(separator: "\n")
+            let jsonRows = try json(objects)
+            sections.append("已查看资料目录（已有分析，非原文证据；\(value["readDirectoryPartial"] as? Bool == true ? "部分保留" : "保留的返回项")）：\n" + (lines.utf8.count <= jsonRows.utf8.count ? lines : jsonRows))
+        }
         for row in rows {
             guard let kind = row["kind"] as? String, ["unit", "doc", "message"].contains(kind),
                   let id = row["id"] as? String, !id.contains("\n"), !id.contains("\r"),

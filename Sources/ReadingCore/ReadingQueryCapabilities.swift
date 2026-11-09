@@ -496,6 +496,7 @@ extension ReadingQuerySession {
             throw ReadingWorkflowBudgetPause(message: "审阅期间原书或OCR版本改变，已停止原任务；已保存的修改保留。")
         }
         invalidateReviewedDocumentCache()
+        returnedObjectDirectory.removeAll()
         project = fresh; refreshTaskCreatedNodes(in: fresh)
     }
 
