@@ -1,3 +1,23 @@
+<!-- chibi-closeout-knowledge-local:start -->
+当前接续：Design/2026-11-10-chibi-closeout-knowledge.md；总入口 logs/chibi-closeout-knowledge-20261110/final-local-delivery.json。产品70e08c1（6产品Swift实改），本机70/101 ARM64本地迭代已安装，二进制651ea5df37051e7dde75d5ab450c88a25b9a3394e8a167cfd2e0a7b8c5397411。本批不推GitHub/云CI/Release；正式App已正常退出，勿重复安装或恢复旧库。
+
+用户最新重点是根治AI与组件协作，不只修格式。已写Design/2026-11-10-ai-component-feedback-design.md：AI决定目的，软件解析共享ID/出处/完整范围并驱动组件，拿到实际呈现后反馈；部分完成返回具体缺口，允许有限定向修正，不清掉有效成果，不固定模板。下一批按此推进，不为同一现场盲目再付费。
+
+收尾新增当前问答的有界已读目录，仅记录实际返回项和版本；非原文证据，不新增权限/事实库；审阅更新后清空。旧真实读到7阶段收尾0→7，最终重放14,344B封装/9,420B排版，来源/引用计数不变，隐藏父关联与截短预算检查通过。真实续接同e5f5ac98…61b376冻结基线，清旧对话，8HTTP/311834报告token，七阶段名称/顺序本轮正确，规范数据不变。
+
+仍未达理想：模型from/to=612/612，只筛火攻起点；之后没有workspace_context_get，回答承认未观察新画面。人工点生产阶段按钮是612/613，才出现已有火攻路线。两者合法格式，根因是展示目的与完成核对缺口。全部参数/回执/模型公开返回/原生workspace和图片已在退出前保存到failure-cases/partial-phase-filter.json；下一批先离线重放，按父事件取七阶段减少4页目录往返，再加按阶段身份操作和真实回执/有限修正。
+
+知识库改仓库actor逐篇搜索，只留匹配ID；140ms停笔取消旧查询，同书库/来源/版本/词才发布。128合成笔记三次独立对照：正文状态68,673,654B→0，RSS中位94,142,464→15,794,176B，命中同10；总0.4382→0.4354s基本同，不冒称整个App内存/FPS/AI网络提速。原生正文10/标题1/提交后无匹配/清空128通过；重复AX设置驱动失效未计为快速输入通过。
+
+core5 479方法/5104独立断言非XCTest；closeoutKnowledge1范围55/共享61/动态52/滚动25，共193原生检查通过且自动报告所检告警零。手动real1/knowledgeUI2另有18/60条AppKit负几何诊断，保留manual-log-review.json和failure-cases/manual-geometry.json，尚未归因，不称所有场景零诊断。core1—4中有测试夹具类型推断/序列化假设错误及一次源码修改中断，失败均保留，只有core5计最终。
+
+安装前新鲜回滚private-books/chibi-closeout-knowledge-20261110/install-before-local-iteration/ReadingBook-0.23.70-local-6ce5e43.app（oldAppFiles校验6ce，newAppFiles校验70e）。原书两次启动104/1484、你好、2笔记/旧问答通过，返回书库正常退出；原库39文件全部字节同、偏好值同，无旧库覆盖。用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，未改未提交。
+
+清理7,872,164→6,938,556KiB，回收933,608KiB/911.7MiB；批初6,886,176，清理时净增52,380KiB/51.2MiB，后续文档微增见最终入口。18结束目录逐成员验SHA归档、1重复PDF指向规范原书、8可重建程序及过旧62a回滚App退役；4897非App私人文件/共享缓存/当前候选/70通用包/最新6ce回滚/唯一失败保留。clean-final.py --apply已执行，勿重跑；ended-runtime-index.json保存成员与恢复位置。
+
+不要忘记后续已有计划：现代地名密度（不淡化底图）、地图浮层避让/取景、原文顺序友好页章标签、轴横移/可视与筛选端点分离/层级区间、远景聚合密度、有据曲线区域、16类组件轮转。
+<!-- chibi-closeout-knowledge-local:end -->
+
 <!-- chibi-catalog-legibility-local:start -->
 当前接续：Design/2026-11-10-chibi-catalog-legibility.md；总入口logs/chibi-catalog-legibility-20261110/final-local-delivery.json。产品be7eba8+6ce5e43（4产品Swift实改），本机70/101 ARM64本地迭代已安装，二进制1cdeaedf2597205b2eb93ae6ad457946ba430e14359820d14ca1016cb94493c0。本批未推GitHub/云CI/Release，远端仍上一阶段83c；正式App已正常退出，勿重复安装/恢复旧库。
 
