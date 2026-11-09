@@ -8,10 +8,14 @@ private struct ReadingMapPoint: Identifiable, Equatable {
     var title: String
     var subtitle: String
     var coordinate: CLLocationCoordinate2D
+    var markerKind = "event"
+    var affinityID: String? = nil
+    var affinityTitle: String? = nil
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id.utf8.elementsEqual(rhs.id.utf8) && lhs.targetID.utf8.elementsEqual(rhs.targetID.utf8)
             && lhs.title.utf8.elementsEqual(rhs.title.utf8) && lhs.subtitle.utf8.elementsEqual(rhs.subtitle.utf8)
             && lhs.coordinate.latitude == rhs.coordinate.latitude && lhs.coordinate.longitude == rhs.coordinate.longitude
+            && lhs.markerKind == rhs.markerKind && lhs.affinityID == rhs.affinityID && lhs.affinityTitle == rhs.affinityTitle
     }
 }
 
@@ -121,14 +125,17 @@ struct SpatialTimelineView: View {
         if temporalMode, let id = store.selectedTemporalEntityID {
             return (store.temporalSnapshot(id)?.footprints ?? []).compactMap { presence in
                 guard let placeID = presence.placeID, let place = places[placeID], let lat = place.latitude, let lon = place.longitude else { return nil }
-                return ReadingMapPoint(id: presence.id, targetID: presence.eventID ?? id, title: store.objectTitle(id), subtitle: presence.action + " · " + place.name, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon))
+                return ReadingMapPoint(id: presence.id, targetID: presence.eventID ?? id, title: store.objectTitle(id), subtitle: presence.action + " · " + place.name, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), markerKind: "person")
             }
         }
         var result: [ReadingMapPoint] = []
+        let snapshots = Dictionary(store.temporalEvents.map { ($0.object.id, $0) }, uniquingKeysWith: { first, _ in first })
         for event in visibleEvents {
+            let metadata = snapshots[event.id]?.metadata
+            let parentID = metadata?.parentEventID.flatMap { snapshots[$0] != nil ? $0 : nil }
             for id in event.placeIDs {
                 if let place = places[id], let lat = place.latitude, let lon = place.longitude {
-                    result.append(ReadingMapPoint(id: "\(event.id)|\(place.id)", targetID: event.id, title: event.name, subtitle: "\(event.dateText) · \(place.name)", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
+                    result.append(ReadingMapPoint(id: "\(event.id)|\(place.id)", targetID: event.id, title: event.name, subtitle: "\(event.dateText) · \(place.name)", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), markerKind: metadata?.kind ?? "event", affinityID: parentID, affinityTitle: parentID.flatMap { snapshots[$0]?.object.name }))
                 }
             }
         }
@@ -136,7 +143,7 @@ struct SpatialTimelineView: View {
             let admitted = Set(admittedEntities.map(\.id))
             result = (store.componentUsesCurrentContext ? store.readingContextItems.entities : book.entities).filter { admitted.contains($0.id) }.compactMap { place in
                 guard let lat = place.latitude, let lon = place.longitude else { return nil }
-                return ReadingMapPoint(id: place.id, targetID: place.id, title: place.name, subtitle: place.locationNote ?? "书中地点", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon))
+                return ReadingMapPoint(id: place.id, targetID: place.id, title: place.name, subtitle: place.locationNote ?? "书中地点", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), markerKind: "place")
             }
         }
         return result
@@ -849,64 +856,92 @@ private struct ReadingMapRenderer: View, Equatable {
     @Binding var camera: MapCameraPosition
     @Binding var selection: ReadingMapSelection?
     @Binding var inspectedRoute: SpatialRoute?
+    @State private var markerNodes: [SpatialMarkerNode] = []
+    @State private var markerSeeds: [SpatialMarkerSeed] = []
+    @State private var markerGroup: [SpatialMarkerSeed]?
+    @State private var cameraRegion: MKCoordinateRegion?
+    @State private var markerEpoch: UInt64 = 0
+    private var seeds: [SpatialMarkerSeed] {
+        points.map { point in
+            SpatialMarkerSeed(id: point.id, objectID: point.targetID, title: point.title, subtitle: point.subtitle,
+                coordinate: .init(latitude: point.coordinate.latitude, longitude: point.coordinate.longitude),
+                assetID: SpatialMarkerAssets.resolve(kind: point.markerKind, title: point.title,
+                    fallback: point.markerKind == "person" ? "person" : point.markerKind == "place" ? "place" : "event").id,
+                affinityID: point.affinityID, affinityTitle: point.affinityTitle)
+        } + SpatialMarkerSeeds.make(points: [], routes: routes)
+    }
+    private var nodes: [SpatialMarkerNode] { markerSeeds == seeds ? markerNodes : SpatialMarkerPacking.bootstrap(seeds) }
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.scope == rhs.scope && lhs.selectedID == rhs.selectedID && lhs.cameraValue == rhs.cameraValue && lhs.routes == rhs.routes
             && lhs.points == rhs.points && lhs.sequence.count == rhs.sequence.count
             && zip(lhs.sequence, rhs.sequence).allSatisfy { $0.latitude == $1.latitude && $0.longitude == $1.longitude }
     }
     var body: some View {
-        let contents = ReadingMapContents(points: points, selectedID: selectedID,
-                                          scope: scope, selection: $selection)
+        GeometryReader { geometry in MapReader { proxy in
         Map(position: $camera) {
-            SpatialMapRoutes(routes: routes, inspected: $inspectedRoute) { id in selection = ReadingMapSelection(targetID: id, scope: scope) }
+            SpatialMapRoutes(routes: routes, inspected: $inspectedRoute,
+                selectEvent: { id in selection = ReadingMapSelection(targetID: id, scope: scope) }, showsMarkers: false)
             // Keep the changing trajectory at one content identity when marker
             // counts cross the reuse threshold. Only annotations are reusable.
             if sequence.count > 1 {
                 MapPolyline(coordinates: sequence).stroke(Palette.copper.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
             }
-            if points.count >= 64 {
-                contents
-            } else {
-                ForEach(points) { point in
-                    Annotation("", coordinate: point.coordinate) { contents.mapMarker(point) }
-                }
+            SpatialMapAnnotations(nodes: nodes) { node in
+                if node.isGroup { markerGroup = node.members }
+                else if let seed = node.members.first { activate(seed) }
             }
         }
         .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
-        .overlay(alignment: .topLeading) { SpatialRouteTimeNotice(routes: routes) }
-    }
-}
-
-private struct ReadingMapContents: MapContent, Equatable {
-    let points: [ReadingMapPoint]
-    let selectedID: String?
-    let scope: ReadingMapScope
-    @Binding var selection: ReadingMapSelection?
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.scope == rhs.scope && lhs.selectedID == rhs.selectedID && lhs.points == rhs.points
-    }
-    var body: some MapContent {
-            ForEach(points) { point in
-                Annotation("", coordinate: point.coordinate) { mapMarker(point) }
+        .overlay(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: 4) {
+                SpatialMarkerLegend(seeds: seeds).padding(.leading, 12).padding(.top, 12)
+                SpatialRouteTimeNotice(routes: routes)
             }
+        }
+        .overlay(alignment: .topTrailing) {
+            if let group = markerGroup {
+                SpatialMarkerGroupCard(members: group, select: activate, zoom: {
+                    markerGroup = nil
+                    if let region = spatialMarkerGroupRegion(group) { camera = .region(region) }
+                }, close: { markerGroup = nil }).padding(.top, 12).padding(.trailing, 12)
+            }
+        }
+        .onMapCameraChange(frequency: .onEnd) { context in
+            cameraRegion = context.region
+            if camera == .automatic { camera = .camera(context.camera) }
+            rebuildMarkers(using: proxy, size: geometry.size)
+            markerEpoch &+= 1
+        }
+        .task(id: markerEpoch) {
+            guard markerEpoch > 0 else { return }
+            for _ in 0..<6 {
+                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+                if rebuildMarkers(using: proxy, size: geometry.size) { return }
+            }
+        }
+        .onChange(of: seeds) { _, _ in markerGroup = nil; rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1 }
+        .onChange(of: selectedID) { _, _ in rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1 }
+        .onChange(of: inspectedRoute) { _, _ in rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1 }
+        .onChange(of: geometry.size) { _, _ in rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1 }
+        .onChange(of: scope) { _, _ in markerGroup = nil; markerSeeds = []; markerNodes = []; markerEpoch &+= 1 }
+        } }
     }
-    func mapMarker(_ point: ReadingMapPoint) -> some View {
-        let selected = selectedID == point.targetID
-        return Button { selection = ReadingMapSelection(targetID: point.targetID, scope: scope) } label: {
-            VStack(spacing: 4) {
-                Image(systemName: selected ? "mappin" : "circle.fill").font(.system(size: selected ? 18 : 9, weight: .semibold))
-                    .foregroundStyle(selected ? Palette.surface : Palette.accent)
-                    .frame(width: selected ? 42 : 22, height: selected ? 42 : 22)
-                    .background(selected ? Palette.accent : Palette.surface, in: Circle())
-                    .overlay(Circle().stroke(Palette.accent.opacity(0.5), lineWidth: 1))
-                if selected {
-                    Text(point.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.accent).lineLimit(1).truncationMode(.middle).frame(maxWidth: 240).padding(.horizontal, 14).padding(.vertical, 8).background(Palette.surface, in: Capsule())
-                    Text(point.subtitle).font(.system(size: 13)).lineLimit(1).truncationMode(.middle).frame(maxWidth: 240).padding(.horizontal, 9).padding(.vertical, 5).background(Palette.surface.opacity(0.94), in: Capsule())
-                }
-            }.frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
-        }.buttonStyle(ReadingQuietButtonStyle()).help("\(point.title) · \(point.subtitle)").accessibilityLabel("\(point.title)，\(point.subtitle)")
+    private func activate(_ seed: SpatialMarkerSeed) {
+        markerGroup = nil
+        if let routeID = seed.routeID, let route = routes.first(where: { $0.relationID == routeID }) {
+            inspectedRoute = route
+            if let id = route.eventID { selection = ReadingMapSelection(targetID: id, scope: scope) }
+        } else if let id = seed.objectID { selection = ReadingMapSelection(targetID: id, scope: scope) }
     }
-
+    @discardableResult private func rebuildMarkers(using proxy: MapProxy, size: CGSize) -> Bool {
+        guard let region = cameraRegion else { return false }
+        let values = seeds
+        guard let layout = spatialMarkerLayout(seeds: values, proxy: proxy, size: size, selected: Set(selectedID.map { [$0] } ?? []),
+            routeID: inspectedRoute?.relationID, showTitles: region.span.longitudeDelta < 1.5) else { return false }
+        if markerNodes != layout { markerNodes = layout }
+        if markerSeeds != values { markerSeeds = values }
+        return true
+    }
 }
 
 private struct ReadingMapCameraSnapshot {

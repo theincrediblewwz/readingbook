@@ -7,13 +7,14 @@ struct SpatialMapRoutes: MapContent {
     let routes: [SpatialRoute]
     @Binding var inspected: SpatialRoute?
     var selectEvent: (String) -> Void
+    var showsMarkers = true
     var body: some MapContent {
         ForEach(routes) { route in
             let color = routeColor(route)
             MapPolyline(coordinates: route.coordinates.map(\.mapCoordinate))
                 .stroke(color.opacity(route.isUncertain ? 0.65 : 0.9), style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: route.isUncertain ? [7, 5] : []))
             MapPolygon(coordinates: SpatialRouteGeometry.arrowhead(route.coordinates).map(\.mapCoordinate)).foregroundStyle(color)
-            if let anchor = route.coordinates.dropFirst().first {
+            if showsMarkers, let anchor = route.coordinates.dropFirst().first {
                 Annotation("", coordinate: anchor.mapCoordinate, anchor: .bottom) {
                     Button {
                         inspected = route

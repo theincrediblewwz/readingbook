@@ -613,12 +613,28 @@ extension ReadingQuerySession {
             let points = Array(Set(map.objectIDs).intersection(objects)).sorted()
             let projected = Set(map.projectedRouteIDs).intersection(relations)
             let visible = Array(Set(map.visibleRouteIDs).intersection(projected)).sorted()
+            let groups: [(id: String, objects: [String], routes: [String])] = (map.markerGroups ?? []).compactMap { group in
+                let objectIDs = Array(Set(group.objectIDs).intersection(objects)).sorted()
+                let routeIDs = Array(Set(group.routeIDs).intersection(projected)).sorted()
+                guard !objectIDs.isEmpty || !routeIDs.isEmpty else { return nil }
+                // Group IDs can encode an out-of-scope leader. Return an opaque
+                // ordinal instead of exposing that renderer-internal identity.
+                return ("group", objectIDs, routeIDs)
+            }
             return ["partID": map.partID, "camera": ["latitude": map.latitude, "longitude": map.longitude,
                 "latitudeDelta": map.latitudeDelta, "longitudeDelta": map.longitudeDelta],
                 "visibleObjectIDs": Array(points.prefix(24)), "visibleRouteIDs": Array(visible.prefix(24)),
                 "visibleRouteCount": visible.count, "projectedRouteCount": projected.count,
-                "partial": points.count > 24 || visible.count > 24,
-                "note": "相机停稳后的区域，扣除工作台内已知的卡片和按钮；不包含其他应用窗口的遮挡。投影路线不一定在屏幕内。"]
+                "visibleObjectCount": points.count, "markerGroupCount": groups.count,
+                "groupedObjectCount": Set(groups.flatMap(\.objects)).count,
+                "groupedRouteCount": Set(groups.flatMap(\.routes)).count,
+                "markerGroups": groups.prefix(6).enumerated().map { index, group -> [String: Any] in
+                    ["id": "display-group-\(index + 1)", "objectIDs": Array(group.objects.prefix(8)), "routeIDs": Array(group.routes.prefix(8)),
+                     "objectCount": group.objects.count, "routeCount": group.routes.count]
+                },
+                "partial": points.count > 24 || visible.count > 24 || groups.count > 6 || groups.contains(where: { $0.objects.count > 8 || $0.routes.count > 8 }),
+                "itemOrder": "stable ID order, not chronology",
+                "note": "相机停稳并扣除工作台已知遮挡；不含其他应用窗口。visibleRouteCount只保证路线有一部分可见，不是全程可见。markerGroups是可展开的显示分组，其成员不算单独可见，不新增战役事实。列表按ID排序，不表示先后顺序。"]
         }
     }
     private func validateWorkspace(_ value: ReadingWorkspaceSnapshot) throws {
@@ -632,7 +648,7 @@ extension ReadingQuerySession {
               [value.timeFrom, value.timeTo, value.currentTime].compactMap({ $0 }).allSatisfy({ $0.isFinite && abs($0) <= 1_000_000_000_000 }) else { throw invalid("界面快照属于其他书或超过界限。") }
         if value.observationStatus == .empty {
             guard let visible = value.visibleObjects, visible.objectIDs.isEmpty, visible.nodeIDs.isEmpty,
-                  (value.mapViewports ?? []).allSatisfy({ $0.objectIDs.isEmpty && $0.visibleRouteIDs.isEmpty && $0.projectedRouteIDs.isEmpty }) else {
+                  (value.mapViewports ?? []).allSatisfy({ $0.objectIDs.isEmpty && $0.visibleRouteIDs.isEmpty && $0.projectedRouteIDs.isEmpty && ($0.markerGroups?.isEmpty ?? true) }) else {
                 throw invalid("空画面回执与渲染器提供的可见数据不一致。")
             }
         }

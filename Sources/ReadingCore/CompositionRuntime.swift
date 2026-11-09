@@ -602,11 +602,14 @@ public enum CompositionRuntime {
                                within window: TemporalQueryWindow?, scope: CompositionScope, queries: inout TemporalQueryCache) throws -> [CompositionMapPoint] {
         var result: [CompositionMapPoint] = []
         var seen = Set<String>()
-        func append(id: String, target: String, place: TypedObject, title: String, subtitle: String, evidence: [Evidence], kind: String) {
+        func append(id: String, target: String, place: TypedObject, title: String, subtitle: String, evidence: [Evidence], kind: String,
+                    markerKind: String? = nil, parentID: String? = nil) {
             guard let latitude = place.latitude, let longitude = place.longitude, latitude.isFinite, longitude.isFinite,
                   (-90...90).contains(latitude), (-180...180).contains(longitude), result.count <= 400, seen.insert(id).inserted else { return }
             result.append(CompositionMapPoint(id: id, targetID: target, title: title, subtitle: subtitle,
-                latitude: latitude, longitude: longitude, evidence: evidence, kind: kind))
+                latitude: latitude, longitude: longitude, evidence: evidence, kind: kind, markerKind: markerKind,
+                affinityID: parentID.flatMap { base.objectsByID[$0]?.kind == .event ? $0 : nil },
+                affinityTitle: parentID.flatMap { base.objectsByID[$0]?.kind == .event ? base.objectsByID[$0]?.name : nil }))
         }
         for row in items {
             try Task.checkCancellation()
@@ -631,7 +634,8 @@ public enum CompositionRuntime {
                 for placeID in event.object.references["places"] ?? [] {
                     guard let place = base.objectsByID[placeID] else { continue }
                     append(id: "event." + id + "." + placeID, target: id, place: place, title: object.name,
-                        subtitle: place.name + " · " + event.extent.sourceText + (event.match == .unknown ? " · 时间未明" : event.match == .possible ? " · 时间待考" : ""), evidence: event.object.evidence, kind: "eventLocation")
+                        subtitle: place.name + " · " + event.extent.sourceText + (event.match == .unknown ? " · 时间未明" : event.match == .possible ? " · 时间待考" : ""), evidence: event.object.evidence, kind: "eventLocation",
+                        markerKind: event.metadata?.kind, parentID: event.metadata?.parentEventID)
                     if result.count > 400 { return result }
                 }
             }

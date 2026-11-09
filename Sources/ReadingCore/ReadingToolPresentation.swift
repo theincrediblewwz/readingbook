@@ -92,14 +92,14 @@ extension ReadingQuerySession {
         var result = fields(value, strings: ["status", "observationStatus", "rendererID", "sourceScope", "timeAxis"],
             numbers: ["partial", "timeFilterApplied", "timeFrom", "timeTo", "currentTime"])
         if let maps = value["mapViewports"] as? [[String: Any]] {
-            result["mapViewports"] = maps.prefix(4).map { fields($0, strings: ["partID"], numbers: ["partial", "projectedRouteCount", "visibleRouteCount"]) }
+            result["mapViewports"] = maps.prefix(4).map { fields($0, strings: ["partID", "itemOrder"], numbers: ["partial", "projectedRouteCount", "visibleRouteCount", "visibleObjectCount", "markerGroupCount", "groupedObjectCount", "groupedRouteCount"]) }
             if maps.count > 4 { result["partial"] = true }
         }
         if let clocks = value["timeWindows"] as? [[String: Any]] {
             result["timeWindows"] = clocks.prefix(4).map { fields($0, strings: ["groupID", "axis"], numbers: ["from", "to", "current"]) }
             if clocks.count > 4 { result["partial"] = true }
         }
-        result["note"] = "对应工具返回时的实际画面概要，已省略对象列表；不是原书事实，也不保证此后画面未变化。"
+        result["note"] = "对应工具返回时的实际画面概要，已省略对象列表；不是原书事实，也不保证此后画面未变化。路线可见仅指有部分线段可见；合并标记成员不算单独可见，ID顺序不表示时间先后。"
         return result
     }
 }

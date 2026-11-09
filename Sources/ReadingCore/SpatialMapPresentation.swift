@@ -1,0 +1,191 @@
+import Foundation
+
+/// Display assets are independent of a book's schema. Unknown action kinds
+/// remain valid shared knowledge and use the neutral asset.
+public struct SpatialMarkerAsset: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let title: String
+    public let symbol: String
+    public let tint: String
+    public let aliases: [String]
+}
+public enum SpatialMarkerAssets {
+    public static let all: [SpatialMarkerAsset] = [
+        .init(id: "fire", title: "火攻", symbol: "flame.fill", tint: "fire", aliases: ["火攻", "纵火", "縱火", "fire", "fire_attack"]),
+        .init(id: "battle", title: "交战", symbol: "crossed-swords", tint: "battle", aliases: ["战斗", "戰鬥", "交战", "交戰", "进攻", "進攻", "battle", "attack", "伏击", "伏擊", "设伏", "設伏"]),
+        .init(id: "retreat", title: "撤退", symbol: "arrow.uturn.backward", tint: "retreat", aliases: ["撤退", "退军", "退軍", "脱身", "脫身", "retreat", "withdrawal"]),
+        .init(id: "march", title: "行军", symbol: "figure.walk", tint: "march", aliases: ["行军", "行軍", "进兵", "進兵", "移兵", "调兵", "調兵", "movement", "march"]),
+        .init(id: "water", title: "渡河", symbol: "sailboat.fill", tint: "water", aliases: ["渡河", "密渡", "渡江", "航行", "water", "crossing", "naval"]),
+        .init(id: "camp", title: "驻营", symbol: "tent.fill", tint: "camp", aliases: ["驻营", "駐營", "进驻", "進駐", "下寨", "驻扎", "駐紮", "camp"]),
+        .init(id: "meeting", title: "会见", symbol: "person.2.fill", tint: "meeting", aliases: ["会盟", "會盟", "会见", "會見", "meeting", "alliance"]),
+        .init(id: "arrival", title: "抵达", symbol: "flag.fill", tint: "march", aliases: ["抵达", "抵達", "arrival"]),
+        .init(id: "transport", title: "运输", symbol: "shippingbox.fill", tint: "camp", aliases: ["运输", "運輸", "运粮", "運糧", "transport", "supply"]),
+        .init(id: "person", title: "人物", symbol: "person.fill", tint: "neutral", aliases: ["person", "presence"]),
+        .init(id: "place", title: "地点", symbol: "smallcircle.filled.circle", tint: "neutral", aliases: ["place", "entityLocation"]),
+        .init(id: "event", title: "事件", symbol: "diamond.fill", tint: "neutral", aliases: ["event", "eventLocation"])
+    ]
+    public static func asset(_ id: String) -> SpatialMarkerAsset { all.first { $0.id == id } ?? all.last! }
+    /// Title fallback chooses a visual hint, never writes an event category.
+    public static func resolve(kind: String, title: String = "", fallback: String = "event") -> SpatialMarkerAsset {
+        let key = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let exact = all.first(where: { $0.id.lowercased() == key || $0.aliases.contains { $0.lowercased() == key } }),
+           !["event", "place"].contains(exact.id) { return exact }
+        if fallback != "place", fallback != "person" {
+            let text = String(title.prefix(160)).lowercased()
+            if let hint = all.prefix(9).first(where: { asset in asset.aliases.contains { $0.count >= 2 && text.contains($0.lowercased()) } }) { return hint }
+        }
+        return asset(fallback)
+    }
+}
+
+/// An annotation's geographic identity never changes when its screen layout
+/// changes. These values are transient; no new facts or coordinates are saved.
+public struct SpatialMarkerSeed: Identifiable, Hashable, Sendable {
+    public var id: String
+    public var objectID: String?
+    public var routeID: String?
+    public var title: String
+    public var subtitle: String
+    public var coordinate: SpatialCoordinate
+    public var assetID: String
+    public var affinityID: String?
+    public var affinityTitle: String?
+    public init(id: String, objectID: String? = nil, routeID: String? = nil, title: String, subtitle: String = "",
+                coordinate: SpatialCoordinate, assetID: String, affinityID: String? = nil, affinityTitle: String? = nil) {
+        self.id = id; self.objectID = objectID; self.routeID = routeID; self.title = title; self.subtitle = subtitle
+        self.coordinate = coordinate; self.assetID = assetID; self.affinityID = affinityID; self.affinityTitle = affinityTitle
+    }
+}
+public struct SpatialMarkerScreenPoint: Sendable {
+    public var seed: SpatialMarkerSeed
+    public var x: Double
+    public var y: Double
+    public init(seed: SpatialMarkerSeed, x: Double, y: Double) { self.seed = seed; self.x = x; self.y = y }
+}
+public struct SpatialMarkerNode: Identifiable, Hashable, Sendable {
+    public var id: String
+    public var members: [SpatialMarkerSeed]
+    public var offsetX: Double = 0
+    public var offsetY: Double = 0
+    public var showsTitle: Bool = false
+    public var isSelected: Bool = false
+    public var coordinate: SpatialCoordinate { members[0].coordinate }
+    public var isGroup: Bool { members.count > 1 }
+    public var title: String { isGroup ? (members[0].affinityTitle ?? "同处记录") : members[0].title }
+    public var assetID: String { isGroup ? "group" : members[0].assetID }
+}
+public struct SpatialMarkerLayout: Sendable {
+    public var nodes: [SpatialMarkerNode]
+    public var candidateCount: Int
+    public var distanceChecks: Int
+    public var overlapChecks: Int = 0
+}
+
+public enum SpatialMarkerPacking {
+    /// Distance decisions use actual projected points. Buckets only accelerate
+    /// neighbour lookup: moving across a bucket edge cannot change a decision.
+    /// Each group is bounded around a stable leader, never a transitive chain
+    /// that could turn nearby records into a continent-sized "battle".
+    public static func layout(_ input: [SpatialMarkerScreenPoint], width: Double, height: Double,
+                              selectedObjectIDs: Set<String> = [], selectedRouteID: String? = nil,
+                              radius: Double = 42, showTitles: Bool = false) -> SpatialMarkerLayout {
+        guard width.isFinite, height.isFinite, width > 0, height > 0, width <= 10_000_000, height <= 10_000_000,
+              radius.isFinite, radius >= 24, radius <= 100,
+              input.count <= 2048 else { return .init(nodes: [], candidateCount: 0, distanceChecks: 0) }
+        struct Cell: Hashable { let x: Int; let y: Int; let affinity: String }
+        struct Group { var leader: SpatialMarkerScreenPoint; var members: [SpatialMarkerSeed] }
+        let points = input.filter { $0.x.isFinite && $0.y.isFinite && $0.seed.coordinate.latitude.isFinite && $0.seed.coordinate.longitude.isFinite
+            && abs($0.seed.coordinate.latitude) <= 90 && abs($0.seed.coordinate.longitude) <= 180
+            && !$0.seed.id.isEmpty && $0.x >= -radius && $0.x <= width + radius && $0.y >= -radius && $0.y <= height + radius }
+            .sorted { $0.seed.id < $1.seed.id }
+        var seen = Set<String>(), groups: [Group] = [], cells: [Cell: [Int]] = [:], selected: [SpatialMarkerScreenPoint] = [], checks = 0
+        func isSelected(_ seed: SpatialMarkerSeed) -> Bool { seed.objectID.map(selectedObjectIDs.contains) == true || (seed.routeID != nil && seed.routeID == selectedRouteID) }
+        for point in points where seen.insert(point.seed.id).inserted {
+            if isSelected(point.seed) { selected.append(point); continue }
+            let x = Int(floor(point.x / radius)), y = Int(floor(point.y / radius)), affinity = point.seed.affinityID ?? ""
+            var best: Int?, distance = radius * radius
+            for dx in -1...1 { for dy in -1...1 {
+                for index in cells[Cell(x: x + dx, y: y + dy, affinity: affinity)] ?? [] {
+                    checks += 1
+                    let leader = groups[index].leader, dx = point.x - leader.x, dy = point.y - leader.y, value = dx * dx + dy * dy
+                    if value < distance || (value == distance && (best == nil || index < best!)) { best = index; distance = value }
+                }
+            } }
+            if let best { groups[best].members.append(point.seed) }
+            else { let index = groups.count; groups.append(.init(leader: point, members: [point.seed])); cells[Cell(x: x, y: y, affinity: affinity), default: []].append(index) }
+        }
+        var occupied = MarkerRectIndex(), nodes: [SpatialMarkerNode] = []
+        // Reserve selected labels before ordinary labels or group badges.
+        for point in selected {
+            var node = SpatialMarkerNode(id: point.seed.id, members: [point.seed], showsTitle: true, isSelected: true)
+            let frame = CGRect(x: point.x - 18, y: point.y - 22, width: 172, height: 44)
+            if frame.maxX > width { node.offsetX = -min(140, max(0, frame.maxX - width)) }
+            occupied.insert(frame.offsetBy(dx: node.offsetX, dy: 0)); nodes.append(node)
+        }
+        for group in groups {
+            var node = SpatialMarkerNode(id: (group.members.count > 1 ? "group:" : "") + group.leader.seed.id, members: group.members)
+            let x = group.leader.x, y = group.leader.y, size = group.members.count > 1 ? 68.0 : 32.0
+            var frame = CGRect(x: x - size / 2, y: y - 22, width: size, height: 44)
+            for offset in [0.0, -48, 48, -96, 96] {
+                let candidate = frame.offsetBy(dx: 0, dy: offset)
+                if candidate.minY >= 0, candidate.maxY <= height, !occupied.intersects(candidate) { node.offsetY = offset; frame = candidate; break }
+            }
+            if showTitles, !node.isGroup {
+                let label = CGRect(x: frame.minX, y: frame.minY, width: 172, height: 44)
+                if label.maxX <= width, !occupied.intersects(label) { node.showsTitle = true; frame = label }
+            }
+            occupied.insert(frame); nodes.append(node)
+        }
+        return .init(nodes: nodes, candidateCount: seen.count, distanceChecks: checks, overlapChecks: occupied.checks)
+    }
+    public static func bootstrap(_ seeds: [SpatialMarkerSeed]) -> [SpatialMarkerNode] {
+        seeds.prefix(2048).map { .init(id: $0.id, members: [$0]) }
+    }
+}
+
+/// Annotation labels also use local buckets; avoiding an all-pairs label scan
+/// matters just as much as accelerating geographic clustering.
+private struct MarkerRectIndex {
+    private struct Cell: Hashable { let x: Int; let y: Int }
+    private var buckets: [Cell: [Int]] = [:]
+    private var rects: [CGRect] = []
+    var checks = 0
+    private func cells(_ rect: CGRect) -> [Cell] {
+        (Int(floor(rect.minX / 64))...Int(floor(rect.maxX / 64))).flatMap { x in
+            (Int(floor(rect.minY / 64))...Int(floor(rect.maxY / 64))).map { Cell(x: x, y: $0) }
+        }
+    }
+    mutating func insert(_ rect: CGRect) {
+        let index = rects.count; rects.append(rect)
+        for cell in cells(rect) { buckets[cell, default: []].append(index) }
+    }
+    mutating func intersects(_ rect: CGRect) -> Bool {
+        var seen = Set<Int>()
+        for cell in cells(rect) { for index in buckets[cell] ?? [] where seen.insert(index).inserted {
+            checks += 1
+            if rects[index].intersects(rect) { return true }
+        } }
+        return false
+    }
+}
+
+public enum SpatialMarkerSeeds {
+    public static func make(points: [CompositionMapPoint], routes: [SpatialRoute]) -> [SpatialMarkerSeed] {
+        let byObject = Dictionary(points.map { ($0.targetID, $0) }, uniquingKeysWith: { first, _ in first })
+        let objects = points.map { point in
+            let fallback = point.kind == "presence" ? "person" : point.kind == "entityLocation" ? "place" : "event"
+            return SpatialMarkerSeed(id: point.id, objectID: point.targetID, title: point.title, subtitle: point.subtitle,
+                coordinate: .init(latitude: point.latitude, longitude: point.longitude),
+                assetID: SpatialMarkerAssets.resolve(kind: point.markerKind ?? point.kind, title: point.title, fallback: fallback).id,
+                affinityID: point.affinityID, affinityTitle: point.affinityTitle)
+        }
+        return objects + routes.compactMap { route in
+            guard let coordinate = route.coordinates.dropFirst().first else { return nil }
+            let event = route.eventID.flatMap { byObject[$0] }
+            return SpatialMarkerSeed(id: "route:" + route.id, routeID: route.relationID, title: route.title,
+                subtitle: route.actorNames.joined(separator: "、") + " · " + route.placeNames.joined(separator: " → "),
+                coordinate: coordinate, assetID: SpatialMarkerAssets.resolve(kind: route.kind, title: route.title).id,
+                affinityID: event?.affinityID, affinityTitle: event?.affinityTitle)
+        }
+    }
+}

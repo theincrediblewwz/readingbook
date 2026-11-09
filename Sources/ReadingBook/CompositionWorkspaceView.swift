@@ -863,60 +863,92 @@ private struct CompositionMap: View {
     @State private var inspectedRoute: SpatialRoute?
     @State private var cameraRegion: MKCoordinateRegion?
     @State private var moving = false
+    @State private var markerNodes: [SpatialMarkerNode] = []
+    @State private var markerSeeds: [SpatialMarkerSeed] = []
+    @State private var markerGroup: [SpatialMarkerSeed]?
+    @State private var legendSize: CGSize = .zero
+    @State private var markerEpoch: UInt64 = 0
+    @State private var selectedMarker: SpatialMarkerSeed?
+    private var seeds: [SpatialMarkerSeed] { SpatialMarkerSeeds.make(points: points, routes: routes) }
+    private var nodes: [SpatialMarkerNode] { markerSeeds == seeds ? markerNodes : SpatialMarkerPacking.bootstrap(seeds) }
     var body: some View {
         if points.isEmpty && routes.isEmpty { CompositionEmptyState(text: "当前范围和时间没有已确认的位置。人物仅显示有出处的出现地点。", icon: "map").task(id: visibilityGeneration) { reportViewport(nil, .empty) } }
         else {
             GeometryReader { geometry in MapReader { proxy in
             Map(position: $camera) {
-                SpatialMapRoutes(routes: routes, inspected: $inspectedRoute, selectEvent: select)
-                ForEach(points) { point in
-                    Annotation(point.title, coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)) {
-                        Button {
-                            selectedLocation(canvas ? proxy.convert(CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude), to: .local) : nil)
-                            select(point.targetID)
-                        } label: {
-                            Image(systemName: point.kind == "presence" ? "person.fill" : "mappin")
-                                .font(.system(size: 17, weight: .semibold)).foregroundStyle(selected.contains(point.targetID) ? Color.white : Palette.accent)
-                                .frame(width: 48, height: 48).background(selected.contains(point.targetID) ? Palette.accent : Palette.paper, in: Circle())
-                                .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 2)).shadow(color: .black.opacity(0.12), radius: 8, y: 3)
-                        }.buttonStyle(ReadingQuietButtonStyle()).help(point.subtitle).accessibilityLabel(point.title + "，" + point.subtitle)
-                    }
+                SpatialMapRoutes(routes: routes, inspected: $inspectedRoute, selectEvent: select, showsMarkers: false)
+                SpatialMapAnnotations(nodes: nodes) { node in
+                    if node.isGroup { inspectedRoute = nil; markerGroup = node.members }
+                    else if let seed = node.members.first { activate(seed, using: proxy, offset: .init(x: node.offsetX, y: node.offsetY)) }
                 }
             }
                 .background(CompositionPageScrollInput())
                 .mapControls { MapCompass(); MapScaleView() }.frame(height: height).clipShape(RoundedRectangle(cornerRadius: canvas ? 0 : 18))
                     .help(canvas ? "拖动或双指平移地图，捏合缩放；点标记看详情，点空白收起。" : "双指滑动浏览整页；拖动平移地图，捏合缩放地图。")
-                .overlay(alignment: .topLeading) { SpatialRouteTimeNotice(routes: routes) }
+                .overlay(alignment: .topLeading) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        SpatialMarkerLegend(seeds: seeds).padding(.leading, 12).padding(.top, 12)
+                        SpatialRouteTimeNotice(routes: routes)
+                    }
+                }
+                .onPreferenceChange(SpatialMarkerLegendSize.self) { size in legendSize = size; publishViewport(using: proxy, geometry: geometry) }
+                .overlay(alignment: .topTrailing) {
+                    if let group = markerGroup {
+                        SpatialMarkerGroupCard(members: group, select: { activate($0, using: proxy) }, zoom: {
+                            markerGroup = nil
+                            if let region = spatialMarkerGroupRegion(group) { camera = .region(region) }
+                        }, close: { markerGroup = nil }).padding(.top, canvas ? 70 : 8).padding(.trailing, 12)
+                    }
+                }
                 .simultaneousGesture(SpatialTapGesture().onEnded { tap in
-                    guard canvas, !selected.isEmpty else { return }
+                    guard canvas, !selected.isEmpty || markerGroup != nil || inspectedRoute != nil else { return }
                     // Native annotation buttons keep their own click. Only a
                     // tap away from all annotation targets is canvas dismissal.
-                    let anchors = points.compactMap { proxy.convert(CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude), to: .local) }
-                    let routeAnchors = routes.compactMap { $0.coordinates.dropFirst().first }.compactMap { proxy.convert($0.mapCoordinate, to: .local) }
-                    guard !anchors.contains(where: { hypot($0.x - tap.location.x, $0.y - tap.location.y) < 40 }),
-                          !routeAnchors.contains(where: { hypot($0.x - tap.location.x, $0.y - tap.location.y) < 90 }) else { return }
-                    inspectedRoute = nil; selectedLocation(nil); deselect()
+                    guard !nodes.contains(where: { node in
+                        guard let p = proxy.convert(node.coordinate.mapCoordinate, to: .local) else { return false }
+                        let x = p.x + node.offsetX, y = p.y + node.offsetY
+                        return CGRect(x: x - (node.showsTitle ? 18 : 36), y: y - 24, width: node.showsTitle ? 172 : 72, height: 48).contains(tap.location)
+                    }) else { return }
+                    markerGroup = nil; inspectedRoute = nil; selectedLocation(nil); deselect()
                 })
                 .onMapCameraChange(frequency: .continuous) { _ in
                     if !moving { moving = true; reportViewport(nil, .pending) }
                     if canvas { reportLocation(using: proxy) }
                 }
                 .onMapCameraChange(frequency: .onEnd) { context in
-                    cameraRegion = context.region; moving = false; publishViewport(using: proxy, geometry: geometry)
+                    cameraRegion = context.region; moving = false
+                    // Keep the actual camera while replacing annotations; an
+                    // automatic fit must not zoom itself into a merged badge.
+                    if camera == .automatic { camera = .camera(context.camera) }
+                    rebuildMarkers(using: proxy, size: geometry.size)
+                    markerEpoch &+= 1
+                    publishViewport(using: proxy, geometry: geometry)
+                }
+                .task(id: markerEpoch) {
+                    guard markerEpoch > 0 else { return }
+                    // Retry only the settled screen transform, never book
+                    // queries or AI requests. A new camera cancels this task.
+                    for _ in 0..<6 {
+                        do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+                        if rebuildMarkers(using: proxy, size: geometry.size) { publishViewport(using: proxy, geometry: geometry); return }
+                    }
                 }
                 .onChange(of: workspaceBlocked) { _, _ in publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: workspaceExclusions) { _, _ in publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: occlusions) { _, _ in publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: visibilityGeneration) { _, _ in publishViewport(using: proxy, geometry: geometry) }
-                .onChange(of: geometry.size) { _, _ in publishViewport(using: proxy, geometry: geometry) }
-                .onChange(of: routes) { _, _ in publishViewport(using: proxy, geometry: geometry) }
-                .onChange(of: inspectedRoute) { _, _ in publishViewport(using: proxy, geometry: geometry) }
+                .onChange(of: geometry.size) { _, _ in rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1; publishViewport(using: proxy, geometry: geometry) }
+                .onChange(of: seeds) { _, _ in markerGroup = nil; rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1; publishViewport(using: proxy, geometry: geometry) }
+                .onChange(of: markerGroup) { _, _ in publishViewport(using: proxy, geometry: geometry) }
+                .onChange(of: inspectedRoute) { _, _ in rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1; publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: selected) { _, ids in
+                    rebuildMarkers(using: proxy, size: geometry.size)
+                    markerEpoch &+= 1
                     if canvas {
                         reportLocation(using: proxy)
                         if let point = screenPoint(ids, using: proxy), CGRect(origin: .zero, size: geometry.size).contains(point) {
                             // Selecting a visible marker keeps the map still.
-                        } else if !ids.isEmpty { locate(ids) }
+                        } else if !ids.isEmpty, screenPoint(ids, using: proxy) != nil { locate(ids) }
                     } else { locate(ids) }
                 }.onChange(of: points) { _, _ in
                     publishViewport(using: proxy, geometry: geometry)
@@ -941,16 +973,42 @@ private struct CompositionMap: View {
                 }
         }
     }
+    @discardableResult private func rebuildMarkers(using proxy: MapProxy, size: CGSize) -> Bool {
+        guard !moving, let region = cameraRegion else { return false }
+        let values = seeds
+        guard let layout = spatialMarkerLayout(seeds: values, proxy: proxy, size: size, selected: selected,
+            routeID: inspectedRoute?.relationID, showTitles: region.span.longitudeDelta < 1.5) else { return false }
+        if markerNodes != layout { markerNodes = layout }
+        if markerSeeds != values { markerSeeds = values }
+        return true
+    }
+    private func activate(_ seed: SpatialMarkerSeed, using proxy: MapProxy, offset: CGPoint = .zero) {
+        markerGroup = nil
+        selectedMarker = seed
+        if let routeID = seed.routeID, let route = routes.first(where: { $0.relationID == routeID }) {
+            inspectedRoute = route
+            if let id = route.eventID { select(id) }
+        } else if let id = seed.objectID {
+            inspectedRoute = nil
+            selectedLocation(canvas ? proxy.convert(seed.coordinate.mapCoordinate, to: .local).map { CGPoint(x: $0.x + offset.x, y: $0.y + offset.y) } : nil)
+            select(id)
+        }
+    }
     private func publishViewport(using proxy: MapProxy, geometry: GeometryProxy) {
-        guard !workspaceBlocked, inspectedRoute == nil else { reportViewport(nil, .obscured); return }
+        guard !workspaceBlocked, inspectedRoute == nil, markerGroup == nil else { reportViewport(nil, .obscured); return }
         guard !moving, let region = cameraRegion else { reportViewport(nil, .pending); return }
+        guard seeds.isEmpty || seeds.contains(where: { proxy.convert($0.coordinate.mapCoordinate, to: .local) != nil }) else { reportViewport(nil, .pending); return }
         let viewport = CGRect(origin: .zero, size: geometry.size)
         let origin = geometry.frame(in: .global).origin
         let exclusions = occlusions + workspaceExclusions.map { $0.offsetBy(dx: -origin.x, dy: -origin.y) }
-        let objects = points.compactMap { point -> String? in
-            guard let screen = proxy.convert(CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude), to: .local),
-                  SpatialViewportVisibility.contains(screen, in: viewport, excluding: exclusions) else { return nil }
-            return point.targetID
+            + [CGRect(x: 12, y: 12, width: legendSize.width, height: legendSize.height), CGRect(x: 12, y: legendSize.height + 28, width: 160, height: routes.contains(where: { $0.timeMatch == .unknown }) ? 40 : 0)]
+        let visibleNodes = nodes.filter { node in
+            guard let screen = proxy.convert(node.coordinate.mapCoordinate, to: .local) else { return false }
+            return SpatialViewportVisibility.contains(.init(x: screen.x + node.offsetX, y: screen.y + node.offsetY), in: viewport, excluding: exclusions)
+        }
+        let objects = visibleNodes.filter { !$0.isGroup }.compactMap { $0.members.first?.objectID }
+        let groups = visibleNodes.filter(\.isGroup).map { node in
+            ReadingMapMarkerGroup(id: node.id, objectIDs: Array(Set(node.members.compactMap(\.objectID))).sorted(), routeIDs: Array(Set(node.members.compactMap(\.routeID))).sorted())
         }
         let visibleRoutes = routes.filter { route in
             let path = route.coordinates.compactMap { proxy.convert($0.mapCoordinate, to: .local) }
@@ -959,9 +1017,15 @@ private struct CompositionMap: View {
         }.map(\.relationID)
         reportViewport(ReadingMapViewport(partID: partID, latitude: region.center.latitude, longitude: region.center.longitude,
             latitudeDelta: region.span.latitudeDelta, longitudeDelta: region.span.longitudeDelta,
-            objectIDs: Array(Set(objects)).sorted(), visibleRouteIDs: Array(Set(visibleRoutes)).sorted(), projectedRouteIDs: Array(Set(routes.map(\.relationID))).sorted()), .ready)
+            objectIDs: Array(Set(objects)).sorted(), visibleRouteIDs: Array(Set(visibleRoutes)).sorted(), projectedRouteIDs: Array(Set(routes.map(\.relationID))).sorted(), markerGroups: groups), .ready)
     }
     private func screenPoint(_ ids: Set<String>, using proxy: MapProxy) -> CGPoint? {
+        // An event can be recorded at several places. Keep the exact marker
+        // clicked by the reader, rather than jumping to that event's first place.
+        if let marker = selectedMarker, seeds.contains(where: { $0.id == marker.id }),
+           marker.objectID.map(ids.contains) == true || (inspectedRoute?.eventID.map(ids.contains) == true && marker.routeID == inspectedRoute?.relationID) {
+            return proxy.convert(marker.coordinate.mapCoordinate, to: .local)
+        }
         guard let point = points.first(where: { ids.contains($0.targetID) }) else { return nil }
         return proxy.convert(CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude), to: .local)
     }

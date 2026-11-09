@@ -122,7 +122,7 @@ jobs:
       - name: Native graph document preview and event detail regression
         run: python3 scripts/native-ui-regression/run-graph-document-previews.py --bin-dir .build/tests/debug --tag ci-graph-document-previews
       - name: Native map content reuse and scoped selection
-        run: python3 scripts/native-ui-regression/run-map-content-reuse.py --bin-dir .build/tests/debug --tag ci-map-content-reuse
+        run: python3 scripts/native-ui-regression/run-map-marker-reuse.py --bin-dir .build/tests/debug --tag ci-map-content-reuse
       - name: Native composition page and canvas scroll routing
         run: python3 scripts/native-ui-regression/run-composition-scroll.py --bin-dir .build/tests/debug --tag ci-composition-scroll
       - name: Native trajectory geometry across map content branches

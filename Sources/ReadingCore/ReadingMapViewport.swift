@@ -1,5 +1,13 @@
 import Foundation
 
+public struct ReadingMapMarkerGroup: Codable, Hashable, Sendable {
+    public var id: String
+    public var objectIDs: [String]
+    public var routeIDs: [String]
+    public init(id: String, objectIDs: [String], routeIDs: [String]) { self.id = id; self.objectIDs = objectIDs; self.routeIDs = routeIDs }
+    public var isValid: Bool { !id.isEmpty && id.utf8.count <= 1024 && objectIDs.count <= 10_000 && routeIDs.count <= 1024 }
+}
+
 /// Ephemeral renderer observations, not saved geography or analysis. The host
 /// reports settled cameras only; model-facing tools reapply the query boundary.
 public struct ReadingMapViewport: Codable, Hashable, Sendable {
@@ -11,17 +19,21 @@ public struct ReadingMapViewport: Codable, Hashable, Sendable {
     public var objectIDs: [String]
     public var visibleRouteIDs: [String]
     public var projectedRouteIDs: [String]
+    public var markerGroups: [ReadingMapMarkerGroup]?
     public init(partID: String, latitude: Double, longitude: Double, latitudeDelta: Double, longitudeDelta: Double,
-                objectIDs: [String], visibleRouteIDs: [String], projectedRouteIDs: [String]) {
+                objectIDs: [String], visibleRouteIDs: [String], projectedRouteIDs: [String], markerGroups: [ReadingMapMarkerGroup]? = nil) {
         self.partID = partID; self.latitude = latitude; self.longitude = longitude
         self.latitudeDelta = latitudeDelta; self.longitudeDelta = longitudeDelta; self.objectIDs = objectIDs
         self.visibleRouteIDs = visibleRouteIDs; self.projectedRouteIDs = projectedRouteIDs
+        self.markerGroups = markerGroups
     }
     public var isValid: Bool {
         !partID.isEmpty && partID.utf8.count <= 256 && latitude.isFinite && abs(latitude) <= 90
         && longitude.isFinite && abs(longitude) <= 180 && latitudeDelta.isFinite && (0...180).contains(latitudeDelta)
         && longitudeDelta.isFinite && (0...360).contains(longitudeDelta)
         && objectIDs.count <= 10_000 && visibleRouteIDs.count <= 1024 && projectedRouteIDs.count <= 1024
+        && (markerGroups?.count ?? 0) <= 512 && (markerGroups ?? []).allSatisfy(\.isValid)
+        && (markerGroups ?? []).reduce(0, { $0 + $1.objectIDs.count + $1.routeIDs.count }) <= 10_000
     }
 }
 

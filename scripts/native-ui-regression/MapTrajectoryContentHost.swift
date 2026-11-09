@@ -53,6 +53,15 @@ private struct TrajectoryFixtureView: View {
             abs($0[0] - $1[0]) < 1e-8 && abs($0[1] - $1[1]) < 1e-8
         }
     }
+    func expectedMarkerCount(_ count: Int, _ native: MKMapView) -> Int {
+        let points = (0..<count).map { index -> SpatialMarkerScreenPoint in
+            let coordinate = SpatialCoordinate(latitude: 22 + Double(index % 10) * 0.1, longitude: 82 + Double(index / 10) * 0.1)
+            let screen = native.convert(coordinate.mapCoordinate, toPointTo: native)
+            return .init(seed: .init(id: "p\(index)", objectID: "e\(index)", title: "地点\(index)", coordinate: coordinate, assetID: "event"), x: screen.x, y: screen.y)
+        }
+        return SpatialMarkerPacking.layout(points, width: native.bounds.width, height: native.bounds.height,
+            showTitles: native.region.span.longitudeDelta < 1.5).nodes.count
+    }
     func run() async throws {
         window = NSWindow(contentRect: .init(x: 100, y: 80, width: 1000, height: 700),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -76,17 +85,18 @@ private struct TrajectoryFixtureView: View {
             let deadline = ProcessInfo.processInfo.systemUptime + 1.5
             repeat {
                 try await Task.sleep(for: .milliseconds(20))
-                if native.annotations.filter({ !($0 is MKUserLocation) }).count == count,
+                if native.annotations.filter({ !($0 is MKUserLocation) }).count == expectedMarkerCount(count, native),
                    matches(coordinates(native), expected) { break }
             } while ProcessInfo.processInfo.systemUptime < deadline
             let actual = coordinates(native), region = native.region
-            checks[name + "Markers"] = native.annotations.filter { !($0 is MKUserLocation) }.count == count
+            checks[name + "Markers"] = native.annotations.filter { !($0 is MKUserLocation) }.count == expectedMarkerCount(count, native)
             checks[name + "Trajectory"] = matches(actual, expected)
             checks[name + "SameMap"] = map(host).map(ObjectIdentifier.init) == identity
             checks[name + "PreservesCamera"] = abs(region.center.latitude-originalRegion.center.latitude) < 1e-6
                 && abs(region.center.longitude-originalRegion.center.longitude) < 1e-6
                 && abs(region.span.latitudeDelta-originalRegion.span.latitudeDelta) < 1e-6
-            rows.append(["phase": name, "markers": native.annotations.count, "coordinates": actual, "expected": expected])
+            rows.append(["phase": name, "markers": native.annotations.count, "sourceMarkers": count,
+                "expectedLODMarkers": expectedMarkerCount(count, native), "coordinates": actual, "expected": expected])
         }
         guard checks.count == 32, checks.values.allSatisfy({ $0 }) else { throw ReadingError.invalid("Stale native map content") }
     }

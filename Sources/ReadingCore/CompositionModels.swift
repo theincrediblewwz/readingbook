@@ -209,6 +209,9 @@ public struct CompositionEdge: Identifiable, Hashable, Sendable {
 public struct CompositionMapPoint: Identifiable, Hashable, Sendable {
     public var id: String; public var targetID: String; public var title: String; public var subtitle: String
     public var latitude: Double; public var longitude: Double; public var evidence: [Evidence]; public var kind: String
+    public var markerKind: String? = nil
+    public var affinityID: String? = nil
+    public var affinityTitle: String? = nil
 }
 public struct CompositionProjection: Sendable {
     public var items: [CompositionItem]; public var edges: [CompositionEdge]; public var mapPoints: [CompositionMapPoint]
