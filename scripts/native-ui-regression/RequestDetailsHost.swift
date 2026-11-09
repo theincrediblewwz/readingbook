@@ -83,7 +83,8 @@ private actor TraceTransport {
         store.libraryRootURL = library; store.repository = repository; store.books = [project]; store.bookID = project.id; store.selectedUnitID = "u1"
         store.settings = .init(baseURL: "http://127.0.0.1/offline", model: "offline-fixture", maxRequestsPerRun: 4, maxOutputTokens: 1000, contextWindowTokens: 128_000)
         store.apiKey = "LOCAL_ONLY_HEADER_KEY"; store.queryScope = .book; store.queryMemoryEnabled = false
-        window = NSWindow(contentRect: .init(x: 100, y: 80, width: 850, height: 760), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let fixtureHeight: CGFloat = CommandLine.arguments.contains("--compact-window") ? 642 : 760
+        window = NSWindow(contentRect: .init(x: 100, y: 80, width: 850, height: fixtureHeight), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "ReadingBook 请求详情 · 离线检查"; window.isReleasedWhenClosed = false
         host = NSHostingView(rootView: AnyView(AIRequestHistoryView(state: store.queryProgressState).environmentObject(store)))
         window.contentView = host
@@ -330,12 +331,27 @@ private actor TraceTransport {
         return context.makeImage()
     }
     func renderedButtonText(_ frame: CGRect) -> String {
+        // Keep text recognition in the full-window context whenever possible.
+        // A tightly cropped, 30-point disclosure can lose the short Latin
+        // "AI" suffix on CI even though the same label is clear in the full
+        // rendered frame. Its real native bounds still determine the hit.
+        let visibleText = rasterRows.filter { frame.contains(CGPoint(x: $0.1.midX, y: $0.1.midY)) }
+            .map(\.0).joined(separator: " ")
+        if !visibleText.isEmpty { return visibleText }
         guard let image = rasterImage else { return "" }
         let sx = CGFloat(image.width) / host.bounds.width, sy = CGFloat(image.height) / host.bounds.height
         let crop = CGRect(x: frame.minX * sx, y: (host.isFlipped ? frame.minY : host.bounds.height - frame.maxY) * sy,
             width: frame.width * sx, height: frame.height * sy).integral
         guard let clipped = image.cropping(to: crop) else { return "" }
         return recognize(clipped).map(\.0).joined(separator: " ")
+    }
+    func comparableButton(_ text: String) -> String {
+        // Vision can confuse the capital I with lowercase l or digit 1.
+        // Normalize only the two actual AI disclosure labels, never source
+        // excerpts, request numbers, or arbitrary answer text.
+        comparable(text)
+            .replacingOccurrences(of: #"发送给A[l1]"#, with: "发送给AI", options: .regularExpression)
+            .replacingOccurrences(of: #"A[l1]返回"#, with: "AI返回", options: .regularExpression)
     }
     func progressOperationRows() -> [(String, CGRect)] {
         let ax = forceRaster ? [] : objects().compactMap { object -> (String, CGRect)? in
@@ -365,8 +381,8 @@ private actor TraceTransport {
             let frame = view.convert(view.bounds, to: host)
             guard host.bounds.contains(frame), view.visibleRect.height >= view.bounds.height - 1,
                   !frames.contains(frame) else { continue }
-            let text = comparable(renderedButtonText(frame))
-            if text.contains(comparable(title)), owningRequest.map({ text.contains(comparable($0)) }) ?? true { frames.append(frame) }
+            let text = comparableButton(renderedButtonText(frame))
+            if text.contains(comparableButton(title)), owningRequest.map({ text.contains(comparable($0)) }) ?? true { frames.append(frame) }
         }
         return frames.sorted { host.isFlipped ? $0.minY < $1.minY : $0.maxY > $1.maxY }
     }
@@ -384,6 +400,11 @@ private actor TraceTransport {
             if let view = object as? NSView {
                 row["bounds"] = NSStringFromRect(view.bounds)
                 row["hidden"] = view.isHiddenOrHasHiddenAncestor
+                if String(describing: type(of: view)).contains("FocusRing") {
+                    let frame = view.convert(view.bounds, to: host)
+                    row["hostFrame"] = NSStringFromRect(frame)
+                    row["renderedButtonText"] = renderedButtonText(frame)
+                }
             }
             return row
         }
