@@ -55,7 +55,7 @@ private struct MapFixtureView: View {
                 return .init(seed:.init(id:event.id+"|"+id,objectID:event.id,title:event.name,coordinate:.init(latitude:lat,longitude:lon),assetID:"event"),x:p.x,y:p.y)
             }
         }
-        return SpatialMarkerPacking.layout(points,width:native.bounds.width,height:native.bounds.height,selectedObjectIDs:Set(store.selectedObjectID.map{[$0]} ?? []),showTitles:native.region.span.longitudeDelta<1.5).nodes.count
+        return SpatialMarkerPacking.layout(points,width:native.bounds.width,height:native.bounds.height,selectedObjectIDs:Set(store.selectedObjectID.map{[$0]} ?? []),showTitles:native.region.span.longitudeDelta<1.5,retainOffscreen:true).nodes.count
     }
     func settle(_ ms: Int = 180) async throws {
         try await Task.sleep(for: .milliseconds(ms)); host.layoutSubtreeIfNeeded(); CATransaction.flush(); window.displayIfNeeded()
@@ -142,9 +142,9 @@ private struct MapFixtureView: View {
         func walk(_ object: Any, _ depth: Int) {
             guard depth < 24, let element = object as? NSAccessibilityProtocol else { return }
             let id = ObjectIdentifier(element); guard visited.insert(id).inserted else { return }
-            if let label = element.accessibilityLabel() { result.append(label) }
+            if let label = element.accessibilityLabel() { result.append(label) }; if let help = element.accessibilityHelp() { result.append(help) }; if let value = element.accessibilityValue() as? String { result.append(value) }
             for child in element.accessibilityChildren() ?? [] { walk(child, depth + 1) }
-            if let view = object as? NSView { for child in view.subviews { walk(child, depth + 1) } }
+            if let view = object as? NSView { if let tip=view.toolTip { result.append(tip) }; for child in view.subviews { walk(child, depth + 1) } }
         }
         walk(root, 0)
         return result
@@ -237,12 +237,26 @@ private struct MapFixtureView: View {
         store.books[0].events[7].name = "更新后的事件七"; expected[0] = store.books[0]; try await settle()
         try verifyCurrentTitle(7, "sameIDTitleRefreshesNativeLabel")
         store.books[0].entities[7].name = "改名后的地点"; expected[0] = store.books[0]; try await settle()
-        try require("sameIDSubtitleRefreshesNativeLabel", try labelStrings(marker(7)).contains { $0.contains("改名后的地点") })
+        // Secondary text is now in the expandable record card, rather than a
+        // permanent marker subtitle. Exercise that production presentation.
+        let neighbor = store.books[0].entities[8]
+        store.selectedObjectID = nil
+        store.books[0].entities[8].latitude = store.books[0].entities[7].latitude
+        store.books[0].entities[8].longitude = store.books[0].entities[7].longitude
+        expected[0] = store.books[0]; try await settle(300)
+        try await click(try marker(7))
+        let expandedText = labelStrings(host) + (try renderedTexts(host))
+        observations.append(["stage":"subtitle-expanded-record-refresh","labels":expandedText])
+        try require("sameIDSubtitleRefreshesExpandedRecord", expandedText.contains { $0.contains("改名后的地点") })
+        store.books[0].entities[8] = neighbor; expected[0] = store.books[0]
+        try await settle(250); try await click(try marker(7))
+
         let oldLatitude = store.books[0].entities[7].latitude!, oldLongitude = store.books[0].entities[7].longitude!
         store.books[0].entities[7].latitude = oldLatitude + 0.04; expected[0] = store.books[0]; try await settle(300)
         try require("sameIDCoordinateRefreshesNativeAnnotation", try annotations().contains { abs($0.coordinate.latitude - oldLatitude - 0.04) < 1e-8 })
         try require("oldCoordinateNotRetained", try !annotations().contains { abs($0.coordinate.latitude - oldLatitude) < 1e-8 && abs($0.coordinate.longitude - oldLongitude) < 1e-8 })
         store.timeTo = 220; try await settle(300)
+        observations.append(["stage":"filtered-lod-diagnostics","actual":try annotations().count,"expected":try expectedVisibleCount(),"mapBounds":NSStringFromRect(try map().bounds),"mapFrame":NSStringFromRect(try map().frame),"annotations":try annotations().map{[$0.coordinate.latitude,$0.coordinate.longitude]}])
         try require("timeFilterLODMatchesVisibleProjection", try annotations().count == expectedVisibleCount() && annotations().count > 0)
         try require("sameNativeMapWhenCrossingBelowThreshold", ObjectIdentifier(try map()) == identity)
         store.timeTo = 400; try await settle(300)

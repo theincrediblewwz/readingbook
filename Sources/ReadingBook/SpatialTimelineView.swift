@@ -345,7 +345,8 @@ struct SpatialTimelineView: View {
         let expectedRoot = store.libraryRootURL
         return ReadingMapRenderer(points: points, routes: actionRoutes, sequence: footprintSequence,
                                   selectedID: store.selectedObjectID, scope: mapScope,
-                                  cameraValue: camera, camera: $camera, selection: $mapSelection, inspectedRoute: $inspectedRoute)
+                                  cameraValue: camera, camera: $camera, selection: $mapSelection, inspectedRoute: $inspectedRoute,
+                                  controlsTopReserve: topReserve)
         .equatable()
         .popover(item: $inspectedRoute) { SpatialRouteDetails(route: $0) }
         .onChange(of: mapSelection) { _, value in
@@ -373,7 +374,6 @@ struct SpatialTimelineView: View {
             guard memoryScope == expectedKey else { return }
             store.updateWorkspaceMemory({ $0.map = saved }, expectedKey: expectedKey)
         }
-        .safeAreaPadding(.top, topReserve).safeAreaPadding(.trailing, 16)
     }
     private func restoreMapMemory() {
         observedCamera = nil; selectionCameraCenter = nil
@@ -856,6 +856,7 @@ private struct ReadingMapRenderer: View, Equatable {
     @Binding var camera: MapCameraPosition
     @Binding var selection: ReadingMapSelection?
     @Binding var inspectedRoute: SpatialRoute?
+    var controlsTopReserve: CGFloat = 0
     @State private var markerNodes: [SpatialMarkerNode] = []
     @State private var markerSeeds: [SpatialMarkerSeed] = []
     @State private var markerGroup: [SpatialMarkerSeed]?
@@ -870,9 +871,10 @@ private struct ReadingMapRenderer: View, Equatable {
                 affinityID: point.affinityID, affinityTitle: point.affinityTitle)
         } + SpatialMarkerSeeds.make(points: [], routes: routes)
     }
-    private var nodes: [SpatialMarkerNode] { markerSeeds == seeds ? markerNodes : SpatialMarkerPacking.bootstrap(seeds) }
+    private var nodes: [SpatialMarkerNode] { markerSeeds == seeds ? markerNodes : SpatialMarkerPacking.bootstrap(seeds, selectedObjectIDs: Set(selectedID.map { [$0] } ?? []), selectedRouteID: inspectedRoute?.relationID) }
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.scope == rhs.scope && lhs.selectedID == rhs.selectedID && lhs.cameraValue == rhs.cameraValue && lhs.routes == rhs.routes
+            && lhs.controlsTopReserve == rhs.controlsTopReserve
             && lhs.points == rhs.points && lhs.sequence.count == rhs.sequence.count
             && zip(lhs.sequence, rhs.sequence).allSatisfy { $0.latitude == $1.latitude && $0.longitude == $1.longitude }
     }
@@ -892,18 +894,22 @@ private struct ReadingMapRenderer: View, Equatable {
             }
         }
         .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }
+        // Reserve controls inside the reader, not around its GeometryReader.
+        // MapKit draws under safe-area padding; using the smaller outer proposal
+        // as the map bounds used to prune markers still visible on the map.
+        .safeAreaPadding(.top, controlsTopReserve).safeAreaPadding(.trailing, 16)
         .overlay(alignment: .topLeading) {
             VStack(alignment: .leading, spacing: 4) {
                 SpatialMarkerLegend(seeds: seeds).padding(.leading, 12).padding(.top, 12)
                 SpatialRouteTimeNotice(routes: routes)
-            }
+            }.padding(.top, controlsTopReserve)
         }
         .overlay(alignment: .topTrailing) {
             if let group = markerGroup {
                 SpatialMarkerGroupCard(members: group, select: activate, zoom: {
                     markerGroup = nil
                     if let region = spatialMarkerGroupRegion(group) { camera = .region(region) }
-                }, close: { markerGroup = nil }).padding(.top, 12).padding(.trailing, 12)
+                }, close: { markerGroup = nil }).padding(.top, controlsTopReserve + 12).padding(.trailing, 12)
             }
         }
         .onMapCameraChange(frequency: .onEnd) { context in

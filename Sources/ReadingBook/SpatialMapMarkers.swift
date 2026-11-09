@@ -131,6 +131,10 @@ struct SpatialMarkerLegend: View {
                         .padding(.horizontal, 10).frame(height: 28)
                 }
             }
+            if seeds.count > SpatialMarkerPacking.maximumMarkers {
+                Text("先显示2,048条").font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.bottom, 5)
+                    .help("地图记录较多，所选记录优先。缩小时间或查看范围可浏览其余记录；书中资料没有删除。")
+            }
         }.padding(4).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
             .background(GeometryReader { geometry in Color.clear.preference(key: SpatialMarkerLegendSize.self, value: geometry.size) })
     }
@@ -141,15 +145,21 @@ struct SpatialMarkerLegendSize: PreferenceKey {
 }
 
 func spatialMarkerLayout(seeds: [SpatialMarkerSeed], proxy: MapProxy, size: CGSize, selected: Set<String>, routeID: String?, showTitles: Bool) -> [SpatialMarkerNode]? {
-    let screen = seeds.compactMap { seed -> SpatialMarkerScreenPoint? in
+    let admitted = SpatialMarkerPacking.boundedSeeds(seeds, selectedObjectIDs: selected, selectedRouteID: routeID)
+    let screen = admitted.compactMap { seed -> SpatialMarkerScreenPoint? in
         guard let point = proxy.convert(seed.coordinate.mapCoordinate, to: .local) else { return nil }
         return .init(seed: seed, x: point.x, y: point.y)
     }
     // MapKit briefly cannot convert during camera/annotation replacement. A
     // missing transform is not a valid empty map and must not erase good nodes.
     guard size.width > 0, size.height > 0, seeds.isEmpty || !screen.isEmpty else { return nil }
+    // Compositions cap their publication at 400 points and 128 routes; the
+    // standalone map discloses the 2,048-marker display ceiling in its legend.
+    // Keep its bounded annotations; MapKit virtualizes their visible views.
+    // SwiftUI safe-area proposals and the native tile viewport can differ, so
+    // independently deleting "offscreen" records here can lose visible data.
     return SpatialMarkerPacking.layout(screen, width: size.width, height: size.height,
-        selectedObjectIDs: selected, selectedRouteID: routeID, showTitles: showTitles).nodes
+        selectedObjectIDs: selected, selectedRouteID: routeID, showTitles: showTitles, retainOffscreen: true).nodes
 }
 
 func spatialMarkerGroupRegion(_ seeds: [SpatialMarkerSeed]) -> MKCoordinateRegion? {

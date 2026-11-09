@@ -60,7 +60,7 @@ private struct TrajectoryFixtureView: View {
             return .init(seed: .init(id: "p\(index)", objectID: "e\(index)", title: "地点\(index)", coordinate: coordinate, assetID: "event"), x: screen.x, y: screen.y)
         }
         return SpatialMarkerPacking.layout(points, width: native.bounds.width, height: native.bounds.height,
-            showTitles: native.region.span.longitudeDelta < 1.5).nodes.count
+            showTitles: native.region.span.longitudeDelta < 1.5, retainOffscreen: true).nodes.count
     }
     func run() async throws {
         window = NSWindow(contentRect: .init(x: 100, y: 80, width: 1000, height: 700),

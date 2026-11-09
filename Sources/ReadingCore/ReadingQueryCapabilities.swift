@@ -626,6 +626,7 @@ extension ReadingQuerySession {
                 "visibleObjectIDs": Array(points.prefix(24)), "visibleRouteIDs": Array(visible.prefix(24)),
                 "visibleRouteCount": visible.count, "projectedRouteCount": projected.count,
                 "visibleObjectCount": points.count, "markerGroupCount": groups.count,
+                "markerGroupsExpandable": map.markerGroups != nil,
                 "groupedObjectCount": Set(groups.flatMap(\.objects)).count,
                 "groupedRouteCount": Set(groups.flatMap(\.routes)).count,
                 "markerGroups": groups.prefix(6).enumerated().map { index, group -> [String: Any] in

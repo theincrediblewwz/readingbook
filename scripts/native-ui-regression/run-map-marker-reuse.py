@@ -45,7 +45,7 @@ warnings={key:runtime.count(pattern) for key,pattern in [('layout300','300 itera
 warnings['invalidViewGeometry']=len(re.findall(r'invalid (?:frame|view) (?:dimension|geometry)',runtime,re.I))
 expected = {
     'isolatedLibrary', 'initialLODMatchesVisibleProjection', 'nativeMarkerSelectsCurrentEvent', 'initialSelectedTitleVisible',
-    'sameIDTitleRefreshesNativeLabel', 'sameIDSubtitleRefreshesNativeLabel', 'sameIDCoordinateRefreshesNativeAnnotation',
+    'sameIDTitleRefreshesNativeLabel', 'sameIDSubtitleRefreshesExpandedRecord', 'sameIDCoordinateRefreshesNativeAnnotation',
     'oldCoordinateNotRetained', 'timeFilterLODMatchesVisibleProjection', 'sameNativeMapWhenCrossingBelowThreshold',
     'restoredTimeLODMatchesVisibleProjection', 'sameNativeMapWhenCrossingAboveThreshold', 'themeChangePreservesCurrentSelection',
     'resizeLODMatchesVisibleProjection', 'resizeKeepsNativeMap', 'removalUpdatesVisibleLOD',

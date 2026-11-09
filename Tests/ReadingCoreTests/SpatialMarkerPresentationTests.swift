@@ -68,6 +68,8 @@ final class SpatialMarkerPresentationTests: XCTestCase {
         XCTAssertTrue(SpatialMarkerPacking.layout([], width: .infinity, height: 500).nodes.isEmpty)
         XCTAssertTrue(SpatialMarkerPacking.layout([], width: 500, height: 500, radius: 0).nodes.isEmpty)
         XCTAssertTrue(SpatialMarkerPacking.layout(Array(repeating: point("x", 1, 1), count: 2049), width: 500, height: 500).nodes.isEmpty)
+        let retained = SpatialMarkerPacking.layout([point("a", 80, 90), point("outside", -400, 60)], width: 600, height: 500, retainOffscreen: true)
+        XCTAssertEqual(Set(retained.nodes.flatMap(\.members).map(\.id)), ["a", "outside"])
     }
     func testSparseLargeMapUsesBoundedNeighbourAndLabelChecks() {
         let points = (0..<2048).map { point(String(format: "%04d", $0), 50 + Double($0 % 64) * 60, 50 + Double($0 / 64) * 60) }
@@ -100,6 +102,15 @@ final class SpatialMarkerPresentationTests: XCTestCase {
         new.markerGroups = Array(repeating: .init(id: "group", objectIDs: [], routeIDs: []), count: 513)
         XCTAssertFalse(new.isValid)
     }
+    func testOversizedPresentationRetainsSelectionInsteadOfBecomingEmpty() {
+        let seeds = (0..<3000).map { point(String($0), 100, 100).seed }
+        let bounded = SpatialMarkerPacking.boundedSeeds(seeds, selectedObjectIDs: ["2999"])
+        XCTAssertEqual(bounded.count, 2048); XCTAssertEqual(bounded.first?.objectID, "2999")
+        XCTAssertEqual(Set(bounded.map(\.id)).count, 2048)
+        let nodes = SpatialMarkerPacking.bootstrap(seeds, selectedObjectIDs: ["2999"])
+        XCTAssertEqual(nodes.count, 2048); XCTAssertEqual(nodes.first?.isSelected, true)
+        XCTAssertEqual(seeds.count, 3000, "显示上限不删除共享资料")
+    }
     func testGroupReceiptReappliesScopeAndNeverLeaksInternalLeaderOrChronology() async throws {
         var book = BookProject(id: "b", title: "范围", originalName: "book.txt", sourceHash: "h", units: [
             .init(id: "u1", order: 0, chapter: "一", page: 1, text: "甲地。"), .init(id: "u2", order: 1, chapter: "二", page: 2, text: "秘密地点。")])
@@ -118,6 +129,7 @@ final class SpatialMarkerPresentationTests: XCTestCase {
         XCTAssertEqual(maps[0]["visibleObjectCount"] as? Int, 0)
         XCTAssertEqual(maps[0]["groupedObjectCount"] as? Int, 1)
         XCTAssertEqual(maps[0]["markerGroupCount"] as? Int, 1)
+        XCTAssertEqual(maps[0]["markerGroupsExpandable"] as? Bool, true)
         XCTAssertFalse(output.contains("secret")); XCTAssertTrue(output.contains("not chronology"))
         XCTAssertTrue(output.contains("不是全程可见"))
         try session.recordHostReceipt(output, tool: "workspace_context_get")
@@ -125,5 +137,7 @@ final class SpatialMarkerPresentationTests: XCTestCase {
         let closing = try XCTUnwrap(summary["mapViewports"] as? [[String: Any]])
         XCTAssertEqual(closing[0]["groupedObjectCount"] as? Int, 1)
         XCTAssertEqual(closing[0]["visibleObjectCount"] as? Int, 0)
+        XCTAssertEqual(closing[0]["markerGroupsExpandable"] as? Bool, true)
+        XCTAssertTrue((summary["note"] as? String)?.contains("不代表本次已实际展开") == true)
     }
 }

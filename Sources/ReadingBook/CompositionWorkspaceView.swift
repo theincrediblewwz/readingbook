@@ -870,7 +870,7 @@ private struct CompositionMap: View {
     @State private var markerEpoch: UInt64 = 0
     @State private var selectedMarker: SpatialMarkerSeed?
     private var seeds: [SpatialMarkerSeed] { SpatialMarkerSeeds.make(points: points, routes: routes) }
-    private var nodes: [SpatialMarkerNode] { markerSeeds == seeds ? markerNodes : SpatialMarkerPacking.bootstrap(seeds) }
+    private var nodes: [SpatialMarkerNode] { markerSeeds == seeds ? markerNodes : SpatialMarkerPacking.bootstrap(seeds, selectedObjectIDs: selected, selectedRouteID: inspectedRoute?.relationID) }
     var body: some View {
         if points.isEmpty && routes.isEmpty { CompositionEmptyState(text: "当前范围和时间没有已确认的位置。人物仅显示有出处的出现地点。", icon: "map").task(id: visibilityGeneration) { reportViewport(nil, .empty) } }
         else {

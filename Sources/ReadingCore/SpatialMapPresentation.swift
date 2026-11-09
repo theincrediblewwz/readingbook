@@ -82,21 +82,31 @@ public struct SpatialMarkerLayout: Sendable {
 }
 
 public enum SpatialMarkerPacking {
+    public static let maximumMarkers = 2048
+    /// A presentation ceiling is not a book-data ceiling. Keep selected records
+    /// first; callers disclose the partial display and can narrow their scope.
+    public static func boundedSeeds(_ seeds: [SpatialMarkerSeed], selectedObjectIDs: Set<String> = [], selectedRouteID: String? = nil) -> [SpatialMarkerSeed] {
+        guard seeds.count > maximumMarkers else { return seeds }
+        let selected: (SpatialMarkerSeed) -> Bool = { $0.objectID.map(selectedObjectIDs.contains) == true || ($0.routeID != nil && $0.routeID == selectedRouteID) }
+        let priority = Array(seeds.lazy.filter(selected).prefix(maximumMarkers))
+        return priority + seeds.lazy.filter { !selected($0) }.prefix(maximumMarkers - priority.count)
+    }
     /// Distance decisions use actual projected points. Buckets only accelerate
     /// neighbour lookup: moving across a bucket edge cannot change a decision.
     /// Each group is bounded around a stable leader, never a transitive chain
     /// that could turn nearby records into a continent-sized "battle".
     public static func layout(_ input: [SpatialMarkerScreenPoint], width: Double, height: Double,
                               selectedObjectIDs: Set<String> = [], selectedRouteID: String? = nil,
-                              radius: Double = 42, showTitles: Bool = false) -> SpatialMarkerLayout {
+                              radius: Double = 42, showTitles: Bool = false, retainOffscreen: Bool = false) -> SpatialMarkerLayout {
         guard width.isFinite, height.isFinite, width > 0, height > 0, width <= 10_000_000, height <= 10_000_000,
               radius.isFinite, radius >= 24, radius <= 100,
-              input.count <= 2048 else { return .init(nodes: [], candidateCount: 0, distanceChecks: 0) }
+              input.count <= maximumMarkers else { return .init(nodes: [], candidateCount: 0, distanceChecks: 0) }
         struct Cell: Hashable { let x: Int; let y: Int; let affinity: String }
         struct Group { var leader: SpatialMarkerScreenPoint; var members: [SpatialMarkerSeed] }
         let points = input.filter { $0.x.isFinite && $0.y.isFinite && $0.seed.coordinate.latitude.isFinite && $0.seed.coordinate.longitude.isFinite
             && abs($0.seed.coordinate.latitude) <= 90 && abs($0.seed.coordinate.longitude) <= 180
-            && !$0.seed.id.isEmpty && $0.x >= -radius && $0.x <= width + radius && $0.y >= -radius && $0.y <= height + radius }
+            && !$0.seed.id.isEmpty && abs($0.x) <= 10_000_000 && abs($0.y) <= 10_000_000
+            && (retainOffscreen || ($0.x >= -radius && $0.x <= width + radius && $0.y >= -radius && $0.y <= height + radius)) }
             .sorted { $0.seed.id < $1.seed.id }
         var seen = Set<String>(), groups: [Group] = [], cells: [Cell: [Int]] = [:], selected: [SpatialMarkerScreenPoint] = [], checks = 0
         func isSelected(_ seed: SpatialMarkerSeed) -> Bool { seed.objectID.map(selectedObjectIDs.contains) == true || (seed.routeID != nil && seed.routeID == selectedRouteID) }
@@ -138,8 +148,11 @@ public enum SpatialMarkerPacking {
         }
         return .init(nodes: nodes, candidateCount: seen.count, distanceChecks: checks, overlapChecks: occupied.checks)
     }
-    public static func bootstrap(_ seeds: [SpatialMarkerSeed]) -> [SpatialMarkerNode] {
-        seeds.prefix(2048).map { .init(id: $0.id, members: [$0]) }
+    public static func bootstrap(_ seeds: [SpatialMarkerSeed], selectedObjectIDs: Set<String> = [], selectedRouteID: String? = nil) -> [SpatialMarkerNode] {
+        boundedSeeds(seeds, selectedObjectIDs: selectedObjectIDs, selectedRouteID: selectedRouteID).map { seed in
+            let chosen = seed.objectID.map(selectedObjectIDs.contains) == true || (seed.routeID != nil && seed.routeID == selectedRouteID)
+            return .init(id: seed.id, members: [seed], showsTitle: chosen, isSelected: chosen)
+        }
     }
 }
 
