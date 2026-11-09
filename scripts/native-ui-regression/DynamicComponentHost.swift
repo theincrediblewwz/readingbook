@@ -214,7 +214,16 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
         let beforeObscured = navigationIntentCount
         let uncovered = try await access.performViewAction("component_show", Data(#"{"componentID":"relations"}"#.utf8))
         try check("managementOverlayReallyClosedBeforeSuccess", String(decoding: uncovered, as: UTF8.self).contains("\"opened\":true") && !store.showingPlugins && navigationIntentCount == beforeObscured+1 && store.renderedComponentPresentation?.matches(store, route: relationRoute) == true)
-        let editor = try await access.performViewAction("component_show", Data(#"{"componentID":"editor"}"#.utf8))
+        let editorStarted = ProcessInfo.processInfo.systemUptime
+        let editorInitial = try await access.performViewAction("component_show", Data(#"{"componentID":"editor"}"#.utf8))
+        let initiallyOpened = String(decoding: editorInitial, as: UTF8.self).contains("\"opened\":true")
+        let initiallyMounted = store.isNotesForeground && store.renderedComponentPresentation?.matches(store, route: "editor") == true
+        try check("notesFirstReceiptNeverInventsOpened", initiallyOpened ? initiallyMounted :
+            String(decoding: editorInitial, as: UTF8.self).contains("\"status\":\"busy\"") && (store.requestedWorkspaceRoute == "editor" || initiallyMounted))
+        // component_show intentionally returns bounded busy while a native
+        // presentation is pending. Observe that intent settling without
+        // resubmitting it before asking for a ready acknowledgement.
+        let editor = editorInitial
         let editorState: [String: Any] = ["receipt": String(decoding: editor, as: UTF8.self), "route": store.route,
             "requestedRoute": store.requestedWorkspaceRoute as Any? ?? NSNull(), "notesForeground": store.isNotesForeground,
             "notesPresented": store.isNotesPresented, "hasAuxiliary": store.hasWorkspaceAuxiliary,
@@ -224,7 +233,14 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
             "canEditAISettings": store.canEditAISettings, "saving": store.isSavingDocument, "pressedMouseButtons": NSEvent.pressedMouseButtons,
             "windowKey": window.isKeyWindow, "attachedSheet": window.attachedSheet != nil, "modalWindow": NSApp.modalWindow != nil]
         try JSONSerialization.data(withJSONObject: editorState, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("editor-transition.json"))
-        try check("notesForegroundReallyPresented", String(decoding: editor, as: UTF8.self).contains("\"opened\":true") && store.isNotesForeground && store.renderedComponentPresentation?.matches(store, route: "editor") == true)
+        try await wait { self.store.isNotesForeground && self.store.requestedWorkspaceRoute == nil && self.store.renderedComponentPresentation?.matches(self.store, route: "editor") == true }
+        try check("notesIntentSettlesBeforeReadyReceipt", store.isNotesForeground && store.requestedWorkspaceRoute == nil)
+        let notesOwner = store.notesPresentation?.id, beforeReadyNavigation = navigationIntentCount, beforeReadyViews = store.book?.views
+        let editorReady = initiallyOpened ? editorInitial : try await access.performViewAction("component_show", Data(#"{"componentID":"editor"}"#.utf8))
+        try check("notesReadyRetryKeepsPresentationAndViews", store.notesPresentation?.id == notesOwner && navigationIntentCount == beforeReadyNavigation && store.book?.views == beforeReadyViews)
+        try check("notesForegroundReallyPresented", String(decoding: editorReady, as: UTF8.self).contains("\"opened\":true") && store.isNotesForeground && store.renderedComponentPresentation?.matches(store, route: "editor") == true)
+        try JSONSerialization.data(withJSONObject: ["initialReceipt": String(decoding: editorInitial, as: UTF8.self), "readyReceipt": String(decoding: editorReady, as: UTF8.self),
+            "settledMilliseconds": (ProcessInfo.processInfo.systemUptime - editorStarted) * 1000], options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("editor-transition-settled.json"))
         if let owner = store.notesPresentation { store.dismissWorkspaceAuxiliary(owner.id) }
         store.route = relationRoute
         try await wait { self.store.renderedComponentPresentation?.matches(self.store, route: relationRoute) == true }
@@ -238,8 +254,11 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
         // replacement of its presentation subtree after a sheet closes.
         window.contentView = NSView()
         try await wait { self.store.renderedComponentPresentation == nil }
-        store.requestedWorkspaceRoute = "editor"
+        let unmountedEditor = try await access.performViewAction("component_show", Data(#"{"componentID":"editor"}"#.utf8))
+        try check("unmountedNotesNeverClaimsOpened", String(decoding: unmountedEditor, as: UTF8.self).contains("\"status\":\"busy\"") &&
+            String(decoding: unmountedEditor, as: UTF8.self).contains("\"opened\":false") && store.requestedWorkspaceRoute == "editor" && store.renderedComponentPresentation == nil)
         window.contentView = NSHostingView(rootView: WorkspaceView().environmentObject(store).environmentObject(ReadingTypographySettings()))
+        try await wait { self.store.isNotesForeground && self.store.requestedWorkspaceRoute == nil && self.store.renderedComponentPresentation?.matches(self.store, route: "editor") == true }
         let pendingEditor = try await access.performViewAction("component_show", Data(#"{"componentID":"editor"}"#.utf8))
         try check("pendingIntentSurvivesWorkspaceRemount", String(decoding: pendingEditor,as:UTF8.self).contains("\"opened\":true") && store.requestedWorkspaceRoute == nil && store.isNotesForeground && store.renderedComponentPresentation?.matches(store,route:"editor") == true)
         if let owner = store.notesPresentation { store.dismissWorkspaceAuxiliary(owner.id) }
