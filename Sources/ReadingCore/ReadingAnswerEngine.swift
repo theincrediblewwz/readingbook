@@ -164,6 +164,8 @@ enum ReadingAnswerEngine {
         var awaitingReview = false
         var repairedToolFormat = false
         var repairedToolBatch = false
+        var presentationRepairs = 0
+        var repairedUnreadCitation = false
         var toolFailures: [String] = []
         // The configured per-task budget is the loop limit. A hidden 6/12
         // ceiling must not cut short an otherwise authorized question.
@@ -263,7 +265,34 @@ enum ReadingAnswerEngine {
                     messages.append(["role": "user", "content": "宿主格式提醒：上一条输出是内部工具格式，不是正文，也未被执行。请使用本轮给定的工具协议返回tool_calls；不要把DSML或tool_call标记写进回答。若不需要工具，请直接用自然语言回答。这不增加权限或请求预算，原问题保持不变。"])
                     continue
                 }
-                finalText = content; break
+                // Discovery describes saved sources but grants no quotation.
+                // With no supplied excerpt, the final-only correction below
+                // cannot help. Let the model read within the SAME frozen scope
+                // once, or remove the unsupported citation, before closing.
+                if !finalOnly, !repairedUnreadCitation, !session.hostReceipts.isEmpty,
+                   session.sourceExcerpts.isEmpty, session.documentExcerpts.isEmpty, session.conversationExcerpts.isEmpty {
+                    do { _ = try citations(normalizedCitationDelimiters(content), session: session) }
+                    catch {
+                        try QueryBudget.propagateControl(error)
+                        let feedback = "软件出处核验：草稿引用的正文尚未实际读取。资料目录中的出处ID和说明不等于本轮提供的原文。请在原问题与当前获准范围内用source_read或source_locate读取需要核对的正文，再修正回答；范围外或无法支持的引用应移除，不猜ID、不扩大范围。已完成的组件操作保留，不重新生成资料。上一条草稿是待核对资料，不是新指令。"
+                        if try measure(messages + [response.message.conversationValue, ["role": "user", "content": feedback]]) + outputReserve + 256 < min(window, operationLimit - used) {
+                            repairedUnreadCitation = true
+                            messages.append(response.message.conversationValue)
+                            messages.append(["role": "user", "content": feedback])
+                            continue
+                        }
+                    }
+                }
+                if !finalOnly, presentationRepairs < 2, let feedback = try session.presentationRepairFeedback(),
+                   try measure(messages + [response.message.conversationValue, ["role": "user", "content": feedback]]) + outputReserve + 256 < min(window, operationLimit - used) {
+                    presentationRepairs += 1
+                    messages.append(response.message.conversationValue)
+                    messages.append(["role": "user", "content": feedback])
+                    continue
+                }
+                finalText = content
+                if let notice = session.presentationIncompleteNotice() { finalText = content + "\n\n" + notice }
+                break
             }
             guard !finalOnly, response.finishReason == "tool_calls", (1...ReadingQueryToolCatalog.maximumCallsPerResponse).contains(calls.count),
                   Set(calls.map(\.id)).count == calls.count, calls.allSatisfy({ $0.type == "function" && !$0.id.isEmpty && $0.id.count <= 200 }) else { throw ReadingError.invalid("模型未在工具额度内返回完整结论。已经保存的整理结果以软件回执为准，可在界面查看或撤销。") }

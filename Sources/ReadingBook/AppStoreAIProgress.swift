@@ -197,6 +197,7 @@ struct AIProgressPresentationState: Equatable {
         case "tool_draft_repair": return "修正整理草案"
         case "document_changes_propose": return "准备笔记修改方案"
         case "book_scheme_propose", "book_plan": return "准备本书阅读方案"
+        case "view_show_event": return "展示完整事件并核对画面"
         case "view_select", "view_focus", "map_fit_objects", "graph_focus", "panel_present", "view_set_time_window": return "调整当前组件视图"
         default: return "处理组件操作"
         }

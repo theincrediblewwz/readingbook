@@ -91,7 +91,7 @@ enum ReadingQueryToolCatalog {
     static let readNames: Set<String> = ["capabilities_list", "book_schema_get", "source_outline", "source_search", "source_read", "source_locate", "reading_coverage_get",
         "objects_search", "object_get", "relations_list", "events_query", "entity_history_get", "documents_list", "documents_search", "document_read",
         "conversation_search", "conversation_read", "workspace_context_get", "visible_objects_list"]
-    static let viewNames: Set<String> = ["view_select", "view_focus", "view_set_time_window", "map_fit_objects", "graph_focus", "panel_present"]
+    static let viewNames: Set<String> = ["view_select", "view_focus", "view_set_time_window", "view_show_event", "map_fit_objects", "graph_focus", "panel_present"]
     static let proposalNames: Set<String> = ["knowledge_changes_propose", "graph_changes_propose", "document_changes_propose", "book_scheme_propose"]
     static func function(_ name: String, _ description: String, _ fields: [String: Any] = [:], required: [String] = []) -> [String: Any] {
         ["type": "function", "function": ["name": name, "description": description,
@@ -119,7 +119,7 @@ enum ReadingQueryToolCatalog {
         object["includeEvidence"] = ["type": "boolean", "description": "组织已有资料先用false，只取字段和来源ID；逐字核对才用true。ids默认false，单个id默认true；不自动读取笔记正文。"]
         var relation = paging; relation["objectID"] = string
         relation["includeEvidence"] = ["type": "boolean", "description": "全范围目录默认只列概览和来源ID；设true返回逐字依据。指定objectID时省略此项保留原有完整返回。"]
-        var event = paging; event["entityID"] = string; event["placeID"] = string; event["includeEvidence"] = evidenceOption
+        var event = paging; event["entityID"] = string; event["placeID"] = string; event["parentEventID"] = string; event["includeEvidence"] = evidenceOption
         let time: [String: Any] = ["type": "object", "additionalProperties": false, "properties": [
             "calendar": string, "year": ["type": "integer", "minimum": -1_000_000_000_000, "maximum": 1_000_000_000_000],
             "month": ["type": "integer", "minimum": 1, "maximum": 12], "day": ["type": "integer", "minimum": 1, "maximum": 31], "narrativeOrder": integer,
@@ -137,7 +137,7 @@ enum ReadingQueryToolCatalog {
                 function("objects_search", "按名称/别名/概述和类型检索范围内对象；索引不是独立证据。", query),
                 function("object_get", "id读取单个对象；ids批量读取已知对象。组织组件先批量取字段/关联，再按需核对原文；返回本范围版本，不自动读取挂载Markdown。", object),
                 function("relations_list", "省略objectID分页列本范围全部关系与地图行动，传objectID按对象过滤；只返回范围内资料，未知时间不当作当前成立。", relation),
-                function("events_query", "按人物/地点/时间查询范围内事件；保留个人参与时间的不确定性，参与事件不推出位置。", event),
+                function("events_query", "按人物/地点/时间查询范围内事件；已有父事件用parentEventID直接读其子阶段，按phaseOrder排序。参与事件不推出位置。", event),
                 function("entity_history_get", "查询一个实体的有证据出现/参与/关系；footprints是明确出现点，不推造连续路线。", entity, required: ["entityID"])]
         }
         if let host {
@@ -151,6 +151,9 @@ enum ReadingQueryToolCatalog {
                 case "view_select":
                     fields = ["rendererID": string]; required = ["rendererID"]
                     purpose = "只切换/打开已有组件，不选择事件、不筛选时间。选择对象用view_focus；阶段筛选用view_set_time_window。"
+                case "view_show_event":
+                    fields = ["eventID": string]; required = ["eventID"]
+                    purpose = "在当前已打开的组合地图/时间轴展示这个已有事件的完整出处区间及行动，软件计算范围、定位并返回实际画面与缺口。先用component_show打开既有视图；不要自己猜阶段起止坐标。"
                 case "view_focus":
                     fields = ["objectID": string, "anchorID": string, "documentID": string]; required = []
                     purpose = "定位一个共享对象，或打开文档、回到原文锚点；三个ID选一种。此操作不设置时间筛选。"
@@ -325,6 +328,7 @@ extension ReadingQuerySession {
             guard maximumBytes >= 1024 else { return try json(["ok": false, "budgetLimited": true, "message": "没有足够空间返回界面操作回执，未执行。"] ) }
             let data = try JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys])
             try validateViewArguments(arguments)
+            if name == "view_show_event" { return try await presentEvent(arguments, host: hostTools, maximumBytes: maximumBytes) }
             let returned = try await hostTools.performViewAction(name, data)
             try Task.checkCancellation()
             let result = try hostResult(returned); try recordHostReceipt(result, tool: name); return result
@@ -443,7 +447,14 @@ extension ReadingQuerySession {
             let names = Dictionary((scoped.entities.map { ($0.id, $0.name) } + scoped.events.map { ($0.id, $0.name) }), uniquingKeysWith: { first, _ in first })
             return try page(rows.map { try relationDiscovery($0, includeEvidence: arguments["includeEvidence"] as? Bool ?? (id != nil), names: names) }, arguments, maximumBytes)
         case "events_query":
-            let rows = try TemporalKnowledgeRuntime.events(in: scoped, entityID: arguments["entityID"] as? String, placeID: arguments["placeID"] as? String, at: timePoint(arguments), boundary: boundary)
+            if let raw = arguments["parentEventID"], !(raw is String) || (raw as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { throw invalid("parentEventID须为非空父事件ID；查询全部时请省略。") }
+            let parent = arguments["parentEventID"] as? String
+            var rows = try TemporalKnowledgeRuntime.events(in: scoped, entityID: arguments["entityID"] as? String, placeID: arguments["placeID"] as? String, at: timePoint(arguments), boundary: boundary)
+            if let parent {
+                rows = rows.filter { $0.object.references["parentEvent"] == [parent] }.sorted {
+                    ($0.metadata?.phaseOrder ?? Int.max, $0.object.id) < ($1.metadata?.phaseOrder ?? Int.max, $1.object.id)
+                }
+            }
             return try page(rows.map { try eventDiscovery($0, includeEvidence: arguments["includeEvidence"] as? Bool == true) }, arguments, maximumBytes)
         case "entity_history_get":
             guard let id = arguments["entityID"] as? String else { throw invalid("缺少entityID。") }
@@ -497,6 +508,9 @@ extension ReadingQuerySession {
         }
         invalidateReviewedDocumentCache()
         returnedObjectDirectory.removeAll()
+        // A reviewed publication supersedes both an old presentation goal and
+        // its renderer observation. Re-resolve the event against fresh facts.
+        pendingEventPresentation = nil; eventPresentationFailures.removeAll(); workspace = nil
         project = fresh; refreshTaskCreatedNodes(in: fresh)
     }
 
@@ -560,7 +574,7 @@ extension ReadingQuerySession {
     private func validateViewArguments(_ arguments: [String: Any]) throws {
         guard let project, let scoped = scopedKnowledgeProject() else { throw invalid("没有当前范围项目，不能定位对象。") }
         let admitted = (try TemporalKnowledgeRuntime.objectIDs(in: scoped, boundary: KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs)))).union(snapshot.documentIDs)
-        let objects = (arguments["objectIDs"] as? [String] ?? []) + [arguments["objectID"] as? String, arguments["documentID"] as? String].compactMap { $0 }
+        let objects = (arguments["objectIDs"] as? [String] ?? []) + [arguments["objectID"] as? String, arguments["documentID"] as? String, arguments["eventID"] as? String].compactMap { $0 }
         let nodes = (arguments["nodeIDs"] as? [String] ?? []) + [arguments["nodeID"] as? String].compactMap { $0 }
         guard objects.allSatisfy(admitted.contains), nodes.allSatisfy({ admitsNode($0, admitted: admitted, project: project) }) else { throw invalid("视图目标不在本次获准范围内；请切换范围后再定位。") }
         if let anchorID = arguments["anchorID"] as? String {
@@ -568,16 +582,21 @@ extension ReadingQuerySession {
             guard anchors.contains(where: { $0.id == anchorID }) else { throw invalid("原文锚点不在本次获准范围内。") }
         }
     }
-    private func hostResult(_ data: Data) throws -> String {
+    func hostResult(_ data: Data) throws -> String {
         guard data.count <= 16_000, (try? JSONSerialization.jsonObject(with: data)) is [String: Any], let text = String(data: data, encoding: .utf8) else { throw invalid("宿主工具必须返回有界JSON对象回执。") }; return text
     }
     /// A successful navigation receipt is not evidence about canvas contents.
     /// Attach only a fresh, authorized renderer snapshot; absent snapshots remain
     /// explicitly unavailable rather than being replaced with project membership.
     private mutating func componentReceiptWithActualView(_ receipt: String, maximumBytes: Int) async throws -> String {
-        guard var result = try JSONSerialization.jsonObject(with: Data(receipt.utf8)) as? [String: Any],
+        guard let result = try JSONSerialization.jsonObject(with: Data(receipt.utf8)) as? [String: Any],
               result["ok"] as? Bool == true, result["opened"] as? Bool == true,
               let route = result["viewID"] as? String else { return receipt }
+        return try await receiptWithActualView(receipt, route: route, maximumBytes: maximumBytes)
+    }
+    mutating func receiptWithActualView(_ receipt: String, route: String, maximumBytes: Int) async throws -> String {
+        var result = try JSONSerialization.jsonObject(with: Data(receipt.utf8)) as! [String: Any]
+        workspace = nil
         var actual = unavailableActualView(nil)
         if hostTools?.readWorkspaceAfterOpening != nil || hostTools?.readWorkspace != nil {
             do {
@@ -614,10 +633,12 @@ extension ReadingQuerySession {
                 }
             } catch {
                 try QueryBudget.propagateControl(error)
-                // The view was already opened. A failed optional read must not
-                // turn that completed operation into a reported navigation failure.
+                workspace = nil
+                // The operation may already be applied. An unavailable
+                // observation must not reuse a stale or invalid workspace.
             }
         }
+        if workspace?.rendererID != route { workspace = nil }
         result["actualView"] = actual
         let data = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
         guard data.count <= min(16_000, maximumBytes) else { return receipt }

@@ -191,12 +191,76 @@ private actor WorkbenchTransport {
         try serialized.write(to: output.appendingPathComponent("offline-model-requests.json"))
         try JSONEncoder().encode(loaded).write(to: output.appendingPathComponent("final-fixture.json"))
         try await timeWindowBridgeChecks(repository: repository)
+        try await eventPresentationChecks(repository: repository)
         if CommandLine.arguments.contains("--inspect") {
             store.readingCompanionVisible = false
             try Data("ready".utf8).write(to: output.appendingPathComponent("inspection-ready"))
             while !FileManager.default.fileExists(atPath: output.appendingPathComponent("end-inspection").path) { try await Task.sleep(nanoseconds: 100_000_000) }
         }
         window.close()
+    }
+    /// Semantic intent must cross the mounted production renderer, not merely
+    /// return a mathematically correct interval in an offline tool stub.
+    func eventPresentationChecks(repository: LibraryRepository) async throws {
+        let texts = ["合成火攻从甲地开始。", "合成火攻向乙地进攻。", "后续撤退。"]
+        var book = BookProject(title: "完整事件展示 · 隔离合成书", originalName: "presentation.txt", sourceHash: "fixture",
+            units: texts.enumerated().map { .init(id: "p\($0.offset)", order: $0.offset, chapter: "合成段落", page: $0.offset + 1, text: $0.element) })
+        PluginEngine.seed(&book)
+        let bytes = Data(texts.joined(separator: "\n").utf8), source = output.appendingPathComponent("presentation.txt")
+        book.sourceHash = try BookImporter.sha256(bytes); try bytes.write(to: source)
+        let proofs = book.units.map { Evidence(unitID: $0.id, quote: $0.text) }
+        book.entities = [.init(id: "p-a", typeID: "place", name: "甲地", latitude: 30, longitude: 110, evidence: [proofs[0]]),
+                         .init(id: "p-b", typeID: "place", name: "乙地", latitude: 30.1, longitude: 110.1, evidence: [proofs[1]])]
+        book.events = [.init(id: "p-fire", name: "合成火攻", placeIDs: ["p-a", "p-b"], evidence: Array(proofs.prefix(2))),
+                       .init(id: "p-later", name: "后续撤退", evidence: [proofs[2]])]
+        book.relations = [.init(id: "p-action", fromID: "p-a", toID: "p-b", label: "进攻", evidence: [proofs[1]])]
+        let anchors = try book.units.map { try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: $0.id, quote: $0.text, in: book) }
+        book.temporalKnowledge = .init(anchors: anchors,
+            eventMetadata: [.init(eventID: "p-fire", kind: "fire", sourceAnchorIDs: Array(anchors.prefix(2).map(\.id)), assertion: .explicit)],
+            relationMetadata: [.init(id: "p-meta", relationID: "p-action", validity: .init(), sourceAnchorIDs: [anchors[1].id], assertion: .explicit, spatial: .init(kind: "attack", eventID: "p-fire"))])
+        let definition = CompositionDefinition(sources: [.init(id: "events", collection: .events, scope: .book)],
+            parts: [.init(id: "map", primitive: .map, sourceID: "events"), .init(id: "axis", primitive: .timeline, sourceID: "events")],
+            layout: [.init(id: "m", kind: .part, partID: "map"), .init(id: "t", kind: .part, partID: "axis"), .init(id: "root", kind: .column, children: ["m", "t"])], rootID: "root")
+        var view = ViewDefinition(id: "presentation-bridge", title: "完整事件", kind: .knowledge)
+        view.rendererID = "reading.composition"; view.composition = definition; book.views = [view]
+        book = try await repository.create(book, sourceURL: source)
+        store.publish(book); store.bookID = book.id; store.selectedUnitID = "p2"; store.route = view.id
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: book)
+        try store.installComponentView(route: view.id, snapshot: snapshot, context: nil)
+        try await wait { self.store.renderedComponentPresentation?.matches(self.store, route: view.id) == true && self.store.renderedCompositionState?.observationStatus == .ready }
+        let before = store.book!, callsBefore = await transport.count()
+        let plan = try ReadingEventPresentationPlan.resolve(eventID: "p-fire", in: book, snapshot: snapshot)
+        let stale = try await store.performReadingViewAction("view_show_event", data: JSONSerialization.data(withJSONObject: ["eventID": "p-fire", "expectedVersion": "old"]), expectedBookID: book.id, sourceHash: book.sourceHash, querySnapshot: snapshot)
+        try check("eventPresentationRejectsStaleVersion", (try JSONSerialization.jsonObject(with: stale) as? [String: Any])?["status"] as? String == "conflict")
+        let narrow = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: .init(unitID: "p0", page: 1))
+        let mismatch = try await store.performReadingViewAction("view_show_event", data: JSONSerialization.data(withJSONObject: ["eventID": "p-fire", "expectedVersion": plan.version]), expectedBookID: book.id, sourceHash: book.sourceHash, querySnapshot: narrow)
+        try check("eventPresentationRejectsDifferentScope", (try JSONSerialization.jsonObject(with: mismatch) as? [String: Any])?["status"] as? String == "unsupported")
+        let host = store.readingViewToolAccess(bookID: book.id, sourceHash: book.sourceHash, snapshot: snapshot)
+        var session = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: book, hostTools: host)
+        let response = try await session.execute(name: "view_show_event", arguments: ["eventID": "p-fire"], maximumBytes: 16_000)
+        try Data(response.utf8).write(to: output.appendingPathComponent("event-presentation.json"))
+        let value = try JSONSerialization.jsonObject(with: Data(response.utf8)) as! [String: Any]
+        try check("eventPresentationActualRendererComplete", value["complete"] as? Bool == true && value["observed"] as? Bool == true)
+        try check("eventPresentationUsesFullSourceInterval", store.timeFrom == 0 && store.timeTo == 1 && store.temporalAxis == "narrative-domain:source-order")
+        let actual = store.makeReadingWorkspaceSnapshot()
+        try check("eventPresentationSelectsRendererEvent", actual?.selectedObjectIDs == ["p-fire"])
+        try check("eventPresentationProjectsSavedAction", actual?.mapViewports?.first?.projectedRouteIDs == ["p-action"])
+        try check("eventPresentationShowsSavedAction", actual?.mapViewports?.first?.visibleRouteIDs == ["p-action"])
+        try check("eventPresentationNoSourceGrant", session.sourceReferences.isEmpty && session.sourceExcerpts.isEmpty)
+        try check("eventPresentationKeepsSharedData", store.book?.entities == before.entities && store.book?.events == before.events && store.book?.relations == before.relations && store.book?.temporalKnowledge == before.temporalKnowledge && store.book?.views == before.views)
+        try check("eventPresentationKeepsSourceBytes", (try Data(contentsOf: source)) == bytes)
+        guard let fitted = store.makeReadingWorkspaceSnapshot()?.mapViewports?.first else { throw ReadingError.invalid("缺少取景后快照") }
+        var withChat = store.book!
+        withChat.chats.append(.init(role: "assistant", content: "合成已保存回答，不修改知识。"))
+        store.publish(withChat)
+        try await wait { self.store.renderedCompositionState?.contextID == self.store.readingVisibilityContextID && self.store.renderedCompositionState?.observationStatus == .ready }
+        let afterChat = store.makeReadingWorkspaceSnapshot(), cameraAfter = afterChat?.mapViewports?.first
+        try check("eventPresentationSurvivesChatPublication", afterChat?.selectedObjectIDs == ["p-fire"] && afterChat?.timeFrom == 0 && afterChat?.timeTo == 1)
+        try check("eventPresentationMarkersSurviveChatPublication", cameraAfter?.objectIDs.contains("p-fire") == true && cameraAfter?.visibleRouteIDs == ["p-action"])
+        try check("eventPresentationCameraSurvivesChatPublication", cameraAfter.map { abs($0.latitude - fitted.latitude) < 0.00001 && abs($0.longitude - fitted.longitude) < 0.00001 && abs($0.latitudeDelta - fitted.latitudeDelta) < 0.00001 && abs($0.longitudeDelta - fitted.longitudeDelta) < 0.00001 } == true)
+        try JSONEncoder().encode(afterChat).write(to: output.appendingPathComponent("after-chat-publication.json"))
+        let callsAfter = await transport.count()
+        try check("eventPresentationNoModelRequest", callsBefore == callsAfter)
     }
     /// Cross the real AppStore -> mounted composition -> background projection
     /// -> acknowledgement bridge; Core-only date arithmetic cannot prove this.
@@ -262,7 +326,7 @@ private actor WorkbenchTransport {
         func nativeMaps(_ view: NSView) -> [MKMapView] { (view as? MKMapView).map { [$0] } ?? view.subviews.flatMap(nativeMaps) }
         guard let native = self.window.contentView.flatMap({ nativeMaps($0).first }) else { throw ReadingError.invalid("原生组合地图未挂载。") }
         let fitted = native.region
-        try check("mapBridgeNativeCameraFitsActualEvent", abs(fitted.center.latitude - 30) < 0.001 && abs(fitted.center.longitude - 110) < 0.001 && fitted.span.latitudeDelta < 1)
+        try check("mapBridgeNativeCameraFitsActualEvent", store.renderedCompositionState?.maps.first?.objectIDs.contains("event0") == true && fitted.span.latitudeDelta < 1)
         let repeatedFit = try await store.performReadingViewAction("map_fit_objects", data: fit, expectedBookID: book.id, sourceHash: book.sourceHash)
         try check("mapBridgeRepeatedSameCameraAcknowledged", (try JSONSerialization.jsonObject(with: repeatedFit) as? [String: Any])?["status"] as? String == "success")
         let hiddenFit = try await store.performReadingViewAction("map_fit_objects", data: JSONSerialization.data(withJSONObject: ["objectIDs": ["event1"]]), expectedBookID: book.id, sourceHash: book.sourceHash)

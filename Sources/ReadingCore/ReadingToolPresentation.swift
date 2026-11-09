@@ -60,11 +60,13 @@ extension ReadingQuerySession {
                   original["tool"] as? String != "components_list" else { continue }
             if let id = original["proposalID"] as? String, !seenProposals.insert(id).inserted { continue }
             var summary: [String: Any] = [:]
-            for key in ["tool", "status", "message", "summary", "proposalID", "digest", "operationID", "applied", "replayed", "opened", "viewID", "componentTitle", "rendererID"] {
+            for key in ["tool", "status", "message", "summary", "proposalID", "digest", "operationID", "applied", "replayed", "opened", "viewID", "componentTitle", "rendererID", "complete", "observed"] {
                 if let string = original[key] as? String { summary[key] = String(string.prefix(300)) }
                 else if let values = original[key] as? [String] { summary[key] = values.prefix(4).map { String($0.prefix(120)) } }
                 else if let number = original[key] as? NSNumber { summary[key] = number }
             }
+            if let goal = original["goal"] as? [String: Any] { summary["goal"] = goal }
+            if let missing = original["missing"] as? [String] { summary["missing"] = missing }
             // Keep the latest actual observation even when the final request
             // drops the tool conversation. Opening alone cannot answer what
             // was displayed. Never replace a newer pending/covered snapshot
@@ -82,7 +84,7 @@ extension ReadingQuerySession {
         return receipts.reversed()
     }
 
-    private func closingWorkspaceObservation(_ value: [String: Any]) -> [String: Any] {
+    func closingWorkspaceObservation(_ value: [String: Any]) -> [String: Any] {
         func fields(_ row: [String: Any], strings: [String], numbers: [String]) -> [String: Any] {
             var result: [String: Any] = [:]
             for key in strings { if let text = row[key] as? String { result[key] = String(text.prefix(300)) } }

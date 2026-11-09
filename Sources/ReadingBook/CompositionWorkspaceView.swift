@@ -35,6 +35,9 @@ struct CompositionWorkspaceView: View {
     @State private var pendingMapParts = Set<String>()
     @State private var mapFitRequests: [String: CompositionMapFitRequest] = [:]
     @State private var mapViewports: [String: ReadingMapViewport] = [:]
+    // Camera intent belongs to this workspace/scope, not to a disposable map
+    // child. Saving a chat republishes the book but must not reset its view.
+    @State private var mapCameras: [String: MapCameraPosition] = [:]
     @State private var viewportGeneration: UInt64 = 0
 
     private struct RefreshOwner: Equatable, Sendable {
@@ -92,14 +95,14 @@ struct CompositionWorkspaceView: View {
             .onChange(of: store.workspaceAICommand) { _, command in receiveViewCommand(command) }
             .onChange(of: store.currentBookRevision) { _, _ in refresh() }
             .onChange(of: store.book?.publicationStamp) { _, _ in refresh() }
-            .onChange(of: store.book?.sourceHash) { _, _ in refresh() }
-            .onChange(of: store.selectedUnitID) { _, _ in refresh() }
+            .onChange(of: store.book?.sourceHash) { _, _ in mapCameras = [:]; refresh() }
+            .onChange(of: store.selectedUnitID) { _, _ in mapCameras = [:]; refresh() }
             .onChange(of: store.book?.temporalKnowledge?.profile?.avoidsSpoilers) { _, _ in refresh() }
             .onChange(of: store.currentReadingContext) { _, _ in refresh() }
     }
     var body: some View {
         sourceObservedContent
-            .onChange(of: store.componentDataScopeID) { _, _ in refresh() }
+            .onChange(of: store.componentDataScopeID) { _, _ in mapCameras = [:]; refresh() }
             .onChange(of: contextOverride) { _, _ in reset() }
             .onChange(of: currentScope) { _, _ in reset() }
             .onChange(of: store.libraryRootURL) { _, _ in reset() }
@@ -139,7 +142,7 @@ struct CompositionWorkspaceView: View {
     }
 
     private func reset() {
-        clearPrepared(); clearMapCommand(); mapViewports = [:]; selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; canvasAnchors = [:]; refresh()
+        clearPrepared(); clearMapCommand(); mapViewports = [:]; mapCameras = [:]; selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; canvasAnchors = [:]; refresh()
     }
     private func clearPrepared() { preparedInput = nil; preparedOwner = nil }
     private func cancelRefresh() {
@@ -170,11 +173,30 @@ struct CompositionWorkspaceView: View {
             mapFitRequests = Dictionary(uniqueKeysWithValues: parts.map { ($0.id, .init(id: command.id, objectIDs: ids, generation: viewportGeneration)) })
             return
         }
-        guard command.name == "view_set_time_window", let window = command.timeWindow else { return }
-        let groups = Set(composition.sources.compactMap { source -> String? in
-            let extents = baseline[source.id]?.items.compactMap(\.extent) ?? []
-            return TemporalAxis.available(extents).contains(window.axis) ? source.timeGroup : nil
-        })
+        guard ["view_set_time_window", "view_show_event"].contains(command.name), let window = command.timeWindow else { return }
+        let groups: Set<String>
+        if command.name == "view_show_event", let eventID = command.eventID {
+            // Resolve the target against the unfiltered projection. A prior
+            // clock must not make a valid saved stage disappear from selection.
+            let timelines = composition.parts.filter { part in
+                part.primitive == .timeline && baseline[part.sourceID]?.items.contains(where: {
+                    ($0.objectID ?? $0.id) == eventID && ReadingEventPresentationPlan.sourceWindow($0.sourceExtent) == window
+                }) == true
+            }
+            let linkedGroups = Set(timelines.map(\.timeGroup))
+            guard linkedGroups.count == 1, let group = linkedGroups.first,
+                  composition.parts.contains(where: { $0.primitive == .map && $0.timeGroup == group }) else {
+                store.acknowledgeViewCommand(command, status: "unsupported", message: "当前组合没有同一时间组的事件时间轴和地图；未猜测或更改其他时间组。")
+                return
+            }
+            groups = linkedGroups
+            for part in timelines { selections[part.selectionGroup] = [eventID] }
+        } else {
+            groups = Set(composition.sources.compactMap { source -> String? in
+                let extents = baseline[source.id]?.items.flatMap { [$0.extent, $0.sourceExtent].compactMap { $0 } } ?? []
+                return TemporalAxis.available(extents).contains(window.axis) ? source.timeGroup : nil
+            })
+        }
         guard !groups.isEmpty else {
             store.acknowledgeViewCommand(command, status: "unsupported", message: "当前组合没有本次时间体系的数据；未改变筛选。")
             return
@@ -576,7 +598,8 @@ struct CompositionWorkspaceView: View {
                 }
                 }
                 let routes = part.routeSourceID.flatMap { projections[$0]?.mapRoutes } ?? projection.mapRoutes
-                CompositionMap(partID: part.id, visibilityGeneration: viewportGeneration, occlusions: occlusions, reportViewport: { publishMap($0, status: $1, partID: part.id, generation: viewportGeneration) },
+                CompositionMap(camera: Binding(get: { mapCameras[part.id] ?? .automatic }, set: { mapCameras[part.id] = $0 }),
+                    partID: part.id, visibilityGeneration: viewportGeneration, occlusions: occlusions, reportViewport: { publishMap($0, status: $1, partID: part.id, generation: viewportGeneration) },
                     fitRequest: mapFitRequests[part.id], finishFit: { id, error in finishMapCommand(id, partID: part.id, error: error) },
                     points: projection.mapPoints, routes: routes, selected: selections[part.selectionGroup] ?? [], height: height, canvas: canvas,
                     select: { select($0, group: part.selectionGroup) },
@@ -904,6 +927,7 @@ private struct CompositionMapFitRequest: Equatable {
 private struct CompositionMap: View {
     @Environment(\.workspaceCanvasBlocked) private var workspaceBlocked
     @Environment(\.workspaceCanvasExclusionRects) private var workspaceExclusions
+    @Binding var camera: MapCameraPosition
     let partID: String
     let visibilityGeneration: UInt64
     let occlusions: [CGRect]
@@ -918,7 +942,6 @@ private struct CompositionMap: View {
     var select: (String) -> Void
     var deselect: () -> Void = {}
     var selectedLocation: (CGPoint?) -> Void = { _ in }
-    @State private var camera: MapCameraPosition = .automatic
     @State private var inspectedRoute: SpatialRoute?
     @State private var cameraRegion: MKCoordinateRegion?
     @State private var moving = false
@@ -998,7 +1021,7 @@ private struct CompositionMap: View {
                 .onChange(of: workspaceExclusions) { _, _ in publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: occlusions) { _, _ in publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: visibilityGeneration) { _, _ in publishViewport(using: proxy, geometry: geometry) }
-                .onChange(of: fitRequest) { _, request in fit(request) }
+                .onChange(of: fitRequest) { _, request in fit(request, geometry: geometry) }
                 .onChange(of: geometry.size) { _, _ in rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1; publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: seeds) { _, _ in markerGroup = nil; rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1; publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: markerGroup) { _, _ in publishViewport(using: proxy, geometry: geometry) }
@@ -1035,7 +1058,7 @@ private struct CompositionMap: View {
                 }
         }
     }
-    private func fit(_ request: CompositionMapFitRequest?) {
+    private func fit(_ request: CompositionMapFitRequest?, geometry: GeometryProxy) {
         pendingFitID = nil
         guard let request else { return }
         guard !workspaceBlocked, request.generation == visibilityGeneration else {
@@ -1047,9 +1070,22 @@ private struct CompositionMap: View {
               let west = matches.map(\.longitude).min(), let east = matches.map(\.longitude).max() else {
             finishFit(request.id, "这些对象不在当前地图投影内。"); return
         }
-        let region = MKCoordinateRegion(center: .init(latitude: (north + south) / 2, longitude: (west + east) / 2),
-            span: .init(latitudeDelta: min(170, max(0.3, (north - south) * 1.5)), longitudeDelta: min(350, max(0.3, (east - west) * 1.5))))
-        let target = MapCameraPosition.region(region)
+        guard let available = SpatialViewportVisibility.availableRect(in: CGRect(origin: .zero, size: geometry.size),
+            excluding: mapExclusions(geometry), padding: 28), available.width >= 60, available.height >= 60 else {
+            finishFit(request.id, "地图可见空间被悬浮卡片遮挡，请先收起卡片；未把遮挡当作可见。"); return
+        }
+        let northwest = MKMapPoint(CLLocationCoordinate2D(latitude: north, longitude: west))
+        let southeast = MKMapPoint(CLLocationCoordinate2D(latitude: south, longitude: east))
+        let minimum = MKMapSize.world.width * 0.3 / 360
+        let scale = max(max(minimum, abs(southeast.x - northwest.x) * 1.3) / available.width,
+                        max(minimum, abs(southeast.y - northwest.y) * 1.3) / available.height)
+        let size = MKMapSize(width: geometry.size.width * scale, height: geometry.size.height * scale)
+        // Place the fitted content in usable space, not underneath a floating
+        // inspector. Map points include Mercator projection and retain aspect.
+        let center = MKMapPoint(x: (northwest.x + southeast.x) / 2 - (available.midX - geometry.size.width / 2) * scale,
+                                y: (northwest.y + southeast.y) / 2 - (available.midY - geometry.size.height / 2) * scale)
+        let rect = MKMapRect(origin: MKMapPoint(x: center.x - size.width / 2, y: center.y - size.height / 2), size: size)
+        let target = MapCameraPosition.rect(rect)
         if camera == target, !moving { finishFit(request.id, nil) }
         else { pendingFitID = request.id; camera = target }
     }
@@ -1079,9 +1115,7 @@ private struct CompositionMap: View {
         guard !moving, let region = cameraRegion else { reportViewport(nil, .pending); return }
         guard seeds.isEmpty || seeds.contains(where: { proxy.convert($0.coordinate.mapCoordinate, to: .local) != nil }) else { reportViewport(nil, .pending); return }
         let viewport = CGRect(origin: .zero, size: geometry.size)
-        let origin = geometry.frame(in: .global).origin
-        let exclusions = occlusions + workspaceExclusions.map { $0.offsetBy(dx: -origin.x, dy: -origin.y) }
-            + [CGRect(x: 12, y: 12, width: legendSize.width, height: legendSize.height), CGRect(x: 12, y: legendSize.height + 28, width: 160, height: routes.contains(where: { $0.timeMatch == .unknown }) ? 40 : 0)]
+        let exclusions = mapExclusions(geometry)
         let visibleNodes = nodes.filter { node in
             guard let screen = proxy.convert(node.coordinate.mapCoordinate, to: .local) else { return false }
             return SpatialViewportVisibility.contains(.init(x: screen.x + node.offsetX, y: screen.y + node.offsetY), in: viewport, excluding: exclusions)
@@ -1098,6 +1132,12 @@ private struct CompositionMap: View {
         reportViewport(ReadingMapViewport(partID: partID, latitude: region.center.latitude, longitude: region.center.longitude,
             latitudeDelta: region.span.latitudeDelta, longitudeDelta: region.span.longitudeDelta,
             objectIDs: Array(Set(objects)).sorted(), visibleRouteIDs: Array(Set(visibleRoutes)).sorted(), projectedRouteIDs: Array(Set(routes.map(\.relationID))).sorted(), markerGroups: groups), .ready)
+    }
+    private func mapExclusions(_ geometry: GeometryProxy) -> [CGRect] {
+        let origin = geometry.frame(in: .global).origin
+        return occlusions + workspaceExclusions.map { $0.offsetBy(dx: -origin.x, dy: -origin.y) }
+            + [CGRect(x: 12, y: 12, width: legendSize.width, height: legendSize.height),
+               CGRect(x: 12, y: legendSize.height + 28, width: 160, height: routes.contains(where: { $0.timeMatch == .unknown }) ? 40 : 0)]
     }
     private func screenPoint(_ ids: Set<String>, using proxy: MapProxy) -> CGPoint? {
         // An event can be recorded at several places. Keep the exact marker
@@ -1179,9 +1219,9 @@ private struct CompositionTimeline: View {
                                 HStack(spacing: 6) {
                                     ForEach(phases) { item in
                                         Button {
-                                            guard let extent = item.sourceExtent, let lo = extent.narrativeStart else { return }
-                                            clock = CompositionClock(axis: "narrative-domain:source-order", lower: Double(lo),
-                                                upper: Double(extent.narrativeEnd ?? lo), cursor: Double(lo), mapMode: clock.mapMode)
+                                            guard let window = ReadingEventPresentationPlan.sourceWindow(item.sourceExtent) else { return }
+                                            clock = CompositionClock(axis: window.axis, lower: window.from,
+                                                upper: window.to, cursor: window.cursor, mapMode: clock.mapMode)
                                             select(item.objectID ?? item.id)
                                         } label: {
                                             Text(item.fields["phaseOrder", default: ""] + " " + item.title)

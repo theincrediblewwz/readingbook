@@ -8,6 +8,7 @@ struct WorkspaceAICommand: Equatable {
     let name: String
     let arguments: Data
     var timeWindow: TemporalViewWindow? = nil
+    var eventID: String? = nil
 }
 
 @MainActor extension AppStore {
@@ -50,7 +51,7 @@ struct WorkspaceAICommand: Equatable {
                                context: ReadingContext? = nil) -> ReadingHostToolAccess {
         let owner = ReadingQueryHostOwner(root: libraryRootURL, bookID: expectedBookID, sourceHash: sourceHash, runID: runID)
         let session = ReadingComponentToolSession(grant: grant, snapshot: snapshot, context: context)
-        return ReadingHostToolAccess(viewActions: ["components_list", "component_show", "view_select", "view_focus", "view_set_time_window", "map_fit_objects", "graph_focus", "panel_present"], performViewAction: { [weak self] name, data in
+        return ReadingHostToolAccess(viewActions: ["components_list", "component_show", "view_select", "view_focus", "view_set_time_window", "view_show_event", "map_fit_objects", "graph_focus", "panel_present"], performViewAction: { [weak self] name, data in
             guard let self, await owner.matches(self) else { throw CancellationError() }
             if ["components_list", "component_show"].contains(name) {
                 return try await self.performReadingComponentAction(name, data: data, owner: owner, session: session)
@@ -94,6 +95,9 @@ struct WorkspaceAICommand: Equatable {
         guard let book, book.id == expectedBookID, book.sourceHash == sourceHash else { return try viewToolResult("conflict", "当前书籍已改变。") }
         guard NSEvent.pressedMouseButtons == 0, !isSavingDocument, !isCommittingLocalWrite else { return try viewToolResult("busy", "读者正在操作，未抢占界面。") }
         guard let args = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ReadingError.invalid("视图操作参数无效。") }
+        if name == "view_show_event" {
+            return try await presentReadingEvent(args, data: data, book: book, owner: owner, snapshot: querySnapshot)
+        }
         if name == "view_select" {
             guard Set(args.keys).isSubset(of: ["rendererID"]) else {
                 return try viewToolResult("invalid_arguments", "view_select只打开组件，只接收rendererID；没有选择事件或应用筛选。对象定位用view_focus，阶段时间范围用view_set_time_window。")
@@ -156,13 +160,19 @@ struct WorkspaceAICommand: Equatable {
         }
 
         let command = WorkspaceAICommand(name: name, arguments: data, timeWindow: resolvedWindow)
+        return try await sendWorkspaceCommand(command, expectedBookID: expectedBookID, owner: owner)
+    }
+    func sendWorkspaceCommand(_ command: WorkspaceAICommand, expectedBookID: String, owner: ReadingQueryHostOwner?) async throws -> Data {
+        let contextID = readingVisibilityContextID
         workspaceAICommand = command
         defer { workspaceAIResponses[command.id] = nil; if workspaceAICommand?.id == command.id { workspaceAICommand = nil } }
         for _ in 0..<50 {
             try Task.checkCancellation()
             guard owner?.matches(self) ?? true else { throw CancellationError() }
             if let response = workspaceAIResponses[command.id] { return response }
-            guard bookID == expectedBookID else { return try viewToolResult("conflict", "书籍已改变。") }
+            guard bookID == expectedBookID, readingVisibilityContextID == contextID else {
+                return try viewToolResult("conflict", "书籍、范围或界面已改变，未沿用旧的操作结果。")
+            }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         return try viewToolResult("unsupported", "当前界面未连接此操作；没有改变保存内容。")

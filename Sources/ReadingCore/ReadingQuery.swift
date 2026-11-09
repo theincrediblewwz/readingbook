@@ -460,6 +460,8 @@ struct ReadingQuerySession {
     var documentExcerpts: [(String, String)] = []
     var conversationExcerpts: [(String, String)] = []
     var returnedObjectDirectory = ReadingReturnedObjectDirectory()
+    var eventPresentationFailures: [String: Int] = [:]
+    var pendingEventPresentation: ReadingEventPresentationPlan?
     var toolCalls = 0
     var hasOnlyPreloadedSources: Bool {
         sourceWasPreloaded && !modelRequestedSource && !sourceExcerpts.isEmpty && documentExcerpts.isEmpty && conversationExcerpts.isEmpty

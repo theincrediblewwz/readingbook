@@ -56,6 +56,39 @@ public struct ReadingViewTimeWindow: Codable, Hashable, Sendable {
 /// Screen-space clipping after the map has projected its coordinates. Cut out
 /// floating cards before declaring a point or any portion of a route visible.
 public enum SpatialViewportVisibility {
+    /// Largest unobscured rectangle, used only when explicitly fitting a map.
+    /// Sweep horizontal edges and merge vertical blockers instead of sampling
+    /// pixels or rebuilding knowledge as the camera moves.
+    public static func availableRect(in viewport: CGRect, excluding occlusions: [CGRect], padding: CGFloat = 20) -> CGRect? {
+        guard !viewport.isNull, !viewport.isInfinite, viewport.width > 0, viewport.height > 0,
+              [viewport.minX, viewport.minY, viewport.maxX, viewport.maxY].allSatisfy(\.isFinite),
+              padding.isFinite, padding >= 0, occlusions.count <= 64,
+              occlusions.allSatisfy({ !$0.isNull && !$0.isInfinite && [$0.minX, $0.minY, $0.maxX, $0.maxY].allSatisfy(\.isFinite) }) else { return nil }
+        let bounds = viewport.insetBy(dx: padding, dy: padding)
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        let blocks = occlusions.filter { !$0.isEmpty }.map { $0.insetBy(dx: -padding, dy: -padding).intersection(bounds) }.filter { !$0.isNull && !$0.isEmpty }
+        let xs = Array(Set([bounds.minX, bounds.maxX] + blocks.flatMap { [$0.minX, $0.maxX] })).sorted()
+        var best: CGRect?
+        func consider(_ rect: CGRect) {
+            guard rect.width > 0, rect.height > 0 else { return }
+            let area = rect.width * rect.height, oldArea = best.map { $0.width * $0.height } ?? -1
+            let distance = abs(rect.midX - bounds.midX) + abs(rect.midY - bounds.midY)
+            let oldDistance = best.map { abs($0.midX - bounds.midX) + abs($0.midY - bounds.midY) } ?? .infinity
+            if area > oldArea || area == oldArea && distance < oldDistance { best = rect }
+        }
+        for (index, left) in xs.enumerated() {
+            for right in xs.dropFirst(index + 1) where right > left {
+                let covered = blocks.filter { $0.minX < right && $0.maxX > left }.sorted { $0.minY < $1.minY }
+                var top = bounds.minY
+                for block in covered {
+                    if block.minY > top { consider(CGRect(x: left, y: top, width: right - left, height: block.minY - top)) }
+                    top = max(top, block.maxY)
+                }
+                if top < bounds.maxY { consider(CGRect(x: left, y: top, width: right - left, height: bounds.maxY - top)) }
+            }
+        }
+        return best
+    }
     public static func contains(_ point: CGPoint, in viewport: CGRect, excluding occlusions: [CGRect]) -> Bool {
         point.x.isFinite && point.y.isFinite && viewport.contains(point) && !occlusions.contains { $0.contains(point) }
     }

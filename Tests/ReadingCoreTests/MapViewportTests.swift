@@ -3,6 +3,38 @@ import XCTest
 @testable import ReadingCore
 
 final class MapViewportTests: XCTestCase {
+    func testFitSpaceAvoidsInspectorAndTimelineInsteadOfUsingCanvasCenter() throws {
+        let viewport = CGRect(x: 0, y: 0, width: 1320, height: 860)
+        let cards = [CGRect(x: 12, y: 12, width: 420, height: 480), CGRect(x: 320, y: 560, width: 680, height: 280)]
+        let available = try XCTUnwrap(SpatialViewportVisibility.availableRect(in: viewport, excluding: cards, padding: 28))
+        XCTAssertTrue(available.midX > viewport.midX); XCTAssertTrue(available.midY < viewport.midY)
+        XCTAssertTrue(cards.allSatisfy { !$0.intersects(available) })
+        XCTAssertTrue(viewport.contains(available)); XCTAssertTrue(available.width > 800); XCTAssertTrue(available.height > 450)
+        XCTAssertEqual(SpatialViewportVisibility.availableRect(in: viewport, excluding: cards.reversed(), padding: 28), available)
+    }
+    func testFitSpaceHandlesTotalOcclusionInvalidGeometryAndEmptyCards() {
+        let viewport = CGRect(x: 0, y: 0, width: 100, height: 80)
+        XCTAssertNil(SpatialViewportVisibility.availableRect(in: viewport, excluding: [viewport]))
+        XCTAssertNil(SpatialViewportVisibility.availableRect(in: .zero, excluding: []))
+        XCTAssertNil(SpatialViewportVisibility.availableRect(in: CGRect(x: Double.nan, y: 0, width: 100, height: 80), excluding: []))
+        XCTAssertNil(SpatialViewportVisibility.availableRect(in: viewport, excluding: [.infinite]))
+        XCTAssertNil(SpatialViewportVisibility.availableRect(in: viewport, excluding: [], padding: -1))
+        XCTAssertEqual(SpatialViewportVisibility.availableRect(in: viewport, excluding: [.zero], padding: 4), viewport.insetBy(dx: 4, dy: 4))
+    }
+    func testFitSpaceMatchesSmallGridExhaustiveOracle() {
+        let viewport = CGRect(x: 0, y: 0, width: 6, height: 6)
+        let candidates = [CGRect(x: 0, y: 0, width: 2, height: 3), CGRect(x: 2, y: 2, width: 3, height: 2), CGRect(x: 3, y: 0, width: 3, height: 1), CGRect(x: 1, y: 5, width: 4, height: 1)]
+        for mask in 0..<16 {
+            let blocks = candidates.enumerated().filter { mask & (1 << $0.offset) != 0 }.map(\.element)
+            var largest = 0.0
+            for x in 0..<6 { for y in 0..<6 { for w in 1...(6-x) { for h in 1...(6-y) {
+                let rect = CGRect(x: x, y: y, width: w, height: h)
+                if blocks.allSatisfy({ $0.intersection(rect).width <= 0 || $0.intersection(rect).height <= 0 || $0.intersection(rect).isNull }) { largest = max(largest, Double(w*h)) }
+            } } } }
+            let result = SpatialViewportVisibility.availableRect(in: viewport, excluding: blocks, padding: 0)
+            XCTAssertEqual(result.map { Double($0.width * $0.height) } ?? 0, largest)
+        }
+    }
     func testPointVisibilityExcludesViewportAndFloatingCards() {
         let rect = CGRect(x: 0, y: 0, width: 100, height: 100), card = CGRect(x: 40, y: 20, width: 60, height: 60)
         XCTAssertTrue(SpatialViewportVisibility.contains(.init(x: 20, y: 50), in: rect, excluding: [card]))
