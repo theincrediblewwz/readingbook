@@ -1,3 +1,21 @@
+<!-- chibi-layout-feedback-local:start -->
+当前接续：Design/2026-11-10-chibi-layout-feedback.md；总入口logs/chibi-layout-feedback-20261110/final-local-delivery.json。产品62a87ad300438d4bb66bb81840130cf0daac9968，7产品Swift实改，本机70/101 ARM64本地迭代已安装，二进制9610f169e9b8f1c9d8bb6c5a775b7e5483c8d5445cf7840c911643b2df8c5973。未推GitHub/云CI/Release；上一阶段集中发布仍在main远端83c。正式App已正常退出，勿重复安装/恢复旧库。
+
+原书两次104页/便签“你好”/已有伴读启动并正常退出，最后返回library；39文件中37字节同，1推荐缓存JSON值同，1Workspace仅reader.companion.isPresented由true到false（验收收起面板），其他值同，偏好同。用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，未改未提交。最新回滚private-books/chibi-layout-feedback-20261110/install-before-local-iteration；其protection的oldAppFiles验证277dbf旧安装、newAppFiles验证62a新安装，无旧库覆盖。
+
+先重放旧phase3失败：组遗漏仅唯一关联补齐，显式冲突不猜；错误含当前/所需值和准确字段。事件表通用字段无需typeIDs；kind对象大类与properties.kind事件类型分开；parentEventID只读既有共享引用，越范围父关联隐藏。旧草案只改kind→properties.kind，在43—50回94单元得到7阶段/15地点/11路线。完整失败输入/中间错误均保留，不要又付费生成同一错误。
+
+真实real1是冻结续接旧35要素/21事件/11关系/2视图/1484单元，清旧对话/记忆。8HTTP/347496报告token，模型实际新增地图铺底/底部悬浮轴/点选情境卡的第3视图，事实/原文均不变。7阶段、火攻筛路线、华容621/622出处实际回PDF621通过。准备中仍多次读取完整对象和尝试未知工具，不称整体AI提速，也不称从零一次成功。最终real1/final项目、输入/公开回复/工具回执/源码hash在退出前保存。
+
+真实取景map_fit_objects发现unsupported后，仅软件补组合地图桥接；最终frozen2禁网络重放同7ID，17坐标约0.101s、重复0.104s、筛后5坐标0.059s，实际相机包含目标且资料/时间/选择/路线不变。0新增HTTP。frozen1立即切换后unsupported现场保留，尚未解决全部快速切换等待；不能称任何时机都成功。actualViewport包含坐标不等于浮层无遮挡。
+
+长标签offset只移视觉导致邻居截获，已改MapKit Annotation.anchor带命中区一起移；旧同输入第8项失败80→80.7邻居，最终layoutLabelFinalV3严格32项通过，不改坐标/精度/等待/驱动捷径。core3 457方法/4835独立断言非XCTest；最终共享layoutFitBridge3 57、地图32、范围55、动态52、滚动25，共221独立原生检查通过；各报告所检告警零，不称所有人工几何诊断零。取景修复后未再实模型全流程，最终产品由冻结重放/原生验。
+
+下一批先轻量阶段/路线/出处批量目录，减少多次完整对象读取和未知工具；用相同冻结数据对比次数/字节/结果后少量实模型。当前实际frozen2/ui-fire-fit-final.png浮层衬底过透、现代地名穿透、轴长标题拥挤，需对照精修，不淡化底图，不把能打开当精致完成。还保留地图就绪反馈/浮层避让取景、原文顺序友好页章标签、现代地名密度、时间轴横移/可视端点与筛选端点分离/层级区间、远景聚合密度、有据曲线区域、16类组件性能轮转。
+
+清理7781436→6766904KiB，回收1014532KiB/990.8MiB；批初6693740，净增73164KiB/71.4MiB。38结束运行目录归档逐成员验SHA，3重复PDF规范原书同SHA后省略；9可重建host/探针、过旧cbb回滚App和69ZIP退役，4813非App私人文件保持，共享缓存/当前候选/70通用包/最新277回滚/唯一失败保留。clean-final.py已经apply，勿重跑；索引ended-runtime-index.json。原生验证构建已退役，从脚本和共享缓存重建；不要自动把旧试用问答带入新基线。
+<!-- chibi-layout-feedback-local:end -->
+
 <!-- chibi-shared-phases-stage:start -->
 当前接续：Design/2026-11-09-chibi-shared-phases.md；总入口logs/chibi-shared-phases-20261109/final-stage-delivery.json。本机0.23.70/build101 ARM64产品5477947702f601a5de75e35ca73f1f2e3ab7db23已安装，两次原书104页/便签“你好”/已有伴读启动并正常退出，最后返回library；39文件中38字节同、1推荐缓存JSON值同，偏好同，无旧库恢复。用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，未改未提交。最新回滚private-books/chibi-shared-phases-20261109/install-before-local-iteration；勿重复安装或恢复旧库。
 
