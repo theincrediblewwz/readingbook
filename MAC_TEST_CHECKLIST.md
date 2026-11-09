@@ -1,3 +1,23 @@
+<!-- chibi-catalog-legibility-local:start -->
+当前接续：Design/2026-11-10-chibi-catalog-legibility.md；总入口logs/chibi-catalog-legibility-20261110/final-local-delivery.json。产品be7eba8+6ce5e43（4产品Swift实改），本机70/101 ARM64本地迭代已安装，二进制1cdeaedf2597205b2eb93ae6ad457946ba430e14359820d14ca1016cb94493c0。本批未推GitHub/云CI/Release，远端仍上一阶段83c；正式App已正常退出，勿重复安装/恢复旧库。
+
+object_get增加ids批量/显式轻量；旧id完整返回JSON值与基线同。相同11对象48,847B/11工具调用→16,295B/2调用（66.6%），7次本地中位0.1703→0.03546s；只是本地查询，不冒称模型HTTP/FPS提速。目录继续用共享对象、范围和版本，不新增事实库。测试新用例包含分页、引用授予、混合范围身份、父关联与非法参数。
+
+地图筛选后取景交接已补：refreshTask/投影pending期间保留同一命令，publishMap就绪后接续，无超时/范围放宽。浮层完整浅色衬底，阶段chip限宽/单行省略/完整help，正常底图颜色保持；用户确认横滑可见后续阶段，华容621入口实际回PDF621。
+
+真实real1续接旧35要素/21事件/11关系/3视图/1484单元，清旧对话记忆；8HTTP/301782报告token，采用批量读取，复用旧图、知识不变。但火攻自动筛选未成，最终还把原前两阶段合并、加入回营事件，不能称理想完成。查明view_select传objectID/objectIDs被忽略仍回成功；6ce5e43已分六工具schema，并拒绝view_select多余事件字段，给出正确操作。不要为同一失败盲目再收费。修复后尚未再次实模型闭环；下一批优先验证，并保留收尾正确阶段清单，减少准备内容。
+
+最终frozen5禁网重放两条真实错误→明确invalid_arguments，正常打开通过；正确source-order612—613筛火攻后立即取景成功，重复5坐标0.042s，原生相机/时间/选择/路线/原书均核对。frozen2/3/4是测试在地图pending阶段比较旧快照的失败，原始输入/结果/source保留在failure-cases/index.json；最终没有加额外sleep或放宽几何。frozen1保留原文621和窄窗/横滑证据；UI只差后续工具契约，不自动把旧试用问答带到下一轮。
+
+core3 464方法/4988独立断言（非XCTest）；catalogContractFinal1共享61/范围55/动态52/滚动25，地图最终catalogContractFinal2为32，共225。地图ContractFinal1两项后因Foreground lost中断，失败不算过；各最终报告所检告警零，手动real1/frozen5另6/12 AppKit几何诊断保留。所有最终产品源码hash匹配；不得使用更早catalogReady*58项当最终总数。
+
+原书两次104/1484、便签你好、2笔记/旧对话数据保留，返回library并正常退出；原库39文件中38字节同、1推荐缓存JSON值同，偏好同，无旧库覆盖。用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，未改未提交。最新回滚private-books/chibi-catalog-legibility-20261110/install-before-local-iteration/ReadingBook-0.23.70-local-62a87ad.app；其oldAppFiles验证62a、新AppFiles验证6ce。
+
+清理7826696→6885780KiB，回收940916KiB/918.9MiB；批初6767224，净增118556KiB/115.8MiB。54结束目录逐成员验SHA归档、6重复PDF核对规范原书后省略，9可重建程序和过旧277回滚App退役；4855非App私人文件、共享缓存/当前候选/70通用包/最新62a回滚/唯一失败保留。clean-final.py --apply已执行，勿重跑；索引ended-runtime-index.json。
+
+后续：先精简AI准备/收尾并验证工具区分后的真实筛选，防止七阶段在回答里失真；同批轮到知识库、笔记/历史检索与内存。地图遮挡避让取景、友好页章标签、现代地名密度（不淡化底图）、轴横移/可视端点与筛选端点分开/层级区间、远景聚合密度、有据曲线区域和16类轮转继续保留。
+<!-- chibi-catalog-legibility-local:end -->
+
 <!-- chibi-layout-feedback-local:start -->
 当前接续：Design/2026-11-10-chibi-layout-feedback.md；总入口logs/chibi-layout-feedback-20261110/final-local-delivery.json。产品62a87ad300438d4bb66bb81840130cf0daac9968，7产品Swift实改，本机70/101 ARM64本地迭代已安装，二进制9610f169e9b8f1c9d8bb6c5a775b7e5483c8d5445cf7840c911643b2df8c5973。未推GitHub/云CI/Release；上一阶段集中发布仍在main远端83c。正式App已正常退出，勿重复安装/恢复旧库。
 
