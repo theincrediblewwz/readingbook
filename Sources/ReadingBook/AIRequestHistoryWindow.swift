@@ -10,9 +10,9 @@ import SwiftUI
 
     init(store: AppStore) { self.store = store }
 
-    func show(_ state: AIProgressObservableState) {
+    func show(_ state: AIProgressObservableState, focusing step: AIProgressPresentationState.ToolStep? = nil) {
         guard let store else { return }
-        if let panel, self.state === state { panel.makeKeyAndOrderFront(nil); return }
+        if let panel, self.state === state, step == nil { panel.makeKeyAndOrderFront(nil); return }
         let owner = NSApp.keyWindow
         let panel = self.panel ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 660),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
@@ -23,7 +23,7 @@ import SwiftUI
         panel.minSize = NSSize(width: 680, height: 440)
         panel.backgroundColor = .clear; panel.isOpaque = false
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { panel.standardWindowButton(button)?.isHidden = true }
-        panel.contentView = NSHostingView(rootView: AIRequestHistoryView(state: state, onClose: { [weak self] in self?.close() }, usesNativeWindowSurface: true)
+        panel.contentView = NSHostingView(rootView: AIRequestHistoryView(state: state, onClose: { [weak self] in self?.close() }, usesNativeWindowSurface: true, focusedStep: step)
             .environmentObject(store).ignoresSafeArea())
         if first {
             if let screen = owner?.screen ?? NSScreen.main {
@@ -43,8 +43,8 @@ import SwiftUI
 }
 
 @MainActor extension AppStore {
-    func showAIRequestHistory(_ state: AIProgressObservableState) {
+    func showAIRequestHistory(_ state: AIProgressObservableState, focusing step: AIProgressPresentationState.ToolStep? = nil) {
         if requestHistoryWindow == nil { requestHistoryWindow = AIRequestHistoryWindow(store: self) }
-        requestHistoryWindow?.show(state)
+        requestHistoryWindow?.show(state, focusing: step)
     }
 }

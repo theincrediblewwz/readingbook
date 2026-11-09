@@ -7,6 +7,7 @@ struct AIRequestHistoryView: View {
     @ObservedObject var state: AIProgressObservableState
     var onClose: (() -> Void)? = nil
     var usesNativeWindowSurface = false
+    var focusedStep: AIProgressPresentationState.ToolStep? = nil
     @State private var savedRequests: [AIRequestHistoryRecord] = []
     @State private var selectedRequestID: UUID?
     @State private var showingArchive = false
@@ -15,7 +16,13 @@ struct AIRequestHistoryView: View {
         state.value.bookID == store.bookID && state.value.libraryRoot == store.libraryRootURL ? state.value.requests : []
     }
     private var selectedRequest: AIProgressPresentationState.Request? {
-        currentRequests.first { $0.id == selectedRequestID } ?? currentRequests.last
+        currentRequests.first { $0.id == selectedRequestID } ?? focusedStep.flatMap(requestForStep) ?? currentRequests.last
+    }
+    private func requestForStep(_ step: AIProgressPresentationState.ToolStep) -> AIProgressPresentationState.Request? {
+        currentRequests.first { request in
+            if let id = step.requestID { return request.id == id }
+            return request.number == step.requestNumber
+        }
     }
     private var otherOperations: [ToolAudit] {
         let represented = Set(currentRequests.map { $0.id.uuidString }).union(savedRequests.map(\.id))
@@ -46,12 +53,21 @@ struct AIRequestHistoryView: View {
             HStack(spacing: 0) {
                 requestList.frame(width: 160)
                 Divider().opacity(0.35)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        if !showingArchive, let request = selectedRequest { requestContent(request).id(request.id) }
-                        else { archiveContent }
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(22)
-                }.accessibilityIdentifier("ai-request-detail-content")
+                ScrollViewReader { reader in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            if !showingArchive, let request = selectedRequest { requestContent(request).id(request.id) }
+                            else { archiveContent }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(22)
+                    }.accessibilityIdentifier("ai-request-detail-content")
+                    .task(id: focusedStep?.id) {
+                        guard let step = focusedStep, let request = requestForStep(step) else { return }
+                        selectedRequestID = request.id; showingArchive = false
+                        await Task.yield()
+                        guard !Task.isCancelled else { return }
+                        reader.scrollTo(step.id, anchor: .top)
+                    }
+                }
             }
         }.frame(minWidth: 680, idealWidth: 900, minHeight: 440, idealHeight: 660)
             .modifier(AIRequestHistorySurface(nativeWindow: usesNativeWindowSurface))
@@ -93,7 +109,7 @@ struct AIRequestHistoryView: View {
 
     @ViewBuilder private func requestContent(_ request: AIProgressPresentationState.Request) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            Text("请求 \(request.number)").font(.system(size: 20, weight: .semibold))
+            Text("请求 \(request.number)").font(.system(size: 20, weight: .semibold)).accessibilityIdentifier("ai-request-heading")
             Text(status(request)).font(.system(size: 12)).foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
@@ -138,7 +154,7 @@ struct AIRequestHistoryView: View {
         let operations = steps(request)
         if operations.isEmpty { notice(request.response?.toolCalls.isEmpty == false ? "尚无执行回执；提出操作不等于已保存。" : "这次没有执行工具操作。") }
         ForEach(operations) { step in
-            AITraceDisclosure(title: step.title, subtitle: step.requiresReview ? "待审阅，尚未应用" : step.succeeded == true ? "已返回回执" : step.succeeded == false ? "未通过" : "处理中") {
+            AITraceDisclosure(title: step.title, subtitle: step.requiresReview ? "待审阅，尚未应用" : step.succeeded == true ? "已返回回执" : step.succeeded == false ? "未通过" : "处理中", expandOnAppear: focusedStep?.id == step.id) {
                 if !step.summary.isEmpty { Text(step.summary).font(.system(size: 13)).textSelection(.enabled) }
                 if let trace = step.trace {
                     ForEach(trace.fragments) { fragment in
@@ -148,10 +164,10 @@ struct AIRequestHistoryView: View {
                             AITraceTextView(content: AITraceText(fragment.text)).equatable()
                         }
                     }
-                    AITraceDisclosure(title: "实际执行的参数") { AITraceTextView(content: trace.arguments).equatable() }
-                    AITraceDisclosure(title: "软件返回的完整文字") { AITraceTextView(content: trace.result).equatable() }
+                    AITraceDisclosure(title: "实际执行的参数", expandOnAppear: focusedStep?.id == step.id) { AITraceTextView(content: trace.arguments).equatable() }
+                    AITraceDisclosure(title: "软件返回的完整文字", expandOnAppear: focusedStep?.id == step.id) { AITraceTextView(content: trace.result).equatable() }
                 } else if step.traceExpired { notice("这条较早记录的文字已释放。") }
-            }
+            }.id(step.id)
         }
     }
 

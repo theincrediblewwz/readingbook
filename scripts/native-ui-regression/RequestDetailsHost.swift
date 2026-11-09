@@ -167,6 +167,33 @@ private actor TraceTransport {
         store.requestHistoryWindow?.close()
         try await wait { self.store.requestHistoryWindow == nil }
         try check("closingDetailsKeepsTaskAndAnswer", store.queryProgressState.value == state && store.book?.chats.last?.role == "assistant")
+        host.rootView = AnyView(ScrollView { AIProgressStatusView(state: store.queryProgressState).environmentObject(store).padding(20) }.id("operation-order"))
+        try await Task.sleep(for: .milliseconds(100))
+        let progressRows = objects().compactMap { object -> (String, CGRect)? in
+            guard let title = read(object, "accessibilityLabel") as? String, title.hasPrefix("查看请求"),
+                  object.responds(to: NSSelectorFromString("accessibilityFrame")),
+                  let frame = (object.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue, frame.width > 0, frame.height > 0 else { return nil }
+            return (title, frame)
+        }.sorted { $0.1.midY > $1.1.midY }
+        try check("progressNewestOperationFirst", progressRows.first?.0.hasPrefix("查看请求2的操作") == true)
+        try check("progressRowsExplainOwningRequest", Set(progressRows.map(\.0)) == ["查看请求1的操作：阅读原文片段", "查看请求2的操作：阅读原文片段"])
+        try await press("查看请求2的操作：阅读原文片段")
+        try await wait { NSApp.windows.contains { $0.title == "请求记录与详情" && $0.isVisible && $0 !== self.window } }
+        let focused = try require(NSApp.windows.first { $0.title == "请求记录与详情" && $0.isVisible && $0 !== self.window })
+        try await wait { self.detailText(focused).contains("冻结范围") }
+        try check("operationClickSelectsItsOwningRequest", detailHeading(focused).contains("请求 2"))
+        try check("operationClickExpandsItsActualParameters", detailText(focused).contains("outside"))
+        try check("operationClickExpandsItsActualResult", detailText(focused).contains("冻结范围"))
+        try check("openingFocusedDetailsPreservesOwnerFrame", window.frame == ownerFrame)
+        window.makeKeyAndOrderFront(nil)
+        try await press("查看请求1的操作：阅读原文片段")
+        try await wait { self.detailText(focused).contains(project.units[1].text) }
+        try check("olderOperationClickReselectsExactRequest", detailHeading(focused).contains("请求 1") && detailText(focused).contains(project.units[1].text))
+        let afterInspectionCount = await transport.count()
+        try check("focusedInspectionDoesNotSendModelRequests", afterInspectionCount == requestCount && store.queryProgressState.value == state)
+        store.requestHistoryWindow?.close()
+        try await wait { self.store.requestHistoryWindow == nil }
+        window.makeKeyAndOrderFront(nil)
         let longSource = "长正文开头。" + String(repeating: "原书文字。", count: 4000) + "长正文末尾。"
         let retained = AITraceText(longSource)
         host.rootView = AnyView(ScrollView { AITraceDisclosure(title: "长正文") { AITraceTextView(content: retained).equatable() }.padding(20) }.id("long-source"))
@@ -200,7 +227,7 @@ private actor TraceTransport {
         guard value.responds(to: selector) else { return nil }
         return value.perform(selector)?.takeUnretainedValue()
     }
-    func objects() -> [NSObject] {
+    func objects(root: NSObject? = nil) -> [NSObject] {
         var result: [NSObject] = [], seen = Set<ObjectIdentifier>()
         func walk(_ value: NSObject, _ depth: Int) {
             guard depth < 40, seen.insert(ObjectIdentifier(value)).inserted else { return }
@@ -208,7 +235,16 @@ private actor TraceTransport {
             for child in self.read(value, "accessibilityChildren") as? [NSObject] ?? [] { walk(child, depth + 1) }
             if let view = value as? NSView { for child in view.subviews { walk(child, depth + 1) } }
         }
-        walk(host, 0); return result
+        walk(root ?? host, 0); return result
+    }
+    func detailText(_ window: NSWindow) -> String {
+        objects(root: window.contentView).flatMap { object in
+            ["accessibilityLabel", "accessibilityValue"].compactMap { read(object, $0) as? String } + ((object as? NSTextView).map { [$0.string] } ?? [])
+        }.joined(separator: "\n")
+    }
+    func detailHeading(_ window: NSWindow) -> String {
+        objects(root: window.contentView).filter { read($0, "accessibilityIdentifier") as? String == "ai-request-heading" }
+            .flatMap { object in ["accessibilityLabel", "accessibilityValue"].compactMap { read(object, $0) as? String } }.joined()
     }
     func labels() -> [String] {
         host.layoutSubtreeIfNeeded(); window.displayIfNeeded()
@@ -313,6 +349,7 @@ private actor TraceTransport {
                let rect = (matches[occurrence].value(forKey: "accessibilityFrame") as? NSValue)?.rectValue,
                rect.width > 0, rect.height > 0 { ready = rect; break }
             var title = label.hasPrefix("展开") || label.hasPrefix("收起") ? String(label.dropFirst(2)) : label
+            if label.hasPrefix("查看请求"), let marker = label.range(of: "的操作：") { title = String(label[marker.upperBound...]) }
             if label.hasPrefix("查看第 "), label.hasSuffix(" 次请求") { title = "请求 " + label.replacingOccurrences(of: "查看第 ", with: "").replacingOccurrences(of: " 次请求", with: "") }
             let frames = visibleButtons(title)
             if frames.indices.contains(occurrence) { ready = window.convertToScreen(host.convert(frames[occurrence], to: nil)); break }

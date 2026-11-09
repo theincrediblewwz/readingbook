@@ -401,15 +401,15 @@ struct AIProgressStatusView: View {
                     }
                     if !compact {
                         HStack {
-                            Text(progress.requestNumber > 0 ? "第 \(progress.requestNumber) 次请求" : "尚未发送请求")
+                            Text(progress.requestNumber > 0 ? "第 \(progress.requestNumber) 次模型请求" : "尚未发送请求")
                             Spacer()
                             if [.performingTool, .toolCompleted].contains(progress.phase), let index = progress.toolIndex, let total = progress.toolTotal {
                                 Text("本批操作 \(index)/\(total)")
                             } else if progress.completedTools > 0 { Text("\(progress.completedTools) 项操作通过") }
                         }.font(.system(size: 11)).foregroundStyle(.secondary)
                         LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(progress.toolSteps) { step in
-                            Button { store.showAIRequestHistory(state) } label: { HStack(spacing: 8) {
+                        ForEach(progress.toolSteps.reversed()) { step in
+                            Button { store.showAIRequestHistory(state, focusing: step) } label: { HStack(spacing: 8) {
                                 Image(systemName: step.requiresReview ? "clock" : step.succeeded == nil ? "circle.dotted" : step.succeeded == true ? "checkmark.circle.fill" : "exclamationmark.circle")
                                     .foregroundStyle(step.succeeded == false ? Palette.copper : Palette.accent)
                                 VStack(alignment: .leading, spacing: 3) {
@@ -419,8 +419,11 @@ struct AIProgressStatusView: View {
                                     else if let fragment = step.trace?.fragments.first { Text(fragment.title).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1) }
                                 }
                                 Spacer(minLength: 4)
+                                Text("请求 \(step.requestNumber)").font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
                             }.frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle()) }
-                                .buttonStyle(ReadingQuietButtonStyle()).help("查看这项操作的实际请求与返回")
+                                .buttonStyle(ReadingQuietButtonStyle())
+                                .accessibilityLabel("查看请求\(step.requestNumber)的操作：\(step.title)")
+                                .help("打开第 \(step.requestNumber) 次模型请求，并展开这项软件操作的参数与返回")
                         }
                         }
                     }
@@ -438,6 +441,7 @@ struct AIProgressStatusView: View {
 struct AITraceDisclosure<Content: View>: View {
     let title: String
     var subtitle = ""
+    var expandOnAppear = false
     @ViewBuilder let content: () -> Content
     @State private var expanded = false
     var body: some View {
@@ -453,6 +457,7 @@ struct AITraceDisclosure<Content: View>: View {
                 .accessibilityLabel((expanded ? "收起" : "展开") + title)
             if expanded { content().padding(.leading, 8) }
         }.frame(maxWidth: .infinity, alignment: .leading)
+            .onAppear { if expandOnAppear { expanded = true } }
     }
 }
 
