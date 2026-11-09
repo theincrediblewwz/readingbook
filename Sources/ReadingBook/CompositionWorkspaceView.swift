@@ -151,6 +151,9 @@ struct CompositionWorkspaceView: View {
               isActive, !embedded, definition?.id == store.route, !store.hasWorkspaceAuxiliary,
               let composition, let owner = displayedOwner, matches(owner, store: store) else { return }
         if command.name == "map_fit_objects" {
+            // Filtering can acknowledge its data projection before MapKit has
+            // published the new viewport. Keep this command for that handoff.
+            guard refreshTask == nil else { return }
             guard let args = try? JSONSerialization.jsonObject(with: command.arguments) as? [String: Any] else { return }
             let ids = Set(args["objectIDs"] as? [String] ?? [])
             let parts = composition.parts.filter { part in
@@ -159,6 +162,7 @@ struct CompositionWorkspaceView: View {
                 return projection.mapPoints.contains { ids.contains($0.targetID) } || routes.contains { $0.eventID.map(ids.contains) == true }
             }
             guard !parts.isEmpty else {
+                if store.renderedCompositionState?.observationStatus == .pending { return }
                 store.acknowledgeViewCommand(command, status: "unsupported", message: "当前已显示地图没有这些对象的可靠位置；未扩大原文或时间范围。")
                 return
             }
@@ -311,6 +315,11 @@ struct CompositionWorkspaceView: View {
             selectedIDs: Array(Set(selections.values.flatMap { $0 })).sorted(),
             maps: mapViewports.keys.sorted().compactMap { mapViewports[$0] }, clocks: windows,
             observationStatus: status == .empty && !mapViewports.isEmpty ? .ready : status)
+        if status == .ready || status == .empty, pendingMapCommand == nil,
+           let command = store.workspaceAICommand, command.name == "map_fit_objects",
+           store.workspaceAIResponses[command.id] == nil {
+            receiveViewCommand(command)
+        }
     }
     private func select(_ id: String, group: String) {
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) {
@@ -346,8 +355,8 @@ struct CompositionWorkspaceView: View {
                         layout(id, in: composition, width: frame.width, floating: true,
                             dismiss: node.presentation == .contextual ? { dismiss(node, in: composition) } : nil)
                     }.scrollIndicators(.visible).frame(width: frame.width, height: frame.height)
-                        .clipShape(RoundedRectangle(cornerRadius: 24))
-                        .shadow(color: .black.opacity(0.13), radius: 18, y: 6)
+                        .background(Palette.surface.opacity(0.96), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .readingGlass(radius: 24, prominent: true)
                         .position(x: frame.midX, y: frame.midY)
                         .accessibilityIdentifier("composition-floating-" + id)
                 }
@@ -495,7 +504,7 @@ struct CompositionWorkspaceView: View {
     private func partCard(_ part: CompositionPart, width: CGFloat, floating: Bool = false, dismiss: (() -> Void)? = nil) -> some View {
         let projection = projections[part.sourceID]
         let source = baseline[part.sourceID]
-        return VStack(alignment: .leading, spacing: 0) {
+        let content = VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: icon(part)).foregroundStyle(Palette.accent)
                 Text(title(part)).font(.system(size: 16, weight: .semibold)).lineLimit(2)
@@ -522,7 +531,11 @@ struct CompositionWorkspaceView: View {
                     }
                 } else { CompositionEmptyState(text: "正在准备内容…", icon: icon(part)) }
             }
-        }.frame(maxWidth: .infinity, alignment: .topLeading).readingGlass(radius: 24)
+        }.frame(maxWidth: .infinity, alignment: .topLeading)
+        return Group {
+            if floating { content }
+            else { content.readingGlass(radius: 24) }
+        }
     }
 
     @ViewBuilder private func primitive(_ part: CompositionPart, projection: CompositionProjection, baseline: CompositionProjection, width: CGFloat, floating: Bool = false) -> some View {
@@ -1155,32 +1168,37 @@ private struct CompositionTimeline: View {
         if axes.isEmpty { CompositionEmptyState(text: "还没有可比较的时间记录。原书纪年会保留，不擅自换算为公历。", icon: "clock") }
         else {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
+                HStack(spacing: 8) {
                     Picker("时间轴", selection: Binding(get: { axis }, set: { clock = CompositionClock(axis: $0, mapMode: clock.mapMode) })) {
                         ForEach(axes, id: \.self) { Text(TemporalAxis($0).title).tag($0) }
-                    }.labelsHidden().pickerStyle(.menu).frame(minHeight: 48)
+                    }.labelsHidden().pickerStyle(.menu).fixedSize(horizontal: true, vertical: false).frame(minHeight: 44)
                     if !phases.isEmpty {
-                        ScrollView(.horizontal) {
-                            HStack(spacing: 6) {
-                                ForEach(phases) { item in
-                                    Button {
-                                        guard let extent = item.sourceExtent, let lo = extent.narrativeStart else { return }
-                                        clock = CompositionClock(axis: "narrative-domain:source-order", lower: Double(lo),
-                                            upper: Double(extent.narrativeEnd ?? lo), cursor: Double(lo), mapMode: clock.mapMode)
-                                        select(item.objectID ?? item.id)
-                                    } label: { Text(item.fields["phaseOrder", default: ""] + " " + item.title).lineLimit(1) }
-                                    .buttonStyle(ReadingToolbarButtonStyle())
-                                    .disabled(item.sourceExtent == nil)
-                                    .accessibilityLabel("查看阶段：" + item.title)
-                                    .help("按这一阶段的原文出处筛选地图与行动；不会改写已有日期")
+                        GeometryReader { geometry in
+                            let chipWidth = min(208, max(112, geometry.size.width * 0.6))
+                            ScrollView(.horizontal) {
+                                HStack(spacing: 6) {
+                                    ForEach(phases) { item in
+                                        Button {
+                                            guard let extent = item.sourceExtent, let lo = extent.narrativeStart else { return }
+                                            clock = CompositionClock(axis: "narrative-domain:source-order", lower: Double(lo),
+                                                upper: Double(extent.narrativeEnd ?? lo), cursor: Double(lo), mapMode: clock.mapMode)
+                                            select(item.objectID ?? item.id)
+                                        } label: {
+                                            Text(item.fields["phaseOrder", default: ""] + " " + item.title)
+                                                .lineLimit(1).truncationMode(.tail).frame(width: chipWidth, alignment: .leading)
+                                        }
+                                        .buttonStyle(ReadingToolbarButtonStyle())
+                                        .disabled(item.sourceExtent == nil)
+                                        .accessibilityLabel("查看阶段：" + item.title)
+                                        .help(item.title + "\n按这一阶段的原文出处筛选地图与行动；不会改写已有日期")
+                                    }
                                 }
-                            }
-                        }.frame(maxHeight: 48)
-                    }
-                    Spacer()
+                            }.scrollIndicators(.hidden)
+                        }.frame(minWidth: 80).frame(height: 44)
+                    } else { Spacer(minLength: 0) }
                     if clock.point != nil {
-                        Button { clock = CompositionClock() } label: { Text("全时段").frame(minHeight: 48) }.buttonStyle(ReadingToolbarButtonStyle())
-                    } else { Text("全时段").font(.caption).foregroundStyle(.secondary) }
+                        Button { clock = CompositionClock() } label: { Text("全时段").fixedSize().frame(minHeight: 44) }.buttonStyle(ReadingToolbarButtonStyle())
+                    } else { Text("全时段").font(.caption).foregroundStyle(.secondary).fixedSize() }
                 }
                 TimelineRangeControl(lower: Binding(get: { lower }, set: { update(lower: $0) }),
                     upper: Binding(get: { upper }, set: { update(upper: $0) }), bounds: bounds,

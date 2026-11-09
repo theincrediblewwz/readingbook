@@ -241,6 +241,11 @@ private actor WorkbenchTransport {
         let filtered = try CompositionRuntime.project(definition, in: book, windows: [sourceDefinition.timeGroup: window])
         try check("timeBridgeWindowSelectsOneSharedEvent", filtered["events"]?.items.map(\.id) == ["event0"])
         try JSONSerialization.data(withJSONObject: ["projectedPointTargets": filtered["events"]?.mapPoints.map(\.targetID) ?? [], "projectedEventIDs": filtered["events"]?.items.map(\.id) ?? []], options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("map-bridge-before-wait.json"))
+        // No readiness wait here: a model may ask to fit immediately after the
+        // time filter returns. The renderer must complete that handoff itself.
+        let immediateFit = try await store.performReadingViewAction("map_fit_objects", data: JSONSerialization.data(withJSONObject: ["objectIDs": ["event0"]]), expectedBookID: book.id, sourceHash: book.sourceHash)
+        try Data(immediateFit).write(to: output.appendingPathComponent("map-fit-immediately-after-filter.json"))
+        try check("mapBridgeImmediateFitAfterTimeFilter", (try JSONSerialization.jsonObject(with: immediateFit) as? [String: Any])?["status"] as? String == "success")
         try await wait { self.store.renderedCompositionState?.maps.first?.objectIDs == ["event0"] }
         try check("mapBridgeFilteredMapReady", store.renderedCompositionState?.maps.first?.projectedRouteIDs.isEmpty == true)
         let clockBeforeFit = [store.temporalAxis, String(store.timeFrom), String(store.timeTo), String(store.timeCursor)]

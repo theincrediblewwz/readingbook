@@ -112,7 +112,11 @@ enum ReadingQueryToolCatalog {
         var query = paging; query["query"] = string; query["typeIDs"] = ids; query["includeEvidence"] = evidenceOption
         query["queries"] = ["type": "array", "items": string, "minItems": 1, "maxItems": 16,
             "description": "一次核对多个姓名或概念时使用，每项独立匹配、结果合并去重；与query二选一，不把多个人名拼成一个检索词。"]
-        var object = ["id": string]; object["expectedHash"] = string
+        var object: [String: Any] = ["id": string]; object["expectedHash"] = string
+        object["ids"] = ["type": "array", "items": string, "minItems": 1, "maxItems": 20,
+            "description": "与id二选一，批量核对已知对象的字段、位置和关联；默认省略长引文。按nextOffset续读。"]
+        object["offset"] = paging["offset"]; object["limit"] = paging["limit"]
+        object["includeEvidence"] = ["type": "boolean", "description": "组织已有资料先用false，只取字段和来源ID；逐字核对才用true。ids默认false，单个id默认true；不自动读取笔记正文。"]
         var relation = paging; relation["objectID"] = string
         relation["includeEvidence"] = ["type": "boolean", "description": "全范围目录默认只列概览和来源ID；设true返回逐字依据。指定objectID时省略此项保留原有完整返回。"]
         var event = paging; event["entityID"] = string; event["placeID"] = string; event["includeEvidence"] = evidenceOption
@@ -131,7 +135,7 @@ enum ReadingQueryToolCatalog {
         if !snapshot.sources.isEmpty {
             result += [function("reading_coverage_get", "本次范围的实际处理状态/缺口；查询不增加覆盖，不证明理解无遗漏。", paging),
                 function("objects_search", "按名称/别名/概述和类型检索范围内对象；索引不是独立证据。", query),
-                function("object_get", "读取一个范围内统一对象，返回版本、字段、来源；不自动读取挂载Markdown。", object, required: ["id"]),
+                function("object_get", "id读取单个对象；ids批量读取已知对象。组织组件先批量取字段/关联，再按需核对原文；返回本范围版本，不自动读取挂载Markdown。", object),
                 function("relations_list", "省略objectID分页列本范围全部关系与地图行动，传objectID按对象过滤；只返回范围内资料，未知时间不当作当前成立。", relation),
                 function("events_query", "按人物/地点/时间查询范围内事件；保留个人参与时间的不确定性，参与事件不推出位置。", event),
                 function("entity_history_get", "查询一个实体的有证据出现/参与/关系；footprints是明确出现点，不推造连续路线。", entity, required: ["entityID"])]
@@ -415,22 +419,7 @@ extension ReadingQuerySession {
             }
             return pageResult
         case "object_get":
-            let id = try identifier(arguments)
-            guard let object = try TemporalKnowledgeRuntime.object(id: id, in: scoped, boundary: boundary) else {
-                guard let candidate = PluginEngine.analysisIdentityCandidates(project, allowedUnitIDs: Set(snapshot.unitIDs), occurrenceTexts: snapshot.sources.map(\.text)).first(where: { $0.id == id }), let saved = reuse?.record(id: id) else { throw invalid("对象不在本次原文范围内。") }
-                guard arguments["expectedHash"] == nil else { throw invalid("当前只是待核对身份候选，没有可用于变更的对象版本。") }
-                return try json(["ok": true, "object": ["id": candidate.id, "name": candidate.name, "typeID": candidate.typeID], "identityOnly": true, "previouslySaved": saved,
-                    "documentBodiesProvided": false, "note": "当前同名身份尚待核对；旧简介是派生资料，不扩大本次原文与引用范围。"])
-            }
-            try checkHash(arguments, actual: object.version)
-            var row: [String: Any] = ["ok": true, "object": try encoded(object), "documentBodiesProvided": false,
-                "identityOnly": isIdentityStub(object.id), "note": "稳定id可复用关联；跨范围聚合属性隐藏，安全旧简介单列为派生资料。只有本范围实际返回原文可作本次引用。"]
-            if let saved = reuse?.record(id: object.id) { row["previouslySaved"] = saved }
-            let kind: KnowledgeRecordKind = object.kind == .event ? .event : .entity
-            if !isIdentityStub(object.id), let edit = KnowledgeUserEditsRuntime.record(object.id, kind: kind, in: scoped), !edit.fields.isEmpty {
-                row["readerCorrection"] = ["basis": edit.basis.title, "protectedFields": edit.fields, "notice": "仅这些字段是用户修正，其余不代表已核对；原文出处单列，不把个人理解当作原文明载。"]
-            }
-            return try objectResultWithTeacherBackground(row, objectID: object.id, visibleName: object.name, project: project, maximumBytes: maximumBytes)
+            return try objectLookup(arguments, scoped: scoped, project: project, reuse: reuse, maximumBytes: maximumBytes)
         case "relations_list":
             if let raw = arguments["objectID"], !(raw is String) { throw invalid("objectID须为对象ID；查询全部关系时请省略。") }
             let id = arguments["objectID"] as? String
