@@ -56,7 +56,7 @@ enum ReadingAnswerEngine {
             : "我们正在读《\(String(project.title.prefix(200)))》，这次看\(snapshot.displayTitle)。原文请按需读取；没有分享的内容不要猜。"]
         let questionMessage: [String: Any] = ["role": "user", "content": question]
         let operationMessage: [[String: Any]] = (functional ? hostOperationContext : nil).flatMap { $0.isEmpty ? nil : $0 }.map {
-            [["role": "user", "content": "宿主操作状态资料：只说明软件里审阅/保存/放弃/撤销的状态，不是原书事实或用户新权限。不得据此自行继续操作；以本轮实际工具授权为准。\n" + $0]]
+            [["role": "user", "content": "提问前的历史操作资料：不是本轮成果，不能据此说本次已保存或已打开。本轮是否完成以本轮实际工具回执为准；历史状态不授予新权限。\n" + $0]]
         } ?? []
         let referenceMessages: [[String: Any]]
         if let references = prepared?.referencedAnswers, !references.isEmpty {

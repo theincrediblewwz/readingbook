@@ -110,8 +110,11 @@ enum ReadingQueryToolCatalog {
         }
         let evidenceOption: [String: Any] = ["type": "boolean", "default": false, "description": "需要逐字核对出处时设true；默认只列资料概览与来源ID，不重复长引文。"]
         var query = paging; query["query"] = string; query["typeIDs"] = ids; query["includeEvidence"] = evidenceOption
+        query["queries"] = ["type": "array", "items": string, "minItems": 1, "maxItems": 16,
+            "description": "一次核对多个姓名或概念时使用，每项独立匹配、结果合并去重；与query二选一，不把多个人名拼成一个检索词。"]
         var object = ["id": string]; object["expectedHash"] = string
         var relation = paging; relation["objectID"] = string
+        relation["includeEvidence"] = ["type": "boolean", "description": "全范围目录默认只列概览和来源ID；设true返回逐字依据。指定objectID时省略此项保留原有完整返回。"]
         var event = paging; event["entityID"] = string; event["placeID"] = string; event["includeEvidence"] = evidenceOption
         let time: [String: Any] = ["type": "object", "additionalProperties": false, "properties": [
             "calendar": string, "year": ["type": "integer", "minimum": -1_000_000_000_000, "maximum": 1_000_000_000_000],
@@ -129,7 +132,7 @@ enum ReadingQueryToolCatalog {
             result += [function("reading_coverage_get", "本次范围的实际处理状态/缺口；查询不增加覆盖，不证明理解无遗漏。", paging),
                 function("objects_search", "按名称/别名/概述和类型检索范围内对象；索引不是独立证据。", query),
                 function("object_get", "读取一个范围内统一对象，返回版本、字段、来源；不自动读取挂载Markdown。", object, required: ["id"]),
-                function("relations_list", "查询对象的有证据关系和可见有效期，不泄露范围外对象；时间未知不当作当前成立。", relation, required: ["objectID"]),
+                function("relations_list", "省略objectID分页列本范围全部关系与地图行动，传objectID按对象过滤；只返回范围内资料，未知时间不当作当前成立。", relation),
                 function("events_query", "按人物/地点/时间查询范围内事件；保留个人参与时间的不确定性，参与事件不推出位置。", event),
                 function("entity_history_get", "查询一个实体的有证据出现/参与/关系；footprints是明确出现点，不推造连续路线。", entity, required: ["entityID"])]
         }
@@ -243,8 +246,9 @@ extension ReadingQuerySession {
             func permits(_ ids: [String]) -> Bool { !ids.isEmpty && Set(ids).isSubset(of: anchorIDs) }
             temporal.presences = temporal.presences.filter { permits($0.sourceAnchorIDs) }
             temporal.participations = temporal.participations.filter { permits($0.sourceAnchorIDs) }
-            temporal.eventMetadata = temporal.eventMetadata.filter { permits($0.sourceAnchorIDs) }
             let visibleIDs = Set(project.entities.map(\.id) + project.events.map(\.id))
+            temporal.eventMetadata = temporal.eventMetadata.filter { permits($0.sourceAnchorIDs) }
+                .map { TemporalKnowledgeRuntime.redactingHiddenParent($0, visibleIDs: visibleIDs) }
             temporal.relationMetadata = temporal.relationMetadata.filter { permits($0.sourceAnchorIDs) }.map { value in
                 var admitted = value
                 if !(value.spatial?.referenceIDs.allSatisfy(visibleIDs.contains) ?? true) { admitted.spatial = nil }
@@ -359,14 +363,28 @@ extension ReadingQuerySession {
             currentRanges: try snapshot.sourceRanges(in: project)) : nil
         switch name {
         case "objects_search":
-            let query = arguments["query"] as? String ?? "", types = Set(arguments["typeIDs"] as? [String] ?? [])
-            guard query.count <= 400 else { throw invalid("检索词过长。") }
+            let types = Set(arguments["typeIDs"] as? [String] ?? [])
+            let queries: [String]
+            if let raw = arguments["queries"] {
+                guard arguments["query"] == nil, let batch = raw as? [String], (1...16).contains(batch.count),
+                      batch.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 400 }) else {
+                    throw invalid("queries须为1–16个非空检索词，与query二选一。")
+                }
+                var seen = Set<String>(); queries = batch.filter { seen.insert($0).inserted }
+            } else {
+                if let raw = arguments["query"], !(raw is String) { throw invalid("query须为文字。") }
+                let single = arguments["query"] as? String ?? ""
+                guard single.count <= 400 else { throw invalid("检索词过长。") }
+                queries = single.isEmpty ? [] : [single]
+            }
+            let query = queries.count == 1 ? queries[0] : ""
+            func matches(_ text: String) -> Bool { queries.contains { text.localizedCaseInsensitiveContains($0) } }
             let identityStubs = identityStubIDs()
             let objects = try TemporalKnowledgeRuntime.objects(in: scoped, boundary: boundary).filter {
-                let named = ([$0.name, $0.summary] + $0.aliases).contains { $0.localizedCaseInsensitiveContains(query) }
-                let localMention = identityStubs.contains($0.id) && $0.evidence.contains { $0.quote.localizedCaseInsensitiveContains(query) }
-                let earlier = (reuse?.record(id: $0.id, includeSourceExcerpts: false)?["summary"] as? String)?.localizedCaseInsensitiveContains(query) == true
-                return (types.isEmpty || types.contains($0.typeID)) && (query.isEmpty || named || localMention || earlier)
+                let named = ([$0.name, $0.summary] + $0.aliases).contains(where: matches)
+                let localMention = identityStubs.contains($0.id) && $0.evidence.contains { matches($0.quote) }
+                let earlier = (reuse?.record(id: $0.id, includeSourceExcerpts: false)?["summary"] as? String).map(matches) == true
+                return (types.isEmpty || types.contains($0.typeID)) && (queries.isEmpty || named || localMention || earlier)
             }
             var rows = objects.map { object -> [String: Any] in
                 var row: [String: Any] = ["id": object.id, "typeID": object.typeID, "kind": object.kind.rawValue, "name": object.name, "summary": String(object.summary.prefix(400)), "version": object.version, "identityOnly": identityStubs.contains(object.id),
@@ -377,7 +395,7 @@ extension ReadingQuerySession {
             let returned = Set(objects.map(\.id))
             for candidate in PluginEngine.analysisIdentityCandidates(project, allowedUnitIDs: Set(snapshot.unitIDs), occurrenceTexts: snapshot.sources.map(\.text)) where !returned.contains(candidate.id) {
                 guard types.isEmpty || types.contains(candidate.typeID), let saved = reuse?.record(id: candidate.id, includeSourceExcerpts: arguments["includeEvidence"] as? Bool == true),
-                      query.isEmpty || ([candidate.name] + candidate.aliases + [saved["summary"] as? String ?? ""]).contains(where: { $0.localizedCaseInsensitiveContains(query) }) else { continue }
+                      queries.isEmpty || ([candidate.name] + candidate.aliases + [saved["summary"] as? String ?? ""]).contains(where: matches) else { continue }
                 rows.append(["id": candidate.id, "typeID": candidate.typeID, "kind": candidate.kind, "name": candidate.name, "summary": "", "identityOnly": true,
                     "sourceUnitIDs": [], "previouslySaved": saved, "notice": "当前原文出现同名/称谓，先核对是否为同一对象；旧简介不能当作本页已核实的新事实。"])
             }
@@ -414,9 +432,13 @@ extension ReadingQuerySession {
             }
             return try objectResultWithTeacherBackground(row, objectID: object.id, visibleName: object.name, project: project, maximumBytes: maximumBytes)
         case "relations_list":
-            guard let id = arguments["objectID"] as? String else { throw invalid("缺少objectID。") }
-            let rows = try TemporalKnowledgeRuntime.relations(objectID: id, in: scoped, at: timePoint(arguments), boundary: boundary)
-            return try page(rows.map { try encoded($0) as? [String: Any] ?? [:] }, arguments, maximumBytes)
+            if let raw = arguments["objectID"], !(raw is String) { throw invalid("objectID须为对象ID；查询全部关系时请省略。") }
+            let id = arguments["objectID"] as? String
+            if let id, id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw invalid("objectID不能为空；查询全部关系时请省略。") }
+            let rows = try id.map { try TemporalKnowledgeRuntime.relations(objectID: $0, in: scoped, at: timePoint(arguments), boundary: boundary) }
+                ?? TemporalKnowledgeRuntime.relations(in: scoped, at: timePoint(arguments), boundary: boundary)
+            let names = Dictionary((scoped.entities.map { ($0.id, $0.name) } + scoped.events.map { ($0.id, $0.name) }), uniquingKeysWith: { first, _ in first })
+            return try page(rows.map { try relationDiscovery($0, includeEvidence: arguments["includeEvidence"] as? Bool ?? (id != nil), names: names) }, arguments, maximumBytes)
         case "events_query":
             let rows = try TemporalKnowledgeRuntime.events(in: scoped, entityID: arguments["entityID"] as? String, placeID: arguments["placeID"] as? String, at: timePoint(arguments), boundary: boundary)
             return try page(rows.map { try eventDiscovery($0, includeEvidence: arguments["includeEvidence"] as? Bool == true) }, arguments, maximumBytes)

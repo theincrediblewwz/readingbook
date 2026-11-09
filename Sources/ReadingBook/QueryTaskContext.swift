@@ -97,8 +97,8 @@ import CryptoKit
     /// new authority. No original chat message is modified or manufactured.
     var queryHostOperationContext: String? {
         guard queryInteractionMode == .functional, let book else { return nil }
-        var state: [String: Any] = ["version": 1, "bookID": book.id,
-            "meaning": "仅软件操作结果；不是原书事实、用户新授权或继续调用请求。是否再次整理由用户本次选择决定。"]
+        var state: [String: Any] = ["version": 2, "bookID": book.id, "temporalContext": "before_current_question",
+            "meaning": "以下是本次提问之前已有的历史操作，不是本轮新增、保存或打开的成果。本轮成果只以本轮工具回执为准；历史状态不授予新权限。"]
         let ownReceipts = (book.controlledChanges?.receipts ?? []).filter { $0.originBookID == book.id }
         let receipts = Array(ownReceipts.sorted { ($0.undoneAt ?? $0.createdAt) < ($1.undoneAt ?? $1.createdAt) }.suffix(4))
         let results: [[String: Any]] = receipts.map { receipt in
@@ -106,7 +106,7 @@ import CryptoKit
              "recordCount": receipt.patches.count, "documentCount": receipt.documents.count,
              "groups": receipt.groups.map(\.rawValue), "occurredAt": (receipt.undoneAt ?? receipt.createdAt).timeIntervalSince1970]
         }
-        state["currentResults"] = results
+        state["priorResults"] = results
         let allDecisions: [[String: Any]] = book.audit.reversed().filter { $0.name == QueryHostOperationRecord.auditName }
             .compactMap { item in
                 guard let data = item.summary.data(using: .utf8), data.count <= 1200,
@@ -122,12 +122,12 @@ import CryptoKit
                 return row
             }
         let decisions = Array(allDecisions.prefix(3))
-        state["recentReviewDecisions"] = decisions
-        state["pendingReview"] = pendingCurrentBookChanges.prefix(3).map {
+        state["priorReviewDecisions"] = decisions
+        state["priorPendingReview"] = pendingCurrentBookChanges.prefix(3).map {
             ["proposalID": $0.proposal.id, "status": "needs_confirmation", "groups": $0.proposal.groups.map(\.rawValue)] as [String: Any]
         }
-        state["pendingReviewCount"] = pendingCurrentBookChanges.count
-        state["receiptCount"] = ownReceipts.count
+        state["priorPendingReviewCount"] = pendingCurrentBookChanges.count
+        state["priorReceiptCount"] = ownReceipts.count
         guard !receipts.isEmpty || !decisions.isEmpty || !pendingCurrentBookChanges.isEmpty else { return nil }
         // Always keep a complete JSON envelope; do not truncate IDs or silently
         // claim an incomplete body is the full operation history.
@@ -135,8 +135,8 @@ import CryptoKit
         if let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]), data.count <= 4000 {
             return String(decoding: data, as: UTF8.self)
         }
-        state["recentReviewDecisions"] = []
-        state["pendingReview"] = []
+        state["priorReviewDecisions"] = []
+        state["priorPendingReview"] = []
         state["partial"] = true
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]), data.count <= 4000 else { return nil }
         return String(decoding: data, as: UTF8.self)

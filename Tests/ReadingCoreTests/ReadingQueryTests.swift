@@ -431,6 +431,7 @@ final class ReadingQueryTests: XCTestCase {
                 XCTAssertTrue(final)
                 XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("早前对话派生记忆") == true && ($0["content"] as? String)?.contains("保留用户指定的年号表达") == true })
                 XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("op-confirmed") == true && ($0["role"] as? String) == "user" })
+                XCTAssertTrue(messages.contains { ($0["content"] as? String)?.contains("提问前的历史操作资料：不是本轮成果") == true })
                 XCTAssertFalse(messages.contains { ($0["role"] as? String) == "tool" })
                 return ProviderClient.Result(message: .init(role: "assistant", content: "刘备在此。[unit:u1]", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 100)
             }

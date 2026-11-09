@@ -459,9 +459,17 @@ public enum TemporalKnowledgeRuntime {
         return (preparedVisibleIDs ?? visibleObjectIDs(in: project, boundary: boundary)).union(allowed).union(insights)
     }
     private static func visibleMetadata(_ metadata: EventTemporalMetadata?, anchors: [String: SourceAnchor], boundary: KnowledgeReadBoundary, referenceIDs: Set<String>?) -> EventTemporalMetadata? {
-        guard let metadata, admits(metadata.sourceAnchorIDs, anchors: anchors, boundary: boundary),
-              metadata.parentEventID.map({ referenceIDs?.contains($0) ?? true }) ?? true else { return nil }
-        return metadata
+        guard let metadata, admits(metadata.sourceAnchorIDs, anchors: anchors, boundary: boundary) else { return nil }
+        return redactingHiddenParent(metadata, visibleIDs: referenceIDs)
+    }
+    /// A parent's broader provenance does not revoke a child's independently
+    /// admitted date/category. Redact only the unavailable relationship and
+    /// its local phase number; never inherit the parent's time or description.
+    static func redactingHiddenParent(_ metadata: EventTemporalMetadata, visibleIDs: Set<String>?) -> EventTemporalMetadata {
+        guard let parent = metadata.parentEventID, let visibleIDs, !visibleIDs.contains(parent) else { return metadata }
+        var admitted = metadata
+        admitted.parentEventID = nil; admitted.phaseOrder = nil
+        return admitted
     }
     private static func assertedMatch(_ extent: TemporalExtent, assertion: KnowledgeAssertion?, at point: TemporalQueryPoint?) -> TemporalMatch {
         let result = match(extent, at: point)
