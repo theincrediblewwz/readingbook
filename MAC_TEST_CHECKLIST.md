@@ -1,3 +1,23 @@
+<!-- chibi-shared-phases-stage:start -->
+当前接续：Design/2026-11-09-chibi-shared-phases.md；总入口logs/chibi-shared-phases-20261109/final-stage-delivery.json。本机0.23.70/build101 ARM64产品5477947702f601a5de75e35ca73f1f2e3ab7db23已安装，两次原书104页/便签“你好”/已有伴读启动并正常退出，最后返回library；39文件中38字节同、1推荐缓存JSON值同，偏好同，无旧库恢复。用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，未改未提交。最新回滚private-books/chibi-shared-phases-20261109/install-before-local-iteration；勿重复安装或恢复旧库。
+
+真实共享阶段：主线父级+七个有序子事件，18→21事件，旧35要素/18事件内容/11关系/2视图/1484单元和3旧日期保持。sourceExtent仅快照派生，无存储迁移，不借事件时间或出处证明路线/人物到场。默认轴同基线覆盖3/18→18/18，原文顺序不冒充日期。轻量轴发现0.785→0.088ms，仅此步骤，不外推FPS。
+
+功能协作指定范围按需source_read，不再每轮预载94单元；当前页/选句/纯阅读保留。工具正文正常换行、短引用按实际片段签发，不改旧别名。最新操作在前、所属请求编号、点击精确滚到操作并展开参数/返回；独立详情窗不挤压伴读。
+
+本机core4为449方法/4787独立断言，非本机XCTest；范围55、动态sharedPhasesNativePending1为52、共享49、详情sharedPhasesFullFrameNormal1为51、组合滚动25、地图复用sharedPhasesMapGlyphNormal1/轨迹各32、恢复48、预算22，共366独立原生用例通过。详情sharedPhasesFullFrameCompact1为同项51个强制画面/642点窗口复测，不重复计数；地图sharedPhasesMapGlyphCompact1另同项32个642点窗口复测；最终源码匹配，自动所检告警零，不称全部人工几何诊断零。
+
+真实phase2为8HTTP，第8额度不足无公开输出/无写入；phase3为13HTTP，经审阅保存阶段，新布局timeGroup错误拒绝打开；phase4显式续接成果，2HTTP开旧视图成功。共23HTTP/1132584报告token，失败一次未知另计；不是从零一次完成或整体提速。最终产品547禁网络frozen1重放，七阶段及华容source-621实际页621通过，原文/项目同，0额外HTTP。运行库已归档，公开输出/失败/审阅草稿/hash保留，不自动进入下轮上下文。
+
+GitHub本批获用户授权集中推main，含前几批本地功能。测试修正611300d/dda3d97/aa072bf/e277a51/20a336f不改产品，installed仍547。前五轮1260 XCTest各过，恢复旧等待、详情无AX/窄按钮OCR、异步呈现假设已明确诊断并修，原始zip/log与四份ci-*-failure.json保留，不盲重跑。第六轮run42577284141已完整通过：1260 XCTest、所有原生门槛与双架构构建成功；外层/内层ZIP SHA、ARM/Intel、严格签名和实际资源回验通过。当前main代码20a336f；随后仅提交文档，不重复云端编译或本机安装。未新建Release。
+
+两轮清理已完成：首轮7806964→6619944KiB，末轮7416380→6693948KiB，累计回收1909452KiB，批初净增215132KiB。4771非App私人文件保持；首轮73/末轮52运行目录归档逐成员验SHA，结束程序、旧67/68安装ZIP和过旧App退役。共享缓存/当前候选/69与70ZIP/最新cbb回滚/唯一失败保留。clean-post-ci.py已经apply，勿重跑；以cleanup-final.json和两个归档索引为准。
+
+下一批先读delivery-readiness、phase3/ui-stage-saved-before-open工具失败、review-01-audit、phase4/frozen1成果：先简化布局分组反馈，改善阶段/路线/原文一致性，勿重复收费同一路径。再做现代地名密度（底图不淡化）、时间轴横移/可视端点分离/层级区间、远景聚合密度、有据曲线区域与16类组件轮转。
+
+地图输入接续：ci-map-input-failure.json及云端42575034337原zip/log保留。本机旧中心输入在642点窗复现命中80.7°邻接标记，目标80°；新图标锚点严格命中检查在普通/642点窗口各32过，没有改产品定位/精度/550ms时限。长标签点击区域被邻接标记截获仍列后续产品精修，不称全交互无问题。
+<!-- chibi-shared-phases-stage:end -->
+
 <!-- chibi-battle-structure-local:start -->
 本批已完成：Design/2026-11-09-chibi-battle-structure.md；总入口 logs/chibi-battle-structure-20261109/final-local-delivery.json。产品cbb0cf650e4ea4a44ef54f8c8ad6e5e8b981b512，5产品Swift/2测试文件；69/100 ARM64本机已更新。两次原书104页/便签“你好”/已有伴读对话启动正常退出，最终39文件字节同、偏好同，没有恢复旧库。用户dirty性能文档SHA9b186792…563d4保持、未改未提交。最新回滚private-books/chibi-battle-structure-20261109/install-before-local-iteration，正式App已正常退出，不要重复安装或恢复旧库。
 
