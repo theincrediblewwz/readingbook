@@ -427,7 +427,8 @@ enum ReadingAnswerEngine {
             try QueryBudget.propagateControl(error)
             // One bounded correction, using only genuinely supplied excerpts.
             // Never fabricate a citation locally or silently widen the page.
-            guard suppliedSource != nil, requests < remainingRequests else { throw error }
+            guard requests < remainingRequests,
+                  !session.sourceExcerpts.isEmpty || !session.documentExcerpts.isEmpty || !session.conversationExcerpts.isEmpty else { throw error }
             let capacity = min(window, operationLimit - used)
             var correctedSession = session
             let actual = try correctedSession.finalEvidence(maximumBytes: min(24_000, max(0, capacity / 3)))

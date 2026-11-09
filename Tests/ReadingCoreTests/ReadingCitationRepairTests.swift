@@ -78,4 +78,46 @@ final class ReadingCitationRepairTests: XCTestCase {
         XCTAssertEqual(requests, 1); XCTAssertEqual(result.message.evidence.map(\.unitID), ["u1", "u2"])
         XCTAssertTrue(result.message.content.contains("[unit:u1][unit:u2]"))
     }
+    func testFunctionalRangeRepairsFromToolReadWithoutInitialPreload() async throws {
+        let value = book(); var context = ReadingContext(unitID: "u1", page: 1); context.queryRange = .init(pageStart: 1, pageEnd: 2)
+        var requests = 0
+        let result = try await ReadingAnswerEngine.run(question: "解释所选范围", project: value,
+            settings: .init(model: "offline", maxOutputTokens: 512, contextWindowTokens: 128000), documents: [:], context: context,
+            scope: .range, history: [], memory: nil, memoryEnabled: false, documentIDs: nil, loader: nil,
+            operationLimit: 128000, remainingRequests: 4, preferences: .init(interaction: .functional)) { messages, tools, _, finalOnly in
+                requests += 1
+                if requests == 1 {
+                    XCTAssertFalse(messages.contains { ($0["content"] as? String)?.contains("火起，曹操退走。") == true })
+                    return .init(message: .init(role: "assistant", content: nil, refusal: nil, tool_calls: [
+                        .init(id: "read", type: "function", function: .init(name: "source_read", arguments: #"{"id":"u1"}"#))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 20)
+                }
+                if requests == 3 {
+                    XCTAssertTrue(finalOnly); XCTAssertTrue(tools.isEmpty)
+                    let text = messages.compactMap { $0["content"] as? String }.joined(separator: "\n")
+                    XCTAssertTrue(text.contains("火起，曹操退走。")); XCTAssertFalse(text.contains("后文秘密"))
+                    XCTAssertTrue(text.contains("invalidCitationMarks")); XCTAssertTrue(text.contains("u2"))
+                }
+                return .init(message: .init(role: "assistant", content: requests == 2 ? "火起后退走。[unit:u1][unit:u2]" : "火起后退走。[unit:u1]", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 20)
+            }
+        XCTAssertEqual(requests, 3); XCTAssertEqual(result.message.evidence.map(\.unitID), ["u1"])
+    }
+    func testToolReadCorrectionStillHonorsTaskRequestLimit() async throws {
+        let value = book(); var context = ReadingContext(unitID: "u1", page: 1); context.queryRange = .init(pageStart: 1, pageEnd: 2)
+        var requests = 0
+        do {
+            _ = try await ReadingAnswerEngine.run(question: "解释所选范围", project: value,
+                settings: .init(model: "offline", maxOutputTokens: 512, contextWindowTokens: 128000), documents: [:], context: context,
+                scope: .range, history: [], memory: nil, memoryEnabled: false, documentIDs: nil, loader: nil,
+                operationLimit: 128000, remainingRequests: 2, preferences: .init(interaction: .functional)) { _, _, _, _ in
+                    requests += 1
+                    if requests == 1 {
+                        return .init(message: .init(role: "assistant", content: nil, refusal: nil, tool_calls: [
+                            .init(id: "read", type: "function", function: .init(name: "source_read", arguments: #"{"id":"u1"}"#))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 20)
+                    }
+                    return .init(message: .init(role: "assistant", content: "未提供的正文。[unit:u2]", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 20)
+                }
+            XCTFail("Request budget must not be bypassed for a correction")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("引用")) }
+        XCTAssertEqual(requests, 2)
+    }
 }
