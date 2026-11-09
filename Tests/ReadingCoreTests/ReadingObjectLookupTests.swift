@@ -113,4 +113,21 @@ final class ReadingObjectLookupTests: XCTestCase {
         }
         XCTAssertTrue(query.sourceExcerpts.isEmpty); XCTAssertTrue(query.sourceReferences.isEmpty)
     }
+
+    func testViewSchemasSeparateOpeningSelectionAndFiltering() throws {
+        let book = try fixture(), snapshot = try ReadingQuerySnapshot.freeze(scope: .page, in: book, context: .init(unitID: "one", page: 1))
+        let host = ReadingHostToolAccess(viewActions: ReadingQueryToolCatalog.viewNames, performViewAction: { _, _ in Data() })
+        let schemas = ReadingQueryToolCatalog.schemas(snapshot: snapshot, host: host, proposals: nil)
+        let expected: [String: Set<String>] = ["view_select": ["rendererID"], "view_focus": ["objectID", "anchorID", "documentID"],
+            "view_set_time_window": ["at", "from", "to", "fromDate", "toDate"], "map_fit_objects": ["objectIDs"],
+            "graph_focus": ["nodeID", "nodeIDs"], "panel_present": ["panelID", "state"]]
+        for (name, keys) in expected {
+            let tool = try XCTUnwrap(schemas.compactMap { $0["function"] as? [String: Any] }.first { $0["name"] as? String == name })
+            let parameters = try XCTUnwrap(tool["parameters"] as? [String: Any]), fields = try XCTUnwrap(parameters["properties"] as? [String: Any])
+            XCTAssertEqual(Set(fields.keys), keys)
+            XCTAssertEqual(parameters["additionalProperties"] as? Bool, false)
+            if name == "view_select" { XCTAssertEqual(parameters["required"] as? [String], ["rendererID"]) }
+            if name == "view_set_time_window" { XCTAssertEqual(parameters["required"] as? [String], ["at"]) }
+        }
+    }
 }

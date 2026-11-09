@@ -145,16 +145,30 @@ enum ReadingQueryToolCatalog {
                 guard let name = (tool["function"] as? [String: Any])?["name"] as? String else { return false }
                 return host.viewActions.contains(name)
             }
-            let fields: [String: Any] = ["rendererID": string, "objectID": string, "anchorID": string, "documentID": string, "nodeID": string,
-                "objectIDs": ids, "nodeIDs": ids, "panelID": string, "state": ["type": "string", "enum": ["open", "collapse", "close"]], "at": time,
-                "from": ["type": "number"], "to": ["type": "number"]]
             for name in host.viewActions.intersection(viewNames).sorted() {
-                var scopedFields = fields
-                if name == "view_set_time_window" {
-                    scopedFields["fromDate"] = ReadingProposalSchemas.date; scopedFields["toDate"] = ReadingProposalSchemas.date
+                let fields: [String: Any], purpose: String, required: [String]
+                switch name {
+                case "view_select":
+                    fields = ["rendererID": string]; required = ["rendererID"]
+                    purpose = "只切换/打开已有组件，不选择事件、不筛选时间。选择对象用view_focus；阶段筛选用view_set_time_window。"
+                case "view_focus":
+                    fields = ["objectID": string, "anchorID": string, "documentID": string]; required = []
+                    purpose = "定位一个共享对象，或打开文档、回到原文锚点；三个ID选一种。此操作不设置时间筛选。"
+                case "view_set_time_window":
+                    fields = ["at": time, "from": ["type": "number"], "to": ["type": "number"],
+                        "fromDate": ReadingProposalSchemas.date, "toDate": ReadingProposalSchemas.date]; required = ["at"]
+                    purpose = "筛选当前已打开地图/时间轴/组合工作台。年份/原文顺序用from/to；原文顺序在at传narrativeOrder和narrativeDomain:source-order。月日用fromDate/toDate并在at保留calendar与当前年月日。结果以实际界面回执为准。"
+                case "map_fit_objects":
+                    fields = ["objectIDs": ids]; required = ["objectIDs"]
+                    purpose = "调整当前地图镜头以容纳这些共享对象的有据位置；不选择事件、不改变时间筛选。"
+                case "graph_focus":
+                    fields = ["nodeID": string, "nodeIDs": ids]; required = []
+                    purpose = "聚焦当前图谱中的物理节点；nodeID或nodeIDs选一种，不能用共享对象ID替代节点ID。"
+                default:
+                    fields = ["panelID": string, "state": ["type": "string", "enum": ["open", "collapse", "close"]]]
+                    required = ["panelID", "state"]; purpose = "展开、收起或关闭当前组件已有的浮动面板，不打开新组件。"
                 }
-                let detail = name == "view_set_time_window" ? " 年份/叙事用from/to；按月日用fromDate/toDate直接给年月日，at保留同一calendar，或narrativeOrder+narrativeDomain。无需计算内部坐标。" : ""
-                result.append(function(name, "执行宿主授予的本次视图操作；不修改原文、笔记、知识或保存的节点坐标；相机/界面偏好可记忆且可重置。结果以宿主真实回执为准。" + detail, scopedFields))
+                result.append(function(name, purpose + " 不修改原文、笔记或知识。", fields, required: required))
             }
         }
         // Typed proposal schemas are added separately when the host grants a group.

@@ -229,6 +229,13 @@ private actor WorkbenchTransport {
         store.readingCompanionVisible = false; store.publish(book); store.bookID = book.id; store.selectedUnitID = "t1"; store.route = view.id
         try await wait { self.store.renderedComponentPresentation?.matches(self.store, route: view.id) == true }
         try check("timeBridgeCompositionMounted", store.enabledViews.first(where: { $0.id == store.route })?.composition == definition)
+        let beforeInvalidSelection = store.makeReadingWorkspaceSnapshot()
+        let selectOne = try await store.performReadingViewAction("view_select", data: JSONSerialization.data(withJSONObject: ["rendererID": view.id, "objectID": "event0"]), expectedBookID: book.id, sourceHash: book.sourceHash)
+        let selectMany = try await store.performReadingViewAction("view_select", data: JSONSerialization.data(withJSONObject: ["rendererID": view.id, "objectIDs": ["event0"], "state": "open"]), expectedBookID: book.id, sourceHash: book.sourceHash)
+        try check("viewSelectRejectsIgnoredSingleObject", (try JSONSerialization.jsonObject(with: selectOne) as? [String: Any])?["status"] as? String == "invalid_arguments")
+        try check("viewSelectRejectsIgnoredObjectList", (try JSONSerialization.jsonObject(with: selectMany) as? [String: Any])?["status"] as? String == "invalid_arguments")
+        try check("viewSelectInvalidInputDoesNotNavigateOrSelect", store.route == view.id && store.requestedWorkspaceRoute == nil && store.makeReadingWorkspaceSnapshot()?.selectedObjectIDs == beforeInvalidSelection?.selectedObjectIDs)
+        try JSONSerialization.data(withJSONObject: ["single": try JSONSerialization.jsonObject(with: selectOne), "list": try JSONSerialization.jsonObject(with: selectMany)], options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("view-select-invalid-input.json"))
         let requestsBefore = await transport.count()
         let arguments: [String: Any] = ["at": ["calendar": "建安", "year": 12, "month": 11, "day": 20], "fromDate": ["year": 12, "month": 11, "day": 20], "toDate": ["year": 12, "month": 11, "day": 20]]
         let data = try JSONSerialization.data(withJSONObject: arguments)

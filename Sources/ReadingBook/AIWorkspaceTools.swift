@@ -95,6 +95,9 @@ struct WorkspaceAICommand: Equatable {
         guard NSEvent.pressedMouseButtons == 0, !isSavingDocument, !isCommittingLocalWrite else { return try viewToolResult("busy", "读者正在操作，未抢占界面。") }
         guard let args = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ReadingError.invalid("视图操作参数无效。") }
         if name == "view_select" {
+            guard Set(args.keys).isSubset(of: ["rendererID"]) else {
+                return try viewToolResult("invalid_arguments", "view_select只打开组件，只接收rendererID；没有选择事件或应用筛选。对象定位用view_focus，阶段时间范围用view_set_time_window。")
+            }
             guard !editorDirty else { return try viewToolResult("needs_confirmation", "当前笔记有未保存修改，请读者先保存或放弃。") }
             guard let renderer = args["rendererID"] as? String else { throw ReadingError.invalid("缺少组件ID。") }
             let route: String?
