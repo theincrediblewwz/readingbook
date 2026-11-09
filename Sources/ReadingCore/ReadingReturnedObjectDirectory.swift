@@ -1,6 +1,7 @@
 import Foundation
 
-/// A bounded, per-question index of objects actually returned by read tools.
+/// A bounded, per-question index of objects actually returned by read tools or
+/// canonical saved-identity receipts.
 /// This is derived context, never evidence, a second knowledge store or a grant.
 struct ReadingReturnedObjectDirectory {
     private struct Entry { var id: String; var version: String; var json: String }
@@ -10,7 +11,7 @@ struct ReadingReturnedObjectDirectory {
     mutating func removeAll() { entries.removeAll() }
 
     mutating func record(_ result: String, tool: String, allowedUnits: Set<String>) throws {
-        guard ["object_get", "objects_search", "events_query"].contains(tool),
+        guard ["object_get", "objects_search", "events_query", "saved_identity"].contains(tool),
               let root = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any],
               root["ok"] as? Bool != false else { return }
         let rows = (root["items"] as? [[String: Any]] ?? []) + (root["object"] != nil ? [root] : [])

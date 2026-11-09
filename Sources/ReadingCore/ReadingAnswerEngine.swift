@@ -335,6 +335,7 @@ enum ReadingAnswerEngine {
                             try await session.refreshReviewedProject()
                             result = String(decoding: reviewed, as: UTF8.self)
                             try session.recordHostReceipt(result, tool: session.lastEffectiveTool ?? call.function.name)
+                            try session.recordSavedIdentities(result)
                             reviewedInBatch = true
                             progress?(AIProgressEvent(.toolCompleted, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count,
                                 toolSucceeded: decision["applied"] as? Bool == true,

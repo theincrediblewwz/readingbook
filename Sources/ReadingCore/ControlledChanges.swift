@@ -173,6 +173,20 @@ public struct ControlledChangeReceipt: Codable, Identifiable, Sendable {
     public var idMap: [String: String]; public var groups: [ControlledChangeGroup]
     public var patches: [ControlledRecordPatch]; public var documents: [ControlledDocumentReceipt]
 
+    /// A bounded wire receipt should hand useful object identities back before
+    /// long technical anchor IDs. The complete canonical mapping is unchanged.
+    public var inlineMappingKeys: [String] {
+        let business = Set(patches.filter { $0.collection != .temporalAnchors && $0.collection != .experienceAnchors }.map(\.id))
+        let anchors = Set(patches.filter { $0.collection == .temporalAnchors || $0.collection == .experienceAnchors }.map(\.id))
+        func priority(_ key: String) -> Int {
+            let id = idMap[key]!
+            if business.contains(id) { return 0 }
+            // Reused canonical source anchors need not have a new patch.
+            return anchors.contains(id) || id.hasPrefix("anchor.") ? 1 : 0
+        }
+        return idMap.keys.sorted { (priority($0), $0) < (priority($1), $1) }
+    }
+
     /// Counts actual stored changes, rather than requested items or aliases.
     /// A document's metadata and body represent one document change.
     public var changeCounts: [String: [String: Int]] {

@@ -134,7 +134,7 @@ enum ReadingQueryToolCatalog {
         ]
         if !snapshot.sources.isEmpty {
             result += [function("reading_coverage_get", "本次范围的实际处理状态/缺口；查询不增加覆盖，不证明理解无遗漏。", paging),
-                function("objects_search", "按名称/别名/概述和类型检索范围内对象；索引不是独立证据。", query),
+                function("objects_search", "按名称/别名/概述和类型检索范围内对象；精确名称、别名优先，多词先覆盖各词候选，同名仍需核对。索引不是独立证据。", query),
                 function("object_get", "id读取单个对象；ids批量读取已知对象。组织组件先批量取字段/关联，再按需核对原文；返回本范围版本，不自动读取挂载Markdown。", object),
                 function("relations_list", "省略objectID分页列本范围全部关系与地图行动，传objectID按对象过滤；只返回范围内资料，未知时间不当作当前成立。", relation),
                 function("events_query", "按人物/地点/时间查询范围内事件；已有父事件用parentEventID直接读其子阶段，按phaseOrder排序。参与事件不推出位置。", event),
@@ -346,6 +346,7 @@ extension ReadingQuerySession {
                       zip(fresh.units, prior.units).allSatisfy({ pair in pair.0 == pair.1 && pair.0.text.utf8.elementsEqual(pair.1.text.utf8) }) else { throw invalid("宿主操作后原书或OCR版本改变；原提案/回执保留，停止混用不同版本。") }
                 project = fresh
                 refreshTaskCreatedNodes(in: fresh)
+                try recordSavedIdentities(result)
             }
             try Task.checkCancellation()
             return result
@@ -400,27 +401,28 @@ extension ReadingQuerySession {
                 queries = single.isEmpty ? [] : [single]
             }
             let query = queries.count == 1 ? queries[0] : ""
-            func matches(_ text: String) -> Bool { queries.contains { text.localizedCaseInsensitiveContains($0) } }
             let identityStubs = identityStubIDs()
-            let objects = try TemporalKnowledgeRuntime.objects(in: scoped, boundary: boundary).filter {
-                let named = ([$0.name, $0.summary] + $0.aliases).contains(where: matches)
-                let localMention = identityStubs.contains($0.id) && $0.evidence.contains { matches($0.quote) }
-                let earlier = (reuse?.record(id: $0.id, includeSourceExcerpts: false)?["summary"] as? String).map(matches) == true
-                return (types.isEmpty || types.contains($0.typeID)) && (queries.isEmpty || named || localMention || earlier)
-            }
-            var rows = objects.map { object -> [String: Any] in
+            let objects = try TemporalKnowledgeRuntime.objects(in: scoped, boundary: boundary)
+            var candidates = [ReadingObjectSearchOrder.Candidate](), returned = Set<String>()
+            for object in objects where types.isEmpty || types.contains(object.typeID) {
+                let saved = reuse?.record(id: object.id, includeSourceExcerpts: false)
+                let descriptions = [object.summary, saved?["summary"] as? String ?? ""] + (identityStubs.contains(object.id) ? object.evidence.map(\.quote) : [])
+                let ranks = ReadingObjectSearchOrder.ranks(name: object.name, aliases: object.aliases, descriptions: descriptions, queries: queries)
+                guard queries.isEmpty || ranks.contains(where: { $0 < 5 }) else { continue }
                 var row: [String: Any] = ["id": object.id, "typeID": object.typeID, "kind": object.kind.rawValue, "name": object.name, "summary": String(object.summary.prefix(400)), "version": object.version, "identityOnly": identityStubs.contains(object.id),
                     "sourceUnitIDs": Array(Set(object.evidence.map(\.unitID))).sorted()]
-                if let saved = reuse?.record(id: object.id, includeSourceExcerpts: arguments["includeEvidence"] as? Bool == true) { row["previouslySaved"] = saved }
-                return row
+                if let value = arguments["includeEvidence"] as? Bool == true ? reuse?.record(id: object.id, includeSourceExcerpts: true) : saved { row["previouslySaved"] = value }
+                candidates.append(.init(row: row, ranks: ranks)); returned.insert(object.id)
             }
-            let returned = Set(objects.map(\.id))
             for candidate in PluginEngine.analysisIdentityCandidates(project, allowedUnitIDs: Set(snapshot.unitIDs), occurrenceTexts: snapshot.sources.map(\.text)) where !returned.contains(candidate.id) {
-                guard types.isEmpty || types.contains(candidate.typeID), let saved = reuse?.record(id: candidate.id, includeSourceExcerpts: arguments["includeEvidence"] as? Bool == true),
-                      queries.isEmpty || ([candidate.name] + candidate.aliases + [saved["summary"] as? String ?? ""]).contains(where: matches) else { continue }
-                rows.append(["id": candidate.id, "typeID": candidate.typeID, "kind": candidate.kind, "name": candidate.name, "summary": "", "identityOnly": true,
-                    "sourceUnitIDs": [], "previouslySaved": saved, "notice": "当前原文出现同名/称谓，先核对是否为同一对象；旧简介不能当作本页已核实的新事实。"])
+                guard types.isEmpty || types.contains(candidate.typeID), let saved = reuse?.record(id: candidate.id, includeSourceExcerpts: false) else { continue }
+                let ranks = ReadingObjectSearchOrder.ranks(name: candidate.name, aliases: candidate.aliases, descriptions: [saved["summary"] as? String ?? ""], queries: queries)
+                guard queries.isEmpty || ranks.contains(where: { $0 < 5 }) else { continue }
+                let row: [String: Any] = ["id": candidate.id, "typeID": candidate.typeID, "kind": candidate.kind, "name": candidate.name, "summary": "", "identityOnly": true,
+                    "sourceUnitIDs": [], "previouslySaved": arguments["includeEvidence"] as? Bool == true ? reuse?.record(id: candidate.id, includeSourceExcerpts: true) ?? saved : saved, "notice": "当前原文出现同名/称谓，先核对是否为同一对象；旧简介不能当作本页已核实的新事实。"]
+                candidates.append(.init(row: row, ranks: ranks))
             }
+            let rows = ReadingObjectSearchOrder.ordered(candidates, queries: queries)
             let pageResult = try page(rows, arguments, maximumBytes)
             if !query.isEmpty, rows.count < 3,
                var output = try JSONSerialization.jsonObject(with: Data(pageResult.utf8)) as? [String: Any] {
@@ -565,7 +567,7 @@ extension ReadingQuerySession {
                 return object["operationID"] as? String
             })
             rows = (project.controlledChanges?.receipts ?? []).filter { operationIDs.contains($0.operationID) }.flatMap { receipt in
-                receipt.idMap.keys.sorted().map { ["operationID": receipt.operationID, "clientID": $0, "id": receipt.idMap[$0] ?? "", "undone": receipt.undoneAt != nil] as [String: Any] }
+                receipt.inlineMappingKeys.map { ["operationID": receipt.operationID, "clientID": $0, "id": receipt.idMap[$0] ?? "", "undone": receipt.undoneAt != nil] as [String: Any] }
             }
         default: throw invalid("未知目录section。")
         }

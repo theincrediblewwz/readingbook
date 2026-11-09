@@ -55,7 +55,7 @@ struct PendingAIChange: Identifiable {
         // Full reviewed bytes stay in the proposal, and IDs can be paged from
         // book_schema_get/operations after an actual successful commit.
         var result: [String: Any] = ["ok": applied, "status": status, "applied": applied, "proposalID": proposal.id,
-            "message": applied ? "本次授权整理已实际保存，可撤销。" : "具体变更已准备，等待读者审阅；尚未应用。",
+            "message": applied ? "已保存，可撤销；后续直接复用idMap中的真实ID。" : "具体变更已准备，等待读者审阅；尚未应用。",
             "groups": proposal.groups.map(\.rawValue), "summaryCount": proposal.summary.count, "fullPreview": "in_app_review",
             "replayed": replayed]
         if let receipt {
@@ -67,7 +67,7 @@ struct PendingAIChange: Identifiable {
         let mappings = receipt?.idMap ?? [:]
         var included: [String: String] = [:]
         result["idMapCount"] = mappings.count; result["idMapPartial"] = !mappings.isEmpty
-        for key in mappings.keys.sorted() {
+        for key in receipt?.inlineMappingKeys ?? mappings.keys.sorted() {
             var candidate = included; candidate[key] = mappings[key]
             result["idMap"] = candidate
             let size = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]).count
