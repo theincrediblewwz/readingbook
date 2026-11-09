@@ -1,3 +1,25 @@
+<!-- chibi-natural-workbench-local:start -->
+当前接续：Design/2026-11-10-natural-workbench-results.md；总入口 logs/chibi-natural-workbench-20261110/final-local-delivery.json。先写自然阅读体验plan再改代码；产品04912c2，11产品Swift实改，70/101 ARM64本地迭代已安装，binary SHA75fd32e12f4cf0450c415654d3fd3da7d3c9301cda3800f3ad3b07478ecdee29。正式App已正常退出。本批不推GitHub/云CI/Release；不要重复安装或恢复旧库。
+
+关键根因：真实AI把41人物地点/24锚点放进bookScheme，旧Codable静默忽略，只留2类型。ReadingProposalShape在已封闭业务结构上先查未知字段，给shapeIssues路径和唯一不覆盖groupMoves；动态属性/组件配置继续开放。失败草案可用move+targetTool短修正，仅切到本轮已授权提案工具，重跑范围/来源/身份/宿主保存审阅，不自动提升权限。新增事实按原有自动保存政策；覆盖等仍须原审阅，不把所有操作都说成人工批准。
+
+离线相同失败输入旧accepted/entities0/types2→新精确拒绝，179B修正完整保留41实体/2类型/24锚点，原草案15389B，不新增网络/正文权限。真实官方Flash也用了整体移动，41资料保存、未重读正文。不是整个App FPS/内存提速。sourceRef离线重放必须走modelSourceReadText才能签发本轮真实已提供引用，不能只execute source_read。
+
+real1从零：新身份，只保原文1484单元与原书目录，43—50回94单元，旧AI计数全0；7HTTP/353909报告token暴露错误分组，错误旧结果未批准。real2只重放公开日志得到HTTP400；据公开请求与官方协议推断缺完整思考协议状态，不能当产品接续失败。real3把公开状态显式恢复成新上下文，不伪造私有思考，新增5HTTP/402820token验证修正；后产品合法压缩历史，诊断适配器仍找旧前缀停住。总13HTTP/756729已报告token；最终41实体、0事件、0视图，未达到从空库自然生成理想地图/轴。简介/现代坐标未全部语义核对，不能宣传精确史实图。新旧模型公开请求均保留，无Key/认证头/私有思考。各失败退出前保存，下一轮先读failure-cases和real-repair-result.json，不盲重读/重付费。
+
+人工组合阶段按钮改走presentUserReadingEvent，与AI共用完整出处/选择/可用区域取景/实际结果核验。连续操作及离开取消旧任务；嵌入、多组歧义或独立轴保留局部控制。manual1冻结旧真实35要素/21事件/11关系/3视图，明确非新生成：CUA点火攻完整612—613、点华容道620、原文跳PDF621通过；资料/原书/视图未改，0模型请求。
+
+日期从本范围结构化extent派生统一摘要，event目录+object收尾可读文本+详情/轴标明原文明示/推算（约略）/未知/原文先后。火攻显示“推算时间（约略）·建安12年11月20日”，只验证保存值与表达一致，不核实或改写旧推断日历。规范数据版本不因显示改变，正文权限不扩。
+
+最终core3独立运行器510方法/5320断言，非本机XCTest；naturalWorkbench2共享80/范围55/动态52/滚动25共212原生过，自动所检告警零。core1/2新日期夹具对全库/范围版本和显式引文的假设错误保留，最终只计core3。proposal replay探针曾漏modelSourceReadText，探针修正后过，原故障保留。
+
+安装前fresh回滚private-books/chibi-natural-workbench-20261110/install-before-local-iteration/ReadingBook-0.23.70-local-bdb8480.app及library/prefs/verification。两次正式启动/正常退出，104/1484、你好、2笔记、旧伴读和对话、查找关闭已核，最后回library；39文件全字节同、偏好值同，无旧库覆盖。用户dirty Design/2026-10-29-performance-progress.md SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，未改未提交。
+
+清理clean-final.py和compact-evidence.py都已执行，勿重跑。7962408→7150284→7072564KiB，约869.0MiB回收，相对批初约46.2MiB净增（最终以delivery为准）。36运行目录182文件逐成员验SHA归档、4重复PDF指规范原书；39快照/日志→22唯一内容另ZIP。8可重建程序及过旧70e回滚App退役；4981非App私人文件、最新bdb回滚、共享缓存、候选与正式70通用ZIP保持。原始real1/input-project.json、公开请求/回复和real3/final/project.json保留原位；快照恢复用restore-evidence.py列目录后--path逐项核SHA，不覆盖已存在文件，不自动恢复运行库。
+
+下一批先查新资料稳定身份回执为何没有直接被消费。真实修正后3轮10次objects_search：姓名也匹配其他对象简介，周瑜还翻页找自己的条目；证据next-batch-findings.json。减少身份往返后，在一次连续真实会话检验自然问题→事件/行动→地图/轴→出处，先把诊断恢复与历史压缩配合好；不将本轮测试脚本故障冒充产品失败。另记录隐藏预备伴读/导航的AX树含禁用WebKit内容，截图实际是阅读页，打开即可就绪，并非卡死；后续量闭合面板成本与首次打开延迟后再动预热。仍保留现代地名密度（不淡化底图）、时间轴横移/端点/层级、远景聚合、有据曲线区域、素材灵活组合及16类组件性能轮转。
+<!-- chibi-natural-workbench-local:end -->
+
 <!-- chibi-stage-intent-local:start -->
 当前接续：Design/2026-11-10-stage-intent-results.md；总入口 logs/chibi-stage-intent-20261110/final-local-delivery.json。先体验构想后实现，plan文件早于代码；产品51f8220+bdb8480，10产品Swift实改，本机70/101 ARM64本地迭代已安装，二进制001f3fbe95c33cf7e659644766b184eec65a821e979f26b12e4277af7d8a6fc2。本批无GitHub访问/云CI/Release；正式App已正常退出，勿重复安装或恢复旧库。
 
