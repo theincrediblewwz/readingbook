@@ -2,7 +2,7 @@
 """Source-bound, network-denied native map-content integration."""
 import argparse, datetime, hashlib, json, os, pathlib, plistlib, re, shutil, subprocess
 R = pathlib.Path(__file__).resolve().parents[2]
-p = argparse.ArgumentParser(); p.add_argument('--bin-dir', type=pathlib.Path, required=True); p.add_argument('--tag', required=True)
+p = argparse.ArgumentParser(); p.add_argument('--bin-dir', type=pathlib.Path, required=True); p.add_argument('--tag', required=True); p.add_argument('--compact-window', action='store_true'); p.add_argument('--label-center-input', action='store_true')
 a = p.parse_args(); assert a.tag.replace('-', '').isalnum()
 b = a.bin_dir.resolve(); out = R / 'logs/map-rendering-20261105' / a.tag
 assert b.is_relative_to(R) and not out.exists()
@@ -32,7 +32,7 @@ profile='(version 1) (allow default) (deny network-outbound) (deny file-read* (s
 (out/'resource-sandbox.sb').write_text(profile+'\n')
 started=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 with (out/'runtime.log').open('x') as log:
-    child=subprocess.Popen(['/usr/bin/sandbox-exec','-p',profile,str(contents/'MacOS/MapMarkerReuseHost'),str(out)],cwd=R,env=environment,stdout=log,stderr=subprocess.STDOUT)
+    child=subprocess.Popen(['/usr/bin/sandbox-exec','-p',profile,str(contents/'MacOS/MapMarkerReuseHost'),str(out)]+(['--compact-window'] if a.compact_window else [])+(['--label-center-input'] if a.label_center_input else []),cwd=R,env=environment,stdout=log,stderr=subprocess.STDOUT)
     (out/'pid.txt').write_text(str(child.pid)+'\n')
     try: code=child.wait(timeout=120)
     except subprocess.TimeoutExpired:

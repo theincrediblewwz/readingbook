@@ -120,16 +120,32 @@ private struct MapFixtureView: View {
             }
             try await settle(16)
         }
-        // Use the visible pin itself, rather than the middle of the selected
-        // pin-plus-label group, which can be covered by another annotation.
-        let y = view.bounds.midY
-        let point = view.convert(CGPoint(x: view.bounds.midX, y: y), to: nil)
+        // The selected annotation grows to the right of its coordinate.
+        // Its frame midpoint is then label text, not the glyph/anchor. Derive
+        // the glyph hit from MapKit's actual centerOffset instead of assuming
+        // the old centered pin layout. The diagnostic option retains that old
+        // input for a controlled comparison without changing the product.
+        let labelCenter = CommandLine.arguments.contains("--label-center-input")
+        let anchor = CGPoint(x: view.bounds.midX - (labelCenter ? 0 : view.centerOffset.x),
+            y: view.bounds.midY + (labelCenter ? 0 : view.isFlipped ? -view.centerOffset.y : view.centerOffset.y))
+        guard view.bounds.contains(anchor) else { throw ReadingError.invalid("Native annotation anchor is outside its current bounds") }
+        let point = view.convert(anchor, to: nil)
         guard host.bounds.contains(host.convert(point, from: nil)) else { throw ReadingError.invalid("Marker outside fixture") }
         let hitPoint = host.superview?.convert(point, from: nil) ?? point
         let hit = host.hitTest(hitPoint)
+        let requestedHit = hit === view || hit?.isDescendant(of: view) == true
+        var hitAnnotation: MKAnnotationView?, ancestor = hit
+        while let current = ancestor {
+            if let marker = current as? MKAnnotationView { hitAnnotation = marker; break }
+            ancestor = current.superview
+        }
         observations.append(["stage": "actual-hit-receiver", "insideNativeMap": hit === native || hit?.isDescendant(of: native) == true,
+            "insideRequestedAnnotation": requestedHit, "labelCenterInput": labelCenter,
+            "requestedCenterOffset": NSStringFromPoint(view.centerOffset), "requestedLocalPoint": NSStringFromPoint(anchor),
+            "hitAnnotationLatitude": hitAnnotation?.annotation?.coordinate.latitude as Any? ?? NSNull(),
+            "hitAnnotationLongitude": hitAnnotation?.annotation?.coordinate.longitude as Any? ?? NSNull(),
             "receiver": hit.map { String(describing: type(of: $0)) } ?? "missing", "point": NSStringFromPoint(point)])
-        guard hit === native || hit?.isDescendant(of: native) == true else { throw ReadingError.invalid("Marker click is outside the interactive map or covered") }
+        guard requestedHit else { throw ReadingError.invalid("Marker input did not hit the requested native annotation") }
         for (type, pressure) in [(NSEvent.EventType.leftMouseDown, Float(1)), (.leftMouseUp, Float(0))] {
             guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: pressure) else { throw ReadingError.invalid("Fixture-local event") }
             NSApp.postEvent(event, atStart: false)
@@ -214,7 +230,8 @@ private struct MapFixtureView: View {
         UserDefaults.standard.setVolatileDomain(["library.root.path.v1": root.path, "service-profiles": Data("[]".utf8), "appearance.reduceMotion": true], forName: UserDefaults.argumentDomain)
         store = AppStore(); store.libraryRootURL = root; store.repository = LibraryRepository(rootURL: root)
         store.settings = .init(baseURL: "http://127.0.0.1:1/disabled", model: ""); store.apiKey = ""; configure(fixture("book-a"))
-        window = NSWindow(contentRect: .init(x: 100, y: 80, width: 1120, height: 760), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let fixtureHeight: CGFloat = CommandLine.arguments.contains("--compact-window") ? 642 : 760
+        window = NSWindow(contentRect: .init(x: 100, y: 80, width: 1120, height: fixtureHeight), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "ReadingBook 新标记复用 · 隔离回归"; window.isReleasedWhenClosed = false
         host = NSHostingView(rootView: MapFixtureView(model: model, store: store)); window.contentView = host
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); try await settle(650)
