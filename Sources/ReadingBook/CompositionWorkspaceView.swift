@@ -39,6 +39,7 @@ struct CompositionWorkspaceView: View {
     // child. Saving a chat republishes the book but must not reset its view.
     @State private var mapCameras: [String: MapCameraPosition] = [:]
     @State private var viewportGeneration: UInt64 = 0
+    @State private var stagePresentationTask: Task<Void, Never>?
 
     private struct RefreshOwner: Equatable, Sendable {
         let libraryRoot: String
@@ -91,7 +92,7 @@ struct CompositionWorkspaceView: View {
     private var sourceObservedContent: some View {
         workspaceContent.background(embedded ? Color.clear : Palette.canvas).readingTextContext(.knowledge)
             .task { isActive = true; refresh() }
-            .onDisappear { if !embedded, store.renderedCompositionState?.contextID == store.readingVisibilityContextID { store.renderedCompositionState = nil }; isActive = false; cancelRefresh(); clearPrepared(); pendingTimeCommand = nil; clearMapCommand() }
+            .onDisappear { if !embedded, store.renderedCompositionState?.contextID == store.readingVisibilityContextID { store.renderedCompositionState = nil }; isActive = false; stagePresentationTask?.cancel(); cancelRefresh(); clearPrepared(); pendingTimeCommand = nil; clearMapCommand() }
             .onChange(of: store.workspaceAICommand) { _, command in receiveViewCommand(command) }
             .onChange(of: store.currentBookRevision) { _, _ in refresh() }
             .onChange(of: store.book?.publicationStamp) { _, _ in refresh() }
@@ -142,6 +143,7 @@ struct CompositionWorkspaceView: View {
     }
 
     private func reset() {
+        stagePresentationTask?.cancel(); stagePresentationTask = nil
         clearPrepared(); clearMapCommand(); mapViewports = [:]; mapCameras = [:]; selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; canvasAnchors = [:]; refresh()
     }
     private func clearPrepared() { preparedInput = nil; preparedOwner = nil }
@@ -350,6 +352,29 @@ struct CompositionWorkspaceView: View {
                 if values.contains(id) { values.remove(id) } else { values.insert(id) }
                 selections[group] = values
             } else { selections[group] = [id] }
+        }
+    }
+    private func presentStage(_ id: String, from part: CompositionPart) {
+        let groups = Set(composition?.parts.filter { candidate in
+            candidate.primitive == .timeline && baseline[candidate.sourceID]?.items.contains(where: { ($0.objectID ?? $0.id) == id }) == true
+        }.map(\.timeGroup) ?? [])
+        // An embedded or independently grouped timeline keeps its local
+        // controls. Do not reinterpret it as a single shared map goal.
+        guard groups.count == 1, store.activeComponentView?.snapshot != nil else {
+            if let item = baseline[part.sourceID]?.items.first(where: { ($0.objectID ?? $0.id) == id }),
+               let window = ReadingEventPresentationPlan.sourceWindow(item.sourceExtent) {
+                clocks[part.timeGroup] = CompositionClock(axis: window.axis, lower: window.from, upper: window.to,
+                    cursor: window.cursor, mapMode: clocks[part.timeGroup]?.mapMode ?? .instant)
+                select(id, group: part.selectionGroup)
+            }
+            return
+        }
+        stagePresentationTask?.cancel()
+        stagePresentationTask = Task { [weak store] in
+            guard let store else { return }
+            do { _ = try await store.presentUserReadingEvent(id) }
+            catch is CancellationError { }
+            catch { if !Task.isCancelled { store.activity = "阶段切换未完成：" + error.localizedDescription } }
         }
     }
 
@@ -578,7 +603,8 @@ struct CompositionWorkspaceView: View {
         case .timeline:
             CompositionTimeline(items: baseline.items, selected: selected,
                 clock: Binding(get: { clocks[part.timeGroup] ?? CompositionClock() }, set: { clocks[part.timeGroup] = $0 }), compact: floating,
-                select: { select($0, group: part.selectionGroup) })
+                select: { select($0, group: part.selectionGroup) },
+                selectStage: !embedded && composition?.parts.contains(where: { $0.primitive == .map && $0.timeGroup == part.timeGroup }) == true ? { presentStage($0, from: part) } : nil)
         case .relations, .documentGraph:
             CompositionGraph(partID: part.id, viewID: definition?.id ?? "composition", projection: projection,
                 selected: selected, documents: part.primitive == .documentGraph, width: width,
@@ -727,6 +753,7 @@ private struct CompositionObjectTable: View {
             .overlay(alignment: .bottom) { Rectangle().fill(Palette.line.opacity(0.5)).frame(height: 0.5) }
     }
     private func displayValue(_ field: String, item: CompositionItem) -> String? {
+        if field == "properties.dateText", item.kind == "event", let extent = item.extent { return TemporalDatePresentation.summary(extent) }
         guard let value = CompositionRuntime.tableValue(field, in: item) else { return nil }
         if field == "kind" { return ["entity": "要素", "event": "事件", "document": "笔记"][value] ?? "要素" }
         if field == "typeID" { return store.book?.types.first { $0.id == value }?.name ?? ["event": "事件", "document": "笔记"][value] ?? "要素" }
@@ -801,7 +828,9 @@ private struct CompositionObjectDetails: View {
                     ForEach(item.fields.keys.filter { $0 != "temporalMatch" }.sorted(), id: \.self) { key in
                         VStack(alignment: .leading, spacing: 5) {
                             Text(fieldLabel(key, item: item)).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                            MarkdownText(markdown: fieldValue(key, value: item.fields[key] ?? ""))
+                            if key == "dateText", item.kind == "event", let extent = item.extent {
+                                Text(TemporalDatePresentation.summary(extent)).help(extent.explanation ?? "保留原书历法与原有确定性，没有换算或补造日期。")
+                            } else { MarkdownText(markdown: fieldValue(key, value: item.fields[key] ?? "")) }
                         }
                     }
                     if let extent = item.extent, !extent.sourceText.isEmpty { Label(extent.sourceText, systemImage: "clock").font(.callout).foregroundStyle(.secondary) }
@@ -1178,6 +1207,7 @@ private struct CompositionTimeline: View {
     @Binding var clock: CompositionClock
     var compact = false
     var select: (String) -> Void
+    var selectStage: ((String) -> Void)? = nil
     private var extents: [[TemporalExtent]] { items.map { [$0.extent, $0.sourceExtent].compactMap { $0 } } }
     private var axes: [String] { TemporalAxis.available(extents.flatMap { $0 }) }
     private var axis: String { clock.axis.flatMap { axes.contains($0) ? $0 : nil } ?? TemporalAxis.preferred(for: extents) ?? "" }
@@ -1220,9 +1250,12 @@ private struct CompositionTimeline: View {
                                     ForEach(phases) { item in
                                         Button {
                                             guard let window = ReadingEventPresentationPlan.sourceWindow(item.sourceExtent) else { return }
-                                            clock = CompositionClock(axis: window.axis, lower: window.from,
-                                                upper: window.to, cursor: window.cursor, mapMode: clock.mapMode)
-                                            select(item.objectID ?? item.id)
+                                            if let selectStage { selectStage(item.objectID ?? item.id) }
+                                            else {
+                                                clock = CompositionClock(axis: window.axis, lower: window.from,
+                                                    upper: window.to, cursor: window.cursor, mapMode: clock.mapMode)
+                                                select(item.objectID ?? item.id)
+                                            }
                                         } label: {
                                             Text(item.fields["phaseOrder", default: ""] + " " + item.title)
                                                 .lineLimit(1).truncationMode(.tail).frame(width: chipWidth, alignment: .leading)
@@ -1249,11 +1282,9 @@ private struct CompositionTimeline: View {
                 if !compact, let item = items.first(where: { selected.contains($0.objectID ?? $0.id) }) {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(item.title).font(.system(size: 17, weight: .medium))
-                        if let extent = item.extent, !extent.sourceText.isEmpty {
-                            HStack(spacing: 6) {
-                                Text(extent.sourceText)
-                                if extent.assertion == .inferred { Text("推算时间").foregroundStyle(Palette.copper).help(extent.explanation ?? "时间由原文线索推算") }
-                            }.font(.caption).foregroundStyle(.secondary)
+                        if let extent = item.extent {
+                            Text(TemporalDatePresentation.summary(extent)).font(.caption).foregroundStyle(.secondary)
+                                .help(extent.explanation ?? "保留原书历法与原有确定性，没有换算或补造日期。")
                         }
                         if !item.summary.isEmpty { Text(item.summary).font(typography.font(for: .knowledge)).lineLimit(4) }
                         CompositionEvidenceList(evidence: item.evidence)

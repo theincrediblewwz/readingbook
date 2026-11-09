@@ -2,6 +2,29 @@ import Foundation
 import ReadingCore
 
 @MainActor extension AppStore {
+    /// A reader's explicit stage click uses the same goal, projection and fit
+    /// as the model action. It sends no model request and grants no new data.
+    func presentUserReadingEvent(_ id: String) async throws -> Bool {
+        guard let book, let active = activeComponentView, active.issue == nil, let snapshot = active.snapshot else {
+            throw ReadingError.invalid("当前组件的原文范围尚未准备好。")
+        }
+        let owner = ReadingQueryHostOwner(root: libraryRootURL, bookID: book.id, sourceHash: book.sourceHash, runID: nil)
+        let plan = try ReadingEventPresentationPlan.resolve(eventID: id, in: book, snapshot: snapshot)
+        let args: [String: Any] = ["eventID": id, "expectedVersion": plan.version]
+        let data = try JSONSerialization.data(withJSONObject: args, options: [.sortedKeys])
+        let returned = try await presentReadingEvent(args, data: data, book: book, owner: owner, snapshot: snapshot)
+        let result = try JSONSerialization.jsonObject(with: returned) as! [String: Any]
+        try Task.checkCancellation()
+        guard result["ok"] as? Bool == true else {
+            throw ReadingError.invalid(result["message"] as? String ?? "阶段尚未切换，已有资料保留。")
+        }
+        let actual = try await readSettledWorkspaceAfterOpening(route, owner: owner)
+        try Task.checkCancellation()
+        let complete = plan.missing(in: actual).isEmpty && result["cameraStatus"] as? String == "success"
+        activity = complete ? "已显示这一阶段的完整出处和已有行动。" : "已切换阶段；地图仍有未显示的内容，可收起浮层或调整取景。"
+        return complete
+    }
+
     /// An event identity is the model's intent. Source span, linked clocks and
     /// camera work are deterministic host operations, using the saved facts.
     func presentReadingEvent(_ args: [String: Any], data: Data, book: BookProject,

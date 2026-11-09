@@ -27,7 +27,11 @@ extension ReadingQuerySession {
     /// Full evidence stays available explicitly; omitted text never grants a
     /// citation and is never removed from the shared project or its version.
     func eventDiscovery(_ value: TemporalEventSnapshot, includeEvidence: Bool) throws -> [String: Any] {
-        if includeEvidence { return try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any] ?? [:] }
+        if includeEvidence {
+            var row = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any] ?? [:]
+            row["timeSummary"] = TemporalDatePresentation.summary(value.extent)
+            return row
+        }
         var compact = value
         let evidence = compact.object.evidence
         let fullSummary = compact.object.summary
@@ -41,6 +45,7 @@ extension ReadingQuerySession {
         object["sourceUnitIDs"] = Array(Set(evidence.map(\.unitID))).sorted()
         if compact.object.summary != fullSummary { object["summaryTruncated"] = true }
         row["object"] = object
+        row["timeSummary"] = TemporalDatePresentation.summary(value.extent)
         return row
     }
 }

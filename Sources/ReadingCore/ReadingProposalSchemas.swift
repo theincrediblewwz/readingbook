@@ -13,6 +13,8 @@ public enum ReadingProposalTools {
         if let wrapper = try JSONSerialization.jsonObject(with: arguments) as? [String: Any], let raw = wrapper["batch"] {
             guard wrapper.count == 1, let value = raw as? [String: Any],
                   Set(value.keys).isSubset(of: ["knowledge", "graph", "documents", "bookScheme"]) else { throw ReadingError.invalid("变更批次包含未声明的宿主字段。") }
+            guard group(for: name) != nil else { throw ReadingError.invalid("未注册的提案组。") }
+            try ReadingProposalShape.validate(value, wrapped: true)
             let batch = try decoder.decode(ControlledChangeBatch.self, from: JSONSerialization.data(withJSONObject: value))
             let present: Bool
             switch group(for: name) { case .knowledge: present = batch.knowledge != nil; case .graph: present = batch.graph != nil
@@ -21,12 +23,8 @@ public enum ReadingProposalTools {
             return batch
         }
         guard let definition = group(for: name) else { throw ReadingError.invalid("未注册的提案组。") }
-        let schema: [String: Any]
-        switch definition { case .knowledge: schema = ReadingProposalSchemas.knowledge; case .graph: schema = ReadingProposalSchemas.graph
-        case .documents: schema = ReadingProposalSchemas.documents; case .bookScheme: schema = ReadingProposalSchemas.bookScheme }
         let object = try JSONSerialization.jsonObject(with: arguments) as? [String: Any] ?? [:]
-        let fields = schema["properties"] as? [String: Any] ?? [:]
-        guard Set(object.keys).isSubset(of: Set(fields.keys)) else { throw ReadingError.invalid("业务提案不能包含宿主权限、批准或其他未知字段。") }
+        try ReadingProposalShape.validate([definition.rawValue: object], wrapped: false)
         switch name {
         case "knowledge_changes_propose": return ControlledChangeBatch(knowledge: try decoder.decode(ControlledKnowledgeChanges.self, from: arguments))
         case "graph_changes_propose": return ControlledChangeBatch(graph: try decoder.decode(ControlledGraphChanges.self, from: arguments))

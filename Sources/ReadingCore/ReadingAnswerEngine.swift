@@ -361,6 +361,10 @@ enum ReadingAnswerEngine {
                     }
                     else if let referenceError = error as? ReadingProposalReferenceError { receipt["referenceIssues"] = referenceError.receiptIssues }
                     else if let metadataError = error as? ReadingProposalMetadataError { receipt["metadataIssues"] = metadataError.issues }
+                    else if let shapeError = error as? ReadingProposalShapeError {
+                        receipt["shapeIssues"] = shapeError.issues
+                        if !shapeError.groupMoves.isEmpty { receipt["groupMoves"] = shapeError.groupMoves }
+                    }
                     else if let temporalError = error as? ReadingProposalTemporalError {
                         receipt["temporalIssues"] = temporalError.issues
                         if !temporalError.metadataIssues.isEmpty { receipt["metadataIssues"] = temporalError.metadataIssues }

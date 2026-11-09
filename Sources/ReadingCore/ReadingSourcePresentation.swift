@@ -46,6 +46,7 @@ extension ReadingQuerySession {
                 if let fields = object["fields"] as? [String: String], !fields.isEmpty {
                     lines.append("  已存字段：" + fields.keys.sorted().map { $0 + "=" + fields[$0]! }.joined(separator: "；"))
                 }
+                if let time = object["timeSummary"] as? String { lines.append("  时间说明：" + time) }
                 if let references = object["references"] as? [String: [String]], !references.isEmpty {
                     lines.append("  关联：" + references.keys.sorted().map { $0 + "=" + references[$0]!.joined(separator: ",") }.joined(separator: "；"))
                 }

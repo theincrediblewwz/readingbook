@@ -259,6 +259,15 @@ private actor WorkbenchTransport {
         try check("eventPresentationMarkersSurviveChatPublication", cameraAfter?.objectIDs.contains("p-fire") == true && cameraAfter?.visibleRouteIDs == ["p-action"])
         try check("eventPresentationCameraSurvivesChatPublication", cameraAfter.map { abs($0.latitude - fitted.latitude) < 0.00001 && abs($0.longitude - fitted.longitude) < 0.00001 && abs($0.latitudeDelta - fitted.latitudeDelta) < 0.00001 && abs($0.longitudeDelta - fitted.longitudeDelta) < 0.00001 } == true)
         try JSONEncoder().encode(afterChat).write(to: output.appendingPathComponent("after-chat-publication.json"))
+        let missingLocation = try await store.presentUserReadingEvent("p-later")
+        try check("manualStageReportsMissingLocation", !missingLocation && store.makeReadingWorkspaceSnapshot()?.timeFrom == 2)
+        let manual = try await store.presentUserReadingEvent("p-fire")
+        let manualActual = store.makeReadingWorkspaceSnapshot(), manualCamera = manualActual?.mapViewports?.first
+        try check("manualStageUsesVerifiedEventGoal", manual && plan.missing(in: manualActual).isEmpty)
+        try check("manualStageFitsSameUsableArea", manualCamera.map { abs($0.latitude - fitted.latitude) < 0.00001 && abs($0.longitude - fitted.longitude) < 0.00001 && abs($0.latitudeDelta - fitted.latitudeDelta) < 0.00001 && abs($0.longitudeDelta - fitted.longitudeDelta) < 0.00001 } == true)
+        do { _ = try await store.presentUserReadingEvent("not-in-scope"); throw ReadingError.invalid("未知阶段不应成功") }
+        catch { try check("manualStageRejectsUnknownWithoutChangingView", store.makeReadingWorkspaceSnapshot()?.timeFrom == 0 && store.makeReadingWorkspaceSnapshot()?.selectedObjectIDs == ["p-fire"]) }
+        try check("manualStageKeepsSourceAndKnowledge", store.book?.events == before.events && store.book?.entities == before.entities && store.book?.temporalKnowledge == before.temporalKnowledge && (try Data(contentsOf: source)) == bytes)
         let callsAfter = await transport.count()
         try check("eventPresentationNoModelRequest", callsBefore == callsAfter)
     }

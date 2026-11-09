@@ -35,6 +35,12 @@ struct ReadingReturnedObjectDirectory {
                 row["fields"] = kept
                 if kept != fields { row["fieldsPartial"] = true }
             }
+            if let time = wrapper["timeSummary"] as? String { row["timeSummary"] = String(time.prefix(320)) }
+            else if let value = object["temporalExtent"],
+                    let data = try? JSONSerialization.data(withJSONObject: value),
+                    let extent = try? JSONDecoder().decode(TemporalExtent.self, from: data) {
+                row["timeSummary"] = String(TemporalDatePresentation.summary(extent).prefix(320))
+            }
             if let references = object["references"] as? [String: [String]] {
                 row["references"] = references.mapValues { Array($0.prefix(16)) }
                 if references.values.contains(where: { $0.count > 16 }) { row["referencesPartial"] = true }

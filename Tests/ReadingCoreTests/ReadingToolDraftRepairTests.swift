@@ -148,4 +148,79 @@ final class ReadingToolDraftRepairTests: XCTestCase {
         XCTAssertEqual(reviews, 1); XCTAssertEqual(count, 1); XCTAssertEqual(requests, 3)
         XCTAssertFalse(result.diagnostics.awaitingReview); XCTAssertEqual(result.diagnostics.toolCalls, 2)
     }
+    func testMovingLargeGroupsDoesNotResendOrOverwriteTheirContents() throws {
+        let text = String(repeating: "原始资料不应重新生成。", count: 3000)
+        let raw: [String: Any] = ["batch": ["bookScheme": ["entities": [["summary": text]]]], "kept": "outside"]
+        let draft = ReadingToolDraft(tool: "book_scheme_propose", arguments: try JSONSerialization.data(withJSONObject: raw))
+        let edit: [String: Any] = ["draftID": draft.id, "targetTool": "knowledge_changes_propose", "edits": [["operation": "move", "from": "/batch/bookScheme", "path": "/batch/knowledge"]]]
+        XCTAssertLessThan(try JSONSerialization.data(withJSONObject: edit).count, 512)
+        let repaired = try draft.applying(edit), batch = try XCTUnwrap(repaired["batch"] as? [String: Any])
+        XCTAssertNil(batch["bookScheme"])
+        XCTAssertEqual((((batch["knowledge"] as? [String: Any])?["entities"] as? [[String: Any]])?.first?["summary"]) as? String, text)
+        XCTAssertEqual(repaired["kept"] as? String, "outside")
+        for (from, to) in [("/batch/bookScheme", "/kept"), ("/batch/bookScheme", "/batch/bookScheme/child"),
+                           ("/batch/missing", "/batch/knowledge"), ("/batch/bookScheme", "/absent/knowledge")] {
+            XCTAssertThrowsError(try draft.applying(["draftID": draft.id, "edits": [["operation": "move", "from": from, "path": to]]]))
+        }
+        XCTAssertTrue(String(decoding: draft.arguments, as: UTF8.self).contains("bookScheme"))
+    }
+    func testMisgroupedDraftCanChangeToAuthorizedProposalToolAndReentersEvidenceAndReview() async throws {
+        let value = book(), host = DraftRepairHost()
+        let access = ReadingProposalToolAccess(proposalTools: ["knowledge_changes_propose", "book_scheme_propose"], prepare: { await host.prepare($0, $1) })
+        var q = try query(value, proposals: access)
+        let facts: [String: Any] = ["newEntityIDs": ["new"], "entities": [["id": "new", "typeID": "person", "name": "黄盖", "summary": "火攻", "properties": [:], "aliases": [], "evidence": [["sourceRef": "u1"]]]]]
+        do { _ = try await q.execute(name: "book_scheme_propose", arguments: ["batch": ["bookScheme": facts]], maximumBytes: 16_000); XCTFail("must not discard facts") }
+        catch { XCTAssertTrue(error is ReadingProposalShapeError) }
+        let before = await host.calls.count; XCTAssertEqual(before, 0)
+        let draft = try XCTUnwrap(q.rejectedToolDraft)
+        let result = try await q.execute(name: "tool_draft_repair", arguments: ["draftID": draft.id, "targetTool": "knowledge_changes_propose", "edits": [["operation": "move", "from": "/batch/bookScheme", "path": "/batch/knowledge"]]], maximumBytes: 16_000)
+        XCTAssertTrue(result.contains("needs_confirmation")); XCTAssertNil(q.rejectedToolDraft)
+        let calls = await host.calls; XCTAssertEqual(calls.count, 1); XCTAssertEqual(calls.first?.0, "knowledge_changes_propose")
+        let batch = try ReadingProposalTools.decode(name: "knowledge_changes_propose", arguments: calls[0].1)
+        XCTAssertEqual(batch.knowledge?.entities?.first?.evidence.first?.quote, "黄盖乘风火攻。")
+        XCTAssertNil(batch.bookScheme); XCTAssertTrue(q.project?.entities.isEmpty == true)
+    }
+    func testChangingDraftToolCannotAcquireAnUnsharedSourceOrNewPermission() async throws {
+        let value = book(), host = DraftRepairHost()
+        let onlyScheme = ReadingProposalToolAccess(proposalTools: ["book_scheme_propose"], prepare: { await host.prepare($0, $1) })
+        var q = try query(value, proposals: onlyScheme)
+        q.rejectedToolDraft = ReadingToolDraft(tool: "book_scheme_propose", arguments: Data(#"{"batch":{"bookScheme":{"entities":[]}}}"#.utf8))
+        let draft = try XCTUnwrap(q.rejectedToolDraft)
+        XCTAssertThrowsError(try q.resolveToolDraft(name: "tool_draft_repair", arguments: ["draftID": draft.id, "targetTool": "knowledge_changes_propose", "edits": [["operation": "move", "from": "/batch/bookScheme", "path": "/batch/knowledge"]]]))
+        let allowed = ReadingProposalToolAccess(proposalTools: ["book_scheme_propose", "knowledge_changes_propose"], prepare: { await host.prepare($0, $1) })
+        q = try query(value, proposals: allowed)
+        q.rejectedToolDraft = ReadingToolDraft(tool: "book_scheme_propose", arguments: try JSONSerialization.data(withJSONObject: ["batch": ["bookScheme": ["newEntityIDs": ["new"], "entities": [["id": "new", "typeID": "person", "name": "黄盖", "summary": "", "aliases": [], "properties": [:], "evidence": [["sourceRef": "u2"]]]]]]]))
+        let unshared = try XCTUnwrap(q.rejectedToolDraft)
+        do { _ = try await q.execute(name: "tool_draft_repair", arguments: ["draftID": unshared.id, "targetTool": "knowledge_changes_propose", "edits": [["operation": "move", "from": "/batch/bookScheme", "path": "/batch/knowledge"]]], maximumBytes: 16_000); XCTFail("unshared source") }
+        catch { XCTAssertTrue(error is ReadingSourceReferenceError) }
+        let calls = await host.calls.count; XCTAssertEqual(calls, 0)
+    }
+    func testEngineExplainsMisgroupedFieldsAndAcceptsAMoveOnlyAfterFullReview() async throws {
+        let value = book(), host = DraftRepairHost()
+        let access = ReadingProposalToolAccess(proposalTools: ["book_scheme_propose", "knowledge_changes_propose"], prepare: { await host.prepare($0, $1) }, currentProject: { value }, awaitReview: { await host.review($0) })
+        var request = 0
+        let result = try await ReadingAnswerEngine.run(question: "整理火攻资料", project: value, settings: .init(model: "offline", maxOutputTokens: 512, contextWindowTokens: 128_000), documents: [:], context: .init(unitID: "u1"), scope: .page, history: [], memory: nil, memoryEnabled: false, documentIDs: nil, loader: nil, operationLimit: 128_000, remainingRequests: 4, proposalAccess: access, preferences: .init(interaction: .functional)) { messages, _, _, _ in
+            request += 1
+            if request < 3 {
+                var tool = "book_scheme_propose"
+                var arguments: [String: Any] = ["batch": ["bookScheme": ["newEntityIDs": ["new"], "entities": [["id": "new", "typeID": "person", "name": "黄盖", "summary": "火攻", "properties": [:], "aliases": [], "evidence": [["sourceRef": "u1"]]]]]]]
+                if request == 2 {
+                    let text = try XCTUnwrap(messages.last?["content"] as? String)
+                    let receipt = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+                    XCTAssertEqual(receipt["ok"] as? Bool, false)
+                    XCTAssertFalse((receipt["shapeIssues"] as? [[String: String]] ?? []).isEmpty)
+                    let move = try XCTUnwrap((receipt["groupMoves"] as? [[String: String]])?.first)
+                    let repair = try XCTUnwrap(receipt["repair"] as? [String: Any])
+                    arguments = ["draftID": try XCTUnwrap(repair["draftID"]), "targetTool": try XCTUnwrap(move["targetTool"]), "edits": [["operation": "move", "from": try XCTUnwrap(move["from"]), "path": try XCTUnwrap(move["path"])]]]
+                    tool = "tool_draft_repair"
+                    let count = await host.calls.count; XCTAssertEqual(count, 0)
+                }
+                return .init(message: .init(role: "assistant", content: nil, refusal: nil, tool_calls: [.init(id: "shape-\(request)", type: "function", function: .init(name: tool, arguments: String(decoding: try JSONSerialization.data(withJSONObject: arguments), as: UTF8.self)))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 20)
+            }
+            return .init(message: .init(role: "assistant", content: "已整理。[unit:u1]", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 20)
+        }
+        let calls = await host.calls, reviews = await host.reviews
+        XCTAssertEqual(request, 3); XCTAssertEqual(reviews, 1); XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(calls.first?.0, "knowledge_changes_propose"); XCTAssertFalse(result.diagnostics.awaitingReview)
+    }
 }

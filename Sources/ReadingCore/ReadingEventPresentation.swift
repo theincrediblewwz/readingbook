@@ -43,7 +43,7 @@ public struct ReadingEventPresentationPlan: Sendable, Equatable {
          "note": "原文出处区间，不是历史日期；只改变呈现，不产生新事实或引用权限。"]
     }
 
-    func missing(in workspace: ReadingWorkspaceSnapshot?) -> [String] {
+    public func missing(in workspace: ReadingWorkspaceSnapshot?) -> [String] {
         guard let workspace else { return ["renderer_observation"] }
         var missing: [String] = []
         if workspace.observationStatus?.permitsVisibility != true { missing.append("renderer_observation") }
