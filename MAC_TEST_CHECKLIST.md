@@ -1,3 +1,23 @@
+<!-- chibi-stage-intent-local:start -->
+当前接续：Design/2026-11-10-stage-intent-results.md；总入口 logs/chibi-stage-intent-20261110/final-local-delivery.json。先体验构想后实现，plan文件早于代码；产品51f8220+bdb8480，10产品Swift实改，本机70/101 ARM64本地迭代已安装，二进制001f3fbe95c33cf7e659644766b184eec65a821e979f26b12e4277af7d8a6fc2。本批无GitHub访问/云CI/Release；正式App已正常退出，勿重复安装或恢复旧库。
+
+按已有parentEventID查阶段并按phaseOrder排；view_show_event只交已有eventID，软件核版本/范围、算完整出处、联动同组地图与时间轴、按未遮挡区域取景，返回goal/applied/observed/complete/missing及真实画面。每事件最多初次+2失败修正，收尾最多2次定向反馈，预算/权限仍约束；审阅更新后旧目标及观察失效，不建第二份事实库。生产按钮共用sourceWindow，但人工镜头仍旧策略。
+
+本批还根治两处：保存问答重建临时子视图会重置镜头→镜头归工作台且跨上下文清理；功能范围按需读取正文初始预载为空，会误跳过最终引用修复→承认本轮工具实际提供的正文/笔记/原消息。无效出处先反馈实际缺口，保留已完成组件工作。
+
+最终core7为499方法/5230断言，独立运行器非XCTest；stageIntent6共享75/范围55/动态52/滚动25，共207原生过，自动所检告警零。七隔离运行已存日志的所检负几何/非有限/循环/崩溃零，不扩大成所有人工场景零诊断。core1/core4夹具错误保留，仅core7计最终。
+
+真实冻结e5f5ac98…61b376显式续接，旧问答清空：real1 6HTTP/222103token先成功后保存镜头重置；real2 5HTTP/206049未读引用失败；real3 7HTTP/264661工具读正文后仍被错误修复门槛挡住；repair1重放前7次公开回复，只新增1真实修正/13312token，回答成功保存，五项保存后画面检查过。合计19HTTP/706125报告token，不称整体省token/提速或从零分析成功。早期real1/real-result.json的pass是被后续观察否定的中间检查点，最终以repair1为准；模型仍把约略推断日期笼统说待考，规范日期未改，须后续改进。
+
+同七阶段本地读取4次49748B→2次19331B，身份/版本/来源权限同，非网络延迟/FPS结论。canonical除了chats/appliedOperationIDs全同。失败索引在failure-cases/：event-behind-floating-card、chat-save-resets-camera、unread-source-citation、range-tool-read-repair-gate；退出前已存输入、公开返回、原生workspace和图片，下轮先回放不要盲重复付费。
+
+新鲜回滚private-books/chibi-stage-intent-20261110/install-before-local-iteration/ReadingBook-0.23.70-local-70e08c1.app。原书两次正常启动/退出104/1484页、你好、2笔记和旧对话；查找关闭/返回书库通过，39文件字节同、偏好同，无旧库覆盖。用户dirty性能文档SHA9b186792…563d4保持未改未提交。
+
+清理两轮已执行：7971608→7157300→7024976KiB，累计回收约924.5MiB，压缩后批初净增约84.1MiB（最终文档微增以交付为准）。93结束运行目录/487文件逐成员校验归档，7重复PDF指向规范原书；69快照/日志去重到48唯一内容另ZIP。7可重建程序和过旧6ce回滚退役；4939非App私人文件/共享缓存/当前候选/正式70通用ZIP/最新70e回滚保留。clean-final.py与compact-evidence.py均已执行，不重跑；ended-runtime-index与snapshot-evidence-index可恢复路径，repair1/final/project.json仍原样保留供续接。
+
+下一批先自然问题从零组织战役、统一人工阶段取景、精简内部原文序号并区分明确/约略推断/未知时间。现代地名密度（不淡化底图）、层级横移轴/可视与筛选端点分离、远景聚合、有据曲线区域及16类组件轮转仍在计划，不因本批忘记。
+<!-- chibi-stage-intent-local:end -->
+
 <!-- chibi-closeout-knowledge-local:start -->
 当前接续：Design/2026-11-10-chibi-closeout-knowledge.md；总入口 logs/chibi-closeout-knowledge-20261110/final-local-delivery.json。产品70e08c1（6产品Swift实改），本机70/101 ARM64本地迭代已安装，二进制651ea5df37051e7dde75d5ab450c88a25b9a3394e8a167cfd2e0a7b8c5397411。本批不推GitHub/云CI/Release；正式App已正常退出，勿重复安装或恢复旧库。
 
