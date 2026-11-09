@@ -175,6 +175,101 @@ final class CompositionTests: XCTestCase {
             XCTAssertLessThanOrEqual(paths.count, 32)
         }
     }
+    func testOmittedGroupsFollowConnectedSourcesWithoutJoiningIndependentLayoutSiblings() throws {
+        let raw = #"{"sources":[{"id":"events","collection":"events","scope":"book","selectionGroup":"events-selection","timeGroup":"events-time"},{"id":"places","collection":"objects","scope":"book","selectionGroup":"places-selection","timeGroup":"places-time"}],"parts":[{"id":"time","primitive":"time.axis","sourceID":"events"},{"id":"detail","primitive":"object.detail","sourceID":"events"},{"id":"map","primitive":"geo.map","sourceID":"places"}],"layout":[{"id":"root","kind":"row","children":["a","b","c"]},{"id":"a","kind":"part","partID":"time"},{"id":"b","kind":"part","partID":"detail"},{"id":"c","kind":"part","partID":"map"}],"rootID":"root"}"#
+        let value = try JSONDecoder().decode(CompositionDefinition.self, from: Data(raw.utf8))
+        XCTAssertEqual(value.parts.map(\.selectionGroup), ["events-selection", "events-selection", "places-selection"])
+        XCTAssertEqual(value.parts.map(\.timeGroup), ["events-time", "events-time", "places-time"])
+        XCTAssertNoThrow(try CompositionRuntime.validate(value, in: fixture()))
+        let projection = try CompositionRuntime.project(value, in: fixture())
+        XCTAssertEqual(projection["events"]?.items.map(\.id), ["campaign"])
+        XCTAssertEqual(Set(projection["places"]?.items.map(\.id) ?? []), ["cao", "liu", "jiangling", "xudu", "campaign"])
+    }
+    func testMapAndIndependentActionSourceInheritUniqueExplicitGroupAndSaveItCanonically() throws {
+        let raw = #"{"sources":[{"id":"places","collection":"objects","scope":"book"},{"id":"actions","collection":"relations","scope":"book"}],"parts":[{"id":"map","primitive":"geo.map","sourceID":"places","routeSourceID":"actions","selectionGroup":"battle","timeGroup":"clock"}],"layout":[{"id":"root","kind":"part","partID":"map"}],"rootID":"root"}"#
+        let value = try JSONDecoder().decode(CompositionDefinition.self, from: Data(raw.utf8))
+        XCTAssertEqual(value.sources.map(\.selectionGroup), ["battle", "battle"])
+        XCTAssertEqual(value.sources.map(\.timeGroup), ["clock", "clock"])
+        XCTAssertNoThrow(try CompositionRuntime.validate(value, in: fixture()))
+        let data = try JSONEncoder().encode(value)
+        XCTAssertEqual(try JSONDecoder().decode(CompositionDefinition.self, from: data), value)
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let sources = try XCTUnwrap(saved["sources"] as? [[String: Any]])
+        XCTAssertEqual(sources[0]["timeGroup"] as? String, "clock", "下次打开不再依赖省略项推导")
+    }
+    func testExplicitGroupConflictsStayInvalidAndFeedbackProvidesValuesToRepair() throws {
+        var value = definition([CompositionDataSource(id: "events", collection: .events, timeGroup: "clock")], primitives: [.timeline])
+        value.parts[0].timeGroup = "another-clock"
+        let decoded = try JSONDecoder().decode(CompositionDefinition.self, from: JSONEncoder().encode(value))
+        XCTAssertEqual(decoded, value, "不能把显式冲突悄悄归并")
+        do { try CompositionRuntime.validate(decoded, in: fixture()); XCTFail("明确冲突仍需模型修正") }
+        catch let error as ReadingCompositionError {
+            let issue = try XCTUnwrap(error.issues.first { $0.path == "parts[0].timeGroup" })
+            XCTAssertEqual(issue.currentValue, "another-clock"); XCTAssertEqual(issue.expectedValue, "clock")
+            XCTAssertTrue(issue.reason.contains("events")); XCTAssertFalse(issue.reason.contains("省略时默认main"))
+        }
+    }
+    func testAllOmittedGroupsKeepLegacyMainAndDuplicateIDsReachValidationSafely() throws {
+        let raw = #"{"sources":[{"id":"s","collection":"events","scope":"book"}],"parts":[{"id":"p","primitive":"time.axis","sourceID":"s"}],"layout":[{"id":"root","kind":"part","partID":"p"}],"rootID":"root"}"#
+        let value = try JSONDecoder().decode(CompositionDefinition.self, from: Data(raw.utf8))
+        XCTAssertEqual(value.sources[0].selectionGroup, "main"); XCTAssertEqual(value.parts[0].timeGroup, "main")
+        XCTAssertNoThrow(try CompositionRuntime.validate(value, in: fixture()))
+        var duplicate = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+        let sources = try XCTUnwrap(duplicate["sources"] as? [[String: Any]]); duplicate["sources"] = sources + sources
+        let decoded = try JSONDecoder().decode(CompositionDefinition.self, from: JSONSerialization.data(withJSONObject: duplicate))
+        XCTAssertEqual(decoded.sources.count, 2)
+        XCTAssertThrowsError(try CompositionRuntime.validate(decoded, in: fixture()))
+    }
+    func testAmbiguousGroupDefaultsNeverChooseBetweenTwoExplicitNames() throws {
+        let raw = #"{"sources":[{"id":"events","collection":"events","scope":"book"}],"parts":[{"id":"time","primitive":"time.axis","sourceID":"events","timeGroup":"clock-a"},{"id":"detail","primitive":"object.detail","sourceID":"events","timeGroup":"clock-b"}],"layout":[{"id":"root","kind":"row","children":["a","b"]},{"id":"a","kind":"part","partID":"time"},{"id":"b","kind":"part","partID":"detail"}],"rootID":"root"}"#
+        let value = try JSONDecoder().decode(CompositionDefinition.self, from: Data(raw.utf8))
+        XCTAssertEqual(value.sources[0].timeGroup, "main")
+        XCTAssertEqual(value.parts.map(\.timeGroup), ["clock-a", "clock-b"])
+        XCTAssertThrowsError(try CompositionRuntime.validate(value, in: fixture()))
+    }
+    func testEventTableReadsSharedFieldsWithoutRedundantTypeDeclaration() throws {
+        let book = try fixture()
+        var value = definition([CompositionDataSource(id: "events", collection: .events, scope: .book)], primitives: [.table])
+        value.parts[0].columns = [.init(field: "name"), .init(field: "properties.dateText"), .init(field: "properties.kind"), .init(field: "properties.phaseOrder")]
+        XCTAssertNoThrow(try CompositionRuntime.validate(value, in: book))
+        let item = try XCTUnwrap(CompositionRuntime.project(value, in: book)["events"]?.items.first)
+        XCTAssertEqual(item.id, "campaign"); XCTAssertEqual(CompositionRuntime.tableValue("properties.dateText", in: item), "208年")
+        var invalid = value; invalid.parts[0].columns = [.init(field: "properties.unregistered")]
+        XCTAssertThrowsError(try CompositionRuntime.validate(invalid, in: book), "省略类型不放开任意字段")
+    }
+    func testStageFilterUsesCanonicalParentAndEventMetadataWithoutChangingFacts() throws {
+        var book = try fixture()
+        let proof = book.events[0].evidence, anchor = try XCTUnwrap(book.temporalKnowledge?.anchors.first?.id)
+        book.events.append(.init(id: "retreat", name: "返回江陵", dateText: "208年", placeIDs: ["jiangling"], evidence: proof))
+        book.temporalKnowledge?.eventMetadata.append(.init(eventID: "retreat", kind: "retreat", parentEventID: "campaign", phaseOrder: 1,
+            sourceAnchorIDs: [anchor], assertion: .explicit))
+        let before = book
+        let source = CompositionDataSource(id: "stages", collection: .events, scope: .book,
+            filters: [.init(field: "parentEventID", operation: .equals, value: "campaign"), .init(field: "properties.kind", operation: .equals, value: "retreat")])
+        let value = definition([source], primitives: [.timeline])
+        let result = try CompositionRuntime.project(value, in: book)
+        XCTAssertEqual(result["stages"]?.items.map(\.id), ["retreat"])
+        XCTAssertEqual(result["stages"]?.items.first?.references["parentEvent"], ["campaign"])
+        XCTAssertEqual(book.events, before.events); XCTAssertEqual(book.temporalKnowledge, before.temporalKnowledge)
+        var hiddenParent = book
+        hiddenParent.events[0].evidence = [Evidence(unitID: "u2", quote: hiddenParent.units[1].text)]
+        let futureAnchor = try XCTUnwrap(hiddenParent.temporalKnowledge?.anchors.last?.id)
+        hiddenParent.temporalKnowledge?.eventMetadata[0].sourceAnchorIDs = [futureAnchor]
+        let scoped = try CompositionRuntime.project(value, in: hiddenParent, boundary: .init(allowedUnitIDs: ["u1"]))
+        XCTAssertTrue(scoped["stages"]?.items.isEmpty == true, "父事件不可见时，筛选不能泄露阶段归属")
+        let unfiltered = definition([.init(id: "visible", collection: .events, scope: .book)])
+        let independentlyVisible = try CompositionRuntime.project(unfiltered, in: hiddenParent, boundary: .init(allowedUnitIDs: ["u1"]))
+        XCTAssertTrue(independentlyVisible["visible"]?.items.contains { $0.id == "retreat" } == true, "不锁住有独立出处的子事件")
+    }
+    func testStageNamesInObjectKindReturnActionableFilterErrorRatherThanAnEmptyDisplay() throws {
+        let source = CompositionDataSource(id: "stages", collection: .events, scope: .book,
+            filters: [.init(field: "kind", operation: .oneOf, values: ["放火", "乌林", "华容道"])])
+        do { try CompositionRuntime.validate(definition([source], primitives: [.timeline]), in: fixture()); XCTFail("不能把阶段名当对象类别静默显示空列表") }
+        catch let error as ReadingCompositionError {
+            let issue = try XCTUnwrap(error.issues.first { $0.path == "sources[0].filters[0]" })
+            XCTAssertTrue(issue.reason.contains("parentEventID")); XCTAssertTrue(issue.reason.contains("properties.kind"))
+        }
+    }
     func testModelCanRepairLayoutFromStructuredFeedbackBeforeHostNavigation() async throws {
         actor Counter { var value = 0; func add() { value += 1 } }
         let book = try fixture(), valid = try XCTUnwrap(ReadingWorkbench.definition(for: ReadingWorkbench.timeMapTemplateID))

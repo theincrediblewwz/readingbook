@@ -31,6 +31,9 @@ struct CompositionWorkspaceView: View {
     @State private var refreshGeneration: UInt64 = 0
     @State private var isActive = false
     @State private var pendingTimeCommand: WorkspaceAICommand?
+    @State private var pendingMapCommand: WorkspaceAICommand?
+    @State private var pendingMapParts = Set<String>()
+    @State private var mapFitRequests: [String: CompositionMapFitRequest] = [:]
     @State private var mapViewports: [String: ReadingMapViewport] = [:]
     @State private var viewportGeneration: UInt64 = 0
 
@@ -85,8 +88,8 @@ struct CompositionWorkspaceView: View {
     private var sourceObservedContent: some View {
         workspaceContent.background(embedded ? Color.clear : Palette.canvas).readingTextContext(.knowledge)
             .task { isActive = true; refresh() }
-            .onDisappear { if !embedded, store.renderedCompositionState?.contextID == store.readingVisibilityContextID { store.renderedCompositionState = nil }; isActive = false; cancelRefresh(); clearPrepared(); pendingTimeCommand = nil }
-            .onChange(of: store.workspaceAICommand) { _, command in receiveTimeCommand(command) }
+            .onDisappear { if !embedded, store.renderedCompositionState?.contextID == store.readingVisibilityContextID { store.renderedCompositionState = nil }; isActive = false; cancelRefresh(); clearPrepared(); pendingTimeCommand = nil; clearMapCommand() }
+            .onChange(of: store.workspaceAICommand) { _, command in receiveViewCommand(command) }
             .onChange(of: store.currentBookRevision) { _, _ in refresh() }
             .onChange(of: store.book?.publicationStamp) { _, _ in refresh() }
             .onChange(of: store.book?.sourceHash) { _, _ in refresh() }
@@ -136,16 +139,34 @@ struct CompositionWorkspaceView: View {
     }
 
     private func reset() {
-        clearPrepared(); mapViewports = [:]; selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; canvasAnchors = [:]; refresh()
+        clearPrepared(); clearMapCommand(); mapViewports = [:]; selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; canvasAnchors = [:]; refresh()
     }
     private func clearPrepared() { preparedInput = nil; preparedOwner = nil }
     private func cancelRefresh() {
         refreshTask?.cancel(); refreshTask = nil; refreshGeneration &+= 1
     }
-    private func receiveTimeCommand(_ command: WorkspaceAICommand?) {
-        guard let command, command.name == "view_set_time_window", let window = command.timeWindow,
+    private func receiveViewCommand(_ command: WorkspaceAICommand?) {
+        if command?.id != pendingMapCommand?.id { clearMapCommand() }
+        guard let command,
               isActive, !embedded, definition?.id == store.route, !store.hasWorkspaceAuxiliary,
               let composition, let owner = displayedOwner, matches(owner, store: store) else { return }
+        if command.name == "map_fit_objects" {
+            guard let args = try? JSONSerialization.jsonObject(with: command.arguments) as? [String: Any] else { return }
+            let ids = Set(args["objectIDs"] as? [String] ?? [])
+            let parts = composition.parts.filter { part in
+                guard part.primitive == .map, mapViewports[part.id] != nil, let projection = projections[part.sourceID] else { return false }
+                let routes = part.routeSourceID.flatMap { projections[$0]?.mapRoutes } ?? projection.mapRoutes
+                return projection.mapPoints.contains { ids.contains($0.targetID) } || routes.contains { $0.eventID.map(ids.contains) == true }
+            }
+            guard !parts.isEmpty else {
+                store.acknowledgeViewCommand(command, status: "unsupported", message: "当前已显示地图没有这些对象的可靠位置；未扩大原文或时间范围。")
+                return
+            }
+            pendingMapCommand = command; pendingMapParts = Set(parts.map(\.id))
+            mapFitRequests = Dictionary(uniqueKeysWithValues: parts.map { ($0.id, .init(id: command.id, objectIDs: ids, generation: viewportGeneration)) })
+            return
+        }
+        guard command.name == "view_set_time_window", let window = command.timeWindow else { return }
         let groups = Set(composition.sources.compactMap { source -> String? in
             let extents = baseline[source.id]?.items.compactMap(\.extent) ?? []
             return TemporalAxis.available(extents).contains(window.axis) ? source.timeGroup : nil
@@ -160,6 +181,22 @@ struct CompositionWorkspaceView: View {
                 cursor: window.cursor, mapMode: clocks[group]?.mapMode ?? .instant)
         }
         refresh(includeBaseline: false, retainingContent: true)
+    }
+    private func clearMapCommand() { pendingMapCommand = nil; pendingMapParts = []; mapFitRequests = [:] }
+    private func finishMapCommand(_ id: UUID, partID: String, error: String?) {
+        guard let command = pendingMapCommand, command.id == id, store.workspaceAICommand?.id == id,
+              pendingMapParts.contains(partID), let request = mapFitRequests[partID],
+              isActive, !embedded, definition?.id == store.route,
+              let owner = displayedOwner, matches(owner, store: store) else { return }
+        if let error = error ?? (request.generation == viewportGeneration ? nil : "地图范围已经变化。") {
+            store.acknowledgeViewCommand(command, status: "conflict", message: "地图调整未完成：" + error)
+            clearMapCommand(); return
+        }
+        pendingMapParts.remove(partID)
+        if pendingMapParts.isEmpty {
+            store.acknowledgeViewCommand(command, message: "组合地图已按当前投影中有依据的位置完成调整；没有改写资料或扩大时间与原文范围。")
+            clearMapCommand()
+        }
     }
     private func finishTimeCommand(error: String? = nil) {
         guard let command = pendingTimeCommand else { return }
@@ -527,6 +564,7 @@ struct CompositionWorkspaceView: View {
                 }
                 let routes = part.routeSourceID.flatMap { projections[$0]?.mapRoutes } ?? projection.mapRoutes
                 CompositionMap(partID: part.id, visibilityGeneration: viewportGeneration, occlusions: occlusions, reportViewport: { publishMap($0, status: $1, partID: part.id, generation: viewportGeneration) },
+                    fitRequest: mapFitRequests[part.id], finishFit: { id, error in finishMapCommand(id, partID: part.id, error: error) },
                     points: projection.mapPoints, routes: routes, selected: selections[part.selectionGroup] ?? [], height: height, canvas: canvas,
                     select: { select($0, group: part.selectionGroup) },
                     deselect: { selections[part.selectionGroup] = []; canvasAnchors[part.selectionGroup] = nil },
@@ -844,6 +882,12 @@ private struct CompositionMarkdown: View {
     }
 }
 
+private struct CompositionMapFitRequest: Equatable {
+    let id: UUID
+    let objectIDs: Set<String>
+    let generation: UInt64
+}
+
 private struct CompositionMap: View {
     @Environment(\.workspaceCanvasBlocked) private var workspaceBlocked
     @Environment(\.workspaceCanvasExclusionRects) private var workspaceExclusions
@@ -851,6 +895,8 @@ private struct CompositionMap: View {
     let visibilityGeneration: UInt64
     let occlusions: [CGRect]
     var reportViewport: (ReadingMapViewport?, ReadingWorkspaceObservationStatus) -> Void
+    var fitRequest: CompositionMapFitRequest?
+    var finishFit: (UUID, String?) -> Void
     let points: [CompositionMapPoint]
     let routes: [SpatialRoute]
     let selected: Set<String>
@@ -869,6 +915,7 @@ private struct CompositionMap: View {
     @State private var legendSize: CGSize = .zero
     @State private var markerEpoch: UInt64 = 0
     @State private var selectedMarker: SpatialMarkerSeed?
+    @State private var pendingFitID: UUID?
     private var seeds: [SpatialMarkerSeed] { SpatialMarkerSeeds.make(points: points, routes: routes) }
     private var nodes: [SpatialMarkerNode] { markerSeeds == seeds ? markerNodes : SpatialMarkerPacking.bootstrap(seeds, selectedObjectIDs: selected, selectedRouteID: inspectedRoute?.relationID) }
     var body: some View {
@@ -923,6 +970,7 @@ private struct CompositionMap: View {
                     rebuildMarkers(using: proxy, size: geometry.size)
                     markerEpoch &+= 1
                     publishViewport(using: proxy, geometry: geometry)
+                    if let id = pendingFitID { pendingFitID = nil; finishFit(id, nil) }
                 }
                 .task(id: markerEpoch) {
                     guard markerEpoch > 0 else { return }
@@ -937,6 +985,7 @@ private struct CompositionMap: View {
                 .onChange(of: workspaceExclusions) { _, _ in publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: occlusions) { _, _ in publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: visibilityGeneration) { _, _ in publishViewport(using: proxy, geometry: geometry) }
+                .onChange(of: fitRequest) { _, request in fit(request) }
                 .onChange(of: geometry.size) { _, _ in rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1; publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: seeds) { _, _ in markerGroup = nil; rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1; publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: markerGroup) { _, _ in publishViewport(using: proxy, geometry: geometry) }
@@ -972,6 +1021,24 @@ private struct CompositionMap: View {
                     }
                 }
         }
+    }
+    private func fit(_ request: CompositionMapFitRequest?) {
+        pendingFitID = nil
+        guard let request else { return }
+        guard !workspaceBlocked, request.generation == visibilityGeneration else {
+            finishFit(request.id, "地图不可操作或内容已变化。"); return
+        }
+        let matches = points.filter { request.objectIDs.contains($0.targetID) }.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+            + routes.filter { $0.eventID.map(request.objectIDs.contains) == true }.flatMap { $0.coordinates.map(\.mapCoordinate) }
+        guard let south = matches.map(\.latitude).min(), let north = matches.map(\.latitude).max(),
+              let west = matches.map(\.longitude).min(), let east = matches.map(\.longitude).max() else {
+            finishFit(request.id, "这些对象不在当前地图投影内。"); return
+        }
+        let region = MKCoordinateRegion(center: .init(latitude: (north + south) / 2, longitude: (west + east) / 2),
+            span: .init(latitudeDelta: min(170, max(0.3, (north - south) * 1.5)), longitudeDelta: min(350, max(0.3, (east - west) * 1.5))))
+        let target = MapCameraPosition.region(region)
+        if camera == target, !moving { finishFit(request.id, nil) }
+        else { pendingFitID = request.id; camera = target }
     }
     @discardableResult private func rebuildMarkers(using proxy: MapProxy, size: CGSize) -> Bool {
         guard !moving, let region = cameraRegion else { return false }

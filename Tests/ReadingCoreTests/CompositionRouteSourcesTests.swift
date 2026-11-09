@@ -74,7 +74,11 @@ final class CompositionRouteSourcesTests: XCTestCase {
             default: value.parts[0].primitive = .timeline
             }
             do { try CompositionRuntime.validate(value, in: book); XCTFail("Invalid binding \(kind)") }
-            catch let error as ReadingCompositionError { XCTAssertTrue(error.issues.contains { $0.path == "parts[0].routeSourceID" }) }
+            catch let error as ReadingCompositionError {
+                let path = kind == 2 ? "sources[1].timeGroup" : kind == 3 ? "sources[1].selectionGroup" : "parts[0].routeSourceID"
+                let issue = try XCTUnwrap(error.issues.first { $0.path == path })
+                if kind == 2 || kind == 3 { XCTAssertEqual(issue.expectedValue, "main"); XCTAssertNotEqual(issue.currentValue, issue.expectedValue) }
+            }
         }
         let old = try JSONDecoder().decode(CompositionPart.self, from: Data(#"{"id":"map","primitive":"geo.map","sourceID":"events"}"#.utf8))
         XCTAssertNil(old.routeSourceID)

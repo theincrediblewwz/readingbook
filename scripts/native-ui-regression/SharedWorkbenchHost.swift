@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SwiftUI
+import MapKit
 @testable import ReadingBook
 @testable import ReadingCore
 
@@ -200,7 +201,7 @@ private actor WorkbenchTransport {
     /// Cross the real AppStore -> mounted composition -> background projection
     /// -> acknowledgement bridge; Core-only date arithmetic cannot prove this.
     func timeWindowBridgeChecks(repository: LibraryRepository) async throws {
-        let texts = ["建安十二年十一月二十日，甲军出发。", "建安十二年十一月二十一日，乙军到达。"]
+        let texts = ["建安十二年十一月二十日，甲军从合成地点0出发。", "建安十二年十一月二十一日，乙军到达合成地点1。"]
         var book = BookProject(title: "时间窗桥接 · 隔离合成书", originalName: "time.txt", sourceHash: "fixture", units: texts.enumerated().map {
             .init(id: "t\($0.offset)", order: $0.offset, chapter: "合成段落", page: $0.offset + 1, text: $0.element)
         })
@@ -208,8 +209,12 @@ private actor WorkbenchTransport {
         let source = output.appendingPathComponent("time.txt"), bytes = Data(texts.joined(separator: "\n").utf8)
         book.sourceHash = try BookImporter.sha256(bytes); try bytes.write(to: source)
         let anchors = try book.units.map { try ReadingExperienceRuntime.createAnchor(sourceHash: book.sourceHash, unitID: $0.id, quote: $0.text, in: book) }
+        book.entities = book.units.enumerated().map { index, unit in
+            .init(id: "place\(index)", typeID: "place", name: "合成地点\(index)", latitude: 30 + Double(index), longitude: 110 + Double(index),
+                  evidence: [.init(unitID: unit.id, quote: unit.text)])
+        }
         book.events = book.units.enumerated().map { index, unit in
-            .init(id: "event\(index)", name: index == 0 ? "合成出发" : "合成到达", evidence: [.init(unitID: unit.id, quote: unit.text)])
+            .init(id: "event\(index)", name: index == 0 ? "合成出发" : "合成到达", placeIDs: ["place\(index)"], evidence: [.init(unitID: unit.id, quote: unit.text)])
         }
         let dates = (20...21).map { day in TemporalExtent(sourceText: texts[day - 20], calendar: "建安", start: .init(year: 12, month: 11, day: day), precision: .day, uncertainty: .exact) }
         book.temporalKnowledge = .init(anchors: anchors, eventMetadata: [
@@ -235,6 +240,26 @@ private actor WorkbenchTransport {
         let window = axis.window(from: store.timeFrom, to: store.timeTo)!
         let filtered = try CompositionRuntime.project(definition, in: book, windows: [sourceDefinition.timeGroup: window])
         try check("timeBridgeWindowSelectsOneSharedEvent", filtered["events"]?.items.map(\.id) == ["event0"])
+        try JSONSerialization.data(withJSONObject: ["projectedPointTargets": filtered["events"]?.mapPoints.map(\.targetID) ?? [], "projectedEventIDs": filtered["events"]?.items.map(\.id) ?? []], options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("map-bridge-before-wait.json"))
+        try await wait { self.store.renderedCompositionState?.maps.first?.objectIDs == ["event0"] }
+        try check("mapBridgeFilteredMapReady", store.renderedCompositionState?.maps.first?.projectedRouteIDs.isEmpty == true)
+        let clockBeforeFit = [store.temporalAxis, String(store.timeFrom), String(store.timeTo), String(store.timeCursor)]
+        let fit = try JSONSerialization.data(withJSONObject: ["objectIDs": ["event0"]])
+        let fitResponse = try await store.performReadingViewAction("map_fit_objects", data: fit, expectedBookID: book.id, sourceHash: book.sourceHash)
+        try check("mapBridgeFitAcknowledgedAfterCamera", (try JSONSerialization.jsonObject(with: fitResponse) as? [String: Any])?["status"] as? String == "success")
+        func nativeMaps(_ view: NSView) -> [MKMapView] { (view as? MKMapView).map { [$0] } ?? view.subviews.flatMap(nativeMaps) }
+        guard let native = self.window.contentView.flatMap({ nativeMaps($0).first }) else { throw ReadingError.invalid("原生组合地图未挂载。") }
+        let fitted = native.region
+        try check("mapBridgeNativeCameraFitsActualEvent", abs(fitted.center.latitude - 30) < 0.001 && abs(fitted.center.longitude - 110) < 0.001 && fitted.span.latitudeDelta < 1)
+        let repeatedFit = try await store.performReadingViewAction("map_fit_objects", data: fit, expectedBookID: book.id, sourceHash: book.sourceHash)
+        try check("mapBridgeRepeatedSameCameraAcknowledged", (try JSONSerialization.jsonObject(with: repeatedFit) as? [String: Any])?["status"] as? String == "success")
+        let hiddenFit = try await store.performReadingViewAction("map_fit_objects", data: JSONSerialization.data(withJSONObject: ["objectIDs": ["event1"]]), expectedBookID: book.id, sourceHash: book.sourceHash)
+        try check("mapBridgeFilteredOutEventRejected", (try JSONSerialization.jsonObject(with: hiddenFit) as? [String: Any])?["status"] as? String == "unsupported")
+        let afterHiddenFit = native.region
+        try check("mapBridgeRejectedFitKeepsNativeCamera", afterHiddenFit.center.latitude == fitted.center.latitude && afterHiddenFit.center.longitude == fitted.center.longitude && afterHiddenFit.span.latitudeDelta == fitted.span.latitudeDelta)
+        try check("mapBridgeFitKeepsTimeWindow", clockBeforeFit == [store.temporalAxis, String(store.timeFrom), String(store.timeTo), String(store.timeCursor)])
+        try check("mapBridgeFitKeepsFilteredProjection", store.renderedCompositionState?.maps.first?.objectIDs == ["event0"])
+        try JSONSerialization.data(withJSONObject: ["response": try JSONSerialization.jsonObject(with: fitResponse), "repeat": try JSONSerialization.jsonObject(with: repeatedFit), "hidden": try JSONSerialization.jsonObject(with: hiddenFit), "nativeCamera": ["latitude": fitted.center.latitude, "longitude": fitted.center.longitude, "latitudeDelta": fitted.span.latitudeDelta, "longitudeDelta": fitted.span.longitudeDelta]], options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("map-fit-bridge.json"))
         let conflict = try await store.performReadingViewAction("view_set_time_window", data: data, expectedBookID: "other-book", sourceHash: book.sourceHash)
         try check("timeBridgeRejectsStaleBook", (try JSONSerialization.jsonObject(with: conflict) as? [String: Any])?["status"] as? String == "conflict")
         do {
@@ -249,6 +274,15 @@ private actor WorkbenchTransport {
         try JSONSerialization.data(withJSONObject: ["response": receipt ?? [:], "axis": store.temporalAxis, "from": store.timeFrom, "to": store.timeTo, "current": store.timeCursor, "filteredEventIDs": filtered["events"]?.items.map(\.id) ?? []], options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("time-bridge.json"))
     }
     func finish(_ error: Error?) async throws {
+        if error != nil, let store {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            if let snapshot = store.makeReadingWorkspaceSnapshot() { try encoder.encode(snapshot).write(to: output.appendingPathComponent("failure-workspace.json")) }
+            if let book = store.book { try encoder.encode(book).write(to: output.appendingPathComponent("failure-project.json")) }
+            if let view = window?.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                if let png = bitmap.representation(using: .png, properties: [:]) { try png.write(to: output.appendingPathComponent("failure-window.png")) }
+            }
+        }
         let records = await transport.allRecords()
         try JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("model-transport-at-exit.json"))
         let result: [String: Any] = ["status": error == nil ? "passed" : "failed", "error": error?.localizedDescription ?? "", "checks": checks, "realNetworkRequests": 0, "originalLibraryUsed": false, "mountedProductionWorkspace": true,

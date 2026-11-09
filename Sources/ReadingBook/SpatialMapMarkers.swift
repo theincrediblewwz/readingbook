@@ -46,10 +46,18 @@ struct SpatialMarkerGlyph: View {
 struct SpatialMapAnnotations: MapContent {
     let nodes: [SpatialMarkerNode]
     var activate: (SpatialMarkerNode) -> Void
+    private func anchor(for node: SpatialMarkerNode) -> UnitPoint {
+        let width = node.isGroup ? 68.0 : node.showsTitle ? 172.0 : 32.0
+        let baseX = node.showsTitle && !node.isGroup ? 18.0 / width : 0.5
+        // Position the native annotation itself, including its hit area. Moving
+        // only the SwiftUI button leaves MapKit intercepting clicks at its old
+        // geographic frame when labels are packed away from nearby markers.
+        return UnitPoint(x: baseX - node.offsetX / width, y: 0.5 - node.offsetY / 44)
+    }
     var body: some MapContent {
         ForEach(nodes) { node in
             Annotation("", coordinate: node.coordinate.mapCoordinate,
-                       anchor: node.showsTitle && !node.isGroup ? UnitPoint(x: 18.0 / 172, y: 0.5) : .center) {
+                       anchor: anchor(for: node)) {
                 Button { activate(node) } label: {
                     HStack(spacing: 6) {
                         SpatialMarkerGlyph(assetID: node.members[0].assetID)
@@ -67,7 +75,6 @@ struct SpatialMapAnnotations: MapContent {
                         .shadow(color: .black.opacity(0.16), radius: 3, y: 1)
                         .frame(minHeight: 44).contentShape(Rectangle())
                 }.buttonStyle(ReadingQuietButtonStyle())
-                    .offset(x: node.offsetX, y: node.offsetY)
                     .help(node.isGroup ? "\(node.title) · \(node.members.count) 条，点此展开；仅为显示分组。" : node.title + " · " + node.members[0].subtitle)
                     .accessibilityLabel(node.isGroup ? "展开\(node.members.count)条相邻记录" : node.title + "，" + node.members[0].subtitle)
                     .accessibilityIdentifier(node.isGroup ? "spatial-marker-group" : "spatial-marker-" + node.members[0].id)

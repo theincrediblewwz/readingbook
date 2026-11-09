@@ -6,7 +6,7 @@ public enum CompositionSchema {
     public static var definition: [String: Any] {
         let id: [String: Any] = ["type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.-]+$"]
         let text: [String: Any] = ["type": "string", "maxLength": 400]
-        let filter = object(["field": ["type": "string", "maxLength": 140, "description": "name/summary/typeID/kind/origin/label，或properties.已声明字段key"],
+        let filter = object(["field": ["type": "string", "maxLength": 140, "description": "name/summary/typeID/origin/label；kind仅entity/event/document/evidence；parentEventID筛父事件的阶段；properties.声明字段，events还可用properties.dateText/kind/phaseOrder。"],
             "operation": enumeration(["equals", "contains", "oneOf", "exists"]), "value": ["type": "string", "maxLength": 1000],
             "values": array(["type": "string", "maxLength": 1000], maximum: 16)], required: ["field", "operation"])
         let traversal = object(["labels": array(["type": "string", "minLength": 1, "maxLength": 400], maximum: 16),
@@ -14,7 +14,7 @@ public enum CompositionSchema {
             "depth": ["type": "integer", "minimum": 1, "maximum": 4], "maxNodes": ["type": "integer", "minimum": 1, "maximum": 200],
             "maxEdges": ["type": "integer", "minimum": 1, "maximum": 800]], required: [])
         let column = object(["field": ["type": "string", "minLength": 1, "maxLength": 140,
-            "description": "name/summary/kind/typeID/origin，或当前单一类型声明的properties.key；事件可读取properties.dateText/kind/phaseOrder。name覆盖固定对象列标题。"],
+            "description": "name/summary/kind/typeID/origin，或当前单一类型声明的properties.key；事件可读取properties.dateText/kind/phaseOrder，不必重复指定typeIDs。name覆盖固定对象列标题。"],
             "title": ["type": "string", "minLength": 1, "maxLength": 400]], required: ["field"])
         let source = object(["id": id, "collection": enumeration(CompositionCollection.allCases.map(\.rawValue)),
             "scope": enumeration(["current", "book"]), "typeIDs": array(id, maximum: 32), "selectionGroup": id, "timeGroup": id,
@@ -33,6 +33,7 @@ public enum CompositionSchema {
         return object(["version": ["type": "integer", "enum": [1]], "sources": array(source, minimum: 1, maximum: 12),
             "parts": array(part, minimum: 1, maximum: 24), "layout": array(node, minimum: 1, maximum: 48), "rootID": id],
             required: ["sources", "parts", "layout", "rootID"])
+            .merging(["description": "省略的selectionGroup/timeGroup沿用相连数据源与元件唯一明确的组；均未指定时用main，显式不同的组不会自动合并。"], uniquingKeysWith: { _, new in new })
     }
     private static func object(_ properties: [String: Any], required: [String]) -> [String: Any] {
         ["type": "object", "properties": properties, "required": required, "additionalProperties": false]

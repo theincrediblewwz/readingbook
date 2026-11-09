@@ -180,6 +180,10 @@ public struct CompositionDefinition: Codable, Hashable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1; sources = try c.decode([CompositionDataSource].self, forKey: .sources)
         parts = try c.decode([CompositionPart].self, forKey: .parts); layout = try c.decode([CompositionLayoutNode].self, forKey: .layout); rootID = try c.decode(String.self, forKey: .rootID)
+        // Only omitted fields inherit a connected group's unique name. Existing
+        // encoded layouts always contain explicit names and remain unchanged.
+        resolveGroupDefaults(sourceGroups: try c.decode([CompositionGroupDeclaration].self, forKey: .sources),
+                             partGroups: try c.decode([CompositionGroupDeclaration].self, forKey: .parts))
     }
 }
 

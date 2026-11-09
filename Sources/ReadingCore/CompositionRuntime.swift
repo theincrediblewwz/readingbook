@@ -52,8 +52,9 @@ public enum CompositionRuntime {
                 }
             }
             for filter in source.filters {
-                let builtin = ["name", "summary", "typeID", "kind", "origin", "label"]
-                let custom = filter.field.hasPrefix("properties.") && declaredFields.contains(String(filter.field.dropFirst(11)))
+                let builtin = ["name", "summary", "typeID", "kind", "origin", "label", "parentEventID"]
+                let eventFields: Set<String> = source.collection == .events ? ["dateText", "kind", "phaseOrder"] : []
+                let custom = filter.field.hasPrefix("properties.") && declaredFields.union(eventFields).contains(String(filter.field.dropFirst(11)))
                 guard builtin.contains(filter.field) || custom else { throw invalid("组合筛选只能引用已有的声明字段。") }
                 guard filter.field != "label" || source.collection == .relations else { throw invalid("label筛选只适用于关系数据源。") }
                 guard (filter.value?.utf8.count ?? 0) <= 1000, (filter.values?.count ?? 0) <= 16,
@@ -84,9 +85,10 @@ public enum CompositionRuntime {
             }
             guard compatible else { throw invalid("组合元件和数据源类型不匹配。") }
             if part.primitive == .table {
-                guard source.typeIDs.count == 1, let columns = part.columns, (1...8).contains(columns.count),
+                let commonCollection = source.typeIDs.isEmpty && [.events, .documents].contains(source.collection)
+                guard source.typeIDs.count == 1 || commonCollection, let columns = part.columns, (1...8).contains(columns.count),
                       Set(columns.map(\.field)).count == columns.count else { throw invalid("对照表需指定一个对象类型和1至8个不同字段。") }
-                let fields = Set(project.types.first { $0.id == source.typeIDs[0] }?.fields.map(\.key) ?? [])
+                let fields = Set(source.typeIDs.first.flatMap { id in project.types.first { $0.id == id } }?.fields.map(\.key) ?? [])
                     .union(source.collection == .events ? ["dateText", "kind", "phaseOrder"] : [])
                 for column in columns {
                     let builtin = ["name", "summary", "kind", "typeID", "origin"].contains(column.field)
@@ -673,6 +675,7 @@ public enum CompositionRuntime {
     private static func field(_ field: String, in item: CompositionItem) -> String {
         switch field { case "name": return item.title; case "summary": return item.summary; case "kind": return item.kind
         case "typeID": return item.typeID ?? ""; case "origin": return item.fields["origin"] ?? ""
+        case "parentEventID": return item.references["parentEvent"]?.first ?? ""
         default: return field.hasPrefix("properties.") ? item.fields[String(field.dropFirst(11))] ?? "" : "" }
     }
     /// Read-only, already scoped object values. Missing is distinct from a claim
