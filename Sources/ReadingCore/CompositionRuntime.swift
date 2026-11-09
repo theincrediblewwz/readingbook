@@ -189,7 +189,7 @@ public enum CompositionRuntime {
                 } else { items = base.objects.filter { related.contains($0.id) }.map { item($0, order: base.order) } }
             case .objects:
                 items = base.objects.filter { $0.kind != .document && ($0.kind != .event || eventResult.byID[$0.id] != nil) }.map { item($0, order: base.order) }
-            case .events: items = events.map { value in var row = item(value.object, order: base.order); row.fields["temporalMatch"] = value.match.rawValue; row.extent = value.extent; return row }
+            case .events: items = events.map { value in var row = item(value.object, order: base.order); row.fields["temporalMatch"] = value.match.rawValue; row.extent = value.extent; row.sourceExtent = value.sourceExtent; return row }
             case .documents: items = base.objects.filter { $0.kind == .document }.map { item($0, order: base.order) }
             case .relations:
                 let endpointIDs = Set(relations.flatMap { [$0.relation.fromID, $0.relation.toID] })

@@ -72,7 +72,7 @@ struct SpatialTimelineView: View {
         return scoped.filter { event in
             guard let item = byID[event.id] else { return false }
             if store.selectedTemporalEntityID != nil { return item.match == .matches }
-            let start = axisValue(item.extent), end = axisEnd(item.extent)
+            let start = axisValue(displayExtent(item)), end = axisEnd(displayExtent(item))
             guard let start else { return store.showUndated }
             return (end ?? start) >= store.timeFrom && start <= store.timeTo
         }
@@ -84,11 +84,14 @@ struct SpatialTimelineView: View {
         }
         let eventsByID = Dictionary((store.componentDataBook?.events ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return store.temporalEvents.compactMap { item in
-            guard var event = eventsByID[item.object.id], let value = axisValue(item.extent) else { return nil }
-            event.startYear = Int(value); event.endYear = axisEnd(item.extent).map(Int.init); return event
+            guard var event = eventsByID[item.object.id], let value = axisValue(displayExtent(item)) else { return nil }
+            event.startYear = Int(value); event.endYear = axisEnd(displayExtent(item)).map(Int.init); return event
         }
     }
     private func axisValue(_ extent: TemporalExtent) -> Double? { TemporalAxis(store.temporalAxis).value(extent) }
+    private func displayExtent(_ event: TemporalEventSnapshot) -> TemporalExtent {
+        store.temporalAxis == "narrative-domain:source-order" ? event.sourceExtent ?? event.extent : event.extent
+    }
     private func axisEnd(_ extent: TemporalExtent) -> Double? { TemporalAxis(store.temporalAxis).value(extent, end: true) }
     private func axisLabel(_ value: Double) -> String {
         temporalMode ? TemporalAxis(store.temporalAxis).label(value) : TimelineRangeControl.yearLabel(Int(value))

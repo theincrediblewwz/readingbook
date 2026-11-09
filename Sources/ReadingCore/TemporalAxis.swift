@@ -32,6 +32,15 @@ public struct TemporalAxis: Hashable, Sendable {
         }
         return ids.sorted()
     }
+    /// Prefer the scale covering the most records; retain calendar preference
+    /// on ties. A record's alternative source position counts only once.
+    public static func preferred(for records: [[TemporalExtent]]) -> String? {
+        let axes = available(records.flatMap { $0 })
+        let ranked = axes.enumerated().map { entry in
+            (id: entry.element, index: entry.offset, count: records.filter { row in row.contains { TemporalAxis(entry.element).value($0) != nil } }.count)
+        }
+        return ranked.max { lhs, rhs in lhs.count == rhs.count ? lhs.index > rhs.index : lhs.count < rhs.count }?.id
+    }
     public func value(_ extent: TemporalExtent?, end: Bool = false) -> Double? {
         guard let extent else { return nil }
         if isNarrative {

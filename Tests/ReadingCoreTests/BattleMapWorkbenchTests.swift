@@ -124,8 +124,10 @@ final class BattleMapWorkbenchTests: XCTestCase {
         XCTAssertEqual(route.extent.narrativeStart, 0); XCTAssertTrue(route.isUncertain)
         XCTAssertEqual(route.eventID, "fire", "关联同一事件仍不等于有同一个日期")
         let ordered = try SpatialKnowledgeRuntime.routes(in: book, at: .ordered(0, domain: "source-order"))
-        XCTAssertEqual(ordered.map(\.relationID), ["attack", "withdraw"])
-        XCTAssertEqual(ordered.first?.timeMatch, .matches); XCTAssertEqual(ordered.last?.timeMatch, .unknown)
+        XCTAssertEqual(ordered.map(\.relationID), ["attack"], "原文顺序用行动自身的出处，不能借同一事件日期混入下一处行动")
+        XCTAssertEqual(ordered.first?.timeMatch, .matches)
+        let later = try SpatialKnowledgeRuntime.routes(in: book, at: .ordered(1, domain: "source-order"))
+        XCTAssertEqual(later.map(\.relationID), ["withdraw"]); XCTAssertEqual(later.first?.timeMatch, .matches)
         XCTAssertEqual(try encoded(book), original)
     }
     func testKnownMatchesTakePriorityOverEarlierUnknownRoutesUnderDisplayLimit() throws {

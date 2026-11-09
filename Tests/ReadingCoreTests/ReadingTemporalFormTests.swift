@@ -145,20 +145,26 @@ final class ReadingTemporalFormTests: XCTestCase {
             context: context, scope: .range, history: [], memory: nil, memoryEnabled: false, documentIDs: nil, loader: nil,
             operationLimit: 128000, remainingRequests: 5, proposalAccess: proposals, preferences: .init(interaction: .functional)) { messages, _, _, _ in
                 requests += 1
-                if requests == 2 {
+                if requests == 1 {
+                    return .init(message: .init(role: "assistant", content: nil, refusal: nil,
+                        tool_calls: book.units.prefix(2).enumerated().map { index, unit in
+                            .init(id: "read-\(index)", type: "function", function: .init(name: "source_read", arguments: "{\"id\":\"\(unit.id)\"}"))
+                        }, reasoning_content: nil), finishReason: "tool_calls", tokenCost: 20)
+                }
+                if requests == 3 {
                     let text = try XCTUnwrap(messages.last?["content"] as? String)
                     let receipt = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
-                    XCTAssertEqual((receipt["temporalIssues"] as? [[String: Any]])?.count, 2)
-                    XCTAssertEqual((receipt["metadataIssues"] as? [[String: String]])?.count, 1)
+                    XCTAssertEqual((receipt["temporalIssues"] as? [[String: Any]])?.count, 2, text)
+                    XCTAssertEqual((receipt["metadataIssues"] as? [[String: String]])?.count, 1, text)
                     XCTAssertNil(receipt["referenceGuide"])
                     let count = await submissions.values.count; XCTAssertEqual(count, 0)
                 }
-                if requests <= 2 { return .init(message: .init(role: "assistant", content: nil, refusal: nil,
-                    tool_calls: [.init(id: "temporal-\(requests)", type: "function", function: .init(name: "knowledge_changes_propose", arguments: String(decoding: requests == 1 ? wrong : good, as: UTF8.self)))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 20) }
-                return .init(message: .init(role: "assistant", content: "已补充原文先后。", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 20)
+                if requests <= 3 { return .init(message: .init(role: "assistant", content: nil, refusal: nil,
+                    tool_calls: [.init(id: "temporal-\(requests)", type: "function", function: .init(name: "knowledge_changes_propose", arguments: String(decoding: requests == 2 ? wrong : good, as: UTF8.self)))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 20) }
+                return .init(message: .init(role: "assistant", content: "已补充原文先后。[unit:unit-000001]", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 20)
             }
         let values = await submissions.values
-        XCTAssertEqual(requests, 3); XCTAssertEqual(values.count, 1)
+        XCTAssertEqual(requests, 4); XCTAssertEqual(values.count, 1)
         let submitted = try XCTUnwrap(values.first)
         let extent = try XCTUnwrap(ReadingProposalTools.decode(name: "knowledge_changes_propose", arguments: submitted).knowledge?.eventMetadata?.first?.extent)
         XCTAssertEqual(extent.narrativeStart, 605); XCTAssertEqual(extent.sourceText, "")

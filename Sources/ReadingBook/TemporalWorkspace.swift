@@ -33,6 +33,7 @@ import ReadingCore
             + state.participations.filter { admits($0.sourceAnchorIDs) }.compactMap(\.extent)
             + state.eventMetadata.filter { admits($0.sourceAnchorIDs) }.compactMap(\.extent)
             + state.relationMetadata.filter { admits($0.sourceAnchorIDs) }.map(\.validity)
+            + TemporalKnowledgeRuntime.eventSourceExtents(in: book, boundary: temporalBoundary)
     }
     func temporalSnapshot(_ id: String, at point: TemporalQueryPoint? = nil) -> EntityTimeSnapshot? {
         guard let book = componentDataBook else { return nil }

@@ -199,11 +199,13 @@ public struct TemporalEventSnapshot: Codable, Hashable, Sendable {
     public var participations: [Participation]
     public var presences: [EntityPresence]
     public var participantMatch: TemporalMatch?
+    public var sourceExtent: TemporalExtent? = nil
 }
 public struct TemporalRelationSnapshot: Codable, Hashable, Sendable {
     public var relation: KnowledgeRelation
     public var metadata: RelationTemporalMetadata?
     public var match: TemporalMatch
+    public var sourceExtent: TemporalExtent? = nil
 }
 public struct EntityTimeSnapshot: Codable, Sendable {
     public var object: TypedObject?
@@ -275,12 +277,26 @@ public enum TemporalKnowledgeRuntime {
                                   anchors: anchorIndex(in: project), referenceIDs: visibleReferenceIDs(in: project, boundary: boundary))
     }
 
+    /// Axis discovery needs only admitted source coordinates, not full object
+    /// adapters, summaries or version hashes for every event.
+    public static func eventSourceExtents(in project: BookProject, boundary: KnowledgeReadBoundary) -> [TemporalExtent] {
+        let orders = TemporalSourceOrder.orders(in: project, boundary: boundary), anchors = anchorIndex(in: project)
+        let metadata = Dictionary((project.temporalKnowledge?.eventMetadata ?? [])
+            .filter { admits($0.sourceAnchorIDs, anchors: anchors, boundary: boundary) }
+            .map { ($0.eventID, $0) }, uniquingKeysWith: { first, _ in first })
+        return project.events.compactMap { event in
+            guard admits(event.evidence, boundary: boundary) else { return nil }
+            return TemporalSourceOrder.extent(metadata[event.id]?.extent, evidence: event.evidence, orders: orders)
+        }
+    }
+
     private static func eventSnapshots(in project: BookProject, entityID: String?, placeID: String? = nil,
                                        at point: TemporalQueryPoint?, boundary: KnowledgeReadBoundary,
                                        anchors: [String: SourceAnchor], referenceIDs: Set<String>?) throws -> [TemporalEventSnapshot] {
         if let entityID, let referenceIDs, !referenceIDs.contains(entityID) { return [] }
         if let placeID, let referenceIDs, !referenceIDs.contains(placeID) { return [] }
         let allMetadata = Dictionary((project.temporalKnowledge?.eventMetadata ?? []).map { ($0.eventID, $0) }, uniquingKeysWith: { first, _ in first })
+        let sourceOrders = TemporalSourceOrder.orders(in: project, boundary: boundary)
         let participationByEvent = Dictionary(grouping: (project.temporalKnowledge?.participations ?? []).filter { $0.entityID == entityID && admits($0.sourceAnchorIDs, anchors: anchors, boundary: boundary) }, by: \.eventID)
         let presenceByEvent = Dictionary(grouping: (project.temporalKnowledge?.presences ?? []).filter { $0.entityID == entityID && $0.eventID != nil && ($0.placeID.map { referenceIDs?.contains($0) ?? true } ?? true) && admits($0.sourceAnchorIDs, anchors: anchors, boundary: boundary) }, by: { $0.eventID ?? "" })
         return try project.events.compactMap { event in
@@ -304,14 +320,16 @@ public enum TemporalKnowledgeRuntime {
             }
             let metadata = visibleMetadata(allMetadata[event.id], anchors: anchors, boundary: boundary, referenceIDs: referenceIDs)
             let extent = metadata?.extent ?? legacyExtent(event)
-            var state = assertedMatch(extent, assertion: metadata?.assertion, at: point)
+            let source = TemporalSourceOrder.extent(metadata?.extent, evidence: event.evidence, orders: sourceOrders)
+            let queryExtent = TemporalSourceOrder.isSource(point) ? source ?? extent : extent
+            var state = assertedMatch(queryExtent, assertion: TemporalSourceOrder.isSource(point) ? queryExtent.assertion : metadata?.assertion, at: point)
             guard state != .outside else { return nil }
             if point != nil, let participantMatch {
                 if participantMatch == .unknown { state = .unknown }
                 else if participantMatch == .possible, state == .matches { state = .possible }
             }
             let object = try adapt(event, metadata: metadata, anchors: anchors, boundary: boundary, referenceIDs: referenceIDs)
-            return TemporalEventSnapshot(object: object, metadata: metadata, extent: extent, match: state, participations: participations, presences: presences, participantMatch: participantMatch)
+            return TemporalEventSnapshot(object: object, metadata: metadata, extent: extent, match: state, participations: participations, presences: presences, participantMatch: participantMatch, sourceExtent: source)
         }
     }
 
@@ -329,6 +347,7 @@ public enum TemporalKnowledgeRuntime {
         let anchors = preparedAnchors ?? anchorIndex(in: project)
         let visibleIDs = preparedVisibleIDs ?? visibleObjectIDs(in: project, boundary: boundary)
         let metadata = Dictionary(grouping: project.temporalKnowledge?.relationMetadata ?? [], by: \.relationID)
+        let sourceOrders = TemporalSourceOrder.orders(in: project, boundary: boundary)
         return project.relations.filter { relation in (objectID.map { relation.fromID == $0 || relation.toID == $0 } ?? true) && visibleIDs.contains(relation.fromID) && visibleIDs.contains(relation.toID) && admits(relation.evidence, boundary: boundary) }.flatMap { relation -> [TemporalRelationSnapshot] in
             let all = metadata[relation.id] ?? []
             let visible = all.filter { admits($0.sourceAnchorIDs, anchors: anchors, boundary: boundary) }
@@ -337,10 +356,12 @@ public enum TemporalKnowledgeRuntime {
                 return all.isEmpty ? [TemporalRelationSnapshot(relation: relation, metadata: nil, match: .unknown)] : []
             }
             return visible.compactMap { metadata in
-                let state = assertedMatch(metadata.validity, assertion: metadata.assertion, at: point)
+                let source = TemporalSourceOrder.extent(metadata.validity, evidence: relation.evidence, orders: sourceOrders)
+                let extent = TemporalSourceOrder.isSource(point) ? source ?? metadata.validity : metadata.validity
+                let state = assertedMatch(extent, assertion: TemporalSourceOrder.isSource(point) ? extent.assertion : metadata.assertion, at: point)
                 var admitted = metadata
                 if !(metadata.spatial?.referenceIDs.allSatisfy(visibleIDs.contains) ?? true) { admitted.spatial = nil }
-                return state == .outside ? nil : TemporalRelationSnapshot(relation: relation, metadata: admitted, match: state)
+                return state == .outside ? nil : TemporalRelationSnapshot(relation: relation, metadata: admitted, match: state, sourceExtent: source)
             }
         }
     }
@@ -834,6 +855,7 @@ extension TemporalKnowledgeRuntime {
                                        within window: TemporalQueryWindow, boundary: KnowledgeReadBoundary,
                                        index: WindowReadIndex) throws -> [TemporalEventSnapshot] {
         try Task.checkCancellation()
+        let sourceOrders = TemporalSourceOrder.orders(in: project, boundary: boundary)
         if let entityID, let ids = index.referenceIDs, !ids.contains(entityID) { return [] }
         if let placeID, let ids = index.referenceIDs, !ids.contains(placeID) { return [] }
         var metadata: [String: EventTemporalMetadata] = [:], participationByEvent: [String: [Participation]] = [:], presenceByEvent: [String: [EntityPresence]] = [:]
@@ -856,7 +878,9 @@ extension TemporalKnowledgeRuntime {
             guard admits(event.evidence, boundary: boundary), placeID.map({ event.placeIDs.contains($0) }) ?? true else { continue }
             let visible = visibleMetadata(metadata[event.id], anchors: index.anchors, boundary: boundary, referenceIDs: index.referenceIDs)
             let extent = visible?.extent ?? legacyExtent(event)
-            var state = assertedMatch(extent, assertion: visible?.assertion, within: window)
+            let source = TemporalSourceOrder.extent(visible?.extent, evidence: event.evidence, orders: sourceOrders)
+            let queryExtent = TemporalSourceOrder.isSource(window) ? source ?? extent : extent
+            var state = assertedMatch(queryExtent, assertion: TemporalSourceOrder.isSource(window) ? queryExtent.assertion : visible?.assertion, within: window)
             guard state != .outside else { continue }
             var participations: [Participation] = [], presences: [EntityPresence] = [], states: [TemporalMatch] = [], participantMatch: TemporalMatch?
             if let entityID {
@@ -883,7 +907,7 @@ extension TemporalKnowledgeRuntime {
             else if participantMatch == .possible, state == .matches { state = .possible }
             let object = try adapt(event, metadata: visible, anchors: index.anchors, boundary: boundary, referenceIDs: index.referenceIDs)
             result.append(TemporalEventSnapshot(object: object, metadata: visible, extent: extent, match: state,
-                participations: participations, presences: presences, participantMatch: participantMatch))
+                participations: participations, presences: presences, participantMatch: participantMatch, sourceExtent: source))
         }
         try Task.checkCancellation()
         return result
@@ -900,6 +924,7 @@ extension TemporalKnowledgeRuntime {
         try validate(window: window)
         try Task.checkCancellation()
         let index = try preparedIndex ?? windowReadIndex(in: project, boundary: boundary)
+        let sourceOrders = TemporalSourceOrder.orders(in: project, boundary: boundary)
         var metadata: [String: [RelationTemporalMetadata]] = [:], result: [TemporalRelationSnapshot] = []
         for value in project.temporalKnowledge?.relationMetadata ?? [] { try Task.checkCancellation(); metadata[value.relationID, default: []].append(value) }
         for relation in project.relations {
@@ -912,10 +937,12 @@ extension TemporalKnowledgeRuntime {
                 try Task.checkCancellation()
                 guard admits(value.sourceAnchorIDs, anchors: index.anchors, boundary: boundary) else { continue }
                 visible = true
-                let state = assertedMatch(value.validity, assertion: value.assertion, within: window)
+                let source = TemporalSourceOrder.extent(value.validity, evidence: relation.evidence, orders: sourceOrders)
+                let extent = TemporalSourceOrder.isSource(window) ? source ?? value.validity : value.validity
+                let state = assertedMatch(extent, assertion: TemporalSourceOrder.isSource(window) ? extent.assertion : value.assertion, within: window)
                 var admitted = value
                 if !(value.spatial?.referenceIDs.allSatisfy(index.visibleIDs.contains) ?? true) { admitted.spatial = nil }
-                if state != .outside { result.append(TemporalRelationSnapshot(relation: relation, metadata: admitted, match: state)) }
+                if state != .outside { result.append(TemporalRelationSnapshot(relation: relation, metadata: admitted, match: state, sourceExtent: source)) }
             }
             if !visible, all.isEmpty { result.append(TemporalRelationSnapshot(relation: relation, metadata: nil, match: .unknown)) }
         }

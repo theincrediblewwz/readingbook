@@ -110,11 +110,14 @@ final class ReadingContinuationContextTests: XCTestCase {
                     XCTAssertTrue(names.contains("knowledge_changes_propose")); XCTAssertTrue(names.contains("component_show"))
                     XCTAssertFalse(names.contains("book_scheme_propose"))
                     let originals = messages.filter { $0["role"] as? String == "user" }.compactMap { $0["content"] as? String }.filter { $0.hasPrefix("宿主已提供本次所选范围的实际原文") }
-                    XCTAssertEqual(originals.count, 1); XCTAssertTrue(originals[0].contains(book.units[0].text))
-                    XCTAssertFalse(originals[0].contains(book.units[1].text))
+                    XCTAssertTrue(originals.isEmpty, "功能协作保留范围授权，正文按需读取")
+                    return .init(message: .init(role: "assistant", content: nil, refusal: nil,
+                        tool_calls: [.init(id: "read", type: "function", function: .init(name: "source_read", arguments: #"{"id":"one"}"#))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 10)
                 }
+                let source = messages.filter { $0["role"] as? String == "tool" }.compactMap { $0["content"] as? String }.joined()
+                XCTAssertTrue(source.contains(book.units[0].text)); XCTAssertFalse(source.contains(book.units[1].text))
                 return .init(message: .init(role: "assistant", content: "曹操到江陵。[unit:one]", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 10)
             }
-        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(calls, 2)
     }
 }

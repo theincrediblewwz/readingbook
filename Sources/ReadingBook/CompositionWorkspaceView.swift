@@ -1058,11 +1058,21 @@ private struct CompositionTimeline: View {
     @Binding var clock: CompositionClock
     var compact = false
     var select: (String) -> Void
-    private var axes: [String] { TemporalAxis.available(items.compactMap(\.extent)) }
-    private var axis: String { clock.axis.flatMap { axes.contains($0) ? $0 : nil } ?? axes.first ?? "" }
-    private func value(_ extent: TemporalExtent?, end: Bool = false) -> Double? { TemporalAxis(axis).value(extent, end: end) }
+    private var extents: [[TemporalExtent]] { items.map { [$0.extent, $0.sourceExtent].compactMap { $0 } } }
+    private var axes: [String] { TemporalAxis.available(extents.flatMap { $0 }) }
+    private var axis: String { clock.axis.flatMap { axes.contains($0) ? $0 : nil } ?? TemporalAxis.preferred(for: extents) ?? "" }
+    private func value(_ item: CompositionItem, end: Bool = false) -> Double? {
+        TemporalAxis(axis).value(axis == "narrative-domain:source-order" ? item.sourceExtent ?? item.extent : item.extent, end: end)
+    }
+    private var phases: [CompositionItem] {
+        items.filter { $0.references["parentEvent"]?.count == 1 && Int($0.fields["phaseOrder"] ?? "") != nil }
+            .sorted { lhs, rhs in
+                let a = lhs.references["parentEvent"]?.first ?? "", b = rhs.references["parentEvent"]?.first ?? ""
+                return (a, Int(lhs.fields["phaseOrder"] ?? "") ?? 0, lhs.id) < (b, Int(rhs.fields["phaseOrder"] ?? "") ?? 0, rhs.id)
+            }
+    }
     private var bounds: ClosedRange<Double> {
-        let values = items.flatMap { [value($0.extent), value($0.extent, end: true)].compactMap { $0 } }
+        let values = items.flatMap { [value($0), value($0, end: true)].compactMap { $0 } }
         return (values.min() ?? 0)...max(values.min() ?? 0, values.max() ?? 1)
     }
     private var lower: Double { min(bounds.upperBound, max(bounds.lowerBound, clock.lower ?? bounds.lowerBound)) }
@@ -1070,8 +1080,8 @@ private struct CompositionTimeline: View {
     private var cursor: Double { min(upper, max(lower, clock.cursor ?? lower)) }
     private var events: [KnowledgeEvent] {
         items.compactMap { item in
-            guard let start = value(item.extent) else { return nil }
-            return KnowledgeEvent(id: item.objectID ?? item.id, name: item.title, startYear: Int(start), endYear: value(item.extent, end: true).map(Int.init))
+            guard let start = value(item) else { return nil }
+            return KnowledgeEvent(id: item.objectID ?? item.id, name: item.title, startYear: Int(start), endYear: value(item, end: true).map(Int.init))
         }
     }
     var body: some View {
@@ -1082,6 +1092,24 @@ private struct CompositionTimeline: View {
                     Picker("时间轴", selection: Binding(get: { axis }, set: { clock = CompositionClock(axis: $0, mapMode: clock.mapMode) })) {
                         ForEach(axes, id: \.self) { Text(TemporalAxis($0).title).tag($0) }
                     }.labelsHidden().pickerStyle(.menu).frame(minHeight: 48)
+                    if !phases.isEmpty {
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 6) {
+                                ForEach(phases) { item in
+                                    Button {
+                                        guard let extent = item.sourceExtent, let lo = extent.narrativeStart else { return }
+                                        clock = CompositionClock(axis: "narrative-domain:source-order", lower: Double(lo),
+                                            upper: Double(extent.narrativeEnd ?? lo), cursor: Double(lo), mapMode: clock.mapMode)
+                                        select(item.objectID ?? item.id)
+                                    } label: { Text(item.fields["phaseOrder", default: ""] + " " + item.title).lineLimit(1) }
+                                    .buttonStyle(ReadingToolbarButtonStyle())
+                                    .disabled(item.sourceExtent == nil)
+                                    .accessibilityLabel("查看阶段：" + item.title)
+                                    .help("按这一阶段的原文出处筛选地图与行动；不会改写已有日期")
+                                }
+                            }
+                        }.frame(maxHeight: 48)
+                    }
                     Spacer()
                     if clock.point != nil {
                         Button { clock = CompositionClock() } label: { Text("全时段").frame(minHeight: 48) }.buttonStyle(ReadingToolbarButtonStyle())
@@ -1091,7 +1119,8 @@ private struct CompositionTimeline: View {
                     upper: Binding(get: { upper }, set: { update(upper: $0) }), bounds: bounds,
                     events: events, selectedID: selected.sorted().first, select: select,
                     cursor: Binding(get: { cursor }, set: { update(cursor: $0) }), label: label)
-                Text("两端筛选事件和行动箭头；光标查看人物此时的位置。").font(.caption).foregroundStyle(.secondary)
+                Text(axis == "narrative-domain:source-order" ? "按原文出处先后筛选，不等同于史事日期；阶段可点选。" : "两端筛选事件和行动箭头；光标查看人物此时的位置。")
+                    .font(.caption).foregroundStyle(.secondary)
                 if !compact, let item = items.first(where: { selected.contains($0.objectID ?? $0.id) }) {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(item.title).font(.system(size: 17, weight: .medium))
@@ -1110,7 +1139,7 @@ private struct CompositionTimeline: View {
     }
     private func label(_ value: Double) -> String { TemporalAxis(axis).label(value) }
     private func update(lower nextLower: Double? = nil, upper nextUpper: Double? = nil, cursor nextCursor: Double? = nil) {
-        let temporal = TemporalAxis(axis), extents = items.compactMap(\.extent)
+        let temporal = TemporalAxis(axis), extents = self.extents.flatMap { $0 }
         let lo = min(upper, max(bounds.lowerBound, nextLower.map { temporal.snapped($0, among: extents) } ?? lower))
         let hi = max(lo, min(bounds.upperBound, nextUpper.map { temporal.snapped($0, among: extents) } ?? upper))
         let position = nextCursor.map { temporal.snapped($0, among: extents) } ?? cursor

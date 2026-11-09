@@ -200,6 +200,7 @@ public struct CompositionItem: Identifiable, Hashable, Sendable {
     public var longitude: Double?
     public var extent: TemporalExtent?
     public var sourceOrder: Int?
+    public var sourceExtent: TemporalExtent? = nil
 }
 public struct CompositionEdge: Identifiable, Hashable, Sendable {
     public var id: String; public var fromID: String; public var toID: String; public var label: String; public var kind: String

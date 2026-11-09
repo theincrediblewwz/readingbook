@@ -1,6 +1,32 @@
 import Foundation
 
 extension ReadingQuerySession {
+    /// Present one successful on-demand read as book text, while retaining the
+    /// canonical JSON result for host validation and diagnostics. References
+    /// bind only the exact returned fragment, never an unread full page.
+    mutating func modelSourceReadText(_ payload: String) throws -> String {
+        guard let value = try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+              value["ok"] as? Bool == true, let id = value["id"] as? String, let text = value["text"] as? String, !text.isEmpty,
+              let offset = value["offset"] as? Int else { return payload }
+        let evidence = Evidence(unitID: id, quote: text), reference = try sourceReferenceID(unitID: id, text: text)
+        guard sourceExcerpts.contains(where: { $0.0 == id && SourceTextLiteral.contains(text, in: $0.1) }),
+              sourceReferences[reference] == nil || sourceReferences[reference] == evidence else {
+            throw invalid("按需原文的实际片段与引用身份不一致，未发送正文。")
+        }
+        if !text.isEmpty, text.count <= 32_768 {
+            sourceReferences[reference] = evidence
+            if !id.hasPrefix("source-"), (try? ControlledChangeCoding.requireID(id)) != nil,
+               sourceReferences[id] == nil || sourceReferences[id] == evidence { sourceReferences[id] = evidence }
+        }
+        let next = value["nextOffset"] as? Int
+        let row: [String: Any] = ["kind": "unit", "id": id, "text": text,
+            "fragmentTruncated": offset != 0 || next != nil, "sourceRef": reference]
+        var result = try modelSourceText(json(["actualReadFragments": [row]]))
+        if let next { result += "\n\n后续起点：\(next)（source_read 的 offset）。" }
+        guard result.utf8.count <= payload.utf8.count else { throw invalid("按需原文排版超过已核对预算，未发送正文。") }
+        return result
+    }
+
     /// The host keeps its canonical evidence envelope for clipping, version
     /// checks and budgets. The model reads the original text with real line
     /// breaks, rather than another JSON string inside its message content.
