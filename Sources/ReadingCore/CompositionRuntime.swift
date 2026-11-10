@@ -115,7 +115,10 @@ public enum CompositionRuntime {
             }
         }
         var visited = Set<String>()
-        for node in definition.layout where node.presentation != nil {
+        for node in definition.layout where node.presentation != nil || node.preferredHeight != nil {
+            if let height = node.preferredHeight {
+                guard height.isFinite, (120...640).contains(height) else { throw invalid("浮卡高度应在120至640之间。") }
+            }
             guard let parent = parents[node.id].flatMap({ layouts[$0] }), parent.kind == .overlay,
                   parent.children.first != node.id else { throw invalid("浮层显示方式只能用于overlay主画布之后的卡片。") }
         }

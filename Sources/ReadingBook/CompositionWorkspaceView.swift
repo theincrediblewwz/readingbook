@@ -382,26 +382,28 @@ struct CompositionWorkspaceView: View {
         let root = composition.layout.first { $0.id == composition.rootID }!
         let mapPart = composition.canvasMapPart!
         let cards = Array(root.children.dropFirst())
-        let controls = CGRect(x: max(12, size.width - 170), y: 12, width: min(158, size.width), height: 52)
-        let fixed = [controls] + cards.compactMap { id -> CGRect? in
-            guard let node = composition.layout.first(where: { $0.id == id }), node.presentation != .contextual else { return nil }
-            return canvasFrame(node, in: composition, size: size)
-        }
+        let controls = CompositionCanvasLayout.controls(in: size)
+        let visible = Set(cards.filter { id in composition.layout.first(where: { $0.id == id }).map { canvasCardIsVisible($0, in: composition) } ?? false })
+        let frames = CompositionCanvasLayout.frames(in: composition, viewport: size, collapsed: collapsed, visible: visible, anchors: canvasAnchors)
         return ZStack(alignment: .topLeading) {
             if let projection = projections[mapPart.sourceID] {
-                compositionMap(mapPart, projection: projection, height: size.height, canvas: true, occlusions: fixed + cards.compactMap { id in
-                    guard let node = composition.layout.first(where: { $0.id == id }), node.presentation == .contextual, canvasCardIsVisible(node, in: composition) else { return nil }
-                    return canvasFrame(node, in: composition, size: size, avoiding: fixed)
-                })
+                compositionMap(mapPart, projection: projection, height: size.height, canvas: true, occlusions: [controls] + cards.compactMap { frames[$0] })
                     .accessibilityIdentifier("composition-map-canvas")
             }
             ForEach(cards, id: \.self) { id in
                 if let node = composition.layout.first(where: { $0.id == id }), canvasCardIsVisible(node, in: composition) {
-                    let frame = canvasFrame(node, in: composition, size: size, avoiding: fixed)
-                    ScrollView {
-                        layout(id, in: composition, width: frame.width, floating: true,
-                            dismiss: node.presentation == .contextual ? { dismiss(node, in: composition) } : nil)
-                    }.scrollIndicators(.visible).frame(width: frame.width, height: frame.height)
+                    let frame = frames[id] ?? .zero
+                    Group {
+                        if node.kind == .part {
+                            layout(id, in: composition, width: frame.width, floating: true,
+                                dismiss: node.presentation == .contextual ? { dismiss(node, in: composition) } : nil, pinnedHeader: true)
+                        } else {
+                            ScrollView {
+                                layout(id, in: composition, width: frame.width, floating: true,
+                                    dismiss: node.presentation == .contextual ? { dismiss(node, in: composition) } : nil)
+                            }.scrollIndicators(.visible)
+                        }
+                    }.frame(width: frame.width, height: frame.height)
                         .background(Palette.surface.opacity(0.96), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                         .readingGlass(radius: 24, prominent: true)
                         .position(x: frame.midX, y: frame.midY)
@@ -415,8 +417,8 @@ struct CompositionWorkspaceView: View {
                     .accessibilityLabel("显示全部内容")
                 Button { store.route = "reader" } label: { Label("原文", systemImage: "book").frame(minHeight: 44).padding(.horizontal, 8) }
                     .buttonStyle(ReadingQuietButtonStyle()).help("回到当前阅读位置")
-            }.padding(4).readingGlass(radius: 28).padding(12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }.padding(4).frame(width: controls.width, height: controls.height).readingGlass(radius: 28)
+                .position(x: controls.midX, y: controls.midY)
         }.frame(width: size.width, height: size.height).clipped()
             .environment(\.workspacePageScroll, false)
     }
@@ -427,29 +429,17 @@ struct CompositionWorkspaceView: View {
             return projections[part.sourceID]?.items.contains { ids.contains($0.objectID ?? $0.documentID ?? $0.id) } == true
         }
     }
-    private func canvasFrame(_ node: CompositionLayoutNode, in composition: CompositionDefinition, size: CGSize, avoiding: [CGRect] = []) -> CGRect {
-        let parts = composition.parts(inLayout: node.id)
-        let isCollapsed = parts.count == 1 && collapsed.contains(parts[0].id)
-        let timeline = parts.count == 1 && parts[0].primitive == .timeline
-        let desired = CGSize(width: min(node.presentation == .contextual ? 430 : 680, max(timeline ? 520 : 260, size.width * (node.fraction ?? 0.4))),
-            height: isCollapsed ? 60 : min(timeline ? 280 : 480, size.height * (timeline ? 0.46 : 0.72)))
-        if node.presentation == .contextual {
-            let anchor = parts.compactMap { canvasAnchors[$0.selectionGroup] }.first
-            return CompositionCanvasLayout.contextual(size: desired, near: anchor, in: size, avoiding: avoiding)
-        }
-        return CompositionCanvasLayout.docked(size: desired, in: size, dock: node.dock ?? .bottomLeading)
-    }
     private func dismiss(_ node: CompositionLayoutNode, in composition: CompositionDefinition) {
         for part in composition.parts(inLayout: node.id) { selections[part.selectionGroup] = []; canvasAnchors[part.selectionGroup] = nil }
     }
 
-    private func layout(_ id: String, in composition: CompositionDefinition, width: CGFloat, floating: Bool = false, dismiss: (() -> Void)? = nil) -> AnyView {
+    private func layout(_ id: String, in composition: CompositionDefinition, width: CGFloat, floating: Bool = false, dismiss: (() -> Void)? = nil, pinnedHeader: Bool = false) -> AnyView {
         guard let node = composition.layout.first(where: { $0.id == id }) else { return AnyView(EmptyView()) }
         let children = node.children
         switch node.kind {
         case .part:
             guard let part = composition.parts.first(where: { $0.id == node.partID }) else { return AnyView(EmptyView()) }
-            return AnyView(partCard(part, width: width, floating: floating, dismiss: dismiss))
+            return AnyView(partCard(part, width: width, floating: floating, dismiss: dismiss, pinnedHeader: pinnedHeader))
         case .column:
             return AnyView(VStack(alignment: .leading, spacing: 18) {
                 ForEach(children, id: \.self) { layout($0, in: composition, width: width, floating: floating, dismiss: dismiss) }
@@ -548,9 +538,21 @@ struct CompositionWorkspaceView: View {
         case .table: return "tablecells"
         }
     }
-    private func partCard(_ part: CompositionPart, width: CGFloat, floating: Bool = false, dismiss: (() -> Void)? = nil) -> some View {
+    private func partCard(_ part: CompositionPart, width: CGFloat, floating: Bool = false, dismiss: (() -> Void)? = nil, pinnedHeader: Bool = false) -> some View {
         let projection = projections[part.sourceID]
         let source = baseline[part.sourceID]
+        let details = VStack(alignment: .leading, spacing: 0) {
+                if let projection {
+                    primitive(part, projection: projection, baseline: source ?? projection, width: width, floating: floating)
+                    if projection.partial, projection.items.count < projection.total {
+                        Text("当前显示 \(projection.items.count) 项，共 \(projection.total) 项。")
+                            .font(.caption).foregroundStyle(.secondary).padding(14)
+                    }
+                    if !projection.diagnostics.isEmpty {
+                        Text(projection.diagnostics.joined(separator: "\n")).font(.caption).foregroundStyle(.secondary).textSelection(.enabled).padding(14)
+                    }
+                } else { CompositionEmptyState(text: "正在准备内容…", icon: icon(part)) }
+        }
         let content = VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: icon(part)).foregroundStyle(Palette.accent)
@@ -567,16 +569,8 @@ struct CompositionWorkspaceView: View {
             }.padding(.leading, 18).padding(.trailing, 6).frame(minHeight: 60)
             if !collapsed.contains(part.id) {
                 Divider().opacity(0.4)
-                if let projection {
-                    primitive(part, projection: projection, baseline: source ?? projection, width: width, floating: floating)
-                    if projection.partial, projection.items.count < projection.total {
-                        Text("当前显示 \(projection.items.count) 项，共 \(projection.total) 项。")
-                            .font(.caption).foregroundStyle(.secondary).padding(14)
-                    }
-                    if !projection.diagnostics.isEmpty {
-                        Text(projection.diagnostics.joined(separator: "\n")).font(.caption).foregroundStyle(.secondary).textSelection(.enabled).padding(14)
-                    }
-                } else { CompositionEmptyState(text: "正在准备内容…", icon: icon(part)) }
+                if pinnedHeader { ScrollView { details }.scrollIndicators(.visible) }
+                else { details }
             }
         }.frame(maxWidth: .infinity, alignment: .topLeading)
         return Group {
@@ -1277,8 +1271,10 @@ private struct CompositionTimeline: View {
                     upper: Binding(get: { upper }, set: { update(upper: $0) }), bounds: bounds,
                     events: events, selectedID: selected.sorted().first, select: select,
                     cursor: Binding(get: { cursor }, set: { update(cursor: $0) }), label: label)
-                Text(axis == "narrative-domain:source-order" ? "按原文出处先后筛选，不等同于史事日期；阶段可点选。" : "两端筛选事件和行动箭头；光标查看人物此时的位置。")
-                    .font(.caption).foregroundStyle(.secondary)
+                if !compact {
+                    Text(axis == "narrative-domain:source-order" ? "按原文出处先后筛选，不等同于史事日期；阶段可点选。" : "两端筛选事件和行动箭头；光标查看人物此时的位置。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if !compact, let item = items.first(where: { selected.contains($0.objectID ?? $0.id) }) {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(item.title).font(.system(size: 17, weight: .medium))
@@ -1290,7 +1286,8 @@ private struct CompositionTimeline: View {
                         CompositionEvidenceList(evidence: item.evidence)
                     }.padding(.top, 10)
                 }
-            }.padding(18)
+            }.padding(compact ? 12 : 18)
+                .help(axis == "narrative-domain:source-order" ? "按原文出处先后筛选，不等同于史事日期；阶段可点选。" : "两端筛选事件和行动箭头；光标查看人物此时的位置。")
         }
     }
     private func label(_ value: Double) -> String { TemporalAxis(axis).label(value) }

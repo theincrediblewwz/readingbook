@@ -158,6 +158,51 @@ final class CompositionTests: XCTestCase {
         XCTAssertTrue(detail.intersection(timeline).isNull || detail.intersection(timeline).isEmpty)
         XCTAssertFalse(detail.contains(CGPoint(x: 720, y: 350)), "卡片不盖住选中的标记")
     }
+    func testCanvasCardsAvoidToolbarAndEachOtherWithoutMovingMapFacts() throws {
+        var value = try XCTUnwrap(ReadingWorkbench.definition(for: ReadingWorkbench.timeMapTemplateID))
+        value.parts = [.init(id: "map", primitive: .map, sourceID: "all"),
+            .init(id: "list", primitive: .objectList, sourceID: "all"),
+            .init(id: "axis", primitive: .timeline, sourceID: "all"),
+            .init(id: "detail", primitive: .objectDetail, sourceID: "all")]
+        value.sources = [.init(id: "all", collection: .objects)]
+        value.layout = [.init(id: "root", kind: .overlay, children: ["back", "left", "bottom", "right"]),
+            .init(id: "back", kind: .part, partID: "map"),
+            .init(id: "left", kind: .part, partID: "list", fraction: 0.3, dock: .topLeading),
+            .init(id: "bottom", kind: .part, partID: "axis", fraction: 0.52, dock: .bottomCenter),
+            .init(id: "right", kind: .part, partID: "detail", fraction: 0.33, presentation: .contextual)]
+        let viewport = CGSize(width: 1320, height: 780)
+        let frames = CompositionCanvasLayout.frames(in: value, viewport: viewport, anchors: ["main": CGPoint(x: 1180, y: 180)])
+        let rects = [CompositionCanvasLayout.controls(in: viewport)] + frames.keys.sorted().compactMap { frames[$0] }
+        for i in rects.indices { for j in rects.indices where j > i {
+            XCTAssertTrue(rects[i].intersection(rects[j]).isNull || rects[i].intersection(rects[j]).isEmpty)
+        } }
+        XCTAssertLessThan(try XCTUnwrap(frames["left"]).height, 480)
+        XCTAssertLessThan(try XCTUnwrap(frames["right"]).height, 480)
+        let collapsed = CompositionCanvasLayout.frames(in: value, viewport: viewport, collapsed: ["list"], visible: ["left", "bottom"])
+        XCTAssertEqual(collapsed["left"]?.height, 60); XCTAssertNil(collapsed["right"])
+        for size in [CGSize(width: 360, height: 480), .zero, CGSize(width: CGFloat.nan, height: CGFloat.infinity)] {
+            for frame in CompositionCanvasLayout.frames(in: value, viewport: size).values {
+                XCTAssertTrue(frame.width.isFinite && frame.height.isFinite && frame.minX >= 0 && frame.minY >= 0)
+                XCTAssertLessThanOrEqual(frame.maxX, size.width.isFinite ? max(1, size.width) : 1)
+                XCTAssertLessThanOrEqual(frame.maxY, size.height.isFinite ? max(1, size.height) : 1)
+            }
+        }
+    }
+    func testPreferredHeightOnlyBelongsToOverlayCardsAndRoundTrips() throws {
+        let book = try fixture()
+        var value = try XCTUnwrap(ReadingWorkbench.definition(for: ReadingWorkbench.timeMapTemplateID))
+        let card = try XCTUnwrap(value.layout.firstIndex { $0.id == "detail-tabs" })
+        value.layout[card].preferredHeight = 300
+        try CompositionRuntime.validate(value, in: book)
+        let decoded = try JSONDecoder().decode(CompositionDefinition.self, from: JSONEncoder().encode(value))
+        XCTAssertEqual(decoded, value); XCTAssertEqual(decoded.layout[card].preferredHeight, 300)
+        for bad in [119.0, 641, Double.infinity, Double.nan] {
+            value.layout[card].preferredHeight = bad; XCTAssertThrowsError(try CompositionRuntime.validate(value, in: book))
+        }
+        value.layout[card].preferredHeight = nil
+        value.layout[value.layout.firstIndex { $0.id == "map-frame" }!].preferredHeight = 300
+        XCTAssertThrowsError(try CompositionRuntime.validate(value, in: book))
+    }
     func testLayoutFeedbackListsIndependentIDGroupAndUnusedSourceMistakesTogether() throws {
         var value = try XCTUnwrap(ReadingWorkbench.definition(for: ReadingWorkbench.timeMapTemplateID))
         value.parts[2].timeGroup = "a-different-clock"

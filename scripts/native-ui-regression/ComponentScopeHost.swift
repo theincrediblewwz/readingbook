@@ -172,6 +172,7 @@ private actor ScopeTransport {
         let transport = transport
         store = AppStore(sharedAIRequests: AIRequestCoordinator(transport: { try await transport.perform($0) }))
         store.libraryRootURL = library; store.repository = repository; store.books = [fixture]; store.bookID = fixture.id
+        store.loadWorkspaceMemory()
         store.selectedUnitID = "u2"; store.route = "reader"; store.readingScopeCurrent = true
         store.settings = .init(baseURL: "http://127.0.0.1:1/disabled", model: "offline-fixture", maxRequestsPerRun: 8,
             maxOutputTokens: 1000, contextWindowTokens: 128_000)
@@ -260,6 +261,21 @@ private actor ScopeTransport {
         try check("explicitRestoreReturnsFrozenSource", store.activeComponentView?.snapshot?.scope == .book && store.componentDataBook?.entities.contains { $0.id == "cao" } == true)
         store.followReaderComponentSource()
         try check("followReaderDoesNotEraseLastChoice", store.activeComponentView == nil && store.restorableComponentSource != nil && store.temporalBoundary.allowedUnitIDs?.contains("u3") == false)
+        let otherRoute = "mindmap"
+        store.route = otherRoute
+        let secondPage = try ReadingQuerySnapshot.freeze(scope: .page, in: store.book!, context: .init(unitID: "u2", page: 2))
+        try store.installComponentView(route: otherRoute, snapshot: secondPage, context: .init(unitID: "u2", page: 2))
+        store.route = scopedRoute
+        try check("sourceChoicesRemainIndependentByRoute", store.restorableComponentSource?.snapshot.scope == .book)
+        store.restoreComponentSource()
+        try check("componentRestoreSurvivesOtherScopeChoice", store.activeComponentView?.snapshot?.scope == .book)
+        store.flushWorkspaceMemory(); store.readingComponentView = nil
+        store.rememberedReadingComponentSources = [:]; store.lastReadingComponentSource = nil; store.loadWorkspaceMemory()
+        try check("workspaceReloadDoesNotAutomaticallyWidenReader", store.activeComponentView == nil)
+        try check("sourceChoiceReloadRetainsOriginalRoute", store.restorableComponentSource?.snapshot.scope == .book)
+        store.route = otherRoute; store.restoreComponentSource()
+        try check("sourceChoiceReloadRetainsOtherRoute", store.activeComponentView?.snapshot?.scope == .page && Set(store.componentDataBook?.units.map(\.id) ?? []) == ["u2", "u2b"])
+        store.route = scopedRoute; store.followReaderComponentSource()
         let lastChoice = store.lastReadingComponentSource
         store.route = "reader"
         try check("sourceChoiceCannotApplyToAnotherRoute", store.restorableComponentSource == nil)

@@ -18,7 +18,7 @@ import ReadingCore
                 queryTask?.cancel(); companionTask?.cancel()
                 pendingPlanRegeneration = nil
                 readingPreparationState.reset()
-                readingComponentView = nil; lastReadingComponentSource = nil; renderedCompositionState = nil
+                readingComponentView = nil; lastReadingComponentSource = nil; rememberedReadingComponentSources = [:]; renderedCompositionState = nil
                 readerChapterAnchor = nil
                 teacherBackground.cancelAll(); sentenceTranslation.cancelAll()
                 queryDocumentIDs = nil; queryAttachedDocumentIDs = []; queryAuthorizedNodeIDs = []; queryReferencedAnswerIDs = []; queryComposerDraft.text = ""
@@ -157,6 +157,7 @@ import ReadingCore
     var renderedComponentPresentation: ReadingComponentPresentation?
     @Published var readingComponentView: ReadingComponentViewState?
     @Published var lastReadingComponentSource: ReadingComponentSourceChoice?
+    @Published var rememberedReadingComponentSources: [String: ReadingComponentSourceChoice] = [:]
     var renderedCompositionState: RenderedCompositionState?
     @Published var renderedSelectedNodeIDs: [String] = []
     @Published var workspaceAICommand: WorkspaceAICommand?
@@ -259,7 +260,7 @@ import ReadingCore
     }
     @Published var catalogOperations = 0
     @Published var libraryRootURL: URL {
-        didSet { if oldValue != libraryRootURL { readingComponentView = nil; lastReadingComponentSource = nil; renderedCompositionState = nil; querySourceRange = nil; if queryScope == .range { queryScope = .page }; currentBookRevision &+= 1; cancelPositionNoteForSourceChange(); readerEditUndo.clear(); positionNoteOpenID = nil; auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); questionSuggestions.reset(); queryReferencedAnswerIDs = []; companionReferencedAnswerIDs = []; positionNoteBinding = nil; queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false; queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
+        didSet { if oldValue != libraryRootURL { readingComponentView = nil; lastReadingComponentSource = nil; rememberedReadingComponentSources = [:]; renderedCompositionState = nil; querySourceRange = nil; if queryScope == .range { queryScope = .page }; currentBookRevision &+= 1; cancelPositionNoteForSourceChange(); readerEditUndo.clear(); positionNoteOpenID = nil; auxiliaryPresentation = nil; notesPresentation = nil; requestedWorkspaceInternalURL = nil; requestedWorkspaceInternalURLOwner = nil; requestedWorkspaceRoute = nil; teacherBackground.cancelAll(); sentenceTranslation.cancelAll(); questionSuggestions.reset(); queryReferencedAnswerIDs = []; companionReferencedAnswerIDs = []; positionNoteBinding = nil; queryMemoryTask?.cancel(); queryMemoryStatus = ""; queryMemoryRequested = false; queryTask?.cancel(); companionTask?.cancel(); pendingPlanRegeneration = nil; readingPreparationState.reset() } }
     }
     @Published var lastTrashedProjectURL: URL?
     let storageState = StorageSettingsState()

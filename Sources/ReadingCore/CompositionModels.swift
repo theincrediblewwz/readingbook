@@ -135,15 +135,18 @@ public struct CompositionLayoutNode: Codable, Hashable, Identifiable, Sendable {
     public var fraction: Double?
     public var dock: FloatingPanelDock?
     public var presentation: CompositionLayoutPresentation?
-    public init(id: String, kind: CompositionLayoutKind, children: [String] = [], partID: String? = nil, fraction: Double? = nil, dock: FloatingPanelDock? = nil, presentation: CompositionLayoutPresentation? = nil) {
-        self.id = id; self.kind = kind; self.children = children; self.partID = partID; self.fraction = fraction; self.dock = dock; self.presentation = presentation
+    /// Preferred screen height for an overlay card; content remains scrollable.
+    public var preferredHeight: Double?
+    public init(id: String, kind: CompositionLayoutKind, children: [String] = [], partID: String? = nil, fraction: Double? = nil, dock: FloatingPanelDock? = nil, presentation: CompositionLayoutPresentation? = nil, preferredHeight: Double? = nil) {
+        self.id = id; self.kind = kind; self.children = children; self.partID = partID; self.fraction = fraction; self.dock = dock; self.presentation = presentation; self.preferredHeight = preferredHeight
     }
-    private enum CodingKeys: String, CodingKey, CaseIterable { case id, kind, children, partID, fraction, dock, presentation }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, kind, children, partID, fraction, dock, presentation, preferredHeight }
     public init(from decoder: Decoder) throws {
         try compositionKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id); kind = try c.decode(CompositionLayoutKind.self, forKey: .kind); children = try c.decodeIfPresent([String].self, forKey: .children) ?? []
         partID = try c.decodeIfPresent(String.self, forKey: .partID); fraction = try c.decodeIfPresent(Double.self, forKey: .fraction)
+        preferredHeight = try c.decodeIfPresent(Double.self, forKey: .preferredHeight)
         presentation = try c.decodeIfPresent(CompositionLayoutPresentation.self, forKey: .presentation)
         if let raw = try c.decodeIfPresent(String.self, forKey: .dock) {
             guard let value = FloatingPanelDock(rawValue: raw) else { throw ReadingError.invalid("未知组合面板停靠位置。") }; dock = value
@@ -154,13 +157,14 @@ public struct CompositionLayoutNode: Codable, Hashable, Identifiable, Sendable {
         try c.encode(id, forKey: .id); try c.encode(kind, forKey: .kind); try c.encode(children, forKey: .children)
         try c.encodeIfPresent(partID, forKey: .partID); try c.encodeIfPresent(fraction, forKey: .fraction); try c.encodeIfPresent(dock?.rawValue, forKey: .dock)
         try c.encodeIfPresent(presentation, forKey: .presentation)
+        try c.encodeIfPresent(preferredHeight, forKey: .preferredHeight)
     }
     public static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.id == rhs.id && lhs.kind == rhs.kind && lhs.children == rhs.children && lhs.partID == rhs.partID && lhs.fraction == rhs.fraction && lhs.dock?.rawValue == rhs.dock?.rawValue && lhs.presentation == rhs.presentation
+        lhs.id == rhs.id && lhs.kind == rhs.kind && lhs.children == rhs.children && lhs.partID == rhs.partID && lhs.fraction == rhs.fraction && lhs.dock?.rawValue == rhs.dock?.rawValue && lhs.presentation == rhs.presentation && lhs.preferredHeight == rhs.preferredHeight
     }
     public func hash(into hasher: inout Hasher) {
         hasher.combine(id); hasher.combine(kind); hasher.combine(children); hasher.combine(partID); hasher.combine(fraction); hasher.combine(dock?.rawValue)
-        hasher.combine(presentation)
+        hasher.combine(presentation); hasher.combine(preferredHeight)
     }
 }
 

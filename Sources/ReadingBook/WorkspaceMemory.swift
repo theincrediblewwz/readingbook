@@ -13,6 +13,7 @@ import ReadingCore
         return libraryRootURL.appendingPathComponent("Workspace", isDirectory: true).appendingPathComponent(name + ".json")
     }
     func loadWorkspaceMemory() {
+        rememberedReadingComponentSources = [:]; lastReadingComponentSource = nil
         guard let book else { workspaceMemory = BookWorkspaceMemory(); return }
         let saved = workspaceMemoryURL.flatMap { url -> BookWorkspaceMemory? in
             guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 1_048_576,
@@ -20,6 +21,10 @@ import ReadingCore
             return try? JSONDecoder().decode(BookWorkspaceMemory.self, from: data)
         }
         workspaceMemory = (saved ?? BookWorkspaceMemory(bookID: book.id, sourceHash: book.sourceHash)).sanitized(bookID: book.id, sourceHash: book.sourceHash)
+        rememberedReadingComponentSources = Dictionary(uniqueKeysWithValues: (workspaceMemory.componentSources ?? [:]).map { key, bookmark in
+            (key, ReadingComponentSourceChoice(root: libraryRootURL, bookID: book.id, sourceHash: book.sourceHash,
+                route: key, snapshot: bookmark))
+        })
         UserDefaults.standard.set(book.id, forKey: "workspace-last-book-v1")
     }
     func updateWorkspaceMemory(_ mutate: (inout BookWorkspaceMemory) -> Void, expectedKey: String? = nil) {

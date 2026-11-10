@@ -88,6 +88,8 @@ public struct BookWorkspaceMemory: Codable, Equatable, Sendable {
     public var readerShowsPDF = true
     public var readerOutline = false
     public var readingSourceMode = "original"
+    /// Explicit per-component source choices; no text or projected facts.
+    public var componentSources: [String: ReadingComponentSourceBookmark]?
     /// A hidden PDF must not override the last text/OCR unit or parallel-reading position.
     public var activePDFPage: Int? { readerShowsPDF && readingSourceMode == "original" ? pdf?.page : nil }
     public init(bookID: String = "", sourceHash: String = "") { self.bookID = bookID; self.sourceHash = sourceHash }
@@ -103,6 +105,13 @@ public struct BookWorkspaceMemory: Codable, Equatable, Sendable {
             if panel.size?.isValid == false { panel.size = nil }
             if let dock = panel.dock, FloatingPanelDock(rawValue: dock) == nil { panel.dock = nil }
             return panel
+        }
+        if let componentSources {
+            var cost = 0
+            let kept = componentSources.filter { $0.key.utf8.count <= 256 && $0.value.isValid && $0.value.bookID == bookID && $0.value.sourceHash == sourceHash }
+                .sorted { $0.value.updatedAt == $1.value.updatedAt ? $0.key < $1.key : $0.value.updatedAt > $1.value.updatedAt }
+                .prefix(32).filter { cost += $0.value.storageBytes; return cost <= 131_072 }
+            value.componentSources = kept.isEmpty ? nil : Dictionary(uniqueKeysWithValues: kept.map { ($0.key, $0.value) })
         }
         if map?.isValid == false { value.map = nil }
         if let from = timeFrom, let to = timeTo, from.isFinite, to.isFinite, from <= to, abs(from) <= 1e9, abs(to) <= 1e9 {} else { value.timeFrom = nil; value.timeTo = nil }

@@ -26,8 +26,8 @@ struct ReadingComponentSourceChoice {
     let bookID: String
     let sourceHash: String
     let route: String
-    let snapshot: ReadingQuerySnapshot
-    let context: ReadingContext?
+    let snapshot: ReadingComponentSourceBookmark
+    var context: ReadingContext? { snapshot.context }
     @MainActor func owns(_ store: AppStore) -> Bool {
         root == store.libraryRootURL && bookID == store.bookID && sourceHash == store.book?.sourceHash && route == store.route
     }
@@ -51,7 +51,8 @@ struct ReadingComponentSourceChoice {
         activeComponentView?.snapshot?.displayTitle ?? (readingScopeCurrent ? "当前原文" : "全书关系")
     }
     var restorableComponentSource: ReadingComponentSourceChoice? {
-        lastReadingComponentSource.flatMap { $0.owns(self) ? $0 : nil }
+        let choice = rememberedReadingComponentSources[route] ?? lastReadingComponentSource
+        return choice.flatMap { $0.owns(self) ? $0 : nil }
     }
     var componentSourceControlTitle: String {
         activeComponentView?.issue ?? activeComponentView?.snapshot?.displayTitle ?? "跟随阅读位置"
@@ -61,7 +62,8 @@ struct ReadingComponentSourceChoice {
     }
     func restoreComponentSource() {
         guard let choice = restorableComponentSource else { return }
-        do { try installComponentView(route: route, snapshot: choice.snapshot, context: choice.context) }
+        guard let book else { return }
+        do { try installComponentView(route: route, snapshot: choice.snapshot.restore(in: book), context: choice.context) }
         catch { activity = "上次范围已失效，请重新选择范围。" }
     }
     func showWholeBookComponentSource() {
@@ -81,8 +83,22 @@ struct ReadingComponentSourceChoice {
         readingComponentView = .init(root: libraryRootURL, bookID: book.id, sourceHash: book.sourceHash,
             route: route, snapshot: snapshot, context: context, projection: projection)
         if let snapshot {
-            lastReadingComponentSource = .init(root: libraryRootURL, bookID: book.id, sourceHash: book.sourceHash,
-                route: route, snapshot: snapshot, context: context)
+            if let bookmark = try? ReadingComponentSourceBookmark(snapshot: snapshot, context: context) {
+                let choice = ReadingComponentSourceChoice(root: libraryRootURL, bookID: book.id, sourceHash: book.sourceHash,
+                    route: route, snapshot: bookmark)
+                lastReadingComponentSource = choice
+                updateWorkspaceMemory { $0.componentSources = ($0.componentSources ?? [:]).merging([route: bookmark]) { _, new in new } }
+                // The shared workspace sanitizer bounds the number and total size.
+                rememberedReadingComponentSources[route] = choice
+                if workspaceMemory.bookID == book.id, workspaceMemory.sourceHash == book.sourceHash {
+                    let allowed = Set(workspaceMemory.componentSources?.keys.map { $0 } ?? [])
+                    rememberedReadingComponentSources = rememberedReadingComponentSources.filter { allowed.contains($0.key) }
+                }
+            } else {
+                rememberedReadingComponentSources[route] = nil
+                if lastReadingComponentSource?.route == route { lastReadingComponentSource = nil }
+                updateWorkspaceMemory { $0.componentSources?[route] = nil }
+            }
         }
     }
 
