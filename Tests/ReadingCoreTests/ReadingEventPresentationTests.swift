@@ -71,6 +71,27 @@ final class ReadingEventPresentationTests: XCTestCase {
         XCTAssertEqual(ReadingEventPresentationPlan.sourceWindow(.init(narrativeStart: 50, narrativeEnd: 51, narrativeDomain: "source-order")), plan.window)
         XCTAssertNil(ReadingEventPresentationPlan.sourceWindow(.init(start: .init(year: 208))))
     }
+    func testEventWithoutMovementCanUseItsActuallyVisibleExplicitPlace() throws {
+        var b=try fixture(); b.relations=[]; b.temporalKnowledge?.relationMetadata=[]
+        let plan=try ReadingEventPresentationPlan.resolve(eventID:"phase2",in:b,snapshot:.freeze(scope:.book,in:b))
+        XCTAssertEqual(plan.knownPlaceIDs,["a"]); XCTAssertTrue(plan.knownRouteIDs.isEmpty)
+        var state=workspace(b);state.selectedObjectIDs=["phase2"]
+        state.timeWindows=[.init(groupID:"story",axis:"narrative-domain:source-order",from:51,to:51,current:51)]
+        state.mapViewports=[.init(partID:"map",latitude:30,longitude:110,latitudeDelta:1,longitudeDelta:1,objectIDs:["a"],visibleRouteIDs:[],projectedRouteIDs:[])]
+        XCTAssertEqual(plan.missing(in:state),[])
+        state.mapViewports?[0].objectIDs=[]
+        XCTAssertTrue(plan.missing(in:state).contains("event_visible"))
+        state.mapViewports?[0].objectIDs=["b"]
+        XCTAssertTrue(plan.missing(in:state).contains("event_visible"),"Unrelated or projected-but-hidden places do not prove event visibility")
+    }
+    func testVisiblePlaceCannotReplaceMissingKnownActionOrBorrowUnrelatedPlace() throws {
+        let b=try fixture(),plan=try ReadingEventPresentationPlan.resolve(eventID:"phase1",in:b,snapshot:.freeze(scope:.book,in:b))
+        var state=workspace(b);state.mapViewports?[0].objectIDs=["a"];state.mapViewports?[0].visibleRouteIDs=[]
+        XCTAssertTrue(plan.missing(in:state).contains("event_visible"));XCTAssertTrue(plan.missing(in:state).contains("known_actions_visible"))
+        var noPlace=b;noPlace.events[2].placeIDs=[];noPlace.relations=[];noPlace.temporalKnowledge?.relationMetadata=[]
+        let empty=try ReadingEventPresentationPlan.resolve(eventID:"phase2",in:noPlace,snapshot:.freeze(scope:.book,in:noPlace))
+        XCTAssertTrue(empty.knownPlaceIDs.isEmpty)
+    }
     func testPlanCannotExpandScopeOrReuseChangedPublication() throws {
         let b = try fixture(), page = try ReadingQuerySnapshot.freeze(scope: .page, in: b, context: .init(unitID: "u0", page: 51))
         XCTAssertThrowsError(try ReadingEventPresentationPlan.resolve(eventID: "phase1", in: b, snapshot: page))

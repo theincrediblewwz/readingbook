@@ -7,6 +7,7 @@ public struct ReadingEventPresentationPlan: Sendable, Equatable {
     public let version: String
     public let sourceUnitIDs: [String]
     public let knownRouteIDs: [String]
+    public let knownPlaceIDs: [String]
     public let window: TemporalViewWindow
 
     public static func resolve(eventID: String, in project: BookProject, snapshot: ReadingQuerySnapshot) throws -> Self {
@@ -25,7 +26,7 @@ public struct ReadingEventPresentationPlan: Sendable, Equatable {
         let routes = try TemporalKnowledgeRuntime.relations(in: scoped, within: .ordered(from: Int(window.from), to: Int(window.to), domain: "source-order"), boundary: boundary)
             .filter { $0.metadata?.spatial?.eventID == eventID }.map { $0.relation.id }
         return Self(eventID: eventID, version: event.object.version, sourceUnitIDs: Array(Set(event.object.evidence.map(\.unitID))).sorted(),
-                    knownRouteIDs: Array(Set(routes)).sorted(), window: window)
+                    knownRouteIDs: Array(Set(routes)).sorted(), knownPlaceIDs: Array(Set(event.object.references["places"] ?? [])).sorted(), window: window)
     }
 
     /// Shared with the production timeline button, so model actions do not
@@ -58,7 +59,10 @@ public struct ReadingEventPresentationPlan: Sendable, Equatable {
             // projected-but-occluded route alone is still insufficient.
             let eventMarker = maps.contains { $0.objectIDs.contains(eventID) }
             let eventAction = !Set(knownRouteIDs).intersection(projected).intersection(visible).isEmpty
-            if !eventMarker && !eventAction { missing.append("event_visible") }
+            // Stationary events can be represented by an explicitly saved
+            // place. This never substitutes places for missing action routes.
+            let eventPlace = knownRouteIDs.isEmpty && !Set(knownPlaceIDs).isDisjoint(with: maps.flatMap(\.objectIDs))
+            if !eventMarker && !eventAction && !eventPlace { missing.append("event_visible") }
             if !Set(knownRouteIDs).isSubset(of: projected) { missing.append("known_actions_projected") }
             if !Set(knownRouteIDs).isSubset(of: visible) { missing.append("known_actions_visible") }
         }

@@ -161,10 +161,20 @@ struct CompositionWorkspaceView: View {
             guard refreshTask == nil else { return }
             guard let args = try? JSONSerialization.jsonObject(with: command.arguments) as? [String: Any] else { return }
             let ids = Set(args["objectIDs"] as? [String] ?? [])
+            // An event need not have a marching route. Its already-projected
+            // explicit place references can locate it on a place-only map.
+            // Never consult withheld book records or infer an actor's location.
+            let linkedPlaces = Set(projections.values.flatMap(\.items).filter {
+                $0.kind == "event" && ids.contains($0.objectID ?? $0.id)
+            }.flatMap { $0.references["places"] ?? [] })
+            var targets: [String: Set<String>] = [:]
             let parts = composition.parts.filter { part in
                 guard part.primitive == .map, mapViewports[part.id] != nil, let projection = projections[part.sourceID] else { return false }
                 let routes = part.routeSourceID.flatMap { projections[$0]?.mapRoutes } ?? projection.mapRoutes
-                return projection.mapPoints.contains { ids.contains($0.targetID) } || routes.contains { $0.eventID.map(ids.contains) == true }
+                let direct = projection.mapPoints.contains { ids.contains($0.targetID) } || routes.contains { $0.eventID.map(ids.contains) == true }
+                let focus = direct ? ids : ids.union(linkedPlaces)
+                guard direct || projection.mapPoints.contains(where: { focus.contains($0.targetID) }) else { return false }
+                targets[part.id] = focus; return true
             }
             guard !parts.isEmpty else {
                 if store.renderedCompositionState?.observationStatus == .pending { return }
@@ -172,7 +182,7 @@ struct CompositionWorkspaceView: View {
                 return
             }
             pendingMapCommand = command; pendingMapParts = Set(parts.map(\.id))
-            mapFitRequests = Dictionary(uniqueKeysWithValues: parts.map { ($0.id, .init(id: command.id, objectIDs: ids, generation: viewportGeneration)) })
+            mapFitRequests = Dictionary(uniqueKeysWithValues: parts.map { ($0.id, .init(id: command.id, objectIDs: targets[$0.id] ?? ids, generation: viewportGeneration)) })
             return
         }
         guard ["view_set_time_window", "view_show_event"].contains(command.name), let window = command.timeWindow else { return }
