@@ -1,3 +1,21 @@
+<!-- chibi-canvas-layout-local:start -->
+本批已完成本机交付：Design/2026-11-10-canvas-layout-results.md；总入口 logs/chibi-canvas-layout-20261110/final-local-delivery.json。产品3da7218（10产品Swift/8新增核心方法），0.23.70/build101 ARM64本地迭代已替换，binary SHA ed6faac0b936ded7d8bd08e7d1f17ee74dfe477926ecf35dd748e2e6ac0aa812。正式App两次原书104/1484、你好、2笔记、旧问答/伴读、查找关闭及正常启动退出过，最后书库退出。未推GitHub/云CI/Release；勿重复安装、索要解锁或恢复旧库。
+
+同8aaea857…0c71a冻结赤壁画布：浮卡默认高度紧凑、可声明preferredHeight120..640，直接part标题固定/正文滚动；绘制与地图遮挡共用一次矩形求解，加入工具/卡片边缘候选。1320×780已知遮挡591368→461560约-22%，无遮挡438232→568040约+30%，工具重叠2444→0；求解1000次均值约5.2微秒。不是FPS/整App内存提速。窄窗仍可能正文互叠，不能称所有窗口同时无遮挡。原生相机四次complete/success，耗时无稳定收益声明。
+
+每组件来源选择改成既有Workspace文件里的轻量书签，最多32条/约128KiB预算；全1484单元样本330B，不存1.86MB正文/投影/分析。切书库/书籍清RAM，恢复重冻当前资料并核片段/原文/身份；离开组件及普通返回仍跟阅读边界，仅明确点“恢复上次查看范围”才恢复。source_scope不授予未读正文证据。CUA详情滚动/关闭/重开、跳617、普通重开/恢复第四十三至五十回均过。
+
+core3最终562方法/5774独立断言，非XCTest；比上批多14方法，其中6个是既有WorkspaceMemory测试本批纳入，只有8个新方法。native最终范围canvasLayout3=60/共享canvasLayout1=80/动态52/滚动25共217过，所检告警零。core1缺Foundation、scope canvasLayout1漏加载工作区、canvasLayout2把双单元页误判单单元，均为夹具失败保留，非最终通过。
+
+真实real1自然请求8HTTP部分完成：新普通分栏、格式修正绕路、只火攻；real2指定沿用overlay及高度8HTTP，先暂存整本方案，经诊断审阅仅三高度字段，后另存浮卡版260/250/300，旧视图/35要素16事件10关系保持，但未做两次阶段且最终回答没确认实际高度。两次saved-case与全部公开请求/退出前快照保留，不能说一次自然提问已全通。real3显式续接real2/final/project.json，清测试待确认方案与旧聊，不重造事实；4HTTP/119988报告token打开/火攻/伏击/回答，窗613→616..618，两次complete/camera success，回答后ready。全批20HTTP/600478报告token，含重复上下文/失败，非计费额；无Key/认证头/私有推理落盘。
+
+真实CUA看到AI浮卡地图，但伏击取景偏宽，路线计数只表示有部分线段可见，四条关联时间记录在616..618窗外，未为了好看改日期。下一批先用保存现场查“微小布局修改为何绕到整本方案/多余修正往返”和“伏击取景/时间变体”，再接新素材标记、远景战役聚合。现代地名密度（正常底图不淡化）、层级横移轴/视窗与筛选端点分离、有证据曲线区域、素材自由组合和16组件性能轮转继续保留。
+
+可导入 private-books/chibi-canvas-layout-20261110/赤壁浮卡地图.readingbook，生产导出/隔离重导入过，含3视图，未混入原书库。选“赤壁·地图画布 · 浮卡版”，若跟随阅读位置没看到赤壁，范围菜单可选全书已有资料，仅显示已存分析。新鲜回滚 private-books/chibi-canvas-layout-20261110/install-before-local-iteration/ReadingBook-0.23.70-local-5ce6e3f.app（旧安装7f292c7f…），及当前原库/prefs/protection；原39文件38字节同，唯一Workspace x往返差<1e-15，偏好语义同，书/笔记/分析字节同。用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持且未提交。
+
+cleanup.py --apply已执行，不得重跑。9可重建诊断程序/更旧3833dfc回滚App退役，旧书库/prefs备份留存；33运行目录184文件逐成员验SHA归档closed-runtime.zip/index；25快照相对链接共享6份evidence-canonical，原路径仍可读，不得单删规范内容。5194非过期App私人文件、最新5ce回滚、正式ZIP、共享缓存/当前候选核SHA保持。清理8399976→7533268KiB，回收846.4MiB；批初净增约113.2MiB，后续文档微增以总入口为准。下一轮先读real1/real2 saved-case、公开请求/回执与冻结续接，不盲从头付费。下方为历史。
+<!-- chibi-canvas-layout-local:end -->
+
 <!-- chibi-presentation-efficiency-local:start -->
 本批已完成本机交付：Design/2026-11-10-presentation-efficiency-results.md；总入口 logs/chibi-presentation-efficiency-20261110/final-local-delivery.json。产品5ce6e3f（7产品Swift/11新增方法），包装来源887e20b，0.23.70/build101 ARM64本机迭代已替换安装，binary SHA 7f292c7fd3338d957f7b62e96049de88a991625f1290a399d7b57b94775415c3。两次原书104/1484、你好、2笔记、旧伴读、查找关闭及正常启动/退出已通过，最后书库退出。未推GitHub/云CI/Release；不重复安装、索要解锁或恢复旧库。
 
