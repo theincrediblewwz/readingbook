@@ -129,9 +129,20 @@ extension ReadingQuerySession {
         for (collection, field) in [("presences", "extent"), ("participations", "extent"), ("eventMetadata", "extent"), ("relationMetadata", "validity")] {
             for (index, row) in (knowledge[collection] as? [[String: Any]] ?? []).enumerated() {
                 guard let rawExtent = row[field] as? [String: Any] else { continue }
-                let extentData = try JSONSerialization.data(withJSONObject: rawExtent)
-                var extent = try JSONDecoder().decode(TemporalExtent.self, from: extentData)
+                // The transport span is checked and resolved separately. A
+                // pending span must not be misreported as a missing manual
+                // narrativeStart, especially while source refs need repair.
+                if rawExtent["sourceSpan"] != nil { continue }
                 let prefix = path + ".\(collection)[\(index)].\(field)"
+                let extentData = try JSONSerialization.data(withJSONObject: rawExtent)
+                var extent: TemporalExtent
+                do { extent = try JSONDecoder().decode(TemporalExtent.self, from: extentData) }
+                catch {
+                    if issues.count < 16 {
+                        issues.append(["path": prefix, "reason": "时间字段的类型、必填值或枚举不符；请核对本条extent结构。", "value": rawExtent])
+                    }
+                    continue
+                }
                 let ids = row["sourceAnchorIDs"] as? [String] ?? []
                 let sources = ids.compactMap { anchors[$0] }
                 var reasons: [(String, String)] = []
@@ -146,7 +157,9 @@ extension ReadingQuerySession {
                 catch { reasons.append(("", error.localizedDescription)) }
                 if extent.narrativeDomain == "source-order" {
                     let orders = Set(sources.map(\.order))
-                    if extent.narrativeStart.map(orders.contains) != true || !(extent.narrativeEnd.map(orders.contains) ?? true) {
+                    // Missing position is already reported by validateExtent.
+                    // Do not spend the bounded issue list twice on each row.
+                    if extent.narrativeStart.map({ !orders.contains($0) }) == true || !(extent.narrativeEnd.map(orders.contains) ?? true) {
                         reasons.append((".narrativeStart", "序号不属于本条引用的原文。可用sourceSpan交给软件按真实order定位，无需手算页码或章回。"))
                     }
                 }

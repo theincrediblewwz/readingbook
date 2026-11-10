@@ -54,7 +54,7 @@ public enum SpatialKnowledgeRuntime {
         let anchors = Dictionary(((project.readingExperience?.anchors ?? []) + (project.temporalKnowledge?.anchors ?? [])).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let records = try window.map { try TemporalKnowledgeRuntime.relations(in: project, within: $0, boundary: boundary) }
             ?? TemporalKnowledgeRuntime.relations(in: project, at: point, boundary: boundary)
-        let locations = Set(project.temporalKnowledge?.profile?.locationTypeIDs ?? []).union(["place", "location"])
+        let locations = TemporalKnowledgeRuntime.locationEntityIDs(in: project, boundary: boundary)
         let filteringTime = point != nil || window != nil
         var result: [SpatialRoute] = [], undated: [SpatialRoute] = []
         for record in records {
@@ -72,7 +72,7 @@ public enum SpatialKnowledgeRuntime {
             guard spatial.referenceIDs.allSatisfy({ byID[$0] != nil }),
                   relevantObjectIDs.map({ !$0.isDisjoint(with: ids + spatial.actorIDs + [spatial.eventID].compactMap { $0 }) }) ?? true else { continue }
             let places = ids.compactMap { byID[$0] }
-            guard places.count == ids.count, places.allSatisfy({ locations.contains($0.typeID) && $0.latitude != nil && $0.longitude != nil }) else { continue }
+            guard places.count == ids.count, places.allSatisfy({ locations.contains($0.id) && $0.latitude != nil && $0.longitude != nil }) else { continue }
             let coordinates = places.compactMap { p -> SpatialCoordinate? in
                 guard let lat = p.latitude, let lon = p.longitude, lat.isFinite, lon.isFinite,
                       (-90...90).contains(lat), (-180...180).contains(lon) else { return nil }

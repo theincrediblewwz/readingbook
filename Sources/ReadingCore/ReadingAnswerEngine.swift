@@ -354,7 +354,11 @@ enum ReadingAnswerEngine {
                     let failure = String(error.localizedDescription.prefix(400))
                     toolFailures.append(failure); toolFailures = Array(toolFailures.suffix(4))
                     var receipt: [String: Any] = ["ok": false, "error": failure]
-                    if let evidenceError = error as? ReadingProposalEvidenceError { receipt["evidenceIssues"] = evidenceError.issues }
+                    if let preflight = error as? ReadingProposalPreflightError {
+                        receipt["preflightIssues"] = preflight.issues
+                        receipt["repairRule"] = "按路径一起修正后重交；也可在单独知识提案顶层明确saveCoreOnly=true，先完整校验并保存基础资料，所有位置、时间和阅读附加内容原稿随回执保留待补。不能拆分文档、画布或方案的原子依赖；未保存内容不得称已完成。"
+                    }
+                    else if let evidenceError = error as? ReadingProposalEvidenceError { receipt["evidenceIssues"] = evidenceError.issues }
                     else if let referenceError = error as? ReadingSourceReferenceError {
                         receipt["sourceReferenceIssues"] = referenceError.issues
                         receipt["affectedSourceReferenceCount"] = referenceError.affectedCount

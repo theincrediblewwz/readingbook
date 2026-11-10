@@ -1,3 +1,13 @@
+<!-- chibi-form-preflight-local:start -->
+本批候选与真实验收：Design/2026-11-10-form-preflight-results.md；logs/chibi-form-preflight-20261110。产品build10已编译；core11 537方法/5502独立断言（非XCTest）、formPreflight7共享80/范围55/动态52/滚动25共212过，所检告警零；replay7一次23问题、核心35/16/10落盘与待补稿重启保持；frozenProjection5真实共享12地点/10路线身份13时间变体/16事件，两阶段可见。
+
+real8同一已保存输入、自然问题，新官方Flash 11HTTP/462946报告token；第2/3请求阶段展示complete=true，回答保存后仍就绪，CUA人工火攻613、伏击616..618、跳PDF617完成。原书库未参与；非从零生成、非精确史地路线。real7实际画面有行动线，旧核验强要事件圆点导致18HTTP反复；已修只认可真正匹配、已投影且可见的行动。事件source-order向外补齐仍须审阅可撤销；没有造日期/自动换经纬度。
+
+本批所有真实累计86HTTP/3893375报告token，包含失败和重复上下文，不等于计费金额。real4人为取消与real3预算收尾如实留存；real6/7故障和已完成成果均保存。公开日志不含Key/认证头/私有思考；下一轮先读现场而非从头重生成。
+
+当前安装与清理正在收尾，尚不能把下方历史安装记录当本批结果。安装脚本install-local.py需core11/formPreflight7/replay7/real8及real-native-acceptance通过；先提交自己的产品文件，快速核包再fresh备份安装。原书39文件、用户dirty SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，严禁恢复旧库。下方为历史批次。
+<!-- chibi-form-preflight-local:end -->
+
 <!-- chibi-identity-flow-local:start -->
 当前批次已完成本机交付：报告 Design/2026-11-10-identity-flow-results.md；总入口 logs/chibi-identity-flow-20261110/final-local-delivery.json。产品 c51c3ba + 636a153（8产品Swift、9新增方法），70/101 ARM64本地迭代已替换安装，候选来源 fd41388，binary SHA f5dedd803e2e8b28be9ea390390cfc3d7f26c997cb277947e4d3c96307c439f4。两次正常原书启动/退出完成，正式App已停止。未推GitHub/云CI/Release；无需重复安装、重复申请解锁或恢复旧库。
 

@@ -1267,8 +1267,9 @@ extension LibraryRepository {
                 receipts.append(ControlledDocumentReceipt(documentID: id, afterHash: afterHash, beforeHash: nil, backupDocumentID: nil))
             }
         }
-        let receipt = ControlledChangeReceipt(operationID: proposal.operationID, originBookID: canonical.id, digest: proposal.digest, grantID: grant.id, createdAt: Date(), undoneAt: nil,
+        var receipt = ControlledChangeReceipt(operationID: proposal.operationID, originBookID: canonical.id, digest: proposal.digest, grantID: grant.id, createdAt: Date(), undoneAt: nil,
             idMap: proposal.idMap, groups: proposal.groups, patches: prepared.patches, documents: receipts)
+        receipt.deferredKnowledge = proposal.deferredKnowledge
         var state = candidate.controlledChanges ?? ControlledChangeState()
         guard state.receipts.count < 1_000 else { throw ControlledChangeError.denied("此书整理历史已达安全上限；未丢弃任何旧回执。") }
         state.receipts.append(receipt); candidate.controlledChanges = state

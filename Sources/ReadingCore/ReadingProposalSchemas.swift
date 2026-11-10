@@ -164,7 +164,11 @@ enum ReadingProposalSchemas {
             for other in [ControlledChangeGroup.knowledge, .graph, .documents, .bookScheme] where other != group {
                 fields[other.rawValue] = ["type": "object", "description": "可选同笔原子搭配，结构可用capabilities_list(schemaFor:\"\(other.rawValue)\")查询；仍须宿主授予该组权限。", "additionalProperties": true]
             }
-            let parameters = object(["batch": object(fields, required: [group.rawValue])])
+            var parameters = object(["batch": object(fields, required: [group.rawValue])])
+            if group == .knowledge {
+                parameters = object(["batch": object(fields, required: [group.rawValue]),
+                    "saveCoreOnly": ["type": "boolean", "description": "可选且须明确为true：仅限knowledge单组，先保存基础要素/事件/关系/锚点，所有坐标、时间和阅读附加原稿随回执保留待补；不表示全部完成，不免除校验或已有资料审阅。"]], required: ["batch"])
+            }
             return ["type": "function", "function": ["name": name, "description": "按batch结构提出具体变更；新文档和挂载节点须同批，局部clientID不可跨批引用。已有笔记修改须真实expectedHash和宿主审阅；applied=true才表示已保存。", "parameters": parameters]]
         }
     }
@@ -282,7 +286,7 @@ extension ReadingQuerySession {
         var issues: [[String: String]] = []
         func scan(_ value: Any, path: String) {
             if let object = value as? [String: Any] {
-                if let id = object["unitID"] as? String, let quote = object["quote"] as? String, !read(id, quote), issues.count < 4 {
+                if let id = object["unitID"] as? String, let quote = object["quote"] as? String, !read(id, quote), issues.count < 32 {
                     var issue = ["path": String(path.prefix(240)), "unitID": String(id.prefix(200)), "quotePreview": String(quote.prefix(120)),
                         "reason": "引文不是这个已提供单元的逐字片段；不要把改写或其他页的文字放在这里。"]
                     let matches = Set(sourceExcerpts.filter { SourceTextLiteral.contains(quote, in: $0.1) }.map { $0.0 })

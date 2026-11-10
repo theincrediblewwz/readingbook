@@ -52,8 +52,13 @@ public struct ReadingEventPresentationPlan: Sendable, Equatable {
         let maps = workspace.mapViewports ?? []
         if maps.isEmpty { missing.append("map_observation") }
         else {
-            if !maps.contains(where: { $0.objectIDs.contains(eventID) }) { missing.append("event_visible") }
             let projected = Set(maps.flatMap(\.projectedRouteIDs)), visible = Set(maps.flatMap(\.visibleRouteIDs))
+            // A place-based map can represent an event through its actually
+            // drawn action instead of a second event marker. Selection or a
+            // projected-but-occluded route alone is still insufficient.
+            let eventMarker = maps.contains { $0.objectIDs.contains(eventID) }
+            let eventAction = !Set(knownRouteIDs).intersection(projected).intersection(visible).isEmpty
+            if !eventMarker && !eventAction { missing.append("event_visible") }
             if !Set(knownRouteIDs).isSubset(of: projected) { missing.append("known_actions_projected") }
             if !Set(knownRouteIDs).isSubset(of: visible) { missing.append("known_actions_visible") }
         }

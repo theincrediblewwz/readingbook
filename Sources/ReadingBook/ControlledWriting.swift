@@ -28,7 +28,9 @@ struct PendingAIChange: Identifiable {
     func prepareReadingProposal(_ name: String, data: Data, grant: ControlledWriteGrant, snapshot: ReadingQuerySnapshot) async throws -> Data {
         try Task.checkCancellation()
         guard bookID == grant.bookID, book?.sourceHash == grant.sourceHash else { throw ControlledChangeError.conflict("书籍已改变，本次整理未写入其他书。") }
-        let batch = try ReadingProposalTools.decode(name: name, arguments: data)
+        let prepared = try ReadingProposalPreparation.prepare(name: name, arguments: data)
+        var batch = try ReadingProposalTools.decode(name: name, arguments: prepared.arguments)
+        batch.deferredKnowledge = prepared.deferred
         let knowledgeEvidence = (batch.knowledge?.entities ?? []).flatMap(\.evidence)
             + (batch.knowledge?.events ?? []).flatMap(\.evidence) + (batch.knowledge?.relations ?? []).flatMap(\.evidence)
         let documentEvidence = (batch.documents?.create ?? []).flatMap { $0.evidence ?? [] }
@@ -65,6 +67,10 @@ struct PendingAIChange: Identifiable {
             result["scope"] = "data_changes_only"
         }
         let mappings = receipt?.idMap ?? [:]
+        if let deferred = receipt?.deferredKnowledge ?? proposal.deferredKnowledge {
+            result["deferred"] = ["status": "held_not_applied", "counts": deferred.heldCounts,
+                "originalRetained": true, "location": "transaction_receipt", "note": "仅基础资料已进入本次保存；附加原稿保留，补齐后须重交，不表示地图或时间轴已完成。"] as [String: Any]
+        }
         var included: [String: String] = [:]
         result["idMapCount"] = mappings.count; result["idMapPartial"] = !mappings.isEmpty
         for key in receipt?.inlineMappingKeys ?? mappings.keys.sorted() {

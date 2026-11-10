@@ -522,12 +522,22 @@ public enum TemporalKnowledgeRuntime {
 }
 
 public extension TemporalKnowledgeRuntime {
+    /// Place roles already declared in shared events survive generated type
+    /// IDs. A separate, adopted book template is not required to use those
+    /// same locations on a map. Participants alone do not acquire this role.
+    static func locationEntityIDs(in project: BookProject, boundary: KnowledgeReadBoundary = .all) -> Set<String> {
+        let locationTypes = Set(project.temporalKnowledge?.profile?.locationTypeIDs ?? []).union(["place", "location"])
+        return Set(project.entities.filter { locationTypes.contains($0.typeID) }.map(\.id))
+            .union(project.events.filter { admits($0.evidence, boundary: boundary) }.flatMap(\.placeIDs))
+    }
+
     /// Called by the package writer/loader. No state means no migration and no
     /// new restrictions on old records that predate the temporal contract.
     static func validateStoredState(in project: BookProject) throws {
         guard let state = project.temporalKnowledge else { return }
         guard state.schemaVersion == 1 else { throw invalid("不支持的时态知识版本。") }
         let entities = Dictionary(project.entities.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let locationIDs = locationEntityIDs(in: project)
         let events = Set(project.events.map(\.id)), relations = Set(project.relations.map(\.id))
         let types = Set(project.types.map(\.id)), methods = Set(project.methods.map(\.id))
         try ids(state.anchors.map(\.id), maximum: 100_000)
@@ -578,7 +588,7 @@ public extension TemporalKnowledgeRuntime {
                   presence.eventID.map(events.contains) ?? true else { throw invalid("出现记录引用了不存在的实体或事件。") }
             if let placeID = presence.placeID {
                 guard let place = entities[placeID], placeID != presence.entityID,
-                      place.typeID == "place" || (state.profile?.locationTypeIDs.contains(place.typeID) ?? false) else { throw invalid("出现地点须引用已声明的地点实体，不能把任意参与者当地点。") }
+                      locationIDs.contains(place.id) else { throw invalid("出现地点须引用已声明的地点实体，不能把任意参与者当地点。") }
             }
             try text(presence.action, maximum: 4000)
             try validateExtent(presence.extent)
@@ -626,10 +636,9 @@ public extension TemporalKnowledgeRuntime {
                       let shared = spatialRelations[relation.relationID], shared.fromID != shared.toID else {
                     throw invalid("地图行动须引用已有参与者、事件和不同的起止地点。")
                 }
-                let locations = Set(state.profile?.locationTypeIDs ?? []).union(["place", "location"])
                 let places = [shared.fromID] + spatial.viaPlaceIDs + [shared.toID]
                 guard places.count == Set(places).count, places.allSatisfy({ id in
-                    guard let place = entities[id] else { return false }; return locations.contains(place.typeID)
+                    entities[id] != nil && locationIDs.contains(id)
                 }) else { throw invalid("地图行动的起点、途经点和终点须为不同的地点实体。") }
             }
             try provenance(relation.sourceAnchorIDs, relation.assertion, relation.explanation, extent: relation.validity)

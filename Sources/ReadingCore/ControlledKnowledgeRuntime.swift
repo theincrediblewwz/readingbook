@@ -240,7 +240,24 @@ public enum ControlledKnowledgeRuntime {
         old.typeID = try filling(old.typeID, value.typeID, field: "typeID")
         old.parentEventID = try filling(old.parentEventID, value.parentEventID, field: "parentEventID")
         old.phaseOrder = try filling(old.phaseOrder, value.phaseOrder, field: "phaseOrder")
-        old.extent = try filling(old.extent, value.extent, field: "extent")
+        if let before = old.extent, let after = value.extent,
+           before.precision == .narrative, after.precision == .narrative,
+           before.narrativeDomain == "source-order", after.narrativeDomain == "source-order",
+           before.start == nil, before.end == nil, before.calendar == nil,
+           after.start == nil, after.end == nil, after.calendar == nil,
+           before.assertion == after.assertion, before.uncertainty == after.uncertainty,
+           let start = before.narrativeStart, let nextStart = after.narrativeStart,
+           nextStart <= start, (after.narrativeEnd ?? nextStart) >= (before.narrativeEnd ?? start) {
+            // Adding actually cited earlier/later passages enriches the same
+            // source-order interval, without replacing a date or excluding the
+            // old position. Interactive changes still produce a before/after
+            // patch and require the normal host review; undo retains the old
+            // complete metadata. Final provenance validation checks both ends.
+            var extent = after
+            let explanation = merge(before.explanation ?? "", after.explanation ?? "")
+            extent.explanation = explanation.isEmpty ? nil : explanation
+            old.extent = extent
+        } else { old.extent = try filling(old.extent, value.extent, field: "extent") }
         guard old.kind == value.kind || old.kind == "event" || value.kind == "event" else {
             throw ControlledChangeError.conflict("事件\(value.eventID)的kind与已有分类冲突；保留原值。")
         }

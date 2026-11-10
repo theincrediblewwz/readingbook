@@ -23,7 +23,7 @@ extension ReadingQuerySession {
                           }) } ?? false
                     guard let source, supplied, extra.isEmpty else {
                         affected += 1
-                        if issues.count < 4 {
+                        if issues.count < 32 {
                             var example: [String: String]?
                             if supplied, let reference {
                                 example = ["sourceRef": reference]

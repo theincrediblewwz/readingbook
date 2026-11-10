@@ -164,8 +164,9 @@ final class ReadingProposalEvidenceTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: ["batch": ["knowledge": ["anchors": rows]]])
         do { _ = try query.resolveSourceReferences(in: data); XCTFail("Contradictory fields cannot be silently removed") }
         catch let error as ReadingSourceReferenceError {
-            XCTAssertEqual(error.affectedCount, 24); XCTAssertEqual(error.issues.count, 4)
+            XCTAssertEqual(error.affectedCount, 24); XCTAssertEqual(error.issues.count, 24)
             XCTAssertEqual(error.issues[0]["path"] as? String, "$.batch.knowledge.anchors[0]")
+            XCTAssertEqual(error.issues[23]["path"] as? String, "$.batch.knowledge.anchors[23]")
             XCTAssertEqual(error.issues[0]["removeFields"] as? [String], ["quote", "unitID"])
             XCTAssertEqual(error.issues[0]["sourceRefIsValid"] as? Bool, true)
             let example = try XCTUnwrap(error.issues[0]["correctedShapeExample"] as? [String: String])

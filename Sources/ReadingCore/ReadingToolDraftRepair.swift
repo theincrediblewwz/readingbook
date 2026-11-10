@@ -143,8 +143,15 @@ extension ReadingQuerySession {
         } catch { lastRepairOffer = draft.offer; throw error }
     }
     mutating func retainRejectedDraft(name: String, arguments: [String: Any], error: Error) {
+        // A later repository validation must retain the *repaired* arguments,
+        // just as the earlier source/shape checks do. Otherwise the next patch
+        // silently starts from the older rejected draft and loses valid edits.
+        let invalidHostValue: Bool
+        if error is ReadingError { invalidHostValue = true }
+        else if let controlled = error as? ControlledChangeError, case .invalid = controlled { invalidHostValue = true }
+        else { invalidHostValue = false }
         guard repairableToolNames.contains(name),
-              error is ReadingProposalTemporalError || error is ReadingProposalEvidenceError || error is ReadingSourceReferenceError ||
+              invalidHostValue || error is ReadingProposalPreflightError || error is ReadingProposalTemporalError || error is ReadingProposalEvidenceError || error is ReadingSourceReferenceError ||
                 error is ReadingProposalReferenceError || error is ReadingProposalMetadataError || error is ReadingProposalShapeError || error is ReadingCompositionError || error is DecodingError,
               let data = try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys]), data.count <= (name == "component_show" ? 32_768 : 262_144) else { return }
         let draft = ReadingToolDraft(tool: name, arguments: data)

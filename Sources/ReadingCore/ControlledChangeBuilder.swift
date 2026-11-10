@@ -47,9 +47,16 @@ enum ControlledChangeBuilder {
         let patches = try diff(from: project, to: candidate)
         guard !patches.isEmpty || !bodies.isEmpty else { throw ControlledChangeError.invalid("此批次没有实际变更。") }
         let approval = !edits.isEmpty || batch.bookScheme != nil || patches.contains { $0.before != nil }
-        let summary = try ControlledChangeSummary.describe(patches, from: project, to: candidate)
-        let proposal = ControlledChangeProposal(id: proposalID, operationID: operationID, bookID: project.id, digest: try ControlledChangeCoding.hash(batch), baseRevision: baseRevision,
+        var summary = try ControlledChangeSummary.describe(patches, from: project, to: candidate)
+        if let deferred = batch.deferredKnowledge {
+            guard groups == [.knowledge], deferred.originalArguments.count <= 262_144 else {
+                throw ControlledChangeError.invalid("待补原稿只能随单独知识提案保留，不能拆开其他操作。")
+            }
+            summary.append("先保存基础资料；待补 \(deferred.heldCounts.values.reduce(0, +)) 项位置、时间或阅读附加内容，完整原稿随回执保留，未进入有效资料。")
+        }
+        var proposal = ControlledChangeProposal(id: proposalID, operationID: operationID, bookID: project.id, digest: try ControlledChangeCoding.hash(batch), baseRevision: baseRevision,
             groups: groups, requiresConfirmation: approval, idMap: identity.values, summary: summary, documents: previews)
+        proposal.deferredKnowledge = batch.deferredKnowledge
         return PreparedControlledChange(proposal: proposal, project: candidate, bodies: bodies, beforeBodies: beforeBodies, patches: patches)
     }
 

@@ -136,6 +136,9 @@ public struct ControlledBookSchemeChanges: Codable, Sendable {
     public init(types: [EntityType]? = nil, methods: [ReadingMethod]? = nil, views: [ViewDefinition]? = nil, plan: ReadingPlan? = nil, profile: BookProfile? = nil) { self.types = types; self.methods = methods; self.views = views; self.plan = plan; self.profile = profile }
 }
 public struct ControlledChangeBatch: Codable, Sendable {
+    // Host-issued after an explicit knowledge-only split. Model envelopes are
+    // shape-checked and cannot directly inject this bookkeeping field.
+    public var deferredKnowledge: DeferredKnowledgeProposal? = nil
     public var knowledge: ControlledKnowledgeChanges?
     public var graph: ControlledGraphChanges?
     public var documents: ControlledDocumentChanges?
@@ -148,6 +151,7 @@ public struct ControlledDocumentPreview: Codable, Sendable {
     public var expectedHash: String?; public var afterHash: String
 }
 public struct ControlledChangeProposal: Codable, Sendable {
+    public var deferredKnowledge: DeferredKnowledgeProposal? = nil
     public let id: String; public let operationID: String; public let bookID: String; public let digest: String; public let baseRevision: String
     public let groups: [ControlledChangeGroup]; public let requiresConfirmation: Bool
     public let idMap: [String: String]; public let summary: [String]; public let documents: [ControlledDocumentPreview]
@@ -167,6 +171,7 @@ public struct ControlledDocumentReceipt: Codable, Sendable {
     public var documentID: String; public var afterHash: String; public var beforeHash: String?; public var backupDocumentID: String?
 }
 public struct ControlledChangeReceipt: Codable, Identifiable, Sendable {
+    public var deferredKnowledge: DeferredKnowledgeProposal? = nil
     public var id: String { operationID }
     public var operationID: String; public var originBookID: String; public var digest: String; public var grantID: String
     public var createdAt: Date; public var undoneAt: Date?

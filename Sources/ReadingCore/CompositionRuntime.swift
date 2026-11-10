@@ -604,6 +604,7 @@ public enum CompositionRuntime {
                                within window: TemporalQueryWindow?, scope: CompositionScope, queries: inout TemporalQueryCache) throws -> [CompositionMapPoint] {
         var result: [CompositionMapPoint] = []
         var seen = Set<String>()
+        let locations = TemporalKnowledgeRuntime.locationEntityIDs(in: base.project)
         func append(id: String, target: String, place: TypedObject, title: String, subtitle: String, evidence: [Evidence], kind: String,
                     markerKind: String? = nil, parentID: String? = nil) {
             guard let latitude = place.latitude, let longitude = place.longitude, latitude.isFinite, longitude.isFinite,
@@ -617,10 +618,9 @@ public enum CompositionRuntime {
             try Task.checkCancellation()
             guard let id = row.objectID, let object = base.objectsByID[id] else { continue }
             if object.kind == .entity {
-                let locations = Set(base.project.temporalKnowledge?.profile?.locationTypeIDs ?? []).union(["place", "location"])
                 // A person's unqualified stored coordinate is not a dated
                 // presence. Fixed geographic objects may remain on the map.
-                if locations.contains(object.typeID) {
+                if locations.contains(object.id) {
                     append(id: "entity." + id, target: id, place: object, title: object.name, subtitle: object.locationNote ?? "", evidence: object.evidence, kind: "entityLocation")
                 }
                 let snapshot = try queries.entity(id: id, scope: scope, base: base, point: point, window: window)

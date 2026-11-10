@@ -132,14 +132,20 @@ final class ReadingEventPresentationTests: XCTestCase {
         let count = await feed.calls.count; XCTAssertEqual(count, 3); XCTAssertNil(try s.presentationRepairFeedback())
         XCTAssertNotNil(s.presentationIncompleteNotice()); XCTAssertEqual(s.hostReceipts.count, 4)
     }
-    func testSelectionOrRouteVisibilityEachRemainSeparateRequirements() throws {
+    func testSelectionAndMatchingRenderedEventRepresentationsAreVerified() throws {
         let b = try fixture(), plan = try ReadingEventPresentationPlan.resolve(eventID: "phase1", in: b, snapshot: .freeze(scope: .book, in: b))
         var value = workspace(b); value.selectedObjectIDs = []
         XCTAssertEqual(plan.missing(in: value), ["event_selection"])
         value = workspace(b); value.mapViewports?[0].visibleRouteIDs = []
         XCTAssertEqual(plan.missing(in: value), ["known_actions_visible"])
         value = workspace(b); value.mapViewports?[0].objectIDs = []
-        XCTAssertEqual(plan.missing(in: value), ["event_visible"])
+        XCTAssertEqual(plan.missing(in: value), [], "实际可见的该事件行动线可以表达事件，不必重复画点")
+        value.mapViewports?[0].visibleRouteIDs = ["unrelated"]
+        value.mapViewports?[0].projectedRouteIDs = ["unrelated"]
+        XCTAssertEqual(plan.missing(in: value), ["event_visible", "known_actions_projected", "known_actions_visible"])
+        var noActions = b; noActions.temporalKnowledge?.relationMetadata = []
+        let noActionPlan = try ReadingEventPresentationPlan.resolve(eventID: "phase1", in: noActions, snapshot: .freeze(scope: .book, in: noActions))
+        XCTAssertEqual(noActionPlan.missing(in: value), ["event_visible"])
     }
     func testReviewInvalidatesOldGoalRetryStateAndObservation() async throws {
         let b = try fixture(), snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: b)
