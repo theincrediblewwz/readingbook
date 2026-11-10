@@ -137,8 +137,8 @@ public actor LibraryRepository {
         try saveCanonicalProject(project)
     }
 
-    /// A request's own append-only view declaration must not invalidate its
-    /// still-current analysis grant. Any intervening content/layout edit keeps
+    /// A request's own atomic component configuration change must not invalidate its
+    /// still-current analysis grant. Any intervening change by another writer keeps
     /// the original conflict protection; other requests' grants stay unchanged.
     func followOwnComponentAppend(grant: ControlledWriteGrant?, before: BookProject, after: BookProject) throws {
         guard let grant, var session = changeGrants[grant.id], session.grant == grant,

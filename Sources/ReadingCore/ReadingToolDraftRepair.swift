@@ -106,7 +106,7 @@ extension ReadingQueryToolCatalog {
     static var draftRepairSchema: [String: Any] {
         function(draftRepairName, "修正失败回执中repair所指的草案，再交回原工具完整校验与审阅。只提交错误字段，不重发整份提案；不是批准或提交权限，不能修改已保存数据。", [
             "draftID": ["type": "string", "maxLength": 128],
-            "targetTool": ["type": "string", "enum": ReadingQueryToolCatalog.proposalNames.sorted(), "description": "仅在提案业务组放错时填写本次已授权的对应提案工具；不是新授权，不用于界面工具。"],
+            "targetTool": ["type": "string", "enum": ReadingQueryToolCatalog.proposalNames.union(["component_show"]).sorted(), "description": "通常省略；可重复原工具名。仅提案业务组放错时切换到本次已授权的对应提案工具，不扩大授权。"],
             "edits": ["type": "array", "minItems": 1, "maxItems": 32, "items": ["type": "object", "additionalProperties": false,
                 "properties": ["operation": ["type": "string", "enum": ["set", "remove", "move"]],
                     "from": ["type": "string", "maxLength": 512, "description": "move的已有内容来源JSON Pointer，不与value混用。"],
@@ -130,9 +130,9 @@ extension ReadingQuerySession {
             let target: String
             if let raw = arguments["targetTool"] {
                 guard let requested = raw as? String,
-                      ReadingQueryToolCatalog.proposalNames.contains(draft.tool),
-                      proposalAccess?.proposalTools.contains(requested) == true,
-                      ReadingQueryToolCatalog.proposalNames.contains(requested) else {
+                      (requested == draft.tool || (ReadingQueryToolCatalog.proposalNames.contains(draft.tool) &&
+                      proposalAccess?.proposalTools.contains(requested) == true &&
+                      ReadingQueryToolCatalog.proposalNames.contains(requested))) else {
                     throw invalid("targetTool须为本次已授权的提案工具；不能切换到未授权操作。")
                 }
                 target = requested

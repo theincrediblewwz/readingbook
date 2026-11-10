@@ -35,6 +35,33 @@ final class MapViewportTests: XCTestCase {
             XCTAssertEqual(result.map { Double($0.width * $0.height) } ?? 0, largest)
         }
     }
+    func testAspectFitAvoidsLargerButShallowStrip() throws {
+        let viewport = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        let blockers = [CGRect(x: 0, y: 280, width: 550, height: 320)]
+        let area = try XCTUnwrap(SpatialViewportVisibility.availableRect(in: viewport, excluding: blockers, padding: 0))
+        let square = try XCTUnwrap(SpatialViewportVisibility.availableRect(in: viewport, excluding: blockers, padding: 0, contentAspectRatio: 1))
+        XCTAssertGreaterThan(area.width * area.height, square.width * square.height)
+        XCTAssertGreaterThan(min(square.width, square.height), min(area.width, area.height))
+        XCTAssertTrue(blockers.allSatisfy { !$0.intersects(square) })
+        for invalid in [Double.nan, Double.infinity, 0, -1] {
+            XCTAssertNil(SpatialViewportVisibility.availableRect(in: viewport, excluding: [], contentAspectRatio: invalid))
+        }
+    }
+    func testAspectFitMatchesIndependentGridOracleForSeveralTargetShapes() {
+        let viewport = CGRect(x: 0, y: 0, width: 6, height: 6)
+        let blocks = [CGRect(x: 0, y: 3, width: 3, height: 3), CGRect(x: 4, y: 0, width: 2, height: 1)]
+        for ratio in [0.4, 1, 2.5] {
+            var expected = 0.0
+            for x in 0..<6 { for y in 0..<6 { for w in 1...(6-x) { for h in 1...(6-y) {
+                let rect = CGRect(x: x, y: y, width: w, height: h)
+                if blocks.allSatisfy({ let overlap = $0.intersection(rect); return overlap.isNull || overlap.width <= 0 || overlap.height <= 0 }) {
+                    expected = max(expected, min(Double(w) / ratio, Double(h)))
+                }
+            } } } }
+            let actual = SpatialViewportVisibility.availableRect(in: viewport, excluding: blocks, padding: 0, contentAspectRatio: ratio)
+            XCTAssertEqual(actual.map { min($0.width / ratio, $0.height) } ?? 0, expected)
+        }
+    }
     func testPointVisibilityExcludesViewportAndFloatingCards() {
         let rect = CGRect(x: 0, y: 0, width: 100, height: 100), card = CGRect(x: 40, y: 20, width: 60, height: 60)
         XCTAssertTrue(SpatialViewportVisibility.contains(.init(x: 20, y: 50), in: rect, excluding: [card]))

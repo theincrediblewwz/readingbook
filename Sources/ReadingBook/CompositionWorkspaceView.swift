@@ -415,6 +415,13 @@ struct CompositionWorkspaceView: View {
                     Image(systemName: "arrow.counterclockwise").frame(width: 44, height: 44)
                 }.buttonStyle(ReadingQuietButtonStyle()).help("取消选择和时间筛选，显示本范围全部资料")
                     .accessibilityLabel("显示全部内容")
+                    .contextMenu {
+                        if let view = definition, view.previousLayout != nil {
+                            Button("恢复上次布局", systemImage: "rectangle.2.swap") {
+                                Task { await store.restoreReadingComponentLayout(view.id) }
+                            }
+                        }
+                    }
                 Button { store.route = "reader" } label: { Label("原文", systemImage: "book").frame(minHeight: 44).padding(.horizontal, 8) }
                     .buttonStyle(ReadingQuietButtonStyle()).help("回到当前阅读位置")
             }.padding(4).frame(width: controls.width, height: controls.height).readingGlass(radius: 28)
@@ -1093,15 +1100,16 @@ private struct CompositionMap: View {
               let west = matches.map(\.longitude).min(), let east = matches.map(\.longitude).max() else {
             finishFit(request.id, "这些对象不在当前地图投影内。"); return
         }
-        guard let available = SpatialViewportVisibility.availableRect(in: CGRect(origin: .zero, size: geometry.size),
-            excluding: mapExclusions(geometry), padding: 28), available.width >= 60, available.height >= 60 else {
-            finishFit(request.id, "地图可见空间被悬浮卡片遮挡，请先收起卡片；未把遮挡当作可见。"); return
-        }
         let northwest = MKMapPoint(CLLocationCoordinate2D(latitude: north, longitude: west))
         let southeast = MKMapPoint(CLLocationCoordinate2D(latitude: south, longitude: east))
         let minimum = MKMapSize.world.width * 0.3 / 360
-        let scale = max(max(minimum, abs(southeast.x - northwest.x) * 1.3) / available.width,
-                        max(minimum, abs(southeast.y - northwest.y) * 1.3) / available.height)
+        let contentWidth = max(minimum, abs(southeast.x - northwest.x) * 1.3)
+        let contentHeight = max(minimum, abs(southeast.y - northwest.y) * 1.3)
+        guard let available = SpatialViewportVisibility.availableRect(in: CGRect(origin: .zero, size: geometry.size),
+            excluding: mapExclusions(geometry), padding: 28, contentAspectRatio: contentWidth / contentHeight), available.width >= 60, available.height >= 60 else {
+            finishFit(request.id, "地图可见空间被悬浮卡片遮挡，请先收起卡片；未把遮挡当作可见。"); return
+        }
+        let scale = max(contentWidth / available.width, contentHeight / available.height)
         let size = MKMapSize(width: geometry.size.width * scale, height: geometry.size.height * scale)
         // Place the fitted content in usable space, not underneath a floating
         // inspector. Map points include Mercator projection and retain aspect.

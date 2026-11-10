@@ -86,6 +86,7 @@ struct ReadingQueryHostOwner {
         }
         let route: String
         var created = false
+        var layoutAdjusted = false
         let composition = request.resolvedComposition
         if request.viewID != nil {
             guard let view = savedView,
@@ -93,6 +94,15 @@ struct ReadingQueryHostOwner {
                 return try viewToolResult("unsupported", "本书没有这个已启用的组件视图；没有改动配置。")
             }
             route = view.id
+            if request.layout != nil || request.restoreLayout == true {
+                guard let revision = request.layoutRevision else { throw ReadingError.invalid("请先取得当前布局版本。") }
+                let saved = try await repository.updateReadingComponentLayout(bookID: book.id, sourceHash: book.sourceHash,
+                    viewID: view.id, expectedRevision: revision, layout: request.layout, rootID: request.rootID,
+                    restore: request.restoreLayout == true, grant: session.grant)
+                guard owner.matches(self) else { throw CancellationError() }
+                layoutAdjusted = saved.view.composition != view.composition
+                if layoutAdjusted { publish(saved.project) }
+            }
         } else if descriptor.permanent {
             guard composition == nil else { throw ReadingError.invalid("这个组件不接受组合定义。") }
             route = descriptor.rendererID ?? descriptor.kind.rawValue
@@ -150,11 +160,17 @@ struct ReadingQueryHostOwner {
             }
         }
         func openedResult() throws -> Data {
-            try viewToolResult("success", created ? "已加入并打开组件；显示已有资料，尚未新增分析。" : "已打开已有组件；没有重复创建。",
-                extra: ["rendererID": descriptor.id, "componentTitle": self.book?.views.first(where: { $0.id == route })?.title ?? descriptor.title, "viewID": route, "created": created, "opened": true, "analysisCreated": false,
-                    "confirmationOnly": request.confirmationOnly == true,
-                    "sourceScope": session.snapshot?.displayTitle ?? "跟随阅读位置",
-                    "displayPurpose": descriptor.purpose])
+            var extra: [String: Any] = ["rendererID": descriptor.id, "componentTitle": self.book?.views.first(where: { $0.id == route })?.title ?? descriptor.title,
+                "viewID": route, "created": created, "opened": true, "analysisCreated": false, "layoutAdjusted": layoutAdjusted,
+                "confirmationOnly": request.confirmationOnly == true, "sourceScope": session.snapshot?.displayTitle ?? "跟随阅读位置", "displayPurpose": descriptor.purpose]
+            if let view = self.book?.views.first(where: { $0.id == route }), let definition = view.composition {
+                extra["layoutRevision"] = try ReadingComponentLayout.revision(definition)
+                extra["rootID"] = definition.rootID; extra["canRestoreLayout"] = view.previousLayout != nil
+                let encoded = try JSONEncoder().encode(definition.layout)
+                if encoded.count <= 10_000 { extra["layout"] = try JSONSerialization.jsonObject(with: encoded) }
+                else { extra["layoutUnavailable"] = "布局超过单次回执大小，未返回完整布局，请勿猜测或覆盖。" }
+            }
+            return try viewToolResult("success", layoutAdjusted ? "已保存现有组件的新布局；资料绑定保持，右键地图的全部内容按钮可恢复上次布局。" : (created ? "已加入并打开组件；显示已有资料，尚未新增分析。" : "已打开已有组件；没有重复创建。"), extra: extra)
         }
         if renderedComponentPresentation?.matches(self, route: route) == true {
             // Repeated same-route intentions can be coalesced by onChange.
@@ -174,4 +190,19 @@ struct ReadingQueryHostOwner {
         return try viewToolResult("busy", created ? "组件配置已加入，但界面尚未完成打开。" : "界面尚未完成打开。",
             extra: ["viewID": route, "created": created, "opened": false, "analysisCreated": false])
     }
+    func restoreReadingComponentLayout(_ viewID: String) async {
+        guard let book, let view = book.views.first(where: { $0.id == viewID }), let composition = view.composition,
+              view.previousLayout != nil, !editorDirty, positionNoteRequest == nil, positionNoteBinding == nil,
+              !isCommittingLocalWrite, !isSavingDocument, !storageState.working else { return }
+        let owner = ReadingQueryHostOwner(root: libraryRootURL, bookID: book.id, sourceHash: book.sourceHash, runID: nil)
+        isCommittingLocalWrite = true
+        defer { isCommittingLocalWrite = false }
+        do {
+            let saved = try await repository.updateReadingComponentLayout(bookID: book.id, sourceHash: book.sourceHash,
+                viewID: viewID, expectedRevision: ReadingComponentLayout.revision(composition), layout: nil, restore: true)
+            guard owner.matches(self) else { return }
+            publish(saved.project); activity = "已恢复上次布局，书籍资料保持不变。"
+        } catch { if owner.matches(self) { errorMessage = error.localizedDescription } }
+    }
+
 }

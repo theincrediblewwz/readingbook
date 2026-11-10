@@ -26,15 +26,20 @@ public enum CompositionSchema {
             "title": text, "selectionGroup": id, "timeGroup": id,
             "columns": array(column, minimum: 1, maximum: 8),
             "routeSourceID": id.merging(["description": "geo.map可另绑定collection=relations的行动数据源，与地图共用selectionGroup/timeGroup；事件标记和行动路线独立取数，没有eventID的行动也可显示，不替它编造事件关联。省略只画主数据源相关路线。"], uniquingKeysWith: { _, next in next })], required: ["id", "primitive", "sourceID"])
-        let node = object(["id": id, "kind": enumeration(["row", "column", "tabs", "overlay", "part"]).merging(["description": "overlay按children顺序叠放：首项为主画布，其后为浮动卡片；首项是geo.map时地图铺满可用空间。每个元件各有kind=part的布局节点，children引用layout.id，partID引用parts.id。"], uniquingKeysWith: { _, new in new }), "children": array(id, maximum: 8),
-            "preferredHeight": ["type": "number", "minimum": 120, "maximum": 640, "description": "仅overlay浮卡的屏幕高度偏好；内容可滚动，省略按元件紧凑显示。"],
-            "partID": id, "fraction": ["type": "number", "minimum": 0.1, "maximum": 0.9],
-            "dock": enumeration(FloatingPanelDock.allCases.map(\.rawValue)),
-            "presentation": enumeration(["docked", "contextual"]).merging(["description": "仅overlay浮层：docked常驻停靠，contextual在本层联动组选中对象时就近出现，点击画布空白收起；省略沿用常驻。fraction控制卡片宽度比例。"], uniquingKeysWith: { _, new in new })], required: ["id", "kind"])
+        let node = layoutNode
         return object(["version": ["type": "integer", "enum": [1]], "sources": array(source, minimum: 1, maximum: 12),
             "parts": array(part, minimum: 1, maximum: 24), "layout": array(node, minimum: 1, maximum: 48), "rootID": id],
             required: ["sources", "parts", "layout", "rootID"])
             .merging(["description": "省略的selectionGroup/timeGroup沿用相连数据源与元件唯一明确的组；均未指定时用main，显式不同的组不会自动合并。"], uniquingKeysWith: { _, new in new })
+    }
+    static var layoutNode: [String: Any] {
+        let id: [String: Any] = ["type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.-]+$"]
+        return object(["id": id, "kind": enumeration(["row", "column", "tabs", "overlay", "part"]).merging(["description": "overlay按children顺序叠放：首项为主画布，其后为浮动卡片；首项是geo.map时地图铺满可用空间。每个元件各有kind=part的布局节点，children引用layout.id，partID引用parts.id。"], uniquingKeysWith: { _, new in new }), "children": array(id, maximum: 8),
+            "preferredHeight": ["type": "number", "minimum": 120, "maximum": 640, "description": "仅overlay浮卡的屏幕高度偏好；内容可滚动，省略按元件紧凑显示。"],
+            "partID": id, "fraction": ["type": "number", "minimum": 0.1, "maximum": 0.9],
+            "dock": enumeration(FloatingPanelDock.allCases.map(\.rawValue)),
+            "presentation": enumeration(["docked", "contextual"]).merging(["description": "仅overlay浮层：docked常驻停靠，contextual在本层联动组选中对象时就近出现，点击画布空白收起；省略沿用常驻。fraction控制卡片宽度比例。"], uniquingKeysWith: { _, new in new })], required: ["id", "kind"])
+
     }
     private static func object(_ properties: [String: Any], required: [String]) -> [String: Any] {
         ["type": "object", "properties": properties, "required": required, "additionalProperties": false]

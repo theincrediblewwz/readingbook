@@ -93,6 +93,17 @@ final class ReadingToolDraftRepairTests: XCTestCase {
         do { _ = try await q.execute(name: "tool_draft_repair", arguments: patch(second.id, "/title", "again"), maximumBytes: 16_000); XCTFail("consumed") } catch { }
         let after = await host.calls.count; XCTAssertEqual(after, 1)
     }
+    func testExplicitSameTargetRepairsComponentWithoutProposalPermission() async throws {
+        let value = book(), host = DraftRepairHost()
+        var q = try query(value, host: .init(viewActions: ["component_show"], performViewAction: { await host.show($0, $1) }))
+        do { _ = try await q.execute(name: "component_show", arguments: invalidComposition(), maximumBytes: 16_000); XCTFail("invalid") } catch { }
+        let draft = try XCTUnwrap(q.rejectedToolDraft)
+        let result = try await q.execute(name: "tool_draft_repair", arguments: ["draftID":draft.id,"targetTool":"component_show","edits":[
+            ["operation":"set","path":"/composition/parts/2/timeGroup","value":"main"],
+            ["operation":"set","path":"/composition/layout/0/children/0","value":"map-frame"]]], maximumBytes:16_000)
+        XCTAssertTrue(result.contains("repairedTool")); XCTAssertNil(q.rejectedToolDraft)
+        let count = await host.calls.count; XCTAssertEqual(count, 1)
+    }
     func testPatchCannotTurnUnsharedSourceIntoEvidenceOrAddHostApproval() async throws {
         let value = book(), host = DraftRepairHost()
         let access = ReadingProposalToolAccess(proposalTools: ["knowledge_changes_propose"], prepare: { await host.prepare($0, $1) })

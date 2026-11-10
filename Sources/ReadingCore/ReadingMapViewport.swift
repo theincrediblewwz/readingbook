@@ -59,10 +59,10 @@ public enum SpatialViewportVisibility {
     /// Largest unobscured rectangle, used only when explicitly fitting a map.
     /// Sweep horizontal edges and merge vertical blockers instead of sampling
     /// pixels or rebuilding knowledge as the camera moves.
-    public static func availableRect(in viewport: CGRect, excluding occlusions: [CGRect], padding: CGFloat = 20) -> CGRect? {
+    public static func availableRect(in viewport: CGRect, excluding occlusions: [CGRect], padding: CGFloat = 20, contentAspectRatio: CGFloat? = nil) -> CGRect? {
         guard !viewport.isNull, !viewport.isInfinite, viewport.width > 0, viewport.height > 0,
               [viewport.minX, viewport.minY, viewport.maxX, viewport.maxY].allSatisfy(\.isFinite),
-              padding.isFinite, padding >= 0, occlusions.count <= 64,
+              padding.isFinite, padding >= 0, contentAspectRatio.map({ $0.isFinite && $0 > 0 }) ?? true, occlusions.count <= 64,
               occlusions.allSatisfy({ !$0.isNull && !$0.isInfinite && [$0.minX, $0.minY, $0.maxX, $0.maxY].allSatisfy(\.isFinite) }) else { return nil }
         let bounds = viewport.insetBy(dx: padding, dy: padding)
         guard bounds.width > 0, bounds.height > 0 else { return nil }
@@ -74,7 +74,11 @@ public enum SpatialViewportVisibility {
             let area = rect.width * rect.height, oldArea = best.map { $0.width * $0.height } ?? -1
             let distance = abs(rect.midX - bounds.midX) + abs(rect.midY - bounds.midY)
             let oldDistance = best.map { abs($0.midX - bounds.midX) + abs($0.midY - bounds.midY) } ?? .infinity
-            if area > oldArea || area == oldArea && distance < oldDistance { best = rect }
+            // Fit the actual target, not just the largest pixel area: a wide,
+            // shallow strip can otherwise force an unnecessarily distant zoom.
+            let score = contentAspectRatio.map { min(rect.width / $0, rect.height) } ?? area
+            let oldScore = best.map { old in contentAspectRatio.map { min(old.width / $0, old.height) } ?? oldArea } ?? -1
+            if score > oldScore || score == oldScore && (area > oldArea || area == oldArea && distance < oldDistance) { best = rect }
         }
         for (index, left) in xs.enumerated() {
             for right in xs.dropFirst(index + 1) where right > left {

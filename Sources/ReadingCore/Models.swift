@@ -111,11 +111,12 @@ public struct ViewDefinition: Codable, Identifiable, Hashable, Sendable {
     public var scope: String? = nil
     public var configuration: [String: String]? = nil
     public var composition: CompositionDefinition? = nil
+    public var previousLayout: CompositionLayoutBackup? = nil
     public init(id: String, title: String, kind: ComponentKind, typeIDs: [String] = [], rendererID: String? = nil, scope: String? = nil, configuration: [String: String]? = nil, composition: CompositionDefinition? = nil) {
         self.id = id; self.title = title; self.kind = kind; self.typeIDs = typeIDs
         self.rendererID = rendererID; self.scope = scope; self.configuration = configuration; self.composition = composition
     }
-    private enum CodingKeys: String, CodingKey { case id, title, kind, typeIDs, rendererID, scope, configuration, composition }
+    private enum CodingKeys: String, CodingKey { case id, title, kind, typeIDs, rendererID, scope, configuration, composition, previousLayout }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id); title = try values.decode(String.self, forKey: .title)
@@ -127,6 +128,7 @@ public struct ViewDefinition: Codable, Identifiable, Hashable, Sendable {
         scope = try values.decodeIfPresent(String.self, forKey: .scope)
         configuration = try values.decodeIfPresent([String: String].self, forKey: .configuration)
         composition = try values.decodeIfPresent(CompositionDefinition.self, forKey: .composition)
+        previousLayout = try values.decodeIfPresent(CompositionLayoutBackup.self, forKey: .previousLayout)
     }
 }
 public struct ReadingMethod: Codable, Identifiable, Hashable, Sendable {
