@@ -1,3 +1,21 @@
+<!-- structured-feedback-local:start -->
+本批本机交付已完成：Design/2026-11-11-structured-feedback-results.md；总入口 logs/structured-feedback-20261111/final-local-delivery.json。产品5c144c8（7产品Swift/13新增核心方法）；0.23.70/build101 ARM64本地迭代已替换，binary SHA81c09c27d2ff6fcfda457081025744cbc751e8fcdbf59d22fa9cb4a45d1dad2a。正式App两次启动退出，104/1484、277%、你好、2笔记保持；旧伴读/对话及查找关闭过，最后书库退出。无需重复安装、索要解锁或恢复旧库。本批无GitHub访问/云CI/Release，按用户本地集中迭代偏好执行。
+
+通用实改：原始JSON语法失败也提供有界草稿ID、行列/附近文字/括号提示，AI用唯一短文字textEdits修正；结尾括号建议经Foundation验证，仅建议不执行。修后走原工具全部来源/范围/权限/类型/保存校验，已有成果不回滚。Codable字段错误给准确JSON Pointer与实际类型，不泛发整份无关指南。原工具名可重复而不可将rawJSON切换到别的工具，修真实schema指引矛盾。草稿仅任务RAM，不新增书库格式。地图共同父级沿当前获准事件树memoize，循环/域外祖先不命名，不按人名/书名加分支。
+
+最终core4=602方法6246独立断言（非XCTest），structuredFeedback3范围60/共享80/动态52/滚动25共217过、所检告警零；surveyNative1和chibiNative1各4次complete/camera success，日期轴/原文轴与显式切换保持、事实/视图不改；CUA实际回调查第5段和PDF619。400事件深链同功能朴素祖先遍历6989.041us→memo143.625us中位数；不是旧安装版直接父级对照、FPS或整App内存。七标记夹具远4组→1组，近7项；原生远景视觉/新素材仍下一批。
+
+真实最终real6先本地重放原source_read+失败草稿，随后3新官方Flash HTTP/90771报告token，第一轮314B短修正处理4322B草稿并保存4事件时间/2关系时间；下一轮events_query核对后作答，没有新source_read/新途经点。不是空库重新分析：隔离fixture只按真实审计after值撤回后来成功的六条元数据，保留5要素4事件2关系1视图；没手填语义字段。原数据未参与。recovery-base-manifest/real-ai-acceptance可查。
+
+failure-cases索引保存real1..5：重放计数0、缺供应商思考协议字段HTTP400、缺本轮已读原文、括号补错、targetTool指引矛盾。real4回答后改源因此非最终证据；real5基线时间已补齐会重复，未批准。全批12HTTP/278031已报告token含失败/重复上下文，非计费金额；HTTP400无报告不称零计费。Key/认证头/私有思考不落盘。下轮先查保存现场，不从头重付费。
+
+fresh回滚private-books/structured-feedback-20261111/install-before-local-iteration/ReadingBook-0.23.70-local-a43b148.app及库/prefs/保护清单。原39文件38字节同，唯一推荐问题缓存仅JSON键顺序，值相同；书/笔记/分析逐字节同、偏好同。用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持未提交。
+
+cleanup.py --apply已执行不得重跑：8679492→7876380KiB，回收784.3MiB，批初净增62.8MiB，文档微增以总入口du为准。9重建程序/误拼swpm-cache及过期c4回滚App退役；57运行目录308文件逐成员核SHA后归档，47快照→10规范内容原路径可读。5322受保护私人文件、最新a43回滚、候选/正式ZIP/PDF、共享缓存不改。归档按closed-runtime-index逐文件核SHA回读，不整库覆盖。
+
+下一批优先新可组合素材映射/类型图标、真实远缩放聚合与展开/画面反馈，用赤壁及不同场景已存事实验证。旧卡仍需滚动看出处，概念图未全完成。现代地名密度（底图不淡化）、时间轴层级横移/可视窗与筛选端点分离、有据曲线区域及16类组件性能轮转继续保留。下方为历史。
+<!-- structured-feedback-local:end -->
+
 <!-- scenario-generalization-local:start -->
 本批本机交付已完成：Design/2026-11-11-scenario-generalization-results.md；总入口 logs/scenario-generalization-20261111/final-local-delivery.json。用户明确要求通用能力，不可按赤壁/赵云/张飞加分支或手填测试结果。产品a43b148（7产品Swift/13新增核心方法）；0.23.70/build101 ARM64本地迭代已替换，binary SHA dc4f7f76d2c65f50377fa92e5d84f02d56e6abdeb47da12aea93fe299107ecb6。本批无GitHub访问/云CI/Release。两次正式原书104/1484、277%、你好、2笔记、旧伴读和对话、查找关闭、正常启动退出过，最后书库退出；无需重复安装/验收/索要解锁。
 
