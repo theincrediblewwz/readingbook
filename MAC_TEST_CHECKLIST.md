@@ -1,19 +1,19 @@
 <!-- chibi-identity-flow-local:start -->
-当前接续总入口 logs/chibi-identity-flow-20261110/pending-native-handoff.json；报告 Design/2026-11-10-identity-flow-results.md。当前不是已完成交付：产品 c51c3ba + 636a153（8产品Swift、9新增方法），70/101 ARM64候选已签名/资源/源码验证；原安装仍是04912c2，未替换，正式App已停止。未推GitHub/云CI/Release。本次解锁问题已异步问过，勿重复申请权限；桌面仍不可用，先完成剩余原生滚动与安装验收，不要开下一批收费测试。
+当前批次已完成本机交付：报告 Design/2026-11-10-identity-flow-results.md；总入口 logs/chibi-identity-flow-20261110/final-local-delivery.json。产品 c51c3ba + 636a153（8产品Swift、9新增方法），70/101 ARM64本地迭代已替换安装，候选来源 fd41388，binary SHA f5dedd803e2e8b28be9ea390390cfc3d7f26c997cb277947e4d3c96307c439f4。两次正常原书启动/退出完成，正式App已停止。未推GitHub/云CI/Release；无需重复安装、重复申请解锁或恢复旧库。
 
 已实现：有界保存回执先业务身份再技术锚点；objects_search精确名/别名优先、多词覆盖、保留同名/全量/分页；实际成功且核对本书事务的ID进入现有RAM轻量目录，历史缩短仍可复用，无新事实库或证据权限。最终相同冻结41要素/27目标，10次57515B→2次30698B，首屏20→27；短回执14人物/0地点→25人物/16地点，完整67映射同，实际宿主3279B/45内联映射。不是全App/FPS或模型提速。
 
-真实real1新身份仅原文1484+原书目录，所有AI计数0；18HTTP在测试限16384截断（用户保存393216未改），17已报告765588token，55次source_read为55不同单元。real2输出限65536、13HTTP；真实草案35要素/16事件/10关系，三次被笼统sourceSpan错误挡，最后0视图。已根治误指引：实际546页“曹操\n決戰”被模型省略换行，时间预处理先报锚点不可用；现在仅对本轮已提供的失败锚点明确evidenceIssues到anchors[1]+有效sourceRef，AI须显式改引文，未模糊匹配/自动改写。
+真实real1新身份仅原文1484+原书目录，所有AI计数0；18HTTP在测试限16384截断（用户保存393216未改），17已报告765588token，55次source_read为55不同单元。real2输出限65536、13HTTP；真实草案35要素/16事件/10关系，三次被笼统sourceSpan错误挡，最后0视图。已修误指引：实际546页“曹操\n決戰”被模型省略换行，时间预处理先报锚点不可用；现在仅对本轮已提供的失败锚点明确evidenceIssues到anchors[1]+有效sourceRef，AI须显式改引文，未模糊匹配/自动改写。
 
-repair2是全新显式修正会话，不是缺私有思考的公开日志接续。5真实回复通过引文阶段；第5含12项时间文本修正，诊断只许证据字段因而先保存审阅，非产品拒绝。断网审阅重放后又暴露10份关系叙事时间缺位置、13组经纬度颠倒。separatedCore1显式诊断拆分，未自动调换/造日期：35要素/16事件/10关系/15锚点/2类型实际保存，46身份入目录；10错误时间表单和13坐标另存未提交，0视图/0有效坐标，语义未逐项核实。不是自然端到端成功，也不是产品已经自动救回部分批次。所有失败退出前留输入/公开请求/回执/版本，saved-case.json先看；下轮显式冻结续接 separatedCore1/final-project.json SHA8da3b6e15c61f873ab95e31e2daf42b0af2dabd1b9ef0edb6827e04927fcb52b。不要盲重生成94单元。总36HTTP、1635912已报告token，截断次统计不完整；无Key/认证头/私有推理持久化。
+repair2是全新显式修正会话，不是缺私有思考的公开日志接续。5真实回复通过引文阶段；第5含12项时间文本修正，诊断只许证据字段因而先保存审阅，非产品拒绝。断网审阅重放后又暴露10份关系叙事时间缺位置、13组经纬度颠倒。separatedCore1显式诊断拆分，未自动调换/造日期：35要素/16事件/10关系/15锚点/2类型实际保存，46身份入目录；10错误时间表单和13坐标另存未提交，0视图/0有效坐标，语义未逐项核实。不是自然端到端成功，也不是产品已经自动救回部分批次。所有失败退出前留输入/公开请求/回执/版本，saved-case.json先看；下轮显式冻结续接 separatedCore1/final-project.json SHA8da3b6e15c61f873ab95e31e2daf42b0af2dabd1b9ef0edb6827e04927fcb52b。不要盲重生成94单元。总36HTTP、1635912已报告token，截断次统计不完整；无Key/认证头/私有推理持久化。本次解锁只收尾验收，未再收费测试。
 
-最终core3为519方法5388独立断言非XCTest；identityFlow2共享80/范围55/动态52合187过、自动所检告警零。其滚动只有keyWindowReady=false，未通过25项；不要把更早identityFlow1的25项充成最终过。解锁后运行run-composition-scroll.py --tag identityFlow3，保留原失败。最终receipt2的9宿主检查、after-final收益探针过。初core1夹具独占访问编译错误、repair1诊断漏异常反馈、reviewedRepair1诊断变量重声明均保留，非产品失败或最终过。
+最终core3为519方法5388独立断言非XCTest；identityFlow2共享80/范围55/动态52，identityFlow3滚动25，合212原生过、自动所检告警零。原滚动identityFlow2 keyWindowReady=false仍留失败现场，未覆盖或计入通过。最终receipt2的9宿主检查、after-final收益探针过。初core1夹具独占访问编译错误、repair1诊断漏异常反馈、reviewedRepair1诊断变量重声明均保留，非产品失败或最终过。
 
-剩余安装：桌面可用→滚动25→必要时本机build-local-macos.py快速重封当前HEAD（产品对象不变）→正常退出旧App→本批install-local.py（新鲜保护和原书不覆盖）→两次原书启动/正常退出、104页/你好/2笔记/旧分析/查找关闭/书库，比较fresh备份而非恢复旧库。若用户期间读书或新增内容，全部保留。原39文件、偏好语义、用户dirty SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4均未改，用户文件未提交。
+安装前fresh回滚 private-books/chibi-identity-flow-20261110/install-before-local-iteration/ReadingBook-0.23.70-local-04912c2.app，及当前library/prefs/verification/protection。两次原书104/1484、277%、你好、2笔记、旧伴读/对话、查找关闭已核，最后回书库正常退出。39文件全保留，37字节同；建议缓存仅键顺序，工作区只新增验收查看的旧笔记documentID。书/笔记/分析正文、PDF位置、偏好值均保持，不恢复旧库。证据original-library-acceptance.json；用户dirty SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持、未提交。
 
-clean-ended.py与finish-cleanup.py均已执行且核验通过，不重跑。累计回收约 1045.3MiB、批初净增约 51.0MiB（最终入口含文档微增）；53运行目录/236文件逐成员验SHA、9重复PDF去重、17快照/日志→唯一内容ZIP，12可重建程序退役。起草但未执行、条件已过期的clean-final.py/compact-evidence.py已退役。已结束运行库逐成员SHA归档、同PDF去重；compiled hosts可重建，mac-release/共享缓存/当前候选/正式ZIP/最新bdb回滚/4981非App私人文件保持。snapshot-evidence-index+restore-evidence.py可逐项回读核SHA（不覆盖存在文件）；下一输入final-project保持原位。未完成安装，不退役当前回滚App。
+clean-ended.py、finish-cleanup.py、cleanup-after-acceptance.py均已执行且核验通过，不重跑；旧的clean-final.py/compact-evidence.py过期草案已退役。累计回收约1242.5MiB，批初净增约60.0MiB，以delivery最终du为准。53运行目录/236文件逐成员验SHA、9重复PDF去重、17快照/日志→唯一内容ZIP；最新滚动宿主及过期bdb程序回滚退役。全部5023非App私人文件与链接、最新049回滚、共享缓存/对象、候选/正式ZIP保持。snapshot-evidence-index+restore-evidence.py可逐项回读核SHA（不覆盖存在文件）；下一输入final-project保持原位。
 
-下一批设计优先：AI讲事件/关系/目的，软件定位已给原文、验证类型/坐标并一次反馈可定位问题；区分不可分依赖与可显式保存核心/待补元数据，不静默丢字段。先把共享已存资料补成实际地图/轴/出处闭环，再相邻多页批读、小成果尽早显示。现代地名密度、层级横移轴/可视与筛选端点、战役远景聚合、有据曲线区域、16类组件性能轮转继续保留。
+下一批设计优先：先读saved-case.json与next-iteration-outline.md。AI讲事件/关系/目的，软件定位已给原文、验证类型/坐标并一次反馈可定位问题；区分不可分依赖与可显式保存核心/待补元数据，不静默丢字段。先把共享已存资料补成实际地图/轴/出处闭环，再相邻多页批读、小成果尽早显示。现代地名密度（不淡化底图）、层级横移轴/可视与筛选端点、战役远景聚合、有据曲线区域、16类组件性能轮转继续保留。
 <!-- chibi-identity-flow-local:end -->
 
 <!-- chibi-natural-workbench-local:start -->
