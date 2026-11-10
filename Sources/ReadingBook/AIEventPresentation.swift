@@ -9,7 +9,8 @@ import ReadingCore
             throw ReadingError.invalid("当前组件的原文范围尚未准备好。")
         }
         let owner = ReadingQueryHostOwner(root: libraryRootURL, bookID: book.id, sourceHash: book.sourceHash, runID: nil)
-        let plan = try ReadingEventPresentationPlan.resolve(eventID: id, in: book, snapshot: snapshot)
+        let plan = try ReadingEventPresentationPlan.resolve(eventID: id, in: book, snapshot: snapshot, preferredAxis: makeReadingWorkspaceSnapshot()?.timeAxis,
+            allowsFullIdentity: snapshot.scope == .book)
         let args: [String: Any] = ["eventID": id, "expectedVersion": plan.version]
         let data = try JSONSerialization.data(withJSONObject: args, options: [.sortedKeys])
         let returned = try await presentReadingEvent(args, data: data, book: book, owner: owner, snapshot: snapshot)
@@ -39,7 +40,8 @@ import ReadingCore
               let state = activeComponentView, state.issue == nil, state.snapshot?.scopeFingerprint == snapshot.scopeFingerprint else {
             return try viewToolResult("unsupported", "请先用component_show打开本轮范围内已有的地图与时间轴组合；未扩大范围或新建资料。")
         }
-        let plan = try ReadingEventPresentationPlan.resolve(eventID: id, in: book, snapshot: snapshot)
+        let plan = try ReadingEventPresentationPlan.resolve(eventID: id, in: book, snapshot: snapshot, preferredAxis: makeReadingWorkspaceSnapshot()?.timeAxis,
+            allowsFullIdentity: snapshot.scope == .book)
         guard version == plan.version else { return try viewToolResult("conflict", "已有事件已被修改，请重新取得资料；未沿用旧版本。") }
         let contextID = readingVisibilityContextID, revision = currentBookRevision, renderer = route
         let command = WorkspaceAICommand(name: "view_show_event", arguments: data, timeWindow: plan.window, eventID: id)
@@ -58,7 +60,7 @@ import ReadingCore
         let fit = try JSONSerialization.jsonObject(with: fitResponse) as! [String: Any]
         receipt["rendererID"] = renderer
         receipt["cameraStatus"] = fit["status"]
-        receipt["message"] = "已按事件完整出处选择并筛选；地图和行动是否可见以随后实际画面回执为准。"
+        receipt["message"] = "已按事件的已存时间或原文先后选择并筛选；地图和行动是否可见以随后实际画面回执为准。"
         return try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
     }
 }

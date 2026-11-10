@@ -145,6 +145,10 @@ struct WorkspaceAICommand: Equatable {
                 for participation in state?.participations ?? [] where admitted(participation.sourceAnchorIDs) { if let extent = participation.extent { extents.append(extent) } }
                 for event in state?.eventMetadata ?? [] where admitted(event.sourceAnchorIDs) { if let extent = event.extent { extents.append(extent) } }
                 for relation in state?.relationMetadata ?? [] where admitted(relation.sourceAnchorIDs) { extents.append(relation.validity) }
+                // Match the reader's axis picker: dated records also retain
+                // admitted source-order positions, without inventing dates.
+                extents += TemporalKnowledgeRuntime.eventSourceExtents(in: book,
+                    boundary: KnowledgeReadBoundary(allowedUnitIDs: Set(querySnapshot.unitIDs)))
                 axes = TemporalAxis.available(extents)
             } else { axes = availableTemporalAxes }
             let window = try TemporalViewWindow(arguments: data, availableAxes: axes)

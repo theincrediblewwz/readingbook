@@ -152,8 +152,9 @@ enum ReadingQueryToolCatalog {
                     fields = ["rendererID": string]; required = ["rendererID"]
                     purpose = "只切换/打开已有组件，不选择事件、不筛选时间。选择对象用view_focus；阶段筛选用view_set_time_window。"
                 case "view_show_event":
-                    fields = ["eventID": string]; required = ["eventID"]
-                    purpose = "在已打开的组合地图/时间轴展示已有事件，软件计算完整出处区间并定位。返回实际画面、行动名称/人物/起止地点及因时间未显示的关联记录；已有分析不是新读正文。先用component_show打开既有视图，无需猜阶段坐标。"
+                    fields = ["eventID": string, "viewID": ["type": "string", "minLength": 1, "maxLength": 128,
+                        "description": "可选，已保存组件视图的ID；同一次动作先打开它再展示事件。不能传新组件或布局；省略则使用当前已打开的组合。仍需component_show权限。"]]; required = ["eventID"]
+                    purpose = "在组合地图/时间轴展示已有事件：明确时间用原有历法和精度，否则用完整原文先后；保留当前原文顺序选择。已知目标视图时一并传viewID，不必先单独打开再请求；返回实际画面、行动和出处。不猜日期或阶段坐标。"
                 case "view_focus":
                     fields = ["objectID": string, "anchorID": string, "documentID": string]; required = []
                     purpose = "定位一个共享对象，或打开文档、回到原文锚点；三个ID选一种。此操作不设置时间筛选。"
@@ -690,7 +691,7 @@ extension ReadingQuerySession {
                 "note": "相机停稳并扣除工作台已知遮挡；不含其他应用窗口。visibleRouteCount只保证路线有一部分可见，不是全程可见。markerGroups是可展开的显示分组，其成员不算单独可见，不新增战役事实。列表按ID排序，不表示先后顺序。"]
         }
     }
-    private func validateWorkspace(_ value: ReadingWorkspaceSnapshot) throws {
+    func validateWorkspace(_ value: ReadingWorkspaceSnapshot) throws {
         guard value.bookID == snapshot.bookID, value.sourceHash == snapshot.sourceHash, value.selectedObjectIDs.count <= 1024,
               value.selectedNodeIDs.count <= 1024,
               (value.mapViewports?.count ?? 0) <= 8, (value.mapViewports ?? []).allSatisfy(\.isValid),

@@ -9,7 +9,7 @@ extension ReadingQuerySession {
         let boundary = KnowledgeReadBoundary(allowedUnitIDs: Set(snapshot.unitIDs))
         guard let event = try TemporalKnowledgeRuntime.events(in: scoped, boundary: boundary)
             .first(where: { $0.object.id == plan.eventID && $0.object.version == plan.version }) else { return nil }
-        let window = TemporalQueryWindow.ordered(from: Int(plan.window.from), to: Int(plan.window.to), domain: "source-order")
+        guard let window = TemporalAxis(plan.window.axis).window(from: plan.window.from, to: plan.window.to) else { return nil }
         let included = Set(try TemporalKnowledgeRuntime.relations(in: scoped, within: window, boundary: boundary)
             .compactMap { $0.metadata?.id })
         let actions = try TemporalKnowledgeRuntime.relations(in: scoped, boundary: boundary)
@@ -37,7 +37,7 @@ extension ReadingQuerySession {
             try Task.checkCancellation()
             guard let metadata = action.metadata, let spatial = metadata.spatial else { continue }
             let matches = included.contains(metadata.id)
-            let extent = action.sourceExtent ?? metadata.validity
+            let extent = TemporalAxis(plan.window.axis).isNarrative ? action.sourceExtent ?? metadata.validity : metadata.validity
             let excludedByTime = !matches && TemporalKnowledgeRuntime.match(extent, within: window) == .outside
             if matches { inWindow += 1 }
             if excludedByTime { outside += 1 }
@@ -66,7 +66,7 @@ extension ReadingQuerySession {
         func envelope() -> [String: Any] {
             ["basis": "saved_analysis_and_actual_view", "bodyProvided": false,
              "event": ["id": plan.eventID, "name": String(event.object.name.prefix(200)),
-                       "timeSummary": TemporalDatePresentation.summary(event.sourceExtent ?? event.extent)],
+                       "timeSummary": TemporalDatePresentation.summary(TemporalAxis(plan.window.axis).isNarrative ? event.sourceExtent ?? event.extent : event.extent)],
              "sourceLocations": sources, "sourceLocationsPartial": plan.sourceUnitIDs.count > sources.count,
              "actionRecordCount": rows.count, "recordsInWindow": inWindow, "recordsOutsideWindow": outside,
              "visibleRelationCount": visibleRelations.count, "actions": kept, "actionsPartial": kept.count < rows.count,

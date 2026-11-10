@@ -28,6 +28,7 @@ struct CompositionWorkspaceView: View {
     @State private var validatedComposition: CompositionDefinition?
     @State private var validatedBookID: String?
     @State private var refreshTask: Task<Void, Never>?
+    @State private var requestedProjection: ProjectionRequest?
     @State private var refreshGeneration: UInt64 = 0
     @State private var isActive = false
     @State private var pendingTimeCommand: WorkspaceAICommand?
@@ -59,6 +60,13 @@ struct CompositionWorkspaceView: View {
         let prepared: CompositionRuntime.PreparedCompositionInput
         let baseline: [String: CompositionProjection]
         let projections: [String: CompositionProjection]
+    }
+    private struct ProjectionRequest {
+        let owner: RefreshOwner
+        let selection: [String: Set<String>]
+        let times: [String: TemporalQueryPoint]
+        let windows: [String: TemporalQueryWindow]
+        let mapModes: [String: CompositionMapTimeMode]
     }
 
     private var composition: CompositionDefinition? { definition?.composition }
@@ -146,9 +154,9 @@ struct CompositionWorkspaceView: View {
         stagePresentationTask?.cancel(); stagePresentationTask = nil
         clearPrepared(); clearMapCommand(); mapViewports = [:]; mapCameras = [:]; selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; canvasAnchors = [:]; refresh()
     }
-    private func clearPrepared() { preparedInput = nil; preparedOwner = nil }
+    private func clearPrepared() { preparedInput = nil; preparedOwner = nil; requestedProjection = nil }
     private func cancelRefresh() {
-        refreshTask?.cancel(); refreshTask = nil; refreshGeneration &+= 1
+        refreshTask?.cancel(); refreshTask = nil; requestedProjection = nil; refreshGeneration &+= 1
     }
     private func receiveViewCommand(_ command: WorkspaceAICommand?) {
         if command?.id != pendingMapCommand?.id { clearMapCommand() }
@@ -192,7 +200,7 @@ struct CompositionWorkspaceView: View {
             // clock must not make a valid saved stage disappear from selection.
             let timelines = composition.parts.filter { part in
                 part.primitive == .timeline && baseline[part.sourceID]?.items.contains(where: {
-                    ($0.objectID ?? $0.id) == eventID && ReadingEventPresentationPlan.sourceWindow($0.sourceExtent) == window
+                    ($0.objectID ?? $0.id) == eventID && ReadingEventPresentationPlan.presentationWindow(recorded: $0.extent, source: $0.sourceExtent, preferredAxis: window.axis) == window
                 }) == true
             }
             let linkedGroups = Set(timelines.map(\.timeGroup))
@@ -265,16 +273,30 @@ struct CompositionWorkspaceView: View {
         return book.publicationStamp == nil
     }
     private func refresh(includeBaseline: Bool = true, retainingContent: Bool = false) {
-        cancelRefresh()
-        if !embedded { publishPreparation(.pending) }
-        guard isActive else { return }
+        guard isActive else { cancelRefresh(); return }
         guard let book = store.book, let composition else {
+            cancelRefresh()
             clearPrepared(); displayedOwner = nil
             projections = [:]; baseline = [:]; baselineSelection = nil; baselineOwner = nil; validatedComposition = nil; validatedBookID = nil; issue = nil; return
         }
         if embedded, selections.isEmpty, let id = readingContext.objectID {
             for source in composition.sources { selections[source.selectionGroup] = [id] }
         }
+        let selection = selections, times = points, ranges = windows, modes = mapModes
+        // Explicit commands and SwiftUI's selection/clock observers can ask
+        // for the same projection. Do not cancel/re-publish it after its time
+        // command has already acknowledged, invalidating a following map fit.
+        if let requested = requestedProjection, matches(requested.owner, store: store),
+           requested.selection == selection, requested.times == times,
+           requested.windows == ranges, requested.mapModes == modes {
+            // A repeated command still needs its own acknowledgment. When a
+            // worker is running it will acknowledge after commit; otherwise
+            // the identical projection has already committed.
+            if refreshTask == nil { finishTimeCommand() }
+            return
+        }
+        cancelRefresh()
+        if !embedded { publishPreparation(.pending) }
         let owner: RefreshOwner
         let retainedPrepared: CompositionRuntime.PreparedCompositionInput?
         if let prior = preparedOwner, matches(prior, store: store) { owner = prior; retainedPrepared = preparedInput }
@@ -287,7 +309,8 @@ struct CompositionWorkspaceView: View {
                 boundaryUnitID: store.selectedUnitID, avoidsSpoilers: book.temporalKnowledge?.profile?.avoidsSpoilers ?? true,
                 componentScopeID: embedded ? nil : store.componentDataScopeID)
         }
-        let generation = refreshGeneration, selection = selections, times = points, ranges = windows, modes = mapModes
+        let generation = refreshGeneration
+        requestedProjection = ProjectionRequest(owner: owner, selection: selection, times: times, windows: ranges, mapModes: modes)
         let sourceSnapshot = embedded ? nil : store.activeComponentView?.snapshot
         let baselineMatches = baselineOwner.map { matches($0, store: store) } ?? false
         let retainedBaseline = !includeBaseline && baselineSelection == selection && baselineMatches ? baseline : nil
@@ -316,15 +339,20 @@ struct CompositionWorkspaceView: View {
                 baseline = result.baseline; baselineSelection = selection; baselineOwner = owner; projections = result.projections
                 validatedComposition = composition; validatedBookID = book.id; issue = nil; refreshTask = nil
                 mapViewports = [:]; viewportGeneration &+= 1
+                // The prior generation may have reported ready while these
+                // projections were preparing. Acknowledge the new time data
+                // only with its map observation pending, so an immediate fit
+                // waits for this generation instead of rejecting empty maps.
+                if !embedded { publishCurrentMapState(.pending) }
                 finishTimeCommand()
             } catch is CancellationError {
-                if refreshGeneration == generation { refreshTask = nil }
+                if refreshGeneration == generation { refreshTask = nil; requestedProjection = nil }
             } catch {
                 guard !Task.isCancelled, isActive, refreshGeneration == generation, selections == selection, points == times, windows == ranges, mapModes == modes,
                       let store, matches(owner, store: store) else { return }
                 displayedOwner = nil
                 projections = [:]; baseline = [:]; baselineSelection = nil; baselineOwner = nil; validatedComposition = nil; validatedBookID = nil
-                issue = error.localizedDescription; refreshTask = nil
+                issue = error.localizedDescription; refreshTask = nil; requestedProjection = nil
                 publishPreparation(.failed)
                 finishTimeCommand(error: error.localizedDescription)
             }
@@ -341,6 +369,17 @@ struct CompositionWorkspaceView: View {
         if let value { mapViewports[partID] = value } else { mapViewports[partID] = nil }
         // No stale observation while a camera is moving. Other parts cannot
         // turn the missing observation into an assertion that the map is empty.
+        publishCurrentMapState(status)
+        if status == .ready || status == .empty, pendingMapCommand == nil,
+           let command = store.workspaceAICommand, command.name == "map_fit_objects",
+           store.workspaceAIResponses[command.id] == nil {
+            receiveViewCommand(command)
+        }
+    }
+    private func publishCurrentMapState(_ status: ReadingWorkspaceObservationStatus) {
+        // The projection's clock and selection are committed even while its
+        // new map awaits a camera observation. Keep that renderer-owned state
+        // so a following action does not silently choose a different axis.
         let windows = clocks.keys.sorted().compactMap { key -> ReadingViewTimeWindow? in
             guard let clock = clocks[key], let axis = clock.axis, let from = clock.lower, let to = clock.upper, let current = clock.cursor else { return nil }
             return ReadingViewTimeWindow(groupID: key, axis: axis, from: from, to: to, current: current)
@@ -349,11 +388,6 @@ struct CompositionWorkspaceView: View {
             selectedIDs: Array(Set(selections.values.flatMap { $0 })).sorted(),
             maps: mapViewports.keys.sorted().compactMap { mapViewports[$0] }, clocks: windows,
             observationStatus: status == .empty && !mapViewports.isEmpty ? .ready : status)
-        if status == .ready || status == .empty, pendingMapCommand == nil,
-           let command = store.workspaceAICommand, command.name == "map_fit_objects",
-           store.workspaceAIResponses[command.id] == nil {
-            receiveViewCommand(command)
-        }
     }
     private func select(_ id: String, group: String) {
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) {
@@ -1060,7 +1094,14 @@ private struct CompositionMap: View {
                 .onChange(of: workspaceBlocked) { _, _ in publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: workspaceExclusions) { _, _ in publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: occlusions) { _, _ in publishViewport(using: proxy, geometry: geometry) }
-                .onChange(of: visibilityGeneration) { _, _ in publishViewport(using: proxy, geometry: geometry) }
+                .onChange(of: visibilityGeneration) { _, _ in
+                    // Switching calendar/source clocks can keep identical
+                    // annotations and camera geometry. Still retry the new
+                    // generation's screen transform; no camera-end or seed
+                    // change is otherwise guaranteed to publish readiness.
+                    rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1
+                    publishViewport(using: proxy, geometry: geometry)
+                }
                 .onChange(of: fitRequest) { _, request in fit(request, geometry: geometry) }
                 .onChange(of: geometry.size) { _, _ in rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1; publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: seeds) { _, _ in markerGroup = nil; rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1; publishViewport(using: proxy, geometry: geometry) }
