@@ -1,18 +1,20 @@
-<!-- chibi-presentation-efficiency-pending:start -->
-当前批次尚待桌面收尾，不要误读为已安装：Design/2026-11-10-presentation-efficiency-results.md；日志 logs/chibi-presentation-efficiency-20261110。产品本地提交5ce6e3f，7产品Swift/11新增方法；Release候选 dist/local-candidate/ReadingBook.app 已核包。本批不推GitHub/云CI；当前安装仍旧c33a32f98491fa63b1f536c026579fb22187e688e3a241cea581f649c8f2d39f，未替换、未恢复旧库。
+<!-- chibi-presentation-efficiency-local:start -->
+本批已完成本机交付：Design/2026-11-10-presentation-efficiency-results.md；总入口 logs/chibi-presentation-efficiency-20261110/final-local-delivery.json。产品5ce6e3f（7产品Swift/11新增方法），包装来源887e20b，0.23.70/build101 ARM64本机迭代已替换安装，binary SHA 7f292c7fd3338d957f7b62e96049de88a991625f1290a399d7b57b94775415c3。两次原书104/1484、你好、2笔记、旧伴读、查找关闭及正常启动/退出已通过，最后书库退出。未推GitHub/云CI/Release；不重复安装、索要解锁或恢复旧库。
 
-同冻结阶段目录3次40489B→2次27971B，15身份/版本/出处同；5页单读5工具→1批读，原文/引用同（封装略增102B，不称字节优化）。新呈现回执含范围内行动人物/起讫/实际路线/窗口外变体，非新正文权限。source_read.ids明确1..8单元共享总预算，未返回的不算已读。core1最终548方法/5624独立断言非XCTest；presentationEfficiency1共享80/范围55/动态52共187过，所检告警零；滚动25尚未运行。nativeAfter1/2因丢前台无效；相机基线4次success，未凭猜测改交接。
+同冻结15阶段目录3次40489B→2次27971B，身份/版本/出处同；5页单读5工具→1批读，正文/引用同（封装略增102B，不称字节优化）。新回执含实际行动人物/起讫/可见路线/窗口外时间变体，非正文权限。source_read.ids明确1..8单元共用总预算，未返回的不算已读。core1最终548方法/5624独立断言非XCTest；presentationEfficiency1共享80/范围55/动态52/滚动25共212过，所检告警零。nativeAfter1/2丢前台无效，解锁后nativeAfter3四次complete+cameraSuccess；未凭猜测改相机交接或宣称渲染提速。
 
-真实read1自然选批读612..616，3HTTP/33717报告token；真实real1与旧real8问题完全同，9HTTP/334849（旧11/462946），两阶段2/3请求complete+cameraSuccess，回答后ready；AI显式放宽显示窗609..618，五路线可见，基础事实/视图未改。单次结果非稳定提速承诺。layout2真实4HTTP/125414，新增地图根画布/左事件浮层/下时间轴/按需详情，共用选择与时间组；原35/16/10及旧视图留存。总16HTTP/493980，Key/认证头/私有思考不保存。layout1诊断bundle校验错零HTTP；导出后比较漏考虑4条落盘请求历史，随后正式导入回验通过，均非产品失败。全部现场退出前保留。
+真实read1自然选批读612..616，3HTTP/33717报告token；real1与旧real8问题完全同，9HTTP/334849（旧11/462946），阶段在2/3请求complete且回答后ready。AI显式扩大显示窗609..618后五路线可见，原始事实和视图未改。一次结果非稳定提速承诺；仍查三处关系。layout2真实4HTTP/125414新增地图根画布/左事件浮层/下时间轴/按需详情，共用选择/时间组，原35/16/10与旧视图保留。总16HTTP/493980，无Key/认证头/私有思考落盘。layout1诊断bundle错零HTTP，导出后过严比较未考虑4条已落盘请求历史，修正后正式导入回验通过，均非产品失败，全部现场保留。
 
-可导入样例 private-books/chibi-presentation-efficiency-20261110/赤壁地图画布.readingbook，正式导出/隔离重导入验证通过，未导入原书库。地图程序位图没可靠捕获MapKit底图，不据此认定空白或最终外观通过。真实结果/最终项目/public模型轨迹保持原位。安装前须先完成原生新画布事件点选/浮卡收起/时间范围/出处跳转、旧布局阶段与来源及25滚动回归，然后用本批install-local.py严格核包、新鲜备份并替换，再原书正常启动/便签/2笔记/查找关闭/重启/退出与文件SHA核对。native脚本可重编译，别重复付费问模型。
+CUA在canvasNative1验证正常底图、空白收起/事件列表弹详情、609..618端点、火攻613与伏击616..618、回原文614/617。旧工作台也通过阶段与出处。新宽窗投影5线、当前无遮挡只2线，不称全看清；浮卡偏大且地图工具拥挤关闭区，尚未达到最终概念图。阅读器切回组件默认跟随阅读位置；手动选择全书已有资料后看同一赤壁分析，未调用模型。下一批优先浮卡高度/工具避让/恢复原分析范围，再接新素材标记、缩放层级，勿仅缩旧圆点。
 
-Mac界面工具多次确认锁屏，已有异步解锁问题待回复，不改锁屏设置、不重复盲目请求或宣称验收通过。用户dirty文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持且不提交。原书39文件未动。
+可导入示例 private-books/chibi-presentation-efficiency-20261110/赤壁地图画布.readingbook，含原书与两视图，正式导出/隔离重导入验过，未混入原书库。导入后若随阅读位置看不到赤壁，点顶部范围选择全书已有资料，仅展示已存分析。原生验收只重放既有资料，没有新增付费调用；real-native-acceptance.json、canvas-native-acceptance.json、installed-original-acceptance.json是最终证据。
 
-cleanup-ended.py --apply已执行一次，勿重跑：8182020→7422464KiB，回收741.8MiB；9重建程序已退役，30运行目录157文件验SHA后进ended-runtime.zip/ended-runtime-index.json。5228保护文件全同，候选、正式ZIP、当前安装、旧回滚、所有private-books与共享缓存留存。最终目录/公开轨迹/失败记录原位。以后查归档内容先读索引核SHA，不覆盖现有文件；新桌面验收产生的运行库另作一轮清理。
+新鲜回滚 private-books/chibi-presentation-efficiency-20261110/install-before-local-iteration/ReadingBook-0.23.70-local-3833dfc.app，另有原库/prefs/verification。原39文件全留、37字节同；建议缓存JSON键序改值同，Workspace仅pdf.location.x往返差<1e-15。书/笔记/分析字节同、偏好语义同，未用旧备份覆盖。用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持且未提交。
 
-下一步先完成本批桌面交互与一次本机安装，然后按用户构想推进新标记素材、全幅画布的体验精修、远景战役聚合；现代地名密度（不淡化）、层级时间轴/可视与筛选端点分离、有据曲线区域与16组件轮转仍保留。下方为历史。
-<!-- chibi-presentation-efficiency-pending:end -->
+三步清理均已执行，不得重跑：cleanup-ended.py、cleanup-acceptance.py、deduplicate-project-snapshots.py。合计回收约1150.8MiB（1.12GiB），根最终约7.07GiB，批初净增约106.3MiB，以delivery最终du为准。12重建诊断程序及更旧fd41388回滚App退役，旧书库/偏好备份和最新3833dfc回滚、正式ZIP、共享缓存留存。38结束运行目录/183文件验SHA归档，索引ended-runtime-index与acceptance-runtime-index。29项目快照共享5份evidence-canonical内容，原路径为相对链接，字节相同；勿单独删规范内容。公开模型请求/最终项目/失败记录可原位读，解归档先核SHA，不覆盖现有文件。
+
+现代地名密度（不淡化底图）、时间轴可视/筛选端点分离和层级横移、有据曲线区域、远景战役聚合、素材自由组合与16组件轮转继续保留。下方为历史。
+<!-- chibi-presentation-efficiency-local:end -->
 
 <!-- chibi-form-preflight-local:start -->
 本批已完成本机交付：Design/2026-11-10-form-preflight-results.md；总入口 logs/chibi-form-preflight-20261110/final-local-delivery.json。产品3833dfc（16产品Swift/18新方法）；0.23.70/build101 ARM64本地迭代已替换，binary SHA c33a32f98491fa63b1f536c026579fb22187e688e3a241cea581f649c8f2d39f。两次原书104/1484、你好、2笔记、旧伴读/对话、查找关闭过，最后书库正常退出。未推GitHub/云CI/Release，勿重复安装/申请解锁/恢复旧库。
