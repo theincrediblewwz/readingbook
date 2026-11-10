@@ -83,6 +83,7 @@ extension ReadingQuerySession {
     /// Collect independent inexpensive checks before calling the write host.
     /// Keep the existing complete validation as the final authority.
     func preflightProposal(name: String, data: Data) throws -> Data {
+        try ReadingProposalShape.validateReferences(name: name, data: data)
         var issues = proposalEntityIssues(in: data) + proposalSpatialIssues(in: data)
         var resolved = data
         var firstError: Error?

@@ -60,10 +60,25 @@ extension ReadingQuerySession {
                   original["tool"] as? String != "components_list" else { continue }
             if let id = original["proposalID"] as? String, !seenProposals.insert(id).inserted { continue }
             var summary: [String: Any] = [:]
-            for key in ["tool", "status", "message", "summary", "proposalID", "digest", "operationID", "applied", "replayed", "opened", "viewID", "componentTitle", "rendererID", "complete", "observed"] {
+            for key in ["tool", "status", "message", "summary", "proposalID", "digest", "operationID", "applied", "replayed", "opened", "viewID", "componentTitle", "rendererID", "complete", "observed", "newlyApplied", "layoutAdjusted"] {
                 if let string = original[key] as? String { summary[key] = String(string.prefix(300)) }
                 else if let values = original[key] as? [String] { summary[key] = values.prefix(4).map { String($0.prefix(120)) } }
                 else if let number = original[key] as? NSNumber { summary[key] = number }
+            }
+            // Saving two anchors is not saving two actions. Keep the actual
+            // typed effect counts when the full tool conversation is compacted.
+            if let changes = original["actualChanges"] as? [String: Any] {
+                var bounded: [String: [String: Int]] = [:]
+                for key in changes.keys.sorted() where ControlledChangeCollection(rawValue: key) != nil {
+                    guard let row = changes[key] as? [String: Any] else { continue }
+                    var counts = [String: Int]()
+                    for action in ["created", "updated", "removed"] {
+                        if let count = row[action] as? Int, (0...10_000).contains(count) { counts[action] = count }
+                    }
+                    if !counts.isEmpty { bounded[key] = counts }
+                }
+                summary["actualChanges"] = bounded
+                summary["changeCountsMeaning"] = "仅这些类别有实际保存；temporalAnchors是原文锚点，relationMetadata才是关系/行动的时间记录。锚点成功不代表行动或地图已完成。"
             }
             if let goal = original["goal"] as? [String: Any] { summary["goal"] = goal }
             if let missing = original["missing"] as? [String] { summary["missing"] = missing }

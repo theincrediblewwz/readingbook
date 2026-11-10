@@ -12,6 +12,15 @@ struct ReadingProposalShapeError: LocalizedError {
 }
 
 enum ReadingProposalShape {
+    /// Report malformed identity references before temporal checks interpret a
+    /// failed cast as an empty list of evidence anchors.
+    static func validateReferences(name: String, data: Data) throws {
+        guard let raw = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let group = ReadingProposalTools.group(for: name) else { return }
+        if let batch = raw["batch"] as? [String: Any] { try validate(batch, wrapped: true) }
+        else { try validate([group.rawValue: raw], wrapped: false) }
+    }
+
     static func schema(_ group: ControlledChangeGroup) -> [String: Any] {
         switch group {
         case .knowledge: return ReadingProposalSchemas.knowledge
@@ -32,6 +41,14 @@ enum ReadingProposalShape {
             visited += 1
             guard visited <= 16_384 else {
                 issues.append(["path": pointer(tokens), "reason": "提案结构过大，请拆成较小的业务批次。"]); return
+            }
+            if tokens.last == "sourceAnchorIDs" {
+                guard let ids = value as? [Any] else {
+                    issues.append(["path": pointer(tokens), "reason": "sourceAnchorIDs须为锚点编号字符串数组。使用本批anchors.clientID或已保存的锚点id，不要放对象。"]); return
+                }
+                for (index, id) in ids.enumerated() where !(id is String) && issues.count < 24 {
+                    issues.append(["path": pointer(tokens + [String(index)]), "reason": "这里须填写锚点编号字符串，例如本批anchors.clientID；不要填写{clientID:...}对象。先修正引用的结构，再核对时间或引文。"])
+                }
             }
             if let object = value as? [String: Any], let fields = schema["properties"] as? [String: Any] {
                 if schema["additionalProperties"] as? Bool == false {

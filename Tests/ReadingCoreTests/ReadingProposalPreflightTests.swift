@@ -45,6 +45,35 @@ final class ReadingProposalPreflightTests: XCTestCase {
         result.sourceExcerpts = [("u1", book.units[0].text)]
         return result
     }
+    func testMalformedAnchorReferencesAreReportedAtTheirOwnPathsBeforeTimeErrors() throws {
+        var raw = payload(), batch = raw["batch"] as! [String: Any], knowledge = batch["knowledge"] as! [String: Any]
+        var rows = knowledge["eventMetadata"] as! [[String: Any]]
+        rows[0]["sourceAnchorIDs"] = [["clientID":"a"], 42]
+        knowledge["eventMetadata"] = rows; batch["knowledge"] = knowledge; raw["batch"] = batch
+        do { _ = try query(fixture()).preflightProposal(name:"knowledge_changes_propose", data:data(raw)); XCTFail("bad reference shape") }
+        catch let error as ReadingProposalShapeError {
+            XCTAssertEqual(error.issues.compactMap { $0["path"] }, ["/batch/knowledge/eventMetadata/0/sourceAnchorIDs/0", "/batch/knowledge/eventMetadata/0/sourceAnchorIDs/1"])
+            XCTAssertTrue(error.issues.allSatisfy { $0["reason"]?.contains("字符串") == true })
+        }
+        rows[0]["sourceAnchorIDs"] = "a"; knowledge["eventMetadata"] = rows
+        do { try ReadingProposalShape.validateReferences(name:"knowledge_changes_propose",data:data(knowledge)); XCTFail("array required") }
+        catch let error as ReadingProposalShapeError { XCTAssertEqual(error.issues.first?["path"], "/eventMetadata/0/sourceAnchorIDs") }
+    }
+    func testRepairingAnchorReferenceShapeRetainsOriginalProposalAndRechecksTime() async throws {
+        let host = PreflightWriteHost(), access = ReadingProposalToolAccess(proposalTools:["knowledge_changes_propose"],prepare:{_,value in await host.submit(value)})
+        var q = try query(fixture(),access:access), raw = payload(), batch = raw["batch"] as! [String:Any], k = batch["knowledge"] as! [String:Any]
+        var entities=k["entities"] as! [[String:Any]]; entities[1]["latitude"] = 29.7; entities[1]["longitude"] = 113.6; k["entities"] = entities
+        var rows=k["eventMetadata"] as! [[String:Any]], extent=rows[0]["extent"] as! [String:Any]
+        extent["sourceSpan"] = ["startAnchorID":"a"]; rows[0]["extent"] = extent; rows[0]["sourceAnchorIDs"] = [["clientID":"a"]]
+        k["eventMetadata"] = rows; batch["knowledge"] = k; raw["batch"] = batch
+        do { _=try await q.execute(name:"knowledge_changes_propose",arguments:raw,maximumBytes:16000); XCTFail("shape") } catch { XCTAssertTrue(error is ReadingProposalShapeError) }
+        let draft=try XCTUnwrap(q.rejectedToolDraft)
+        let result=try await q.execute(name:"tool_draft_repair",arguments:["draftID":draft.id,"edits":[["operation":"set","path":"/batch/knowledge/eventMetadata/0/sourceAnchorIDs/0","value":"a"]]],maximumBytes:16000)
+        XCTAssertTrue(result.contains("repairedTool")); XCTAssertNil(q.rejectedToolDraft)
+        let saved=await host.received; XCTAssertEqual(saved.count,1)
+        let change=try ReadingProposalTools.decode(name:"knowledge_changes_propose",arguments:try XCTUnwrap(saved.first))
+        XCTAssertEqual(change.knowledge?.entities?.count,2); XCTAssertEqual(change.knowledge?.eventMetadata?.first?.extent?.narrativeStart,611)
+    }
     func testOnePreflightReportsIndependentCoordinateAndTimeErrorsWithoutSaving() throws {
         let book = fixture(), q = try query(book), raw = try data(payload())
         do { _ = try q.preflightProposal(name: "knowledge_changes_propose", data: raw); XCTFail("Must reject") }

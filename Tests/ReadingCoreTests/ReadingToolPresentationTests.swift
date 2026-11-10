@@ -83,6 +83,18 @@ final class ReadingToolPresentationTests: XCTestCase {
         XCTAssertEqual((final["hostToolReceipts"] as? [[String: Any]])?.count, 4)
         let small = try XCTUnwrap(session.finalEvidence(maximumBytes: 600)); XCTAssertLessThanOrEqual(small.utf8.count, 600)
     }
+    func testClosingRetainsTypedSavedCountsWithoutCopyingBodiesOrInventingActions() throws {
+        var q=try session()
+        try q.recordHostReceipt(try q.json(["status":"success","applied":true,"newlyApplied":true,"proposalID":"anchors-only","actualChanges":[
+            "temporalAnchors":["created":2],"unknown":["created":900],"entities":["created":10001],"events":["secretBody":"not retained"]],"idMap":["alias":"long-original-id"],"body":"not copied"]),tool:"knowledge_changes_propose")
+        let summary=try XCTUnwrap(q.closingHostReceiptSummaries().first)
+        let counts=try XCTUnwrap(summary["actualChanges"] as? [String:[String:Int]])
+        XCTAssertEqual(counts,["temporalAnchors":["created":2]])
+        XCTAssertNil(counts["relationMetadata"]); XCTAssertEqual(summary["newlyApplied"] as? Bool,true)
+        XCTAssertNil(summary["idMap"]); XCTAssertNil(summary["body"])
+        let final=try XCTUnwrap(q.finalEvidence(maximumBytes:7000))
+        XCTAssertTrue(final.contains("actualChanges")); XCTAssertTrue(final.contains("temporalAnchors")); XCTAssertFalse(final.contains("long-original-id"))
+    }
     func testActualWireMatchesProgressAndKeepsCanonicalKnowledgeUntouched() async throws {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let book = book(), before = try encoder.encode(book), requests = ToolPresentationRequests(), progress = ToolPresentationProgress()
