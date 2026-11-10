@@ -249,3 +249,59 @@ private actor EventPresentationFeed {
     }
     func read() -> ReadingWorkspaceSnapshot { calls.count > 1 ? corrected ?? initial : initial }
 }
+
+extension ReadingEventPresentationTests {
+    func testBusinessReceiptExplainsSavedActionAndSourceLocationsWithoutGrantingSourceText() async throws {
+        let b = try fixture(), feed = EventPresentationFeed(workspace(b)); var s = try session(b, host: host(feed))
+        let raw = try await s.execute(name: "view_show_event", arguments: ["eventID": "phase1"], maximumBytes: 12000)
+        let result = try json(raw), context = try XCTUnwrap(result["eventContext"] as? [String: Any])
+        let actions = try XCTUnwrap(context["actions"] as? [[String: Any]])
+        XCTAssertEqual(result["complete"] as? Bool, true); XCTAssertEqual(context["bodyProvided"] as? Bool, false)
+        XCTAssertEqual(context["visibleRelationCount"] as? Int, 1); XCTAssertEqual(actions.count, 1)
+        XCTAssertEqual(actions[0]["relationLineVisible"] as? Bool, true)
+        XCTAssertEqual(actions[0]["label"] as? String, "登岸")
+        XCTAssertEqual((actions[0]["from"] as? [String: String])?["name"], "甲地")
+        XCTAssertEqual((actions[0]["to"] as? [String: String])?["name"], "乙地")
+        XCTAssertEqual((context["sourceLocations"] as? [[String: Any]])?.compactMap { $0["page"] as? Int }, [51, 52])
+        XCTAssertTrue(s.sourceExcerpts.isEmpty); XCTAssertTrue(s.sourceReferences.isEmpty)
+        XCTAssertFalse(raw.contains(b.units[0].text)); XCTAssertLessThanOrEqual(raw.utf8.count, 12000)
+    }
+    func testBusinessReceiptSeparatesTemporalVariantsOfOneRelationAndActualVisibility() throws {
+        var b = try fixture()
+        let laterAnchor = b.temporalKnowledge!.anchors[7].id
+        b.temporalKnowledge?.relationMetadata.append(.init(id: "later-record", relationID: "action",
+            validity: .init(precision: .narrative, narrativeStart: 57, narrativeDomain: "source-order"),
+            sourceAnchorIDs: [laterAnchor], assertion: .explicit,
+            spatial: .init(kind: "deployment", eventID: "phase1")))
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .book, in: b)
+        let plan = try ReadingEventPresentationPlan.resolve(eventID: "phase1", in: b, snapshot: snapshot)
+        var s = try session(b); s.workspace = workspace(b)
+        let value = try XCTUnwrap(s.eventReceiptContext(plan, maximumBytes: 6000)), actions = try XCTUnwrap(value["actions"] as? [[String: Any]])
+        XCTAssertEqual(value["actionRecordCount"] as? Int, 2); XCTAssertEqual(value["recordsInWindow"] as? Int, 1)
+        XCTAssertEqual(value["recordsOutsideWindow"] as? Int, 1); XCTAssertEqual(value["visibleRelationCount"] as? Int, 1)
+        XCTAssertEqual(Set(actions.compactMap { $0["recordID"] as? String }), ["action-meta", "later-record"])
+        let later = try XCTUnwrap(actions.first { $0["recordID"] as? String == "later-record" })
+        XCTAssertEqual(later["windowMatch"] as? String, "outside_window"); XCTAssertEqual(later["relationLineVisible"] as? Bool, false)
+        s.workspace?.observationStatus = .pending
+        let pending = try XCTUnwrap(s.eventReceiptContext(plan, maximumBytes: 6000))
+        XCTAssertEqual(pending["visibleRelationCount"] as? Int, 0)
+        s.workspace = workspace(b);s.workspace?.timeWindows?[0].from = 57
+        let otherWindow = try XCTUnwrap(s.eventReceiptContext(plan, maximumBytes: 6000))
+        XCTAssertEqual(otherWindow["visibleRelationCount"] as? Int, 0)
+    }
+    func testBusinessReceiptNeverRevealsFutureActorNamesAndSmallBudgetIsHonest() async throws {
+        var b = try fixture()
+        b.entities.append(.init(id: "future-actor", typeID: "person", name: "未读秘密人物", evidence: [.init(unitID: "u7", quote: b.units[7].text)]))
+        b.temporalKnowledge?.relationMetadata[0].spatial?.actorIDs = ["future-actor"]
+        var context = ReadingContext(unitID: "u0", page: 51);context.queryRange = .init(pageStart: 51, pageEnd: 52)
+        let snapshot = try ReadingQuerySnapshot.freeze(scope: .range, in: b, context: context)
+        let plan = try ReadingEventPresentationPlan.resolve(eventID: "phase1", in: b, snapshot: snapshot)
+        var s = ReadingQuerySession(snapshot: snapshot, history: [], loader: nil, providedDocuments: [:], project: b)
+        s.workspace = workspace(b)
+        let value = try XCTUnwrap(s.eventReceiptContext(plan, maximumBytes: 3000))
+        let data = try JSONSerialization.data(withJSONObject: value)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("未读秘密人物"))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("future-actor"))
+        XCTAssertNil(try s.eventReceiptContext(plan, maximumBytes: 1)); XCTAssertTrue(s.sourceReferences.isEmpty)
+    }
+}

@@ -137,7 +137,7 @@ enum ReadingQueryToolCatalog {
                 function("objects_search", "按名称/别名/概述和类型检索范围内对象；精确名称、别名优先，多词先覆盖各词候选，同名仍需核对。索引不是独立证据。", query),
                 function("object_get", "id读取单个对象；ids批量读取已知对象。组织组件先批量取字段/关联，再按需核对原文；返回本范围版本，不自动读取挂载Markdown。", object),
                 function("relations_list", "省略objectID分页列本范围全部关系与地图行动，传objectID按对象过滤；只返回范围内资料，未知时间不当作当前成立。", relation),
-                function("events_query", "按人物/地点/时间查询范围内事件；已有父事件用parentEventID直接读其子阶段，按phaseOrder排序。参与事件不推出位置。", event),
+                function("events_query", "按人物/地点/时间查事件；parentEventID列子阶段并按phaseOrder排序。默认简明目录，重复时间用sameAs指向保留值；includeEvidence:true取完整解释与引文。参与事件不推出位置。", event),
                 function("entity_history_get", "查询一个实体的有证据出现/参与/关系；footprints是明确出现点，不推造连续路线。", entity, required: ["entityID"])]
         }
         if let host {
@@ -153,7 +153,7 @@ enum ReadingQueryToolCatalog {
                     purpose = "只切换/打开已有组件，不选择事件、不筛选时间。选择对象用view_focus；阶段筛选用view_set_time_window。"
                 case "view_show_event":
                     fields = ["eventID": string]; required = ["eventID"]
-                    purpose = "在当前已打开的组合地图/时间轴展示这个已有事件的完整出处区间及行动，软件计算范围、定位并返回实际画面与缺口。先用component_show打开既有视图；不要自己猜阶段起止坐标。"
+                    purpose = "在已打开的组合地图/时间轴展示已有事件，软件计算完整出处区间并定位。返回实际画面、行动名称/人物/起止地点及因时间未显示的关联记录；已有分析不是新读正文。先用component_show打开既有视图，无需猜阶段坐标。"
                 case "view_focus":
                     fields = ["objectID": string, "anchorID": string, "documentID": string]; required = []
                     purpose = "定位一个共享对象，或打开文档、回到原文锚点；三个ID选一种。此操作不设置时间筛选。"

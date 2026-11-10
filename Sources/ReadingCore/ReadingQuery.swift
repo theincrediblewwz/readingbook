@@ -609,10 +609,13 @@ struct ReadingQuerySession {
         search["mode"] = ["type": "string", "enum": ["any", "all"]]
         var documentSearch = search; documentSearch["scanOffset"] = offset
         let reading: [String: Any] = ["id": string, "offset": offset, "length": ["type": "integer", "minimum": 1, "maximum": 12000], "expectedHash": string]
+        var sourceReading = reading
+        sourceReading["ids"] = ["type": "array", "items": string, "minItems": 1, "maxItems": 8,
+            "description": "与id二选一，按顺序读取明确选中的最多8页；length为总字符上限。批读从各页开头开始，未读页见remainingIDs，局部续读用id/offset。"]
         return [
             tool("source_outline", "仅列当前冻结范围内原文单元索引，并非PDF书签目录；nextOffset分页。索引不代表正文已读。", paging),
             tool("source_search", "检索当前范围原文，自动简繁互搜，1至8关键词any/all；返回有界原文字形和定位，范围外无法读取。", search, ["keywords"]),
-            tool("source_read", "按目录id/字符offset分段读取当前范围原文；选段范围只返回选段，按nextOffset续读，不增加阅读覆盖。", reading, ["id"]),
+            tool("source_read", "id/offset读取一页，ids一次读几页已选原文；同一总预算、逐页保留引用和续读位置。只返回冻结范围实际片段，不隐式扩页或增加阅读覆盖。", sourceReading),
             tool("source_locate", "按已知原文ID查询本范围的页码、章回和实际叙事序号；不重读正文，不增加引用或阅读覆盖。", ["ids": ["type": "array", "items": string, "minItems": 1, "maxItems": 20]], ["ids"]),
             tool("documents_list", "只列本次显式授权的笔记目录；原文范围不会自动附加笔记。目录不是正文。", paging),
             tool("documents_search", "按需检索已授权笔记全文，每批最多32篇，nextScanOffset续查后续文档，offset只在本批命中中分页；笔记不能冒充原书。", documentSearch, ["keywords"]),
@@ -682,6 +685,7 @@ struct ReadingQuerySession {
         case "documents_list":
             return try page(snapshot.documents.map { ["id": $0.id, "title": $0.title, "origin": $0.origin] as [String: Any] }, arguments, cap)
         case "source_read":
+            if arguments["ids"] != nil { return try readSourceBatch(arguments, maximumBytes: cap) }
             let id = try identifier(arguments)
             guard let source = snapshot.sources.first(where: { $0.unitID == id }) else { throw invalid("原文ID不在本次冻结范围内。") }
             try checkHash(arguments, actual: source.textHash)
@@ -793,7 +797,7 @@ struct ReadingQuerySession {
         return try json(["ok": true, "items": selected, "total": rows.count, "nextOffset": !selected.isEmpty && offset + selected.count < rows.count ? (offset + selected.count) as Any : NSNull(),
             "budgetLimited": selected.isEmpty && offset < rows.count, "bodyProvided": false])
     }
-    private func readSlice(_ text: String, _ args: [String: Any], _ cap: Int, metadata: [String: Any]) throws -> (text: String, result: String) {
+    func readSlice(_ text: String, _ args: [String: Any], _ cap: Int, metadata: [String: Any]) throws -> (text: String, result: String) {
         let offset = try number(args, "offset", fallback: 0, maximum: text.count)
         let length = try number(args, "length", fallback: 3000, maximum: 12000)
         guard length > 0 else { throw invalid("length须为1至12000。") }

@@ -111,3 +111,26 @@ final class ReadingDiscoveryTests: XCTestCase {
         XCTAssertTrue(query.sourceExcerpts.contains { $0.0 == "one" && $0.1 == String(book.units[0].text.prefix(15)) })
     }
 }
+
+extension ReadingDiscoveryTests {
+    func testDefaultDirectoryAliasesOnlyByteIdenticalTimeFieldsAndFullMetadataIsStillAvailable() async throws {
+        var b = try fixture(); b.temporalKnowledge?.eventMetadata[0].explanation = String(repeating: "完整依据说明。", count: 100)
+        var brief = try session(b), complete = try session(b)
+        let text = try await brief.execute(name: "events_query", arguments: ["limit": 1], maximumBytes: 16000)
+        let full = try await complete.execute(name: "events_query", arguments: ["limit": 1, "includeEvidence": true], maximumBytes: 16000)
+        let first = try XCTUnwrap((try object(text)["items"] as? [[String: Any]])?.first)
+        let second = try XCTUnwrap((try object(full)["items"] as? [[String: Any]])?.first)
+        let aliases = try XCTUnwrap(first["sameAs"] as? [String: String])
+        XCTAssertEqual(aliases["object.temporalExtent"], "extent"); XCTAssertEqual(aliases["metadata.extent"], "extent")
+        XCTAssertNil(aliases["sourceExtent"], "叙事出处与史事日历不同，不能合并")
+        XCTAssertNotNil(first["sourceExtent"])
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: first["extent"]!, options: [.sortedKeys]), try JSONSerialization.data(withJSONObject: second["extent"]!, options: [.sortedKeys]))
+        XCTAssertEqual((first["object"] as? [String: Any])?["version"] as? String, (second["object"] as? [String: Any])?["version"] as? String)
+        XCTAssertNil((first["metadata"] as? [String: Any])?["explanation"])
+        XCTAssertEqual(first["metadataExplanationOmitted"] as? Bool, true)
+        XCTAssertEqual((second["metadata"] as? [String: Any])?["explanation"] as? String, b.temporalKnowledge?.eventMetadata[0].explanation)
+        XCTAssertNotNil((second["metadata"] as? [String: Any])?["extent"])
+        XCTAssertTrue(brief.sourceExcerpts.isEmpty); XCTAssertTrue(brief.sourceReferences.isEmpty)
+        XCTAssertLessThan(text.utf8.count, full.utf8.count)
+    }
+}

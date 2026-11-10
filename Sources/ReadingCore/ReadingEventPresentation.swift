@@ -94,6 +94,11 @@ extension ReadingQuerySession {
         let complete = applied && missing.isEmpty
         result["complete"] = complete; result["observed"] = applied && workspace?.observationStatus?.permitsVisibility == true
         result["missing"] = missing
+        if applied {
+            if let context = try eventReceiptContext(plan, maximumBytes: min(4_000, maximumBytes / 2)) {
+                result["eventContext"] = context
+            } else { result["eventContextOmitted"] = true }
+        }
         pendingEventPresentation = complete ? nil : plan
         if !complete {
             eventPresentationFailures[id] = attempts + 1
@@ -104,6 +109,9 @@ extension ReadingQuerySession {
                 "message": "已有应用结果保留；按missing与实际画面只修正缺口。未就绪可重试本动作；布局不支持时先打开合适的已有组合。没有有据地点或行动时说明缺少资料，不造路线。"]
         }
         var output = try json(result)
+        if output.utf8.count > min(16_000, maximumBytes), result.removeValue(forKey: "eventContext") != nil {
+            result["eventContextOmitted"] = true; output = try json(result)
+        }
         if output.utf8.count > min(16_000, maximumBytes), let actual = result["actualView"] as? [String: Any] {
             result["actualView"] = closingWorkspaceObservation(actual); output = try json(result)
         }

@@ -5,6 +5,33 @@ extension ReadingQuerySession {
     /// canonical JSON result for host validation and diagnostics. References
     /// bind only the exact returned fragment, never an unread full page.
     mutating func modelSourceReadText(_ payload: String) throws -> String {
+        if let batch = try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+           batch["ok"] as? Bool == true, let rows = batch["items"] as? [[String: Any]], !rows.isEmpty {
+            // Stage all reference changes: an inconsistent row must not issue
+            // references for other rows in an envelope that was never sent.
+            guard rows.count <= 8, Set(rows.compactMap { $0["id"] as? String }).count == rows.count else {
+                throw invalid("批读原文的单元身份重复或超出上限。")
+            }
+            var staged = self, sections = [String]()
+            for row in rows {
+                guard let id = row["id"] as? String, let text = row["text"] as? String,
+                      row["ok"] as? Bool == true else { throw invalid("批读原文的实际片段封装不完整。") }
+                if text.isEmpty {
+                    guard snapshot.sources.contains(where: { $0.unitID == id && $0.text.isEmpty }), !id.contains("\n"), !id.contains("\r") else {
+                        throw invalid("批读的空白单元不在实际冻结原文中。")
+                    }
+                    sections.append("【原文 [unit:\(id)]｜空白单元】")
+                }
+                else { sections.append(try staged.modelSourceReadText(json(row))) }
+            }
+            if let remaining = batch["remainingIDs"] as? [String], !remaining.isEmpty {
+                sections.append("尚未读取的单元：" + remaining.joined(separator: "、") + "（可用source_read的ids继续）。")
+            }
+            let text = sections.joined(separator: "\n\n")
+            guard text.utf8.count <= payload.utf8.count else { throw invalid("批读正文排版超过已核对预算，未发送正文。") }
+            sourceReferences = staged.sourceReferences
+            return text
+        }
         guard let value = try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
               value["ok"] as? Bool == true, let id = value["id"] as? String, let text = value["text"] as? String, !text.isEmpty,
               let offset = value["offset"] as? Int else { return payload }

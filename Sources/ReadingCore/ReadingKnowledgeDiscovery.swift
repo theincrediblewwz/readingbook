@@ -44,6 +44,30 @@ extension ReadingQuerySession {
         object["evidenceCount"] = evidence.count
         object["sourceUnitIDs"] = Array(Set(evidence.map(\.unitID))).sorted()
         if compact.object.summary != fullSummary { object["summaryTruncated"] = true }
+        // A stage used to repeat one identical extent four times. Keep one
+        // complete value (including calendar/assertion/explanation) and name
+        // the exact aliases; different factual/source extents stay separate.
+        var sameAs = [String: String]()
+        func identical(_ lhs: Any?, _ rhs: Any?) -> Bool {
+            guard let lhs = lhs as? NSDictionary, let rhs = rhs as? NSDictionary else { return false }
+            return lhs.isEqual(rhs)
+        }
+        if identical(object["temporalExtent"], row["extent"]) {
+            object.removeValue(forKey: "temporalExtent"); sameAs["object.temporalExtent"] = "extent"
+        }
+        if identical(row["sourceExtent"], row["extent"]) {
+            row.removeValue(forKey: "sourceExtent"); sameAs["sourceExtent"] = "extent"
+        }
+        if var metadata = row["metadata"] as? [String: Any] {
+            if identical(metadata["extent"], row["extent"]) {
+                metadata.removeValue(forKey: "extent"); sameAs["metadata.extent"] = "extent"
+            }
+            if let explanation = metadata["explanation"] as? String, !explanation.isEmpty {
+                metadata.removeValue(forKey: "explanation"); row["metadataExplanationOmitted"] = true
+            }
+            row["metadata"] = metadata
+        }
+        if !sameAs.isEmpty { row["sameAs"] = sameAs }
         row["object"] = object
         row["timeSummary"] = TemporalDatePresentation.summary(value.extent)
         return row
