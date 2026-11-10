@@ -1,3 +1,25 @@
+<!-- chibi-view-adjustment-local:start -->
+本批已完成本机交付：Design/2026-11-10-view-adjustment-results.md；总入口 logs/chibi-view-adjustment-20261110/final-local-delivery.json。产品96cf874、7ffed68、c4fcf2d（14产品Swift/14新增核心方法）；0.23.70/build101 ARM64本地迭代已替换，binary SHA 6acf4afcaad273254718bfd7d569d270b44fdd1289eb6577df86373b59c3453c。两次正式原书104/1484、277%、你好、2笔记、旧伴读/对话、查找关闭及正常启动退出过，最后书库退出。最终原39文件逐字节一致，偏好值一致，未恢复旧库覆盖。未推GitHub/云CI/Release；勿重复安装、索要解锁或恢复旧库。用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持且未提交。
+
+已实现：component_show读实际layout/root/version，并可原位调旧视图几何，不绕整本方案/不复制资料；仅保一份previousLayout，检查版本及bindingsRevision，右键地图“全部内容”按钮可恢复；草案声明同原工具允许原授权内修正。锚点引用数组元素先查结构并给JSON Pointer，保留严格引文核验。收尾轻量回执保留actualChanges类别数量，避免只保存2锚点却说完成2行动。无已知行动路线的静态事件允许用当前获准投影中明确places引用定位；不猜位置，不以地点替代已有但不可见路线。
+
+取景新算法按目标长宽比例选空矩形。同native5冻结事实/浮卡最终样本，1000×680/1320×780/1640×980/1920×1080，火攻旧scale/新scale为1/1.425/1.173/1.271，伏击1.013/1/1/1；每组1000次均值4.54..5.49us。不是FPS或整App内存收益；不要套用早期native3的倍率到最终native5。部分伏击仍偏宽，素材视觉未最终完成。
+
+最终core4=576方法5855独立断言（非XCTest），viewAdjustment3组件60/共享80/动态52/滚动25共217过，所检告警零；native5布局9项、火攻/伏击/赵云/张飞4次complete+camera success，实际点回PDF619。real4两次模型呈现complete；追加CUA锁屏，物理画面证据是同最终源码和资料的native5，不混称real4人工操作。中途夹具/编译失败及real2失败均留原现场，不计通过。
+
+真实官方Flash：real1从前批real3/final/project.json SHA3f45d1c8a7124702eae6635dec2d76116a6e4d4aaaee32a100b6030ec7060719续接，5HTTP/158671报告token，高度260/250/300→220/210/280、仍3视图、事实/来源/parts不改，火攻/伏击两次成功但收尾偏满。real2=8HTTP/314430，引用字符串填对象等，最终只存2锚点、未存执行事实，却因收尾压缩丢actualChanges而误报，saved-case及closing-count-loss-case保留。
+
+real3在修反馈后从real2/final显式续接，8HTTP/375868，真实AI选择2个子事件+2份eventMetadata（不是2份relationMetadata/新路线），分别赵云乌林之西截击w-cc00a59857b3c5effb42b1fe8daec32eb338606a、张飞葫芦口截击w-3f677a6d9dc2a9425d2129ed147c8946c1a9baed。依据PDF617/619，source-order616/618为叙事序号非日历日期；旧部署关系时间原值保留。该轮数据保存、呈现未完成，如实收尾。
+
+real4最终c4fcf2d读取real3/final，4HTTP/120778，打开旧组件/展示赵云/展示张飞/答复；两次complete/camera success、时间616与618、实际乌林/葫芦口可见。张飞无路线仍可依明确地点呈现，不造箭头。赵云窗有他事败退线，不误认它为赵云路线。事实/视图全不改。全批25HTTP/969747报告token，含失败与重复上下文，非计费金额。无Key/认证头/私有推理持久化；所有退出前输入/公开请求/回执/结果/构建清单已存，下一轮先读现场，别从头重付费。
+
+下一冻结输入 logs/chibi-view-adjustment-20261110/real4/final/project.json（同real3事实，35要素18事件10关系13关系时间信息31锚点3视图）。可导入 private-books/chibi-view-adjustment-20261110/赤壁执行与浮卡地图.readingbook；生产导出/隔离重导入通过，未混原书库。原位布局有一层previousLayout，只是根/layout/绑定版本，不存正文或分析；详见数据存储说明.md。
+
+新鲜回滚 private-books/chibi-view-adjustment-20261110/install-before-local-iteration/ReadingBook-0.23.70-local-3da7218.app（旧ed6faac安装），及原库/prefs/verification/protection。cleanup.py --apply已执行不得重跑；9重建程序/更旧5ce回滚App退役，旧书库/prefs留存。60结束运行目录318文件逐成员验SHA归档closed-runtime.zip/index；33快照→11规范内容、原路径相对链接可读，不单删evidence-canonical。5238非过期App私人文件、最新3da回滚、正式ZIP、共享缓存和当前候选核SHA保持。清理8575912→7688876KiB，回收866.2MiB，批初净增151.7MiB，文档微增以总入口最终du为准。
+
+下一批优先减少AI准备阶段目录/身份/字段往返，沿用已保存事实与当前授权；同时推进按已选概念图的新可组合素材、类型图标/行动箭头/按需详情与远景战役聚合，不只是缩旧圆点。现代地名密度（底图不淡化）、层级横移时间轴/可视窗与筛选端点分离、有据曲线区域、素材自由组合和16组件性能轮转继续保留。下方为历史。
+<!-- chibi-view-adjustment-local:end -->
+
 <!-- chibi-canvas-layout-local:start -->
 本批已完成本机交付：Design/2026-11-10-canvas-layout-results.md；总入口 logs/chibi-canvas-layout-20261110/final-local-delivery.json。产品3da7218（10产品Swift/8新增核心方法），0.23.70/build101 ARM64本地迭代已替换，binary SHA ed6faac0b936ded7d8bd08e7d1f17ee74dfe477926ecf35dd748e2e6ac0aa812。正式App两次原书104/1484、你好、2笔记、旧问答/伴读、查找关闭及正常启动退出过，最后书库退出。未推GitHub/云CI/Release；勿重复安装、索要解锁或恢复旧库。
 
