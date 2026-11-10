@@ -1,3 +1,21 @@
+<!-- scenario-generalization-local:start -->
+本批本机交付已完成：Design/2026-11-11-scenario-generalization-results.md；总入口 logs/scenario-generalization-20261111/final-local-delivery.json。用户明确要求通用能力，不可按赤壁/赵云/张飞加分支或手填测试结果。产品a43b148（7产品Swift/13新增核心方法）；0.23.70/build101 ARM64本地迭代已替换，binary SHA dc4f7f76d2c65f50377fa92e5d84f02d56e6abdeb47da12aea93fe299107ecb6。本批无GitHub访问/云CI/Release。两次正式原书104/1484、277%、你好、2笔记、旧伴读和对话、查找关闭、正常启动退出过，最后书库退出；无需重复安装/验收/索要解锁。
+
+通用实改：view_show_event可同时传已有viewID，复用component_show和原事件能力，按宿主实时视图目录支持同一问题刚创建的视图；仍检查完整来源、授权、目标、版本和实际画面。明确精确日/年用原历法，其他退回有据原文先后；显式原文轴优先，UI/模型/回执共用规则。全书身份策略显式传递、默认false，不用日期或布局扩大正文授权。投影提交先标新地图pending并保已提交时钟/选择，新代次触发有界屏幕观察；相同投影输入合并且重复命令仍确认，避免显式动作和界面监听重复刷新清空镜头状态。无新增事实库、固定睡眠、降可见性标准或命名场景分支。
+
+最终core5=589方法6149独立断言（非XCTest）；scenarioGeneralization2组件60/共享80/动态52/滚动25共217过，所检告警零。run-suites.py最初摘要误读tag1路径，实际执行tag2；已核对真实tag2报告修正摘要，不能把tag1当最终。surveyNative9与chibiNative3各4事件complete/camera success，facts/views不变；新日期→原文→日期及重复同时间命令确认过，实际出处跳4/619页。中间native1..8的失败与原因均留存，不计最终通过。core4身份版本不一致修成显式调用方策略，不改默认权限。
+
+真实real9从0要素/事件/关系/视图开始，只提供5段专写的虚构生态调查文字；官方Flash自行生成5要素4事件2转运1地图/日期轴组合。校准/复检两次完整呈现、calendar-day:公历，静态活动没造路线；无未知途经点。回答保存后ready，CUA回第4页/重开原视图/恢复上次范围/两转运路线通过，结果未混原书库。9HTTP/364878报告token；仍有第4请求元数据通用格式错、第5自修成功，基础成果保留。real3初轮9HTTP/317013暴露旧视图目录/日期轴，real4..8仅链接未启动0HTTP。全批18HTTP/681891含重复上下文、非账单。不含Key/认证头/私有思考；公开请求/回复/输入/错误/退出成果已保存，不盲目重做付费生成。
+
+确定性同协议实际引擎对照：旧3次模型请求92410输入封装B→新2次60433B（-34.6%），同宿主动作/答案/0正文读取。不是供应商延迟、整App FPS或计费收益。真实全链仍9请求，不能宣称整体提速。新样本短，普通分栏为模型选择，不冒充已选浮卡概念图完成；24变化夹具不等于24本真实书。
+
+新鲜回滚 private-books/scenario-generalization-20261111/install-before-local-iteration/ReadingBook-0.23.70-local-c4fcf2d.app，及原库/prefs/保护清单。最终原39文件38字节同，唯一Workspace pdf.location.x往返差<1e-15；书/笔记/分析字节同，偏好值同，不用旧备份覆盖。用户dirty Design/2026-10-29-performance-progress.md SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持且未提交。
+
+cleanup.py --apply已执行不得重跑：8670332→7811840KiB，回收838.4MiB，批初净增119.9MiB。8重建程序/过期3da回滚App退役；78运行目录317文件逐成员SHA归档closed-runtime.zip/index；75项目快照→7规范内容、原路径相对链接可读，不单删evidence-canonical。5280非过期App私人文件、最新c4回滚、当前候选、正式ZIP、规范PDF保持，保共享缓存供下轮增量编译。
+
+下一批先读 generic-draft-feedback-case.json 和 real9/final/project.json：通用解码错误仍只有“格式不对”，应定位字段/实际类型、集中反馈、保留已存成果，不能为调查样本写例外。再接按已选概念图的可组合新图标/行动箭头/区域/按需浮卡和远景聚合；不是只缩旧圆点。现代地名密度（不淡化底图）、层级横移时间轴/可视窗与筛选端点分离、有据曲线区域、16组件性能轮转继续保留。下方为历史。
+<!-- scenario-generalization-local:end -->
+
 <!-- chibi-view-adjustment-local:start -->
 本批已完成本机交付：Design/2026-11-10-view-adjustment-results.md；总入口 logs/chibi-view-adjustment-20261110/final-local-delivery.json。产品96cf874、7ffed68、c4fcf2d（14产品Swift/14新增核心方法）；0.23.70/build101 ARM64本地迭代已替换，binary SHA 6acf4afcaad273254718bfd7d569d270b44fdd1289eb6577df86373b59c3453c。两次正式原书104/1484、277%、你好、2笔记、旧伴读/对话、查找关闭及正常启动退出过，最后书库退出。最终原39文件逐字节一致，偏好值一致，未恢复旧库覆盖。未推GitHub/云CI/Release；勿重复安装、索要解锁或恢复旧库。用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持且未提交。
 
