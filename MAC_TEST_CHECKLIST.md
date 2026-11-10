@@ -1,11 +1,17 @@
 <!-- chibi-form-preflight-local:start -->
-本批候选与真实验收：Design/2026-11-10-form-preflight-results.md；logs/chibi-form-preflight-20261110。产品build10已编译；core11 537方法/5502独立断言（非XCTest）、formPreflight7共享80/范围55/动态52/滚动25共212过，所检告警零；replay7一次23问题、核心35/16/10落盘与待补稿重启保持；frozenProjection5真实共享12地点/10路线身份13时间变体/16事件，两阶段可见。
+本批已完成本机交付：Design/2026-11-10-form-preflight-results.md；总入口 logs/chibi-form-preflight-20261110/final-local-delivery.json。产品3833dfc（16产品Swift/18新方法）；0.23.70/build101 ARM64本地迭代已替换，binary SHA c33a32f98491fa63b1f536c026579fb22187e688e3a241cea581f649c8f2d39f。两次原书104/1484、你好、2笔记、旧伴读/对话、查找关闭过，最后书库正常退出。未推GitHub/云CI/Release，勿重复安装/申请解锁/恢复旧库。
 
-real8同一已保存输入、自然问题，新官方Flash 11HTTP/462946报告token；第2/3请求阶段展示complete=true，回答保存后仍就绪，CUA人工火攻613、伏击616..618、跳PDF617完成。原书库未参与；非从零生成、非精确史地路线。real7实际画面有行动线，旧核验强要事件圆点导致18HTTP反复；已修只认可真正匹配、已投影且可见的行动。事件source-order向外补齐仍须审阅可撤销；没有造日期/自动换经纬度。
+最终core11为537方法/5502独立断言非XCTest；formPreflight7共享80/范围55/动态52/滚动25共212过，所检告警零。replay7一次23问题、核心35/16/10实际落盘与待补完整稿重启保持；frozenProjection5共享12地点/10路线身份13时间变体/16事件，火攻613、伏击616..618可见。core10新夹具漏预期known_actions_projected，未放宽程序，最终只计core11。
 
-本批所有真实累计86HTTP/3893375报告token，包含失败和重复上下文，不等于计费金额。real4人为取消与real3预算收尾如实留存；real6/7故障和已完成成果均保存。公开日志不含Key/认证头/私有思考；下一轮先读现场而非从头重生成。
+真实最后real8沿用repairCurrent5/final-project.json SHA e54a1f01864a79ccb0648071e54cadf0a2d92ec8350c8412283a946bcb7169d9；自然问题新官方Flash 11HTTP/462946报告token，第2/3请求complete=true、回答保存后仍就绪。CUA点两阶段、跳PDF617完成。原书库未参与；不是空库一次生成，坐标/路线为约略参考，时间轴为原文先后。real7行动线已画却强要事件圆点，修正后只认可关联且实际可见路线，不放行无关/遮挡/未选事件。事件同域source-order向外补齐须审阅可撤销，没编日期/自动换坐标。
 
-当前安装与清理正在收尾，尚不能把下方历史安装记录当本批结果。安装脚本install-local.py需core11/formPreflight7/replay7/real8及real-native-acceptance通过；先提交自己的产品文件，快速核包再fresh备份安装。原书39文件、用户dirty SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持，严禁恢复旧库。下方为历史批次。
+本批累计86HTTP/3893375报告token，含失败及重复上下文，不等于计费金额。real3预算收尾、real4主动取消、real6资料区间冲突、real7画面假失败及成果均已保存，不冒充最终成功。公开请求/回复不含Key/认证头/私有思考。下一轮先读现场，别从头重付费生成。
+
+fresh回滚 private-books/chibi-form-preflight-20261110/install-before-local-iteration/ReadingBook-0.23.70-local-fd41388.app，及当前library/prefs/verification。原39文件全留、38字节同，工作区仅pdf.location.x差小于1e-15，偏好同，无旧库覆盖。用户dirty SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持且未提交。
+
+cleanup-final.py与compact-snapshots.py均已执行且验SHA，勿重跑。119运行目录/607文件去重为227份、17重复PDF指规范源；34快照/日志→17唯一内容。累计回收约1024.7MiB，批初净增约192.5MiB，以delivery最终du为准。8可重建程序及旧049回滚App退役；5072受保护私人/交付文件、正式ZIP、最新fd回滚、共享缓存保持。根输入、公开模型请求、故障索引和截图在原位；被归档project/unified通过runtime/snapshot-evidence-index和restore-evidence.py逐文件验SHA读取，不覆盖现有文件。真实可导入示例：private-books/chibi-form-preflight-20261110/赤壁地图与时间轴.readingbook，未混入原库。
+
+下一批优先减少成功呈现后多余查目录/字段往返、相邻多页批读、小成果早显示，并核查同一行动部署/执行变体；随后全幅地图/浮动轴/按需卡的新布局与新素材标记。现代地名密度（不淡化）、时间轴可视/筛选端点分离和层级横移、远景战役聚合、有据曲线区域、素材自由组合与16类组件性能轮转继续保留。下方均为历史。
 <!-- chibi-form-preflight-local:end -->
 
 <!-- chibi-identity-flow-local:start -->
