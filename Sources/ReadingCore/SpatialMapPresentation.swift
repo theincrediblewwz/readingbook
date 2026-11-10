@@ -183,6 +183,32 @@ private struct MarkerRectIndex {
 }
 
 public enum SpatialMarkerSeeds {
+    /// Shared parent facts define a display family, independently of title or
+    /// subject. Only admitted event IDs may contribute ancestors or labels.
+    /// Resolve each chain once; invalid cycles do not become named families.
+    public static func familyRoots(eventIDs: Set<String>, parents: [String: String]) -> [String: String] {
+        var resolved: [String: String] = [:], invalid = Set<String>()
+        for id in eventIDs.sorted() where resolved[id] == nil && !invalid.contains(id) {
+            var path = [String](), visited = Set<String>(), cursor = id, root: String?
+            while true {
+                if let known = resolved[cursor] { root = known; break }
+                if invalid.contains(cursor) || !visited.insert(cursor).inserted { break }
+                path.append(cursor)
+                guard let parent = parents[cursor], eventIDs.contains(parent) else { root = cursor; break }
+                cursor = parent
+            }
+            for member in path {
+                if let root { resolved[member] = root }
+                else { invalid.insert(member) }
+            }
+        }
+        let linkedRoots = Set(parents.compactMap { child, parent -> String? in
+            guard eventIDs.contains(child), eventIDs.contains(parent), child != parent else { return nil }
+            return resolved[child]
+        })
+        return resolved.filter { linkedRoots.contains($0.value) }
+    }
+
     public static func make(points: [CompositionMapPoint], routes: [SpatialRoute]) -> [SpatialMarkerSeed] {
         let byObject = Dictionary(points.map { ($0.targetID, $0) }, uniquingKeysWith: { first, _ in first })
         let objects = points.map { point in

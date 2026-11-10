@@ -608,14 +608,17 @@ public enum CompositionRuntime {
         var result: [CompositionMapPoint] = []
         var seen = Set<String>()
         let locations = TemporalKnowledgeRuntime.locationEntityIDs(in: base.project)
+        let families = SpatialMarkerSeeds.familyRoots(eventIDs: Set(base.objectsByID.values.filter { $0.kind == .event }.map(\.id)),
+            parents: Dictionary((base.project.temporalKnowledge?.eventMetadata ?? []).compactMap { row in
+                row.parentEventID.map { (row.eventID, $0) }
+            }, uniquingKeysWith: { first, _ in first }))
         func append(id: String, target: String, place: TypedObject, title: String, subtitle: String, evidence: [Evidence], kind: String,
-                    markerKind: String? = nil, parentID: String? = nil) {
+                    markerKind: String? = nil) {
             guard let latitude = place.latitude, let longitude = place.longitude, latitude.isFinite, longitude.isFinite,
                   (-90...90).contains(latitude), (-180...180).contains(longitude), result.count <= 400, seen.insert(id).inserted else { return }
             result.append(CompositionMapPoint(id: id, targetID: target, title: title, subtitle: subtitle,
                 latitude: latitude, longitude: longitude, evidence: evidence, kind: kind, markerKind: markerKind,
-                affinityID: parentID.flatMap { base.objectsByID[$0]?.kind == .event ? $0 : nil },
-                affinityTitle: parentID.flatMap { base.objectsByID[$0]?.kind == .event ? base.objectsByID[$0]?.name : nil }))
+                affinityID: families[target], affinityTitle: families[target].flatMap { base.objectsByID[$0]?.name }))
         }
         for row in items {
             try Task.checkCancellation()
@@ -640,7 +643,7 @@ public enum CompositionRuntime {
                     guard let place = base.objectsByID[placeID] else { continue }
                     append(id: "event." + id + "." + placeID, target: id, place: place, title: object.name,
                         subtitle: place.name + " · " + event.extent.sourceText + (event.match == .unknown ? " · 时间未明" : event.match == .possible ? " · 时间待考" : ""), evidence: event.object.evidence, kind: "eventLocation",
-                        markerKind: event.metadata?.kind, parentID: event.metadata?.parentEventID)
+                        markerKind: event.metadata?.kind)
                     if result.count > 400 { return result }
                 }
             }

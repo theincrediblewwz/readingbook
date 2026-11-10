@@ -116,6 +116,7 @@ extension ReadingQuerySession {
     }
 
     private static func preflightIssues(_ error: Error) -> [[String: Any]] {
+        if let value = error as? ReadingToolArgumentError { return value.issues }
         if let value = error as? ReadingProposalTemporalError {
             return value.issues + value.metadataIssues.map { $0.mapValues { $0 as Any } }
         }

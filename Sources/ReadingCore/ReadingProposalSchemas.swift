@@ -10,12 +10,17 @@ public enum ReadingProposalTools {
     public static func decode(name: String, arguments: Data) throws -> ControlledChangeBatch {
         guard arguments.count <= 262_144, (try? JSONSerialization.jsonObject(with: arguments)) is [String: Any] else { throw ReadingError.invalid("变更提案须为小于256 KiB的JSON对象。") }
         let decoder = JSONDecoder()
+        let original = try JSONSerialization.jsonObject(with: arguments) as! [String: Any]
+        func decode<T: Decodable>(_ type: T.Type, data: Data, prefix: [String] = []) throws -> T {
+            do { return try decoder.decode(type, from: data) }
+            catch let error as DecodingError { throw ReadingToolArguments.decoding(error, original: original, prefix: prefix) }
+        }
         if let wrapper = try JSONSerialization.jsonObject(with: arguments) as? [String: Any], let raw = wrapper["batch"] {
             guard wrapper.count == 1, let value = raw as? [String: Any],
                   Set(value.keys).isSubset(of: ["knowledge", "graph", "documents", "bookScheme"]) else { throw ReadingError.invalid("变更批次包含未声明的宿主字段。") }
             guard group(for: name) != nil else { throw ReadingError.invalid("未注册的提案组。") }
             try ReadingProposalShape.validate(value, wrapped: true)
-            let batch = try decoder.decode(ControlledChangeBatch.self, from: JSONSerialization.data(withJSONObject: value))
+            let batch = try decode(ControlledChangeBatch.self, data: JSONSerialization.data(withJSONObject: value), prefix: ["batch"])
             let present: Bool
             switch group(for: name) { case .knowledge: present = batch.knowledge != nil; case .graph: present = batch.graph != nil
             case .documents: present = batch.documents != nil; case .bookScheme: present = batch.bookScheme != nil; case nil: present = false }
@@ -26,10 +31,10 @@ public enum ReadingProposalTools {
         let object = try JSONSerialization.jsonObject(with: arguments) as? [String: Any] ?? [:]
         try ReadingProposalShape.validate([definition.rawValue: object], wrapped: false)
         switch name {
-        case "knowledge_changes_propose": return ControlledChangeBatch(knowledge: try decoder.decode(ControlledKnowledgeChanges.self, from: arguments))
-        case "graph_changes_propose": return ControlledChangeBatch(graph: try decoder.decode(ControlledGraphChanges.self, from: arguments))
-        case "document_changes_propose": return ControlledChangeBatch(documents: try decoder.decode(ControlledDocumentChanges.self, from: arguments))
-        case "book_scheme_propose": return ControlledChangeBatch(bookScheme: try decoder.decode(ControlledBookSchemeChanges.self, from: arguments))
+        case "knowledge_changes_propose": return ControlledChangeBatch(knowledge: try decode(ControlledKnowledgeChanges.self, data: arguments))
+        case "graph_changes_propose": return ControlledChangeBatch(graph: try decode(ControlledGraphChanges.self, data: arguments))
+        case "document_changes_propose": return ControlledChangeBatch(documents: try decode(ControlledDocumentChanges.self, data: arguments))
+        case "book_scheme_propose": return ControlledChangeBatch(bookScheme: try decode(ControlledBookSchemeChanges.self, data: arguments))
         default: throw ReadingError.invalid("未注册的提案组。")
         }
     }

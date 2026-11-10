@@ -305,15 +305,21 @@ enum ReadingAnswerEngine {
                 do {
                     guard allowedNames.contains(call.function.name) else { throw ReadingError.invalid("该工具未在本轮冻结能力中授权。") }
                     let argumentLimit = ReadingQueryToolCatalog.proposalNames.contains(call.function.name) ? 262_144 : 32_768
-                    guard call.function.arguments.utf8.count <= argumentLimit, let data = call.function.arguments.data(using: .utf8),
-                          let arguments = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ReadingError.invalid("只读工具参数不是有界JSON对象。") }
+                    guard call.function.arguments.utf8.count <= argumentLimit, let data = call.function.arguments.data(using: .utf8) else { throw ReadingError.invalid("工具参数不是有界JSON对象。") }
+                    session.lastRepairOffer = nil
+                    progress?(AIProgressEvent(.performingTool, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count))
+                    reportedStart = true
+                    let arguments: [String: Any]
+                    do { arguments = try ReadingToolArguments.parse(data, maximumBytes: argumentLimit) }
+                    catch let error as ReadingToolArgumentError {
+                        session.retainRejectedRawDraft(name: call.function.name, arguments: data)
+                        throw error
+                    }
                     // The response has already been charged. Executing its
                     // local tools is not another billable model request: size
                     // the receipt against the context window, then recheck the
                     // remaining task budget before the next HTTP request.
                     let room = window - (try measure(messages)) - outputReserve - (calls.count - index) * 700
-                    progress?(AIProgressEvent(.performingTool, toolName: call.function.name, toolIndex: index + 1, toolTotal: calls.count))
-                    reportedStart = true
                     result = try await session.execute(name: call.function.name, arguments: arguments, maximumBytes: max(0, room / 2))
                     result = try session.modelReadToolResult(result, tool: call.function.name)
                     let receipt = result.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
@@ -354,7 +360,11 @@ enum ReadingAnswerEngine {
                     let failure = String(error.localizedDescription.prefix(400))
                     toolFailures.append(failure); toolFailures = Array(toolFailures.suffix(4))
                     var receipt: [String: Any] = ["ok": false, "error": failure]
-                    if let preflight = error as? ReadingProposalPreflightError {
+                    if let argumentError = error as? ReadingToolArgumentError {
+                        receipt["argumentIssues"] = argumentError.issues
+                        receipt["repairRule"] = "用tool_draft_repair局部修正：语法草稿使用textEdits；若argumentIssues有suggestedTextEdits可直接复制，它只修正结尾括号。字段错误使用edits和JSON Pointer。建议不代表保存，仍须通过原工具完整校验与审阅；已有保存成果保留。"
+                    }
+                    else if let preflight = error as? ReadingProposalPreflightError {
                         receipt["preflightIssues"] = preflight.issues
                         receipt["repairRule"] = "按路径一起修正后重交；也可在单独知识提案顶层明确saveCoreOnly=true，先完整校验并保存基础资料，所有位置、时间和阅读附加内容原稿随回执保留待补。不能拆分文档、画布或方案的原子依赖；未保存内容不得称已完成。"
                     }

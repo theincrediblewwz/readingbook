@@ -7,14 +7,17 @@ struct ReadingToolDraft {
     let id = UUID().uuidString
     let tool: String
     let arguments: Data
+    var rawJSON = false
 
     var offer: [String: Any] {
         ["draftID": id, "tool": tool, "editTool": ReadingQueryToolCatalog.draftRepairName,
+         "format": rawJSON ? "json_text" : "json_object",
          "originalBytes": arguments.count,
-         "pathSyntax": "JSON Pointer。set改字段；remove删字段；move用from/path移动已有内容，目标不能覆盖已有字段。业务组放错时可同时给targetTool，须为本次已授权提案工具。草案仅在本次任务保留，无需重发整份资料。"]
+         "pathSyntax": rawJSON ? "使用textEdits:[{before,after}]替换唯一匹配的短原文，before包含错误附近足够上下文；不要计算字符下标。修正后重新解析并交原工具完整校验。" : "JSON Pointer。set改字段；remove删字段；move用from/path移动已有内容，目标不能覆盖已有字段。业务组放错时可同时给targetTool，须为本次已授权提案工具。草案仅在本次任务保留，无需重发整份资料。"]
     }
 
     func applying(_ request: [String: Any]) throws -> [String: Any] {
+        if rawJSON { return try applyingText(request) }
         guard Set(request.keys) == (request["targetTool"] == nil ? ["draftID", "edits"] : ["draftID", "edits", "targetTool"]), request["draftID"] as? String == id,
               let edits = request["edits"] as? [[String: Any]], (1...32).contains(edits.count),
               try JSONSerialization.data(withJSONObject: request).count <= 16_384 else {
@@ -42,6 +45,27 @@ struct ReadingToolDraft {
             throw ReadingError.invalid("修正后的完整草案超过原工具大小上限；没有执行或保存。")
         }
         return object
+    }
+
+    private func applyingText(_ request: [String: Any]) throws -> [String: Any] {
+        guard Set(request.keys) == (request["targetTool"] == nil ? ["draftID", "textEdits"] : ["draftID", "textEdits", "targetTool"]),
+              request["targetTool"] == nil || request["targetTool"] as? String == tool,
+              request["draftID"] as? String == id,
+              let edits = request["textEdits"] as? [[String: String]], (1...32).contains(edits.count),
+              try JSONSerialization.data(withJSONObject: request).count <= 16_384 else {
+            throw ReadingError.invalid("语法草稿接收draftID和1至32项textEdits，每项before/after，合计不超过16KiB；targetTool可省略或重复原工具，不能切换工具。")
+        }
+        var text = String(decoding: arguments, as: UTF8.self)
+        for edit in edits {
+            guard Set(edit.keys) == ["before", "after"], let before = edit["before"], let after = edit["after"],
+                  !before.isEmpty, before.count <= 512, after.count <= 2048,
+                  let match = text.range(of: before, options: .literal),
+                  text.range(of: before, options: .literal, range: text.index(after: match.lowerBound)..<text.endIndex) == nil else {
+                throw ReadingError.invalid("before须唯一匹配当前草稿中的短文字（最多512字）；after最多2048字。匹配缺失或歧义时未修改草稿。")
+            }
+            text.replaceSubrange(match, with: after)
+        }
+        return try ReadingToolArguments.parse(Data(text.utf8), maximumBytes: tool == "component_show" ? 32_768 : 262_144)
     }
 
     private static func tokens(_ path: String) throws -> [String] {
@@ -107,12 +131,13 @@ extension ReadingQueryToolCatalog {
         function(draftRepairName, "修正失败回执中repair所指的草案，再交回原工具完整校验与审阅。只提交错误字段，不重发整份提案；不是批准或提交权限，不能修改已保存数据。", [
             "draftID": ["type": "string", "maxLength": 128],
             "targetTool": ["type": "string", "enum": ReadingQueryToolCatalog.proposalNames.union(["component_show"]).sorted(), "description": "通常省略；可重复原工具名。仅提案业务组放错时切换到本次已授权的对应提案工具，不扩大授权。"],
+            "textEdits": ["type": "array", "minItems": 1, "maxItems": 32, "description": "仅format=json_text语法草稿使用，与edits二选一；before须唯一匹配短文字，不使用字符下标。", "items": ["type": "object", "additionalProperties": false, "properties": ["before": ["type": "string", "minLength": 1, "maxLength": 512], "after": ["type": "string", "maxLength": 2048]], "required": ["before", "after"]]],
             "edits": ["type": "array", "minItems": 1, "maxItems": 32, "items": ["type": "object", "additionalProperties": false,
                 "properties": ["operation": ["type": "string", "enum": ["set", "remove", "move"]],
                     "from": ["type": "string", "maxLength": 512, "description": "move的已有内容来源JSON Pointer，不与value混用。"],
                     "path": ["type": "string", "maxLength": 512, "description": "JSON Pointer，从/开始，数组用数字下标。set可补对象字段或替换已有值；remove删除已有字段/数组项，同一数组删除从后往前。"],
                     "value": ["description": "set的JSON值，可为文字、数值、对象、数组或null；remove不填。"]], "required": ["operation", "path"]]]
-        ], required: ["draftID", "edits"])
+        ], required: ["draftID"])
     }
 }
 
@@ -140,7 +165,16 @@ extension ReadingQuerySession {
             let value = try draft.applying(arguments)
             lastEffectiveTool = target
             return (target, value)
+        } catch let error as ReadingToolArgumentError {
+            if let raw = error.rawArguments { retainRejectedRawDraft(name: draft.tool, arguments: raw) }
+            else { lastRepairOffer = draft.offer }
+            throw error
         } catch { lastRepairOffer = draft.offer; throw error }
+    }
+    mutating func retainRejectedRawDraft(name: String, arguments: Data) {
+        guard repairableToolNames.contains(name), arguments.count <= (name == "component_show" ? 32_768 : 262_144) else { return }
+        let draft = ReadingToolDraft(tool: name, arguments: arguments, rawJSON: true)
+        rejectedToolDraft = draft; lastRepairOffer = draft.offer
     }
     mutating func retainRejectedDraft(name: String, arguments: [String: Any], error: Error) {
         // A later repository validation must retain the *repaired* arguments,
@@ -152,7 +186,7 @@ extension ReadingQuerySession {
         else { invalidHostValue = false }
         guard repairableToolNames.contains(name),
               invalidHostValue || error is ReadingProposalPreflightError || error is ReadingProposalTemporalError || error is ReadingProposalEvidenceError || error is ReadingSourceReferenceError ||
-                error is ReadingProposalReferenceError || error is ReadingProposalMetadataError || error is ReadingProposalShapeError || error is ReadingCompositionError || error is DecodingError,
+                error is ReadingProposalReferenceError || error is ReadingProposalMetadataError || error is ReadingProposalShapeError || error is ReadingCompositionError || error is ReadingToolArgumentError || error is DecodingError,
               let data = try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys]), data.count <= (name == "component_show" ? 32_768 : 262_144) else { return }
         let draft = ReadingToolDraft(tool: name, arguments: data)
         rejectedToolDraft = draft; lastRepairOffer = draft.offer
