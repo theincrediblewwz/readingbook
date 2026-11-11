@@ -202,6 +202,13 @@ private struct MarkerRectIndex {
 }
 
 public enum SpatialMarkerSeeds {
+    public static func familyRoots(objects: [TypedObject]) -> [String: String] {
+        let events = objects.filter { $0.kind == .event }
+        return familyRoots(eventIDs: Set(events.map(\.id)), parents: Dictionary(events.compactMap { event in
+            guard let parents = event.references["parentEvent"], parents.count == 1 else { return nil }
+            return (event.id, parents[0])
+        }, uniquingKeysWith: { first, _ in first }))
+    }
     /// Shared parent facts define a display family, independently of title or
     /// subject. Only admitted event IDs may contribute ancestors or labels.
     /// Resolve each chain once; invalid cycles do not become named families.
@@ -243,7 +250,7 @@ public enum SpatialMarkerSeeds {
             return SpatialMarkerSeed(id: "route:" + route.id, routeID: route.relationID, title: route.title,
                 subtitle: route.actorNames.joined(separator: "、") + " · " + route.placeNames.joined(separator: " → "),
                 coordinate: coordinate, assetID: SpatialMarkerAssets.resolve(kind: route.kind, title: route.title, mappings: mappings).id,
-                affinityID: event?.affinityID, affinityTitle: event?.affinityTitle)
+                affinityID: route.affinityID ?? event?.affinityID, affinityTitle: route.affinityTitle ?? event?.affinityTitle)
         }
     }
 }

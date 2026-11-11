@@ -44,7 +44,10 @@ public enum ReadingComponentLayout {
                 let mapIDs = Set(composition.parts.filter { $0.primitive == .map }.map(\.id))
                 guard !markerAssets.isEmpty, markerAssets.count <= 24, Set(markerAssets.keys).isSubset(of: mapIDs) else { throw ReadingError.invalid("markerAssets只能引用本视图已有geo.map元件ID。") }
                 for index in composition.parts.indices {
-                    if let values = markerAssets[composition.parts[index].id] { composition.parts[index].markerAssets = values }
+                    if let values = markerAssets[composition.parts[index].id] {
+                        composition.parts[index].markerAssets = values.isEmpty ? [:]
+                            : (composition.parts[index].markerAssets ?? [:]).merging(values) { _, new in new }
+                    }
                 }
             }
         }

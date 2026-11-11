@@ -38,7 +38,53 @@ enum ReadingToolArguments {
         guard let object = value as? [String: Any] else {
             throw ReadingToolArgumentError(issues: [["kind": "root_type", "path": "", "expected": "object", "actualType": jsonType(value)]], rawArguments: data)
         }
+        if let duplicate = duplicateKey(Array(data)) {
+            let prefix = String(decoding: data.prefix(duplicate.offset), as: UTF8.self)
+            let text = String(decoding: data, as: UTF8.self)
+            let end = text.index(text.startIndex, offsetBy: prefix.count)
+            let start = text.index(end, offsetBy: -min(96, prefix.count))
+            throw ReadingToolArgumentError(issues: [["kind": "duplicate_key", "key": duplicate.key,
+                "line": prefix.filter { $0 == "\n" }.count + 1,
+                "column": (prefix.split(separator: "\n", omittingEmptySubsequences: false).last?.unicodeScalars.count ?? 0) + 1,
+                "near": String(text[start...].prefix(160)),
+                "reason": "同一对象出现重复键；未按最后一个值覆盖。请用textEdits只保留该键需要的一个值，其他内容保留。"]], rawArguments: data)
+        }
         return object
+    }
+
+    /// Foundation validates the grammar first, but silently collapses duplicate
+    /// keys. Scan the valid text before it can reach any host mutation. A
+    /// string followed by ':' is a key; strings in values are never inspected.
+    private static func duplicateKey(_ bytes: [UInt8]) -> (offset: Int, key: String)? {
+        var frames: [Set<String>?] = [], index = 0
+        while index < bytes.count {
+            let byte = bytes[index]
+            if byte == 123 { frames.append(Set<String>()) }
+            else if byte == 91 { frames.append(nil) }
+            else if byte == 125 || byte == 93 { frames.removeLast() }
+            else if byte == 34 {
+                let start = index
+                var escaped = false
+                index += 1
+                while index < bytes.count && bytes[index] != 34 {
+                    if bytes[index] == 92 { escaped = true; index += 1 }
+                    index += 1
+                }
+                var next = index + 1
+                while next < bytes.count && [UInt8(32),9,10,13].contains(bytes[next]) { next += 1 }
+                if next < bytes.count && bytes[next] == 58, let frame = frames.indices.last, var keys = frames[frame] {
+                    let key: String
+                    if escaped {
+                        guard let decoded = try? JSONSerialization.jsonObject(with: Data(bytes[start...index]), options: [.fragmentsAllowed]) as? String else { return nil }
+                        key = decoded
+                    } else { key = String(decoding: bytes[(start + 1)..<index], as: UTF8.self) }
+                    if !keys.insert(key).inserted { return (start, key) }
+                    frames[frame] = keys
+                }
+            }
+            index += 1
+        }
+        return nil
     }
 
     /// Offer only a closing-delimiter suffix replacement that Foundation can

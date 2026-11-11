@@ -86,6 +86,24 @@ final class MapAssetChoiceTests: XCTestCase {
         XCTAssertThrowsError(try ReadingComponentLayout.changed(view, expectedRevision: revision, layout: nil, rootID: nil, restore: false, markerAssets: ["unknown": [:]], in: book))
         XCTAssertEqual(book.views, [view]); XCTAssertNil(view.previousLayout)
     }
+    func testPartialStyleUpdatesPreserveOtherKindsAndExplicitClearIsReversible() throws {
+        let (book, view) = fixture()
+        func patch(_ current: ViewDefinition, _ values: [String: String]) throws -> ViewDefinition {
+            try ReadingComponentLayout.changed(current, expectedRevision: ReadingComponentLayout.revision(current.composition!),
+                layout: nil, rootID: nil, restore: false, markerAssets: ["map": values], in: book)
+        }
+        let first = try patch(view, ["校验": "measurement", "运输": "transport"])
+        let second = try patch(first, ["运输": "water"])
+        XCTAssertEqual(second.composition!.parts[0].markerAssets, ["校验": "measurement", "运输": "water"])
+        XCTAssertEqual(second.previousLayout!.markerAssets, ["map": first.composition!.parts[0].markerAssets!])
+        XCTAssertEqual(second.composition!.sources, view.composition!.sources)
+        let cleared = try patch(second, [:])
+        XCTAssertEqual(cleared.composition!.parts[0].markerAssets, [:])
+        let restored = try ReadingComponentLayout.changed(cleared, expectedRevision: ReadingComponentLayout.revision(cleared.composition!),
+            layout: nil, rootID: nil, restore: true, in: book)
+        XCTAssertEqual(restored.composition, second.composition)
+        XCTAssertEqual(book.views, [view])
+    }
     func testCanonicalStylePatchKeepsConcurrentNoteAndExistingView() async throws {
         let pair = fixture(); var book = pair.0; let view = pair.1
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("MapAssets-" + UUID().uuidString)

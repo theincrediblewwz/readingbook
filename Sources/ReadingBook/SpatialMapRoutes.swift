@@ -45,8 +45,12 @@ extension SpatialCoordinate {
 struct SpatialRouteDetails: View {
     @EnvironmentObject private var store: AppStore
     let route: SpatialRoute
-    var body: some View {
-        ScrollView {
+    var embedded = false
+    @ViewBuilder var body: some View {
+        if embedded { content }
+        else { ScrollView { content }.frame(width: 380).frame(maxHeight: 520) }
+    }
+    private var content: some View {
             VStack(alignment: .leading, spacing: 14) {
                 Text(route.title).font(.system(size: 18, weight: .semibold))
                 if !route.actorNames.isEmpty { Text(route.actorNames.joined(separator: "、")).foregroundStyle(Palette.accent) }
@@ -71,8 +75,7 @@ struct SpatialRouteDetails: View {
                 Divider()
                 Text(Array(Set(route.locationNotes)).sorted().joined(separator: "；") + "。连线只表示行动方向，不表示精确古道、河道或战场边界。")
                     .font(.caption).foregroundStyle(.secondary)
-            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
-        }.frame(width: 380).frame(maxHeight: 520)
+            }.padding(embedded ? 0 : 20).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

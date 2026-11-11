@@ -36,6 +36,9 @@ public struct SpatialRoute: Identifiable, Hashable, Sendable {
     public var explanation: String
     public var evidence: [Evidence]
     public var locationNotes: [String]
+    /// Transient display grouping derived from admitted event metadata.
+    public var affinityID: String? = nil
+    public var affinityTitle: String? = nil
     public var isUncertain: Bool { assertion != .explicit || timeMatch == .possible || timeMatch == .unknown }
 }
 
@@ -55,6 +58,9 @@ public enum SpatialKnowledgeRuntime {
         let records = try window.map { try TemporalKnowledgeRuntime.relations(in: project, within: $0, boundary: boundary) }
             ?? TemporalKnowledgeRuntime.relations(in: project, at: point, boundary: boundary)
         let locations = TemporalKnowledgeRuntime.locationEntityIDs(in: project, boundary: boundary)
+        // objects already contains admitted, parent-redacted adapters. Reuse
+        // them instead of rebuilding every event snapshot/version a second time.
+        let families = SpatialMarkerSeeds.familyRoots(objects: objects)
         let filteringTime = point != nil || window != nil
         var result: [SpatialRoute] = [], undated: [SpatialRoute] = []
         for record in records {
@@ -91,7 +97,9 @@ public enum SpatialKnowledgeRuntime {
                 actorNames: spatial.actorIDs.compactMap { byID[$0]?.name }, placeIDs: ids, placeNames: places.map(\.name),
                 coordinates: coordinates, assertion: metadata.assertion, timeMatch: record.match,
                 extent: metadata.validity, explanation: metadata.explanation, evidence: evidence,
-                locationNotes: places.map { $0.locationNote ?? "现代地理参考位置" })
+                locationNotes: places.map { $0.locationNote ?? "现代地理参考位置" },
+                affinityID: spatial.eventID.flatMap { families[$0] },
+                affinityTitle: spatial.eventID.flatMap { families[$0] }.flatMap { byID[$0]?.name })
             if unresolved { undated.append(route) } else { result.append(route) }
             if result.count == limit { break }
         }

@@ -24,6 +24,7 @@ struct CompositionWorkspaceView: View {
     @State private var collapsed = Set<String>()
     @State private var tabs: [String: String] = [:]
     @State private var canvasAnchors: [String: CGPoint] = [:]
+    @State private var inspectedRoutes: [String: SpatialRoute] = [:]
     @State private var issue: String?
     @State private var validatedComposition: CompositionDefinition?
     @State private var validatedBookID: String?
@@ -118,7 +119,10 @@ struct CompositionWorkspaceView: View {
             .onChange(of: store.bookID) { _, _ in reset() }
             .onChange(of: definition) { _, _ in reset() }
             .onChange(of: selections) { _, _ in refresh(retainingContent: true) }
-            .onChange(of: clocks) { _, _ in refresh(includeBaseline: false, retainingContent: true) }
+            .onChange(of: clocks) { old, new in
+                clearRouteInspections(groups: Set(old.keys).union(new.keys).filter { old[$0] != new[$0] }, timeGroups: true)
+                refresh(includeBaseline: false, retainingContent: true)
+            }
     }
 
     private var workspaceHeader: some View {
@@ -152,7 +156,7 @@ struct CompositionWorkspaceView: View {
 
     private func reset() {
         stagePresentationTask?.cancel(); stagePresentationTask = nil
-        clearPrepared(); clearMapCommand(); mapViewports = [:]; mapCameras = [:]; selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; canvasAnchors = [:]; refresh()
+        clearPrepared(); clearMapCommand(); mapViewports = [:]; mapCameras = [:]; selections = [:]; clocks = [:]; collapsed = []; tabs = [:]; canvasAnchors = [:]; inspectedRoutes = [:]; refresh()
     }
     private func clearPrepared() { preparedInput = nil; preparedOwner = nil; requestedProjection = nil }
     private func cancelRefresh() {
@@ -221,6 +225,7 @@ struct CompositionWorkspaceView: View {
             store.acknowledgeViewCommand(command, status: "unsupported", message: "当前组合没有本次时间体系的数据；未改变筛选。")
             return
         }
+        clearRouteInspections(groups: groups, timeGroups: true)
         pendingTimeCommand = command
         for group in groups {
             clocks[group] = CompositionClock(axis: window.axis, lower: window.from, upper: window.to,
@@ -390,6 +395,7 @@ struct CompositionWorkspaceView: View {
             observationStatus: status == .empty && !mapViewports.isEmpty ? .ready : status)
     }
     private func select(_ id: String, group: String) {
+        clearRouteInspections(groups: [group])
         withAnimation(ReadingMotion.animation(reduce: reduceMotion)) {
             if NSEvent.modifierFlags.contains(.command) {
                 var values = selections[group] ?? []
@@ -397,6 +403,22 @@ struct CompositionWorkspaceView: View {
                 selections[group] = values
             } else { selections[group] = [id] }
         }
+    }
+    private func clearRouteInspections(groups: Set<String>, timeGroups: Bool = false) {
+        for part in composition?.parts ?? [] where part.primitive == .map && groups.contains(timeGroups ? part.timeGroup : part.selectionGroup) {
+            inspectedRoutes[part.id] = nil
+        }
+    }
+    private func routeDetailOwner(_ mapPart: CompositionPart) -> String? {
+        guard !embedded, let composition, let route = inspectedRoutes[mapPart.id] else { return nil }
+        return CompositionRouteContext.detailPartID(eventID: route.eventID, mapPartID: mapPart.id, definition: composition,
+            projections: projections, selectedIDs: selections[mapPart.selectionGroup] ?? [], collapsed: collapsed)
+    }
+    private func routeInCard(_ part: CompositionPart) -> SpatialRoute? {
+        for map in composition?.parts ?? [] where map.primitive == .map && routeDetailOwner(map) == part.id {
+            return inspectedRoutes[map.id]
+        }
+        return nil
     }
     private func presentStage(_ id: String, from part: CompositionPart) {
         let groups = Set(composition?.parts.filter { candidate in
@@ -455,7 +477,7 @@ struct CompositionWorkspaceView: View {
                 }
             }
             HStack(spacing: 6) {
-                Button { selections = [:]; canvasAnchors = [:]; clocks = [:] } label: {
+                Button { inspectedRoutes = [:]; selections = [:]; canvasAnchors = [:]; clocks = [:] } label: {
                     Image(systemName: "arrow.counterclockwise").frame(width: 44, height: 44)
                 }.buttonStyle(ReadingQuietButtonStyle()).help("取消选择和时间筛选，显示本范围全部资料")
                     .accessibilityLabel("显示全部内容")
@@ -481,7 +503,7 @@ struct CompositionWorkspaceView: View {
         }
     }
     private func dismiss(_ node: CompositionLayoutNode, in composition: CompositionDefinition) {
-        for part in composition.parts(inLayout: node.id) { selections[part.selectionGroup] = []; canvasAnchors[part.selectionGroup] = nil }
+        for part in composition.parts(inLayout: node.id) { clearRouteInspections(groups: [part.selectionGroup]); selections[part.selectionGroup] = []; canvasAnchors[part.selectionGroup] = nil }
     }
 
     private func layout(_ id: String, in composition: CompositionDefinition, width: CGFloat, floating: Bool = false, dismiss: (() -> Void)? = nil, pinnedHeader: Bool = false) -> AnyView {
@@ -620,7 +642,7 @@ struct CompositionWorkspaceView: View {
             }.padding(.leading, 18).padding(.trailing, 6).frame(minHeight: 60)
             if !collapsed.contains(part.id) {
                 Divider().opacity(0.4)
-                if pinnedHeader { ScrollView { details }.scrollIndicators(.visible) }
+                if pinnedHeader && part.primitive != .objectDetail { ScrollView { details }.scrollIndicators(.visible) }
                 else { details }
             }
         }.frame(maxWidth: .infinity, alignment: .topLeading)
@@ -636,7 +658,7 @@ struct CompositionWorkspaceView: View {
         case .objectList:
             CompositionObjectList(items: projection.items, selected: selected) { select($0, group: part.selectionGroup) }
         case .objectDetail:
-            CompositionObjectDetails(items: projection.items, selected: selected)
+            CompositionObjectDetails(items: projection.items, selected: selected, route: routeInCard(part))
         case .table:
             CompositionObjectTable(items: projection.items, columns: part.columns ?? [], selected: selected) { select($0, group: part.selectionGroup) }
         case .sourceExcerpt:
@@ -670,11 +692,18 @@ struct CompositionWorkspaceView: View {
                 }
                 let routes = part.routeSourceID.flatMap { projections[$0]?.mapRoutes } ?? projection.mapRoutes
                 CompositionMap(camera: Binding(get: { mapCameras[part.id] ?? .automatic }, set: { mapCameras[part.id] = $0 }),
+                    inspectedRoute: Binding(get: { inspectedRoutes[part.id] }, set: { inspectedRoutes[part.id] = $0 }),
                     partID: part.id, visibilityGeneration: viewportGeneration, occlusions: occlusions, reportViewport: { publishMap($0, status: $1, partID: part.id, generation: viewportGeneration) },
                     fitRequest: mapFitRequests[part.id], finishFit: { id, error in finishMapCommand(id, partID: part.id, error: error) },
                     points: projection.mapPoints, routes: routes, markerAssets: part.markerAssets, selected: selections[part.selectionGroup] ?? [], height: height, canvas: canvas,
+                    routeDetailInCard: routeDetailOwner(part) != nil,
                     select: { select($0, group: part.selectionGroup) },
-                    deselect: { selections[part.selectionGroup] = []; canvasAnchors[part.selectionGroup] = nil },
+                    selectRoute: { route in
+                        if let id = route.eventID { select(id, group: part.selectionGroup) }
+                        else { clearRouteInspections(groups: [part.selectionGroup]); selections[part.selectionGroup] = [] }
+                        inspectedRoutes[part.id] = route
+                    },
+                    deselect: { clearRouteInspections(groups: [part.selectionGroup]); selections[part.selectionGroup] = []; canvasAnchors[part.selectionGroup] = nil },
                     selectedLocation: { if canvasAnchors[part.selectionGroup] != $0 { canvasAnchors[part.selectionGroup] = $0 } })
                 if !canvas {
                 Text(clocks[part.timeGroup]?.mapMode == .windowFootprints && clocks[part.timeGroup]?.window != nil
@@ -850,12 +879,27 @@ private struct CompositionObjectDetails: View {
     @EnvironmentObject private var store: AppStore
     let items: [CompositionItem]
     let selected: Set<String>
+    var route: SpatialRoute? = nil
     @State private var showsInspector = false
+    @State private var showsRelatedEvent = false
+    private struct ScrollIdentity: Hashable { let itemID: String; let relationID: String? }
     private var item: CompositionItem? { items.first { selected.contains($0.objectID ?? $0.documentID ?? $0.id) } ?? (items.count == 1 ? items.first : nil) }
     var body: some View {
         if let item {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let route {
+                        SpatialRouteDetails(route: route, embedded: true)
+                            .accessibilityIdentifier("composition-integrated-route-details")
+                        Button { withAnimation { showsRelatedEvent.toggle() } } label: {
+                            HStack {
+                                Text("关联事件 · " + item.title).lineLimit(2)
+                                Spacer(minLength: 6)
+                                Image(systemName: showsRelatedEvent ? "chevron.up" : "chevron.down").font(.caption)
+                            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        }.buttonStyle(ReadingQuietButtonStyle()).help("展开或收起同一份共享事件资料；不会另开一张卡片")
+                    }
+                    if route == nil || showsRelatedEvent {
                     Text(item.title).font(.system(size: 27, weight: .semibold, design: .serif)).textSelection(.enabled)
                     if let objectID = item.objectID, item.kind == "entity" || item.kind == "event" {
                         HStack {
@@ -880,8 +924,12 @@ private struct CompositionObjectDetails: View {
                     }
                     if let extent = item.extent, !extent.sourceText.isEmpty { Label(extent.sourceText, systemImage: "clock").font(.callout).foregroundStyle(.secondary) }
                     CompositionEvidenceList(evidence: item.evidence)
+                    }
                 }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 460)
+                .id(ScrollIdentity(itemID: item.id, relationID: route?.relationID))
+                .onChange(of: route?.relationID) { _, _ in showsRelatedEvent = false; showsInspector = false }
+                .onChange(of: item.id) { _, _ in showsRelatedEvent = false; showsInspector = false }
         } else { CompositionEmptyState(text: "选择一个要素，查看它的内容和原文依据。", icon: "text.rectangle") }
     }
     private func fieldLabel(_ key: String, item: CompositionItem) -> String {
@@ -1002,6 +1050,7 @@ private struct CompositionMap: View {
     @Environment(\.workspaceCanvasBlocked) private var workspaceBlocked
     @Environment(\.workspaceCanvasExclusionRects) private var workspaceExclusions
     @Binding var camera: MapCameraPosition
+    @Binding var inspectedRoute: SpatialRoute?
     let partID: String
     let visibilityGeneration: UInt64
     let occlusions: [CGRect]
@@ -1014,10 +1063,11 @@ private struct CompositionMap: View {
     let selected: Set<String>
     var height: CGFloat = 420
     var canvas = false
+    var routeDetailInCard = false
     var select: (String) -> Void
+    var selectRoute: (SpatialRoute) -> Void
     var deselect: () -> Void = {}
     var selectedLocation: (CGPoint?) -> Void = { _ in }
-    @State private var inspectedRoute: SpatialRoute?
     @State private var cameraRegion: MKCoordinateRegion?
     @State private var moving = false
     @State private var markerNodes: [SpatialMarkerNode] = []
@@ -1108,6 +1158,10 @@ private struct CompositionMap: View {
                 .onChange(of: seeds) { _, _ in markerGroup = nil; rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1; publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: markerGroup) { _, _ in publishViewport(using: proxy, geometry: geometry) }
                 .onChange(of: inspectedRoute) { _, _ in rebuildMarkers(using: proxy, size: geometry.size); markerEpoch &+= 1; publishViewport(using: proxy, geometry: geometry) }
+                .onChange(of: routeDetailInCard) { _, _ in publishViewport(using: proxy, geometry: geometry) }
+                .onChange(of: routes) { _, values in
+                    if let route = inspectedRoute { inspectedRoute = values.first { $0.relationID == route.relationID } }
+                }
                 .onChange(of: selected) { _, ids in
                     rebuildMarkers(using: proxy, size: geometry.size)
                     markerEpoch &+= 1
@@ -1123,7 +1177,7 @@ private struct CompositionMap: View {
                 }
             } }.frame(height: height).padding(canvas ? 0 : 8)
                 .overlay(alignment: .topTrailing) {
-                    if let route = inspectedRoute {
+                    if let route = inspectedRoute, !routeDetailInCard {
                         VStack(spacing: 0) {
                             HStack {
                                 Text("行动与原文依据").font(.subheadline.weight(.medium))
@@ -1185,8 +1239,8 @@ private struct CompositionMap: View {
         markerGroup = nil
         selectedMarker = seed
         if let routeID = seed.routeID, let route = routes.first(where: { $0.relationID == routeID }) {
-            inspectedRoute = route
-            if let id = route.eventID { select(id) }
+            selectRoute(route)
+            selectedLocation(canvas ? proxy.convert(seed.coordinate.mapCoordinate, to: .local).map { CGPoint(x: $0.x + offset.x, y: $0.y + offset.y) } : nil)
         } else if let id = seed.objectID {
             inspectedRoute = nil
             selectedLocation(canvas ? proxy.convert(seed.coordinate.mapCoordinate, to: .local).map { CGPoint(x: $0.x + offset.x, y: $0.y + offset.y) } : nil)
@@ -1194,7 +1248,7 @@ private struct CompositionMap: View {
         }
     }
     private func publishViewport(using proxy: MapProxy, geometry: GeometryProxy) {
-        guard !workspaceBlocked, inspectedRoute == nil, markerGroup == nil else { reportViewport(nil, .obscured); return }
+        guard !workspaceBlocked, (inspectedRoute == nil || routeDetailInCard), markerGroup == nil else { reportViewport(nil, .obscured); return }
         guard !moving, let region = cameraRegion else { reportViewport(nil, .pending); return }
         guard seeds.isEmpty || seeds.contains(where: { proxy.convert($0.coordinate.mapCoordinate, to: .local) != nil }) else { reportViewport(nil, .pending); return }
         let viewport = CGRect(origin: .zero, size: geometry.size)

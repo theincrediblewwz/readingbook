@@ -169,6 +169,17 @@ struct ReadingQueryHostOwner {
                 extra["rootID"] = definition.rootID; extra["canRestoreLayout"] = view.previousLayout != nil
                 extra["mapParts"] = definition.parts.filter { $0.primitive == .map }.map { ["id": $0.id, "markerAssets": $0.markerAssets as Any? ?? NSNull()] }
                 if definition.parts.contains(where: { $0.primitive == .map }) { extra["mapMarkerAssets"] = SpatialMarkerAssets.selectable.map { ["id": $0.id, "title": $0.title] } }
+                // Reuse the exact projection installed for this question;
+                // never derive a convenience directory from the full book.
+                if definition.parts.contains(where: { $0.primitive == .map }), let snapshot = session.snapshot,
+                   let state = self.readingComponentView, state.route == route,
+                   state.snapshot?.scopeFingerprint == snapshot.scopeFingerprint, let projected = state.projection,
+                   let catalog = try? ReadingMapKindCatalog.make(in: projected),
+                   let encoded = try? JSONEncoder().encode(catalog),
+                   let value = try? JSONSerialization.jsonObject(with: encoded) {
+                    extra["mapKinds"] = value
+                    extra["mapKindsScope"] = "当前提问获准资料的唯一kind；eventCount/actionCount分别计数，同一kind共用一个素材。partial为true时并非全量。选类别素材通常无需再逐页查询全部事件和关系。"
+                }
                 let encoded = try JSONEncoder().encode(definition.layout)
                 if encoded.count <= 10_000 { extra["layout"] = try JSONSerialization.jsonObject(with: encoded) }
                 else { extra["layoutUnavailable"] = "布局超过单次回执大小，未返回完整布局，请勿猜测或覆盖。" }

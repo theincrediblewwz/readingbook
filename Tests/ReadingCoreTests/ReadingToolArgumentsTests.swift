@@ -48,6 +48,29 @@ final class ReadingToolArgumentsTests: XCTestCase {
         XCTAssertEqual(issue["kind"] as? String, "json_syntax")
         XCTAssertNil(issue["line"]); XCTAssertNotNil(issue["reason"])
     }
+    func testDuplicateKeysAreRejectedBeforeLastValueCanReplaceTheFirst() throws {
+        let raw = "{\n\"markerAssets\":{\"map\":{\"设备转运\":\"event\",\"设备转运\":\"transport\"}}}"
+        let error = try failure(raw), issue = try XCTUnwrap(error.issues.first)
+        XCTAssertEqual(issue["kind"] as? String, "duplicate_key")
+        XCTAssertEqual(issue["key"] as? String, "设备转运"); XCTAssertEqual(issue["line"] as? Int, 2)
+        XCTAssertEqual(error.rawArguments, Data(raw.utf8)); XCTAssertNotNil(issue["column"])
+        let draft = ReadingToolDraft(tool: "component_show", arguments: error.rawArguments!, rawJSON: true)
+        let corrected = try draft.applying(["draftID": draft.id, "textEdits": [[
+            "before": "\"设备转运\":\"event\",\"设备转运\":\"transport\"", "after": "\"设备转运\":\"transport\""]]])
+        let maps = try XCTUnwrap(corrected["markerAssets"] as? [String: [String: String]])
+        XCTAssertEqual(maps, ["map": ["设备转运": "transport"]])
+        XCTAssertThrowsError(try draft.applying(["draftID": draft.id, "textEdits": [["before": "event", "after": "observation"]]]))
+    }
+    func testDuplicateKeyScanSeparatesObjectsAndDecodesEscapedKeysOnly() throws {
+        let raw = #"{"a":1,"\u0061":2}"#
+        XCTAssertEqual(try failure(raw).issues.first?["key"] as? String, "a")
+        let legal = #"{"rows":[{"a":1},{"a":2}],"a":"a\":{}[]\"","nested":{"a":3},"quoted\"key":4}"#
+        let parsed = try ReadingToolArguments.parse(Data(legal.utf8), maximumBytes: 32_768)
+        XCTAssertEqual((parsed["rows"] as? [[String: Int]])?.count, 2)
+        XCTAssertEqual(parsed["quoted\"key"] as? Int, 4)
+        XCTAssertEqual(try failure(#"{"a/b~c":1,"a\/b~c":2}"#).issues.first?["key"] as? String, "a/b~c")
+        XCTAssertThrowsError(try ReadingToolArguments.parse(Data(legal.utf8), maximumBytes: 8))
+    }
     func testRawRepairWorksAcrossTopicsAndPreservesAllOtherData() throws {
         for title in ["植物调查", "城市维护", "Field notes", "急救记录🌲"] {
             let valid: [String: Any] = ["title": title, "rows": [["details": "保留这一段文字", "values": [1,2,3]]]]
@@ -141,6 +164,10 @@ final class ReadingToolArgumentsTests: XCTestCase {
         XCTAssertEqual(arguments["rows"] as? [Int], [1])
     }
     func testEngineReturnsSyntaxDraftAndRepairsThroughOriginalHost() async throws {
+        for (raw, before, after) in [
+            (#"{"viewID":"view-a""#, #""view-a""#, #""view-a"}"#),
+            (#"{"viewID":"wrong","viewID":"view-a"}"#, #""viewID":"wrong","viewID":"view-a""#, #""viewID":"view-a""#)
+        ] {
         let book = try project(), host = ArgumentRepairHost()
         let access = ReadingHostToolAccess(viewActions: ["component_show"], performViewAction: { try await host.open($0,$1) },
             readWorkspaceAfterOpening: { id in .init(bookID: book.id, sourceHash: book.sourceHash, rendererID: id) })
@@ -154,14 +181,14 @@ final class ReadingToolArgumentsTests: XCTestCase {
                 round += 1
                 if round == 3 { return .init(message: .init(role: "assistant", content: "已打开工作台。", refusal: nil, tool_calls: nil, reasoning_content: nil), finishReason: "stop", tokenCost: 30) }
                 let name: String, arguments: String
-                if round == 1 { name = "component_show"; arguments = #"{"viewID":"view-a""# }
+                if round == 1 { name = "component_show"; arguments = raw }
                 else {
                     let receipt = try JSONSerialization.jsonObject(with: Data((messages.last?["content"] as! String).utf8)) as! [String: Any]
                     XCTAssertNotNil(receipt["argumentIssues"]); XCTAssertNil(receipt["referenceGuide"])
                     let repair = try XCTUnwrap(receipt["repair"] as? [String: Any])
                     XCTAssertEqual(repair["format"] as? String, "json_text")
                     name = "tool_draft_repair"
-                    arguments = String(decoding: try JSONSerialization.data(withJSONObject: ["draftID": repair["draftID"]!, "textEdits": [["before": "\"view-a\"", "after": "\"view-a\"}"]]]), as: UTF8.self)
+                    arguments = String(decoding: try JSONSerialization.data(withJSONObject: ["draftID": repair["draftID"]!, "textEdits": [["before": before, "after": after]]]), as: UTF8.self)
                 }
                 return .init(message: .init(role: "assistant", content: "", refusal: nil, tool_calls: [.init(id: "call-\(round)", type: "function", function: .init(name: name, arguments: arguments))], reasoning_content: nil), finishReason: "tool_calls", tokenCost: 30)
             }
@@ -174,6 +201,7 @@ final class ReadingToolArgumentsTests: XCTestCase {
         XCTAssertEqual(completed.first?.toolSucceeded, false)
         XCTAssertEqual(completed.last?.toolSucceeded, true)
         XCTAssertNotNil(completed.first?.toolTrace)
+        }
     }
     func testAdmittedNestedFamiliesMergeAtDistanceAndSeparateWhenZoomed() throws {
         for prefix in ["救援", "调查", "travel"] {

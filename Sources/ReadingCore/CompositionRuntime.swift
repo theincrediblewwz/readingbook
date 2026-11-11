@@ -612,10 +612,7 @@ public enum CompositionRuntime {
         var result: [CompositionMapPoint] = []
         var seen = Set<String>()
         let locations = TemporalKnowledgeRuntime.locationEntityIDs(in: base.project)
-        let families = SpatialMarkerSeeds.familyRoots(eventIDs: Set(base.objectsByID.values.filter { $0.kind == .event }.map(\.id)),
-            parents: Dictionary((base.project.temporalKnowledge?.eventMetadata ?? []).compactMap { row in
-                row.parentEventID.map { (row.eventID, $0) }
-            }, uniquingKeysWith: { first, _ in first }))
+        let families = SpatialMarkerSeeds.familyRoots(objects: base.objects)
         func append(id: String, target: String, place: TypedObject, title: String, subtitle: String, evidence: [Evidence], kind: String,
                     markerKind: String? = nil) {
             guard let latitude = place.latitude, let longitude = place.longitude, latitude.isFinite, longitude.isFinite,
