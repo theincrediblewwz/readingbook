@@ -1,3 +1,19 @@
+<!-- map-context-stage:start -->
+本批本机已完成，阶段更新0.23.71/build102：Design/2026-11-11-map-context-results.md含效果评价表，总入口logs/map-context-20261111/final-local-delivery.json。产品efe6123f83ef8db0c239be5714e00bd2ebcf7e22，10产品Swift实改/12新增核心方法；安装binary SHA daddfabad63e4f5df2474a29b72b204326e3879c2491163b3640dd8aec620706。本批按用户新指令集中同步GitHub main，云CI精确运行/结论见总回执；下方“未推GitHub”属于旧批历史。
+
+通用实改：画布行动复用同组按需事件详情，关联事件同卡展开，切阶段/时间/范围/重置清旧行动，换行动滚动归零；旧分栏无适合按需卡保留独立回退。不再套第二层纵向详情滚动。地点源地图的行动家族从当前获准TypedObject父子引用算，隐藏祖先/元数据及循环不命名。mapKinds复用当前冻结投影、有界32类、不返正文，每种kind一行，事件/行动分计；同kind共用素材。已有视图素材仅合并指定kind，空对象才清该地图；版本冲突不覆盖。原始JSON重复键在宿主执行前反馈键/行列/附近文字，用现有有界草稿局部修正，不静默取最后值。
+
+最终core3=622方法/6391独立断言，非XCTest；mapContext3范围60/共享80/动态52/滚动25共217过、所检告警零。surveyNative2/chibiNative2各4次complete+camera success，轴显式切换保持，事实/视图不改。CUA单卡/关联事件/滚动归零/阶段清理/原文跳533和调查5过。正式App两启两退，原书104/1484、277%、你好、2笔记、旧伴读/对话、查找关闭过，最后书库退出；不必重复安装或索要解锁。
+
+真实real1赤壁6HTTP/160160报告token，自选11映射，35/18/10/3保持；对上批7HTTP/6次资料工具→6HTTP/3次，后续UI/协议细化由最终源码离线重放，不伪称旧运行源码一致。real2调查7HTTP/112100暴露重复kind/重复键/整图替换歧义，现场shared-kind-update-case.json已保留。最终源码real3调查4HTTP/65062，一次选5映射，无新source_read/复制视图/事实布局日期坐标修改。全批17HTTP/337322报告token非计费额；请求耗时赤壁48.67→130.77s、调查31.29→42.93s，往返减但不称总耗时提速。Key/认证头/私有思考不落盘。下轮输入优先real1/final与real3/final，勿盲重付费。
+
+等价家族计算5预热60交替样本，18事件重复适配787.39us→复用18.10us、输出同；不是旧安装无此功能对照、整App FPS/内存。原库39保留38字节同，唯一推荐缓存JSON键序，值同；偏好同，书/笔记/分析正文同，没恢复旧库。新鲜回滚private-books/map-context-20261111/install-before-stage-update，用户dirty性能文档SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4保持未提交。
+
+cleanup.py --apply已成功不得重跑：8592708→7754108KiB回收818.9MiB，批初净增90.5MiB（后续文档少量以总入口du为准）。8可重建程序/更旧5c回滚App退役，50运行目录267文件逐成员验SHA归档，38快照共7规范内容原路径仍可读；5406非退役私人文件保持，最新af回滚/候选/旧正式ZIP/PDF/共享缓存/公开AI记录留存。read-archived-evidence.py验SHA读取或恢复单文件到新路径，不覆盖；勿单删evidence-canonical。
+
+下一批：单对象素材覆盖、层级时间轴横移及可视窗/筛选端点分开、现代地名密度（不淡化底图）、有据曲线区域和完整战役热度边缘仍未完；性能轮转到知识库/长对话/可编辑导图。无书名、人名、题材特判。本批不凭名字擅删远端旧分支，不改写main历史。下方为历史。
+<!-- map-context-stage:end -->
+
 <!-- map-assets-local:start -->
 本批本机交付已完成：Design/2026-11-11-map-assets-results.md（含效果评价表）；总入口 logs/map-assets-20261111/final-local-delivery.json。产品 af286775c0931da28918360d6d4d55076d8f88ea，12 产品 Swift 实改、8 新核心方法；0.23.70/build101 ARM64 本地迭代已替换，binary SHA cc4281ddab95e216341cb7ef513614de022452b9b8dabd73760b7eed5bef7d89。正式 App 两次启动和正常退出完成，原书104/1484、277%、便签“你好”、2笔记、旧伴读/对话及查找关闭过，最后书库退出。无需重复安装、索要解锁或恢复旧库。本批无 GitHub/云 CI/Release，继续本地集中迭代。
 
