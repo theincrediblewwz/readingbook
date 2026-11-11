@@ -20,17 +20,36 @@ public enum SpatialMarkerAssets {
         .init(id: "meeting", title: "会见", symbol: "person.2.fill", tint: "meeting", aliases: ["会盟", "會盟", "会见", "會見", "meeting", "alliance"]),
         .init(id: "arrival", title: "抵达", symbol: "flag.fill", tint: "march", aliases: ["抵达", "抵達", "arrival"]),
         .init(id: "transport", title: "运输", symbol: "shippingbox.fill", tint: "camp", aliases: ["运输", "運輸", "运粮", "運糧", "transport", "supply"]),
+        .init(id: "observation", title: "观测", symbol: "binoculars.fill", tint: "water", aliases: ["observation", "观测", "觀測"]),
+        .init(id: "measurement", title: "测量", symbol: "ruler", tint: "water", aliases: ["measurement", "测量", "測量"]),
+        .init(id: "repair", title: "修复", symbol: "wrench.and.screwdriver.fill", tint: "camp", aliases: ["repair", "修复", "修復"]),
+        .init(id: "warning", title: "警示", symbol: "exclamationmark.triangle.fill", tint: "fire", aliases: ["warning", "警示"]),
+        .init(id: "sample", title: "采样", symbol: "leaf.fill", tint: "retreat", aliases: ["sample", "采样", "採樣"]),
         .init(id: "person", title: "人物", symbol: "person.fill", tint: "neutral", aliases: ["person", "presence"]),
         .init(id: "place", title: "地点", symbol: "smallcircle.filled.circle", tint: "neutral", aliases: ["place", "entityLocation"]),
+        .init(id: "group", title: "一组记录", symbol: "square.stack.3d.up.fill", tint: "neutral", aliases: []),
         .init(id: "event", title: "事件", symbol: "diamond.fill", tint: "neutral", aliases: ["event", "eventLocation"])
     ]
-    public static func asset(_ id: String) -> SpatialMarkerAsset { all.first { $0.id == id } ?? all.last! }
+    public static var selectable: [SpatialMarkerAsset] { all.filter { $0.id != "group" } }
+    private static let byID = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+    private static let byKind: [String: SpatialMarkerAsset] = {
+        var result: [String: SpatialMarkerAsset] = [:]
+        for asset in all { for key in [asset.id] + asset.aliases { if result[key.lowercased()] == nil { result[key.lowercased()] = asset } } }
+        return result
+    }()
+    public static func asset(_ id: String) -> SpatialMarkerAsset { byID[id] ?? byID["event"]! }
+    public static func validate(_ mappings: [String: String]) throws {
+        guard mappings.count <= 32, mappings.allSatisfy({ kind, id in
+            !kind.isEmpty && kind == kind.trimmingCharacters(in: .whitespacesAndNewlines) && kind.utf8.count <= 80 && byID[id] != nil && id != "group"
+        }) else { throw ReadingError.invalid("地图markerAssets最多32项；键为实际kind（1至80字节），值须为素材目录中的ID。分组图标由显示器自动选择。") }
+    }
     /// Title fallback chooses a visual hint, never writes an event category.
-    public static func resolve(kind: String, title: String = "", fallback: String = "event") -> SpatialMarkerAsset {
+    public static func resolve(kind: String, title: String = "", fallback: String = "event", mappings: [String: String]? = nil) -> SpatialMarkerAsset {
         let key = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let exact = all.first(where: { $0.id.lowercased() == key || $0.aliases.contains { $0.lowercased() == key } }),
-           !["event", "place"].contains(exact.id) { return exact }
-        if fallback != "place", fallback != "person" {
+        if let id = mappings?[kind], let chosen = byID[id], id != "group" { return chosen }
+        if let exact = byKind[key],
+           !["event", "place", "group"].contains(exact.id) { return exact }
+        if mappings == nil, fallback != "place", fallback != "person" {
             let text = String(title.prefix(160)).lowercased()
             if let hint = all.prefix(9).first(where: { asset in asset.aliases.contains { $0.count >= 2 && text.contains($0.lowercased()) } }) { return hint }
         }
@@ -209,13 +228,13 @@ public enum SpatialMarkerSeeds {
         return resolved.filter { linkedRoots.contains($0.value) }
     }
 
-    public static func make(points: [CompositionMapPoint], routes: [SpatialRoute]) -> [SpatialMarkerSeed] {
+    public static func make(points: [CompositionMapPoint], routes: [SpatialRoute], mappings: [String: String]? = nil) -> [SpatialMarkerSeed] {
         let byObject = Dictionary(points.map { ($0.targetID, $0) }, uniquingKeysWith: { first, _ in first })
         let objects = points.map { point in
             let fallback = point.kind == "presence" ? "person" : point.kind == "entityLocation" ? "place" : "event"
             return SpatialMarkerSeed(id: point.id, objectID: point.targetID, title: point.title, subtitle: point.subtitle,
                 coordinate: .init(latitude: point.latitude, longitude: point.longitude),
-                assetID: SpatialMarkerAssets.resolve(kind: point.markerKind ?? point.kind, title: point.title, fallback: fallback).id,
+                assetID: SpatialMarkerAssets.resolve(kind: point.markerKind ?? point.kind, title: point.title, fallback: fallback, mappings: mappings).id,
                 affinityID: point.affinityID, affinityTitle: point.affinityTitle)
         }
         return objects + routes.compactMap { route in
@@ -223,7 +242,7 @@ public enum SpatialMarkerSeeds {
             let event = route.eventID.flatMap { byObject[$0] }
             return SpatialMarkerSeed(id: "route:" + route.id, routeID: route.relationID, title: route.title,
                 subtitle: route.actorNames.joined(separator: "、") + " · " + route.placeNames.joined(separator: " → "),
-                coordinate: coordinate, assetID: SpatialMarkerAssets.resolve(kind: route.kind, title: route.title).id,
+                coordinate: coordinate, assetID: SpatialMarkerAssets.resolve(kind: route.kind, title: route.title, mappings: mappings).id,
                 affinityID: event?.affinityID, affinityTitle: event?.affinityTitle)
         }
     }

@@ -133,9 +133,12 @@ struct SpatialTimelineView: View {
         }
         var result: [ReadingMapPoint] = []
         let snapshots = Dictionary(store.temporalEvents.map { ($0.object.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let families = SpatialMarkerSeeds.familyRoots(eventIDs: Set(snapshots.keys), parents: Dictionary(snapshots.values.compactMap { snapshot in
+            snapshot.metadata?.parentEventID.map { (snapshot.object.id, $0) }
+        }, uniquingKeysWith: { first, _ in first }))
         for event in visibleEvents {
             let metadata = snapshots[event.id]?.metadata
-            let parentID = metadata?.parentEventID.flatMap { snapshots[$0] != nil ? $0 : nil }
+            let parentID = families[event.id]
             for id in event.placeIDs {
                 if let place = places[id], let lat = place.latitude, let lon = place.longitude {
                     result.append(ReadingMapPoint(id: "\(event.id)|\(place.id)", targetID: event.id, title: event.name, subtitle: "\(event.dateText) · \(place.name)", coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), markerKind: metadata?.kind ?? "event", affinityID: parentID, affinityTitle: parentID.flatMap { snapshots[$0]?.object.name }))
@@ -866,13 +869,12 @@ private struct ReadingMapRenderer: View, Equatable {
     @State private var cameraRegion: MKCoordinateRegion?
     @State private var markerEpoch: UInt64 = 0
     private var seeds: [SpatialMarkerSeed] {
-        points.map { point in
-            SpatialMarkerSeed(id: point.id, objectID: point.targetID, title: point.title, subtitle: point.subtitle,
-                coordinate: .init(latitude: point.coordinate.latitude, longitude: point.coordinate.longitude),
-                assetID: SpatialMarkerAssets.resolve(kind: point.markerKind, title: point.title,
-                    fallback: point.markerKind == "person" ? "person" : point.markerKind == "place" ? "place" : "event").id,
+        SpatialMarkerSeeds.make(points: points.map { point in
+            CompositionMapPoint(id: point.id, targetID: point.targetID, title: point.title, subtitle: point.subtitle,
+                latitude: point.coordinate.latitude, longitude: point.coordinate.longitude, evidence: [],
+                kind: point.markerKind == "person" ? "presence" : point.markerKind == "place" ? "entityLocation" : "eventLocation", markerKind: point.markerKind,
                 affinityID: point.affinityID, affinityTitle: point.affinityTitle)
-        } + SpatialMarkerSeeds.make(points: [], routes: routes)
+        }, routes: routes)
     }
     private var nodes: [SpatialMarkerNode] { markerSeeds == seeds ? markerNodes : SpatialMarkerPacking.bootstrap(seeds, selectedObjectIDs: Set(selectedID.map { [$0] } ?? []), selectedRouteID: inspectedRoute?.relationID) }
     static func == (lhs: Self, rhs: Self) -> Bool {

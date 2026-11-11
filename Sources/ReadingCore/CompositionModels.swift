@@ -111,11 +111,13 @@ public struct CompositionPart: Codable, Hashable, Identifiable, Sendable {
     public var columns: [CompositionTableColumn]?
     /// A map may draw shared actions independently of its event/place markers.
     public var routeSourceID: String?
-    public init(id: String, primitive: CompositionPrimitive, sourceID: String, title: String = "", selectionGroup: String = "main", timeGroup: String = "main", columns: [CompositionTableColumn]? = nil, routeSourceID: String? = nil) {
+    /// Visual material choices only; kind names remain free shared knowledge.
+    public var markerAssets: [String: String]?
+    public init(id: String, primitive: CompositionPrimitive, sourceID: String, title: String = "", selectionGroup: String = "main", timeGroup: String = "main", columns: [CompositionTableColumn]? = nil, routeSourceID: String? = nil, markerAssets: [String: String]? = nil) {
         self.id = id; self.primitive = primitive; self.sourceID = sourceID; self.title = title; self.selectionGroup = selectionGroup; self.timeGroup = timeGroup
-        self.columns = columns; self.routeSourceID = routeSourceID
+        self.columns = columns; self.routeSourceID = routeSourceID; self.markerAssets = markerAssets
     }
-    private enum CodingKeys: String, CodingKey, CaseIterable { case id, primitive, sourceID, title, selectionGroup, timeGroup, columns, routeSourceID }
+    private enum CodingKeys: String, CodingKey, CaseIterable { case id, primitive, sourceID, title, selectionGroup, timeGroup, columns, routeSourceID, markerAssets }
     public init(from decoder: Decoder) throws {
         try compositionKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -124,6 +126,7 @@ public struct CompositionPart: Codable, Hashable, Identifiable, Sendable {
         timeGroup = try c.decodeIfPresent(String.self, forKey: .timeGroup) ?? "main"
         columns = try c.decodeIfPresent([CompositionTableColumn].self, forKey: .columns)
         routeSourceID = try c.decodeIfPresent(String.self, forKey: .routeSourceID)
+        markerAssets = try c.decodeIfPresent([String: String].self, forKey: .markerAssets)
     }
 }
 
@@ -221,6 +224,12 @@ public struct CompositionMapPoint: Identifiable, Hashable, Sendable {
     public var markerKind: String? = nil
     public var affinityID: String? = nil
     public var affinityTitle: String? = nil
+    public init(id: String, targetID: String, title: String, subtitle: String, latitude: Double, longitude: Double,
+                evidence: [Evidence], kind: String, markerKind: String? = nil, affinityID: String? = nil, affinityTitle: String? = nil) {
+        self.id = id; self.targetID = targetID; self.title = title; self.subtitle = subtitle
+        self.latitude = latitude; self.longitude = longitude; self.evidence = evidence; self.kind = kind
+        self.markerKind = markerKind; self.affinityID = affinityID; self.affinityTitle = affinityTitle
+    }
 }
 public struct CompositionProjection: Sendable {
     public var items: [CompositionItem]; public var edges: [CompositionEdge]; public var mapPoints: [CompositionMapPoint]

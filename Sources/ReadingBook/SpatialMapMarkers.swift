@@ -6,6 +6,7 @@ import ReadingCore
 /// presentation hint, not an additional persisted event type or fact store.
 struct SpatialMarkerGlyph: View {
     let assetID: String
+    var isAction = false
     var tint: Color {
         switch SpatialMarkerAssets.asset(assetID).tint {
         case "fire": return .orange
@@ -39,6 +40,9 @@ struct SpatialMarkerGlyph: View {
                 Image(systemName: SpatialMarkerAssets.asset(assetID).symbol).font(.system(size: 16, weight: .semibold))
                     .frame(width: 18, height: 18).foregroundStyle(tint)
             }
+        }.overlay(alignment: .topTrailing) {
+            if isAction { Image(systemName: "arrow.right").font(.system(size: 8, weight: .bold)).foregroundStyle(tint)
+                .padding(2).background(.regularMaterial, in: Circle()).offset(x: 7, y: -5) }
         }.accessibilityHidden(true)
     }
 }
@@ -60,7 +64,7 @@ struct SpatialMapAnnotations: MapContent {
                        anchor: anchor(for: node)) {
                 Button { activate(node) } label: {
                     HStack(spacing: 6) {
-                        SpatialMarkerGlyph(assetID: node.members[0].assetID)
+                        SpatialMarkerGlyph(assetID: node.assetID, isAction: !node.isGroup && node.members[0].routeID != nil)
                         if node.isGroup {
                             Text("\(node.members.count)").font(.system(size: 12, weight: .semibold)).monospacedDigit()
                             Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
@@ -91,7 +95,7 @@ struct SpatialMarkerGroupCard: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text("相邻记录 · \(members.count)").font(.subheadline.weight(.semibold))
+                Text("\(title) · \(members.count)").font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
                 Button(action: zoom) { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 36, height: 36) }
                     .buttonStyle(ReadingQuietButtonStyle()).help("放大这一组；同一地点的记录仍可从列表选择").accessibilityLabel("放大这一组")
@@ -103,7 +107,7 @@ struct SpatialMarkerGroupCard: View {
                     ForEach(members) { seed in
                         Button { select(seed) } label: {
                             HStack(spacing: 10) {
-                                SpatialMarkerGlyph(assetID: seed.assetID)
+                                SpatialMarkerGlyph(assetID: seed.assetID, isAction: seed.routeID != nil)
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(seed.title).font(.system(size: 14, weight: .medium)).lineLimit(2)
                                     Text(seed.subtitle).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
@@ -117,6 +121,10 @@ struct SpatialMarkerGroupCard: View {
         }.frame(width: 330).frame(maxHeight: 350)
             .readingGlass(radius: 20).shadow(color: .black.opacity(0.12), radius: 12, y: 4)
             .accessibilityIdentifier("spatial-marker-group-details")
+    }
+    private var title: String {
+        let families = Set(members.compactMap(\.affinityID))
+        return families.count == 1 && members.allSatisfy { $0.affinityID != nil } ? (members.first?.affinityTitle ?? "相邻记录") : "相邻记录"
     }
 }
 

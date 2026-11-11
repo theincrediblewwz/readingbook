@@ -66,6 +66,7 @@ struct ReadingQueryHostOwner {
             }
             return try viewToolResult("success", "按当前需求选择组件；显示配置不代表已有分析。", extra: ["components": components,
                 "views": views, "totalViews": book.views.count, "nextOffset": page.offset + views.count < book.views.count ? page.offset + views.count as Any : NSNull(),
+                "mapMarkerAssets": SpatialMarkerAssets.selectable.map { ["id": $0.id, "title": $0.title] },
                 "templates": ReadingWorkbench.templateIDs.map { id in ["id": id, "componentID": "reading.composition", "title": ReadingWorkbench.title(for: id), "purpose": id == ReadingWorkbench.timeMapTemplateID ? "可选布局：地图、事件先后与人物详情联动，共用本书资料。" : "人物/关系/相关事件/读者笔记联动；选择一个人物时一起查看，已保存工作台复用。"] },
                 "customComponents": "只能组合现有元件，不执行代码；打开的组件沿用这次提问的原文范围，正文读取仍限本次授权。"])
         }
@@ -94,11 +95,11 @@ struct ReadingQueryHostOwner {
                 return try viewToolResult("unsupported", "本书没有这个已启用的组件视图；没有改动配置。")
             }
             route = view.id
-            if request.layout != nil || request.restoreLayout == true {
+            if request.layout != nil || request.markerAssets != nil || request.restoreLayout == true {
                 guard let revision = request.layoutRevision else { throw ReadingError.invalid("请先取得当前布局版本。") }
                 let saved = try await repository.updateReadingComponentLayout(bookID: book.id, sourceHash: book.sourceHash,
                     viewID: view.id, expectedRevision: revision, layout: request.layout, rootID: request.rootID,
-                    restore: request.restoreLayout == true, grant: session.grant)
+                    restore: request.restoreLayout == true, markerAssets: request.markerAssets, grant: session.grant)
                 guard owner.matches(self) else { throw CancellationError() }
                 layoutAdjusted = saved.view.composition != view.composition
                 if layoutAdjusted { publish(saved.project) }
@@ -166,11 +167,13 @@ struct ReadingQueryHostOwner {
             if let view = self.book?.views.first(where: { $0.id == route }), let definition = view.composition {
                 extra["layoutRevision"] = try ReadingComponentLayout.revision(definition)
                 extra["rootID"] = definition.rootID; extra["canRestoreLayout"] = view.previousLayout != nil
+                extra["mapParts"] = definition.parts.filter { $0.primitive == .map }.map { ["id": $0.id, "markerAssets": $0.markerAssets as Any? ?? NSNull()] }
+                if definition.parts.contains(where: { $0.primitive == .map }) { extra["mapMarkerAssets"] = SpatialMarkerAssets.selectable.map { ["id": $0.id, "title": $0.title] } }
                 let encoded = try JSONEncoder().encode(definition.layout)
                 if encoded.count <= 10_000 { extra["layout"] = try JSONSerialization.jsonObject(with: encoded) }
                 else { extra["layoutUnavailable"] = "布局超过单次回执大小，未返回完整布局，请勿猜测或覆盖。" }
             }
-            return try viewToolResult("success", layoutAdjusted ? "已保存现有组件的新布局；资料绑定保持，右键地图的全部内容按钮可恢复上次布局。" : (created ? "已加入并打开组件；显示已有资料，尚未新增分析。" : "已打开已有组件；没有重复创建。"), extra: extra)
+            return try viewToolResult("success", layoutAdjusted ? "已保存现有组件的布局或地图素材；资料绑定保持，右键地图的全部内容按钮可恢复上次显示。" : (created ? "已加入并打开组件；显示已有资料，尚未新增分析。" : "已打开已有组件；没有重复创建。"), extra: extra)
         }
         if renderedComponentPresentation?.matches(self, route: route) == true {
             // Repeated same-route intentions can be coalesced by onChange.
@@ -201,7 +204,7 @@ struct ReadingQueryHostOwner {
             let saved = try await repository.updateReadingComponentLayout(bookID: book.id, sourceHash: book.sourceHash,
                 viewID: viewID, expectedRevision: ReadingComponentLayout.revision(composition), layout: nil, restore: true)
             guard owner.matches(self) else { return }
-            publish(saved.project); activity = "已恢复上次布局，书籍资料保持不变。"
+            publish(saved.project); activity = "已恢复上次显示，书籍资料保持不变。"
         } catch { if owner.matches(self) { errorMessage = error.localizedDescription } }
     }
 

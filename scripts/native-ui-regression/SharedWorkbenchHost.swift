@@ -337,6 +337,7 @@ private actor WorkbenchTransport {
         let fitted = native.region
         try check("mapBridgeNativeCameraFitsActualEvent", store.renderedCompositionState?.maps.first?.objectIDs.contains("event0") == true && fitted.span.latitudeDelta < 1)
         let repeatedFit = try await store.performReadingViewAction("map_fit_objects", data: fit, expectedBookID: book.id, sourceHash: book.sourceHash)
+        try repeatedFit.write(to: output.appendingPathComponent("map-fit-repeat-response.json"))
         try check("mapBridgeRepeatedSameCameraAcknowledged", (try JSONSerialization.jsonObject(with: repeatedFit) as? [String: Any])?["status"] as? String == "success")
         let hiddenFit = try await store.performReadingViewAction("map_fit_objects", data: JSONSerialization.data(withJSONObject: ["objectIDs": ["event1"]]), expectedBookID: book.id, sourceHash: book.sourceHash)
         try check("mapBridgeFilteredOutEventRejected", (try JSONSerialization.jsonObject(with: hiddenFit) as? [String: Any])?["status"] as? String == "unsupported")

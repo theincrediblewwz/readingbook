@@ -84,6 +84,10 @@ public enum CompositionRuntime {
             case .relations: compatible = source.collection == .relations
             }
             guard compatible else { throw invalid("组合元件和数据源类型不匹配。") }
+            if let mappings = part.markerAssets {
+                guard part.primitive == .map else { throw invalid("只有geo.map元件可以声明markerAssets。") }
+                try SpatialMarkerAssets.validate(mappings)
+            }
             if part.primitive == .table {
                 let commonCollection = source.typeIDs.isEmpty && [.events, .documents].contains(source.collection)
                 guard source.typeIDs.count == 1 || commonCollection, let columns = part.columns, (1...8).contains(columns.count),

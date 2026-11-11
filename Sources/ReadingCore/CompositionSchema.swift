@@ -25,12 +25,18 @@ public enum CompositionSchema {
         let part = object(["id": id, "primitive": enumeration(CompositionPrimitive.allCases.map(\.rawValue)).merging(["description": "object.detail含摘要、字段、原文依据及跳转；source.excerpt仅展示原文；选择联动的元件共用selectionGroup，时间筛选共用timeGroup。"], uniquingKeysWith: { _, new in new }), "sourceID": id,
             "title": text, "selectionGroup": id, "timeGroup": id,
             "columns": array(column, minimum: 1, maximum: 8),
+            "markerAssets": markerAssets,
             "routeSourceID": id.merging(["description": "geo.map可另绑定collection=relations的行动数据源，与地图共用selectionGroup/timeGroup；事件标记和行动路线独立取数，没有eventID的行动也可显示，不替它编造事件关联。省略只画主数据源相关路线。"], uniquingKeysWith: { _, next in next })], required: ["id", "primitive", "sourceID"])
         let node = layoutNode
         return object(["version": ["type": "integer", "enum": [1]], "sources": array(source, minimum: 1, maximum: 12),
             "parts": array(part, minimum: 1, maximum: 24), "layout": array(node, minimum: 1, maximum: 48), "rootID": id],
             required: ["sources", "parts", "layout", "rootID"])
             .merging(["description": "省略的selectionGroup/timeGroup沿用相连数据源与元件唯一明确的组；均未指定时用main，显式不同的组不会自动合并。"], uniquingKeysWith: { _, new in new })
+    }
+    static var markerAssets: [String: Any] {
+        ["type": "object", "maxProperties": 32,
+         "additionalProperties": enumeration(SpatialMarkerAssets.selectable.map(\.id)),
+         "description": "仅geo.map：自由kind名称→内置素材ID，用于事件和行动。显式映射优先，未映射的未知kind用中性图标，不按标题猜；不改事实类别。空映射关闭标题猜测，省略兼容旧图。"]
     }
     static var layoutNode: [String: Any] {
         let id: [String: Any] = ["type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.-]+$"]

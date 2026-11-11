@@ -461,7 +461,7 @@ struct CompositionWorkspaceView: View {
                     .accessibilityLabel("显示全部内容")
                     .contextMenu {
                         if let view = definition, view.previousLayout != nil {
-                            Button("恢复上次布局", systemImage: "rectangle.2.swap") {
+                            Button("恢复上次显示", systemImage: "rectangle.2.swap") {
                                 Task { await store.restoreReadingComponentLayout(view.id) }
                             }
                         }
@@ -672,7 +672,7 @@ struct CompositionWorkspaceView: View {
                 CompositionMap(camera: Binding(get: { mapCameras[part.id] ?? .automatic }, set: { mapCameras[part.id] = $0 }),
                     partID: part.id, visibilityGeneration: viewportGeneration, occlusions: occlusions, reportViewport: { publishMap($0, status: $1, partID: part.id, generation: viewportGeneration) },
                     fitRequest: mapFitRequests[part.id], finishFit: { id, error in finishMapCommand(id, partID: part.id, error: error) },
-                    points: projection.mapPoints, routes: routes, selected: selections[part.selectionGroup] ?? [], height: height, canvas: canvas,
+                    points: projection.mapPoints, routes: routes, markerAssets: part.markerAssets, selected: selections[part.selectionGroup] ?? [], height: height, canvas: canvas,
                     select: { select($0, group: part.selectionGroup) },
                     deselect: { selections[part.selectionGroup] = []; canvasAnchors[part.selectionGroup] = nil },
                     selectedLocation: { if canvasAnchors[part.selectionGroup] != $0 { canvasAnchors[part.selectionGroup] = $0 } })
@@ -1010,6 +1010,7 @@ private struct CompositionMap: View {
     var finishFit: (UUID, String?) -> Void
     let points: [CompositionMapPoint]
     let routes: [SpatialRoute]
+    let markerAssets: [String: String]?
     let selected: Set<String>
     var height: CGFloat = 420
     var canvas = false
@@ -1026,7 +1027,7 @@ private struct CompositionMap: View {
     @State private var markerEpoch: UInt64 = 0
     @State private var selectedMarker: SpatialMarkerSeed?
     @State private var pendingFitID: UUID?
-    private var seeds: [SpatialMarkerSeed] { SpatialMarkerSeeds.make(points: points, routes: routes) }
+    private var seeds: [SpatialMarkerSeed] { SpatialMarkerSeeds.make(points: points, routes: routes, mappings: markerAssets) }
     private var nodes: [SpatialMarkerNode] { markerSeeds == seeds ? markerNodes : SpatialMarkerPacking.bootstrap(seeds, selectedObjectIDs: selected, selectedRouteID: inspectedRoute?.relationID) }
     var body: some View {
         if points.isEmpty && routes.isEmpty { CompositionEmptyState(text: "当前范围和时间没有已确认的位置。人物仅显示有出处的出现地点。", icon: "map").task(id: visibilityGeneration) { reportViewport(nil, .empty) } }
@@ -1040,7 +1041,7 @@ private struct CompositionMap: View {
                 }
             }
                 .background(CompositionPageScrollInput())
-                .mapControls { MapCompass(); MapScaleView() }.frame(height: height).clipShape(RoundedRectangle(cornerRadius: canvas ? 0 : 18))
+                .mapControls { MapZoomStepper(); MapCompass(); MapScaleView() }.frame(height: height).clipShape(RoundedRectangle(cornerRadius: canvas ? 0 : 18))
                     .help(canvas ? "拖动或双指平移地图，捏合缩放；点标记看详情，点空白收起。" : "双指滑动浏览整页；拖动平移地图，捏合缩放地图。")
                 .overlay(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: 4) {

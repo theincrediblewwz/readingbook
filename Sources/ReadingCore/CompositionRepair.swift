@@ -45,6 +45,10 @@ extension CompositionRuntime {
                 } else { issue("parts[\(index)].routeSourceID", "须引用sources中collection=relations的数据源；它只投影已有行动，不创建事件归属。"); }
             }
             if part.columns != nil && part.primitive != .table { issue("parts[\(index)].columns", "columns仅适用于object.table；其他元件请移除此字段。"); }
+            if let mappings = part.markerAssets {
+                if part.primitive != .map { issue("parts[\(index)].markerAssets", "markerAssets仅适用于geo.map，不改变书中类别。") }
+                else { do { try SpatialMarkerAssets.validate(mappings) } catch { issue("parts[\(index)].markerAssets", error.localizedDescription) } }
+            }
             if !value.layout.contains(where: { $0.kind == .part && $0.partID == part.id }) { issue("parts[\(index)].id", "元件\(part.id)缺少布局位置。请添加kind=part、partID=\(part.id)的layout节点，并在父容器children引用该节点id。"); }
         }
         for (index, source) in value.sources.enumerated() where !value.parts.contains(where: { $0.sourceID == source.id || $0.routeSourceID == source.id }) {
