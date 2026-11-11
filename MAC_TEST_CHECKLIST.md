@@ -1,3 +1,21 @@
+<!-- map-assets-local:start -->
+本批本机交付已完成：Design/2026-11-11-map-assets-results.md（含效果评价表）；总入口 logs/map-assets-20261111/final-local-delivery.json。产品 af286775c0931da28918360d6d4d55076d8f88ea，12 产品 Swift 实改、8 新核心方法；0.23.70/build101 ARM64 本地迭代已替换，binary SHA cc4281ddab95e216341cb7ef513614de022452b9b8dabd73760b7eed5bef7d89。正式 App 两次启动和正常退出完成，原书104/1484、277%、便签“你好”、2笔记、旧伴读/对话及查找关闭过，最后书库退出。无需重复安装、索要解锁或恢复旧库。本批无 GitHub/云 CI/Release，继续本地集中迭代。
+
+通用实改：geo.map 可选 markerAssets（真实自由 kind→内置素材ID），17可选素材+自动group，新观测/测量/修复/警示/样本不限定战役模板。已有 component_show 可按 viewID/latest layoutRevision 改素材/布局，重读当前项目保并发笔记，一层previousLayout可恢复；不复制共享事实、不重建视图。group不再拿首成员图标代表整体；未知自定义类别中性，不按标题乱猜。独立/组合地图共用种子生成与已获准家族解析。指引明确显示调整不是仅打开即完成；未建立确定性意图完成验证器。
+
+最终core2=610方法/6306独立断言（非XCTest），mapAssets最终范围60/共享80/动态52/滚动25共217过，所检告警零。最终surveyNative1、chibiNative1各4次事件complete/camera success，日期/原文轴显式切换保持，事实/视图前后相等；CUA分组/展开/放大/成员/出处实际过，回调查5及PDF614。赤壁远景组13/5/4/2为实际画面观察，数值快照仍pending不能当ready镜头；横向自动滚动没建立证据，不计通过。
+
+真实最终real4调查5HTTP/69697报告token、自选5映射；real6赤壁7HTTP/176681、自选11映射。分别5/4/2/1和35/18/10/3资料计数保持，布局/坐标/日期不改，无新source_read；不是空库整书生成。冻结后续输入 logs/map-assets-20261111/real4/final/project.json 和 real6/final/project.json；当前源码哈希与已提交产品核对。全批30HTTP/462478报告token含失败和重复上下文，非计费金额，截断请求用量不全。real1预算尽/real3只打开/real5诊断4096输出截断等现场保留；real6诊断16384未改用户配置。无Key/认证头/私有思考落盘，下轮先读现场，勿盲重付费生成。
+
+同扩展素材库、2048输入、5预热60交替样本，线性中位21422.958us→索引18015.583us（耗时-15.9%），输出相同；不是旧安装包对照、整App FPS/内存。早期共享一次重复适配确认失败，保响应，同源码和最终源码复测80项均过，根因尚未稳定复现；未降阈值/加睡眠。
+
+原库39全留、37字节同；另2仅推荐缓存JSON键序和Workspace pdf.location.x差8.67e-19，其他语义同，书/笔记/分析正文逐字节同、偏好值同；没有旧备份覆盖原库。fresh回滚 private-books/map-assets-20261111/install-before-local-iteration/ReadingBook-0.23.70-local-5c144c8.app 及当前库/prefs清单。用户dirty Design/2026-10-29-performance-progress.md SHA9b186792359dcc1ee93e4d1d5aeb456b2e9f7b1cb71213476aa9acfe6aa563d4 保持且未提交。
+
+cleanup.py --apply 和 archive-closed-diagnostics.py --apply 已成功执行不得重跑。8重建程序和过期a43回滚App退役，49运行目录261文件逐成员验SHA归档；63快照→10规范内容，原路径可读；953旧unified.log压缩至约26.8MiB，原公开AI请求/回复/最终项目仍原位。保5364非退役私人文件、最新5c回滚、当前候选、正式ZIP、规范PDF及共享缓存。约8.45→7.31GiB，回收1.14GiB，批初净减约207MiB；准确du看总入口。closed-runtime-index、snapshot-evidence-index 和 logs/diagnostic-log-archives-20261111.json 可查；read-archived-evidence.py 逐文件验SHA读取/恢复到新路径，不覆盖，不单删evidence-canonical。
+
+下一批先合并同时弹出的事件/行动重复卡，保持地图为主体；补紧凑的实际类别目录、可选单对象素材覆盖，减少为样式反复分页。地点源组合地图仍缺行动事件家族，完整命名战役聚合/热度边缘未完成；用共享ID通用解决，不按赤壁/赵云/张飞写分支。现代地名密度（不淡化底图）、轴层级横移及可视窗/筛选端点分离、有据曲线区域、16组件性能轮转继续保留。下方为历史。
+<!-- map-assets-local:end -->
+
 <!-- structured-feedback-local:start -->
 本批本机交付已完成：Design/2026-11-11-structured-feedback-results.md；总入口 logs/structured-feedback-20261111/final-local-delivery.json。产品5c144c8（7产品Swift/13新增核心方法）；0.23.70/build101 ARM64本地迭代已替换，binary SHA81c09c27d2ff6fcfda457081025744cbc751e8fcdbf59d22fa9cb4a45d1dad2a。正式App两次启动退出，104/1484、277%、你好、2笔记保持；旧伴读/对话及查找关闭过，最后书库退出。无需重复安装、索要解锁或恢复旧库。本批无GitHub访问/云CI/Release，按用户本地集中迭代偏好执行。
 
